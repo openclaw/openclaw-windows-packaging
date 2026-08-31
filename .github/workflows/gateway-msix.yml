@@ -540,6 +540,19 @@ jobs:
             -SourceCommit '${{ github.sha }}' `
             -OutputDirectory '${{ runner.temp }}\openclaw-msix'
 
+      - name: Smoke-test packaged x64 launcher
+        if: matrix.architecture == 'x64'
+        shell: pwsh
+        run: |
+          $package = '${{ runner.temp }}\openclaw-msix\OpenClawGateway-x64.msix'
+          $unpacked = '${{ runner.temp }}\openclaw-msix-smoke'
+          [IO.Compression.ZipFile]::ExtractToDirectory($package, $unpacked)
+          & (Join-Path $unpacked 'openclaw.exe') --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "Packaged launcher smoke test failed with exit code $LASTEXITCODE."
+          }
+          Write-Host 'Packaged launcher smoke test passed.'
+
       - name: Upload unsigned MSIX
         uses: actions/upload-artifact@v7
         with:
