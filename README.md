@@ -9,6 +9,8 @@ This repository builds a Windows MSIX package containing:
 - the official Node.js archive matching the upstream build's runtime version
   and the package architecture.
 
+Builds use .NET SDK 10.0.400 or a later .NET 10 feature band.
+
 The package is independent from the
 [OpenClaw Windows Node and Companion](https://github.com/openclaw/openclaw-windows-node)
 and uses the Partner Center-reserved

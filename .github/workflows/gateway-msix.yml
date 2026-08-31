@@ -126,7 +126,7 @@ jobs:
           cache-dependency-path: Directory.Packages.props
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -423,7 +423,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ needs.build-package.outputs.node_version }}
           architecture: ${{ matrix.architecture }}
