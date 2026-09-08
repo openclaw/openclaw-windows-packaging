@@ -193,6 +193,23 @@ if (
         -Recurse
 }
 
+$payloadSymbols = @(
+    Get-ChildItem `
+        -LiteralPath $applicationTarget `
+        -Filter '*.pdb' `
+        -File `
+        -Force `
+        -Recurse
+)
+foreach ($payloadSymbol in $payloadSymbols) {
+    Remove-Item -LiteralPath $payloadSymbol.FullName -Force
+}
+if ($payloadSymbols.Count -ne 0) {
+    Write-Host (
+        "Excluded $($payloadSymbols.Count) payload PDB files from the MSIX."
+    )
+}
+
 $payloadFiles = @(
     Get-ChildItem -LiteralPath $applicationTarget -File -Force -Recurse |
         ForEach-Object {
@@ -315,7 +332,9 @@ try {
             }
 
             $decodedPath = [Uri]::UnescapeDataString($entry.FullName)
-            $null = $packageEntries.Add($decodedPath)
+            if (-not $packageEntries.Add($decodedPath)) {
+                throw "The MSIX contains a duplicate decoded path: $decodedPath"
+            }
             $expectedEntry = $null
             if (
                 -not $expectedPackageFiles.Remove(

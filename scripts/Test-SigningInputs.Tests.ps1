@@ -30,7 +30,9 @@ function New-TestArtifact {
 
         [bool]$IncludeApplicationBundledNode = $false,
 
-        [bool]$IncludeApplicationNodeArchive = $false
+        [bool]$IncludeApplicationNodeArchive = $false,
+
+        [bool]$IncludeEncodedScopedDependency = $false
     )
 
     $directory = Join-Path $Root $Architecture
@@ -58,6 +60,21 @@ function New-TestArtifact {
             ) `
             -Value 'bundled-node-archive'
     }
+    if ($IncludeEncodedScopedDependency) {
+        $scopedDependencyDirectory = Join-Path `
+            $applicationDirectory `
+            'node_modules\%40scope'
+        New-Item `
+            -Path $scopedDependencyDirectory `
+            -ItemType Directory `
+            -Force |
+            Out-Null
+        Set-Content `
+            -LiteralPath (
+                Join-Path $scopedDependencyDirectory 'package.json'
+            ) `
+            -Value '{"name":"@scope/package"}'
+    }
 
     $payloadFiles = @(
         Get-ChildItem -LiteralPath $applicationDirectory -File -Recurse |
@@ -68,7 +85,7 @@ function New-TestArtifact {
                             $applicationDirectory,
                             $_.FullName
                         )
-                    ).Replace('\', '/')
+                    ).Replace('\', '/').Replace('%40', '@')
                     length = $_.Length
                     sha256 = (
                         Get-FileHash `
@@ -305,6 +322,39 @@ try {
     New-TestArtifact -Root $testRoot -Architecture arm64
     Assert-Fails `
         -MessagePattern 'x64 MSIX bundles Node.js' `
+        -Action {
+            Invoke-PolicyValidation -Root $testRoot
+        }
+
+    Remove-Item -LiteralPath $testRoot -Recurse -Force
+    New-Item -Path $testRoot -ItemType Directory | Out-Null
+    New-TestArtifact `
+        -Root $testRoot `
+        -Architecture x64 `
+        -IncludeEncodedScopedDependency $true
+    New-TestArtifact -Root $testRoot -Architecture arm64
+    Invoke-PolicyValidation -Root $testRoot
+
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        $decodedDirectory = Join-Path `
+            $Expanded `
+            'app\node_modules\@scope'
+        New-Item `
+            -Path $decodedDirectory `
+            -ItemType Directory `
+            -Force |
+            Out-Null
+        Copy-Item `
+            -LiteralPath (
+                Join-Path `
+                    $Expanded `
+                    'app\node_modules\%40scope\package.json'
+            ) `
+            -Destination (Join-Path $decodedDirectory 'package.json')
+    }
+    Assert-Fails `
+        -MessagePattern 'duplicate decoded path' `
         -Action {
             Invoke-PolicyValidation -Root $testRoot
         }

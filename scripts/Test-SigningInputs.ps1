@@ -18,6 +18,41 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
+function Get-DecodedZipEntries {
+    param(
+        [Parameter(Mandatory)]
+        [IO.Compression.ZipArchive]$Archive,
+
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    return @($Archive.Entries | Where-Object {
+        [Uri]::UnescapeDataString($_.FullName) -eq $Path
+    })
+}
+
+function Assert-DecodedZipPathsAreUnique {
+    param(
+        [Parameter(Mandatory)]
+        [IO.Compression.ZipArchive]$Archive
+    )
+
+    $paths = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase
+    )
+    foreach ($entry in $Archive.Entries) {
+        if ([string]::IsNullOrEmpty($entry.Name)) {
+            continue
+        }
+
+        $decodedPath = [Uri]::UnescapeDataString($entry.FullName)
+        if (-not $paths.Add($decodedPath)) {
+            throw "The MSIX contains a duplicate decoded path: $decodedPath"
+        }
+    }
+}
+
 function Read-ZipEntryText {
     param(
         [Parameter(Mandatory)]
@@ -27,9 +62,7 @@ function Read-ZipEntryText {
         [string]$Path
     )
 
-    $entries = @($Archive.Entries | Where-Object {
-        $_.FullName -eq $Path
-    })
+    $entries = @(Get-DecodedZipEntries -Archive $Archive -Path $Path)
     if ($entries.Count -ne 1) {
         throw "Expected one '$Path' entry; found $($entries.Count)."
     }
@@ -54,9 +87,7 @@ function Get-ZipEntrySha256 {
         [string]$Path
     )
 
-    $entries = @($Archive.Entries | Where-Object {
-        $_.FullName -eq $Path
-    })
+    $entries = @(Get-DecodedZipEntries -Archive $Archive -Path $Path)
     if ($entries.Count -ne 1) {
         throw "Expected one '$Path' entry; found $($entries.Count)."
     }
@@ -83,9 +114,7 @@ function Get-ZipEntryLength {
         [string]$Path
     )
 
-    $entries = @($Archive.Entries | Where-Object {
-        $_.FullName -eq $Path
-    })
+    $entries = @(Get-DecodedZipEntries -Archive $Archive -Path $Path)
     if ($entries.Count -ne 1) {
         throw "Expected one '$Path' entry; found $($entries.Count)."
     }
@@ -176,6 +205,7 @@ foreach ($architecture in @('x64', 'arm64')) {
 
     $packageArchive = [IO.Compression.ZipFile]::OpenRead($msix.FullName)
     try {
+        Assert-DecodedZipPathsAreUnique -Archive $packageArchive
         $bundledNodeEntries = @(
             $packageArchive.Entries |
                 Where-Object {
