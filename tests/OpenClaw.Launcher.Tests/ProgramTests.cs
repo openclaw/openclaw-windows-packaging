@@ -1,6 +1,3 @@
-using System.Runtime.InteropServices;
-using System.Text.Json;
-
 namespace OpenClaw.Launcher.Tests;
 
 public sealed class ProgramTests : IDisposable
@@ -8,56 +5,127 @@ public sealed class ProgramTests : IDisposable
     private readonly string _testDirectory = TestDirectory.Create();
 
     [Fact]
-    public async Task AgentLaunchChecksPreparedStateBeforeNodeDependency()
+    public async Task AgentLaunchResolvesNodeAndRunsPackagedApplication()
     {
-        HostOptions options = await CreateUnpreparedOptionsAsync();
+        string applicationDirectory = Path.Combine(_testDirectory, "app");
+        Directory.CreateDirectory(applicationDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(applicationDirectory, "openclaw.mjs"),
+            "console.log('fixture');");
+        string[] arguments = ["gateway", "run", "--port", "12345"];
+        var options = new HostOptions(applicationDirectory, arguments);
+        var nodeRuntime = new NodeRuntime(
+            Path.Combine(_testDirectory, "node.exe"),
+            new Version(24, 15, 0),
+            System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture);
         bool nodeResolutionAttempted = false;
+        bool launchAttempted = false;
 
-        InvalidOperationException exception =
-            await Assert.ThrowsAsync<InvalidOperationException>(
-                () => Program.RunAgentAsync(
-                    options,
-                    _ => { },
-                    _ =>
-                    {
-                        nodeResolutionAttempted = true;
-                        return Task.FromException<NodeRuntime>(
-                            new InvalidOperationException("Node resolution should not run."));
-                    }));
+        int exitCode = await Program.RunAgentAsync(
+            options,
+            _ => { },
+            _ =>
+            {
+            nodeResolutionAttempted = true;
+            return Task.FromResult(nodeRuntime);
+            },
+            (nodePath, appDirectory, forwardedArguments, _, _) =>
+            {
+            launchAttempted = true;
+            Assert.Equal(nodeRuntime.ExecutablePath, nodePath);
+            Assert.Equal(applicationDirectory, appDirectory);
+            Assert.Equal(arguments, forwardedArguments);
+            return Task.FromResult(23);
+            });
 
-        Assert.False(nodeResolutionAttempted);
-        Assert.Contains("clawctl setup", exception.Message);
+        Assert.True(nodeResolutionAttempted);
+        Assert.True(launchAttempted);
+        Assert.Equal(23, exitCode);
     }
 
-    private async Task<HostOptions> CreateUnpreparedOptionsAsync()
+    [Fact]
+    public async Task SetupChecksNodeAndPackagedApplicationWithoutMutation()
     {
-        string architecture = RuntimeInformation.ProcessArchitecture ==
-            Architecture.Arm64
-                ? "arm64"
-                : "x64";
-        string payloadPath = Path.Combine(
-            _testDirectory,
-            $"app-{architecture}.tar.gz");
-        await File.WriteAllTextAsync(payloadPath, "payload");
-        string metadataPath = Path.Combine(
-            _testDirectory,
-            "payload-metadata.json");
-        await File.WriteAllTextAsync(
-            metadataPath,
-            JsonSerializer.Serialize(new
+        string applicationDirectory = Path.Combine(_testDirectory, "app");
+        Directory.CreateDirectory(applicationDirectory);
+        string entryPoint = Path.Combine(applicationDirectory, "openclaw.mjs");
+        await File.WriteAllTextAsync(entryPoint, "console.log('fixture');");
+        DateTime lastWriteTime = File.GetLastWriteTimeUtc(entryPoint);
+        var options = new HostOptions(applicationDirectory, []);
+        var nodeRuntime = new NodeRuntime(
+            Path.Combine(_testDirectory, "node.exe"),
+            new Version(24, 15, 0),
+            System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture);
+        var output = new StringWriter();
+
+        int exitCode = await Program.RunControlAsync(
+            options,
+            ["setup"],
+            _ => { },
+            _ => { },
+            _ => Task.FromResult(nodeRuntime),
+            output);
+
+        Assert.Equal(0, exitCode);
+        Assert.True(File.Exists(entryPoint));
+        Assert.Equal(lastWriteTime, File.GetLastWriteTimeUtc(entryPoint));
+        Assert.Contains(
+            nodeRuntime.ExecutablePath,
+            output.ToString(),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            applicationDirectory,
+            output.ToString(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SetupResolvesNodeBeforeReportingMissingApplication()
+    {
+        bool nodeResolutionAttempted = false;
+
+        await Assert.ThrowsAsync<FileNotFoundException>(
+            () => Program.RunControlAsync(
+            new HostOptions(null, []),
+            ["setup"],
+            _ => { },
+            _ => { },
+            _ =>
             {
-                repository = "https://github.com/openclaw/openclaw",
-                resolvedCommit = new string('a', 40),
-                architecture,
-                archive = Path.GetFileName(payloadPath),
-                sha256 = new string('b', 64)
+                nodeResolutionAttempted = true;
+                return Task.FromResult(
+                    new NodeRuntime(
+                        "node.exe",
+                        new Version(24, 15, 0),
+                        System.Runtime.InteropServices.RuntimeInformation
+                            .ProcessArchitecture));
+            },
+            new StringWriter()));
+
+        Assert.True(nodeResolutionAttempted);
+    }
+
+    [Fact]
+    public async Task AgentResolvesNodeBeforeReportingMissingApplication()
+    {
+        bool nodeResolutionAttempted = false;
+
+        await Assert.ThrowsAsync<FileNotFoundException>(
+            () => Program.RunAgentAsync(
+            new HostOptions(null, []),
+            _ => { },
+            _ =>
+            {
+                nodeResolutionAttempted = true;
+                return Task.FromResult(
+                    new NodeRuntime(
+                        "node.exe",
+                        new Version(24, 15, 0),
+                        System.Runtime.InteropServices.RuntimeInformation
+                            .ProcessArchitecture));
             }));
 
-        return new HostOptions(
-            payloadPath,
-            metadataPath,
-            Path.Combine(_testDirectory, "app"),
-            []);
+        Assert.True(nodeResolutionAttempted);
     }
 
     public void Dispose()

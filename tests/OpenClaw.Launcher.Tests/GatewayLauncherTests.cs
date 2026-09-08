@@ -3,6 +3,7 @@ namespace OpenClaw.Launcher.Tests;
 public sealed class GatewayLauncherTests : IDisposable
 {
     private readonly string _payloadDirectory = TestDirectory.Create();
+    private readonly string _workingDirectory = TestDirectory.Create();
 
     public GatewayLauncherTests()
     {
@@ -17,11 +18,12 @@ public sealed class GatewayLauncherTests : IDisposable
         var startInfo = GatewayLauncher.CreateStartInfo(
             "node",
             _payloadDirectory,
-            []);
+            [],
+            _workingDirectory);
 
         Assert.False(startInfo.UseShellExecute);
         Assert.False(startInfo.RedirectStandardError);
-        Assert.Empty(startInfo.WorkingDirectory);
+        Assert.Equal(_workingDirectory, startInfo.WorkingDirectory);
         Assert.Equal(
             "external",
             startInfo.Environment["OPENCLAW_SUPERVISOR_MODE"]);
@@ -35,6 +37,18 @@ public sealed class GatewayLauncherTests : IDisposable
     }
 
     [Fact]
+    public void CreateStartInfoDefaultsToCurrentWorkingDirectory()
+    {
+        var startInfo = GatewayLauncher.CreateStartInfo(
+            "node",
+            _payloadDirectory,
+            []);
+
+        Assert.Equal(Environment.CurrentDirectory, startInfo.WorkingDirectory);
+        Assert.NotEqual(_payloadDirectory, startInfo.WorkingDirectory);
+    }
+
+    [Fact]
     public void CreateStartInfoPreservesExplicitArguments()
     {
         string[] arguments = ["status", "--json", "value with spaces"];
@@ -45,7 +59,7 @@ public sealed class GatewayLauncherTests : IDisposable
             arguments);
 
         Assert.False(startInfo.RedirectStandardError);
-        Assert.Empty(startInfo.WorkingDirectory);
+        Assert.Equal(Environment.CurrentDirectory, startInfo.WorkingDirectory);
         Assert.Equal(
             "external",
             startInfo.Environment["OPENCLAW_SUPERVISOR_MODE"]);
@@ -81,6 +95,7 @@ public sealed class GatewayLauncherTests : IDisposable
     public void Dispose()
     {
         Directory.Delete(_payloadDirectory, recursive: true);
+        Directory.Delete(_workingDirectory, recursive: true);
         GC.SuppressFinalize(this);
     }
 }

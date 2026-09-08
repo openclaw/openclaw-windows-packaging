@@ -28,59 +28,63 @@ function New-TestArtifact {
 
         [bool]$IncludeBundledNode = $false,
 
-        [bool]$IncludePayloadBundledNode = $false,
+        [bool]$IncludeApplicationBundledNode = $false,
 
-        [bool]$IncludePayloadNodeArchive = $false
+        [bool]$IncludeApplicationNodeArchive = $false
     )
 
     $directory = Join-Path $Root $Architecture
     $staging = Join-Path $Root ".$Architecture-package"
     $payloadDirectory = Join-Path $staging 'payload'
-    New-Item -Path $directory, $payloadDirectory -ItemType Directory -Force |
+    $applicationDirectory = Join-Path $staging 'app'
+    New-Item `
+        -Path $directory, $payloadDirectory, $applicationDirectory `
+        -ItemType Directory `
+        -Force |
         Out-Null
 
-    $payloadArchiveName = "app-$Architecture.tar.gz"
-    $payloadArchivePath = Join-Path $payloadDirectory $payloadArchiveName
-    $payloadContent = Join-Path $Root ".$Architecture-payload"
-    New-Item -Path $payloadContent -ItemType Directory -Force | Out-Null
     Set-Content `
-        -LiteralPath (Join-Path $payloadContent 'openclaw.mjs') `
+        -LiteralPath (Join-Path $applicationDirectory 'openclaw.mjs') `
         -Value "payload-$Architecture"
-    if ($IncludePayloadBundledNode) {
+    if ($IncludeApplicationBundledNode) {
         Set-Content `
-            -LiteralPath (Join-Path $payloadContent 'node.exe') `
+            -LiteralPath (Join-Path $applicationDirectory 'node.exe') `
             -Value 'bundled-node'
     }
-    if ($IncludePayloadNodeArchive) {
+    if ($IncludeApplicationNodeArchive) {
         Set-Content `
             -LiteralPath (
-                Join-Path $payloadContent 'node-v24.16.0-win-x64.7z'
+                Join-Path $applicationDirectory 'node-v24.16.0-win-x64.7z'
             ) `
             -Value 'bundled-node-archive'
     }
-    & tar -czf $payloadArchivePath -C $payloadContent .
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to create the $Architecture test payload."
-    }
-    Remove-Item -LiteralPath $payloadContent -Recurse -Force
-    $payloadHash = (
-        Get-FileHash -LiteralPath $payloadArchivePath -Algorithm SHA256
-    ).Hash.ToLowerInvariant()
 
+    $payloadFiles = @(
+        Get-ChildItem -LiteralPath $applicationDirectory -File -Recurse |
+            ForEach-Object {
+                [ordered]@{
+                    path = (
+                        [IO.Path]::GetRelativePath(
+                            $applicationDirectory,
+                            $_.FullName
+                        )
+                    ).Replace('\', '/')
+                    length = $_.Length
+                    sha256 = (
+                        Get-FileHash `
+                            -LiteralPath $_.FullName `
+                            -Algorithm SHA256
+                    ).Hash.ToLowerInvariant()
+                }
+            } |
+            Sort-Object path
+    )
     [ordered]@{
-        repository = $policy.repository
-        requestedRef = $PayloadCommit
-        resolvedCommit = $PayloadCommit
-        packageVersion = '2026.8.2'
-        architecture = $Architecture
-        archive = $payloadArchiveName
-        sha256 = $payloadHash
-        nodeVersion = 'v24.16.0'
-        npmVersion = '11.5.1'
+        files = $payloadFiles
     } |
-        ConvertTo-Json |
+        ConvertTo-Json -Depth 4 |
         Set-Content `
-            -LiteralPath (Join-Path $payloadDirectory 'payload-metadata.json') `
+            -LiteralPath (Join-Path $payloadDirectory 'payload-files.json') `
             -Encoding utf8
 
     @"
@@ -117,8 +121,10 @@ function New-TestArtifact {
         packagingCommit = $packagingCommit
         sourceTreeDirty = $SourceTreeDirty
         payloadRepository = $policy.repository
-        payloadRequestedRef = $approvedCommit
-        payloadResolvedCommit = $approvedCommit
+        payloadRequestedRef = $PayloadCommit
+        payloadResolvedCommit = $PayloadCommit
+        payloadLayout = 'immutable-package'
+        payloadFileCount = $payloadFiles.Count
         architecture = $Architecture
         archive = $msixName
         sha256 = $msixHash
@@ -172,12 +178,62 @@ function Assert-Fails {
     throw "Expected failure matching '$MessagePattern', but the action succeeded."
 }
 
-try {
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    New-Item -Path $testRoot -ItemType Directory | Out-Null
+function Update-TestMsix {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Root,
 
+        [Parameter(Mandatory)]
+        [ValidateSet('x64', 'arm64')]
+        [string]$Architecture,
+
+        [Parameter(Mandatory)]
+        [scriptblock]$Mutator
+    )
+
+    $msixPath = Join-Path `
+        $Root `
+        "$Architecture\OpenClawGateway-$Architecture.msix"
+    $expanded = Join-Path $Root ".$Architecture-mutated"
+    [IO.Compression.ZipFile]::ExtractToDirectory($msixPath, $expanded)
+    try {
+        & $Mutator $expanded
+        Remove-Item -LiteralPath $msixPath
+        [IO.Compression.ZipFile]::CreateFromDirectory($expanded, $msixPath)
+    }
+    finally {
+        Remove-Item `
+            -LiteralPath $expanded `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue
+    }
+
+    $metadataPath = Join-Path $Root "$Architecture\msix-metadata.json"
+    $metadata = Get-Content -LiteralPath $metadataPath -Raw |
+        ConvertFrom-Json
+    $metadata.sha256 = (
+        Get-FileHash -LiteralPath $msixPath -Algorithm SHA256
+    ).Hash.ToLowerInvariant()
+    $metadata |
+        ConvertTo-Json |
+        Set-Content -LiteralPath $metadataPath -Encoding utf8
+}
+
+function Reset-TestArtifacts {
+    Remove-Item `
+        -LiteralPath $testRoot `
+        -Recurse `
+        -Force `
+        -ErrorAction SilentlyContinue
+    New-Item -Path $testRoot -ItemType Directory | Out-Null
     New-TestArtifact -Root $testRoot -Architecture x64
     New-TestArtifact -Root $testRoot -Architecture arm64
+}
+
+try {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    Reset-TestArtifacts
     Invoke-PolicyValidation -Root $testRoot
 
     Assert-Fails `
@@ -209,7 +265,7 @@ try {
         -Architecture arm64 `
         -PayloadCommit ('3' * 40)
     Assert-Fails `
-        -MessagePattern 'embedded arm64 payload metadata is not approved' `
+        -MessagePattern 'metadata is not eligible' `
         -Action {
             Invoke-PolicyValidation -Root $testRoot
         }
@@ -232,10 +288,10 @@ try {
     New-TestArtifact `
         -Root $testRoot `
         -Architecture x64 `
-        -IncludePayloadBundledNode $true
+        -IncludeApplicationBundledNode $true
     New-TestArtifact -Root $testRoot -Architecture arm64
     Assert-Fails `
-        -MessagePattern 'embedded x64 payload bundles Node.js' `
+        -MessagePattern 'x64 MSIX bundles Node.js' `
         -Action {
             Invoke-PolicyValidation -Root $testRoot
         }
@@ -245,18 +301,95 @@ try {
     New-TestArtifact `
         -Root $testRoot `
         -Architecture x64 `
-        -IncludePayloadNodeArchive $true
+        -IncludeApplicationNodeArchive $true
     New-TestArtifact -Root $testRoot -Architecture arm64
     Assert-Fails `
-        -MessagePattern 'embedded x64 payload bundles Node.js' `
+        -MessagePattern 'x64 MSIX bundles Node.js' `
         -Action {
             Invoke-PolicyValidation -Root $testRoot
         }
 
-    Remove-Item -LiteralPath $testRoot -Recurse -Force
-    New-Item -Path $testRoot -ItemType Directory | Out-Null
-    New-TestArtifact -Root $testRoot -Architecture x64
-    New-TestArtifact -Root $testRoot -Architecture arm64
+    Reset-TestArtifacts
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        Set-Content `
+            -LiteralPath (Join-Path $Expanded 'app\openclaw.mjs') `
+            -Value 'tampered' `
+            -Encoding utf8
+    }
+    Assert-Fails `
+        -MessagePattern 'application file is invalid' `
+        -Action {
+            Invoke-PolicyValidation -Root $testRoot
+        }
+
+    Reset-TestArtifacts
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        Remove-Item -LiteralPath (Join-Path $Expanded 'app\openclaw.mjs')
+    }
+    Assert-Fails `
+        -MessagePattern "Expected one 'app/openclaw.mjs' entry; found 0" `
+        -Action {
+            Invoke-PolicyValidation -Root $testRoot
+        }
+
+    Reset-TestArtifacts
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        Set-Content `
+            -LiteralPath (Join-Path $Expanded 'app\unexpected.js') `
+            -Value 'unexpected' `
+            -Encoding utf8
+    }
+    Assert-Fails `
+        -MessagePattern 'application file set is invalid' `
+        -Action {
+            Invoke-PolicyValidation -Root $testRoot
+        }
+
+    Reset-TestArtifacts
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        $inventoryPath = Join-Path $Expanded 'payload\payload-files.json'
+        $inventory = Get-Content -LiteralPath $inventoryPath -Raw |
+            ConvertFrom-Json
+        $inventory.files = @($inventory.files) + @($inventory.files)
+        $inventory |
+            ConvertTo-Json -Depth 4 |
+            Set-Content -LiteralPath $inventoryPath -Encoding utf8
+    }
+    $x64MetadataPath = Join-Path $testRoot 'x64\msix-metadata.json'
+    $x64Metadata = Get-Content -LiteralPath $x64MetadataPath -Raw |
+        ConvertFrom-Json
+    $x64Metadata.payloadFileCount = 2
+    $x64Metadata |
+        ConvertTo-Json |
+        Set-Content -LiteralPath $x64MetadataPath -Encoding utf8
+    Assert-Fails `
+        -MessagePattern 'inventory has duplicate paths' `
+        -Action {
+            Invoke-PolicyValidation -Root $testRoot
+        }
+
+    Reset-TestArtifacts
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        $inventoryPath = Join-Path $Expanded 'payload\payload-files.json'
+        $inventory = Get-Content -LiteralPath $inventoryPath -Raw |
+            ConvertFrom-Json
+        $inventory.files[0].path = 'sub\..\openclaw.mjs'
+        $inventory |
+            ConvertTo-Json -Depth 4 |
+            Set-Content -LiteralPath $inventoryPath -Encoding utf8
+    }
+    Assert-Fails `
+        -MessagePattern 'payload inventory is invalid' `
+        -Action {
+            Invoke-PolicyValidation -Root $testRoot
+        }
+
+    Reset-TestArtifacts
     Add-Content `
         -LiteralPath (Join-Path $testRoot 'x64\OpenClawGateway-x64.msix') `
         -Value 'tampered'

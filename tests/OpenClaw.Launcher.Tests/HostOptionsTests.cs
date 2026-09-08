@@ -1,7 +1,9 @@
 namespace OpenClaw.Launcher.Tests;
 
-public sealed class HostOptionsTests
+public sealed class HostOptionsTests : IDisposable
 {
+    private readonly string _testDirectory = TestDirectory.Create();
+
     [Fact]
     public void ParseForwardsAllArgumentsUnchanged()
     {
@@ -24,30 +26,36 @@ public sealed class HostOptionsTests
     }
 
     [Fact]
-    public void ParseUsesPackagedAndProfileDefaults()
+    public void ParseReportsMissingPackagedApplication()
     {
-        HostOptions options = HostOptions.Parse([]);
+        HostOptions options = HostOptions.Parse([], _testDirectory);
 
-        Assert.EndsWith(
-            Path.Combine("payload", $"app-{GetArchitecture()}.tar.gz"),
-            options.PayloadPath,
-            StringComparison.OrdinalIgnoreCase);
-        Assert.EndsWith(
-            Path.Combine("payload", "payload-metadata.json"),
-            options.MetadataPath,
-            StringComparison.OrdinalIgnoreCase);
-        Assert.EndsWith(
-            Path.Combine(".openclaw-msix", "app"),
-            options.InstallDirectory,
-            StringComparison.OrdinalIgnoreCase);
+        Assert.Null(options.PackagedApplicationDirectory);
         Assert.Empty(options.OpenClawArguments);
     }
 
-    private static string GetArchitecture() =>
-        System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture switch
-        {
-            System.Runtime.InteropServices.Architecture.X64 => "x64",
-            System.Runtime.InteropServices.Architecture.Arm64 => "arm64",
-            _ => throw new PlatformNotSupportedException()
-        };
+    [Fact]
+    public void ParseResolvesPackagedApplicationWhenEntryPointExists()
+    {
+        string applicationDirectory = Path.Combine(_testDirectory, "app");
+        Directory.CreateDirectory(applicationDirectory);
+        File.WriteAllText(
+            Path.Combine(applicationDirectory, "openclaw.mjs"),
+            "console.log('fixture');");
+
+        HostOptions options = HostOptions.Parse(
+            ["gateway", "run"],
+            _testDirectory);
+
+        Assert.Equal(
+            applicationDirectory,
+            options.PackagedApplicationDirectory);
+        Assert.Equal(["gateway", "run"], options.OpenClawArguments);
+    }
+
+    public void Dispose()
+    {
+        Directory.Delete(_testDirectory, recursive: true);
+        GC.SuppressFinalize(this);
+    }
 }

@@ -4,12 +4,12 @@ public static class ClawCtlConsole
 {
     public static void WriteHelp(TextWriter output)
     {
-        output.WriteLine("clawctl - OpenClaw package preparation");
+        output.WriteLine("clawctl - OpenClaw package management");
         output.WriteLine();
         WriteUsage(output);
         output.WriteLine();
         output.WriteLine("Commands:");
-        output.WriteLine("  setup   Set up the packaged OpenClaw payload.");
+        output.WriteLine("  setup   Check that packaged OpenClaw is ready.");
         output.WriteLine();
         WriteNodePrerequisite(output);
         output.WriteLine();
@@ -32,16 +32,12 @@ public static class ClawCtlConsole
         output.WriteLine(
             $"Using Node.js {runtime.Version} from {runtime.ExecutablePath}");
 
-    public static void WritePreparationSummary(
+    public static void WriteReadinessSummary(
         TextWriter output,
-        StagedPayload payload)
+        string applicationDirectory)
     {
         output.WriteLine();
-        output.WriteLine("OpenClaw package files are ready.");
-        output.WriteLine(
-            payload.Reused
-                ? "The existing prepared payload is current and was reused."
-                : "The packaged payload was verified and prepared.");
-        output.WriteLine($"Prepared files: {payload.DirectoryPath}");
+        output.WriteLine("OpenClaw package is ready.");
+        output.WriteLine($"Read-only application files: {applicationDirectory}");
     }
 }

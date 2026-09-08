@@ -74,16 +74,13 @@ function Get-ZipEntrySha256 {
     }
 }
 
-function Assert-ZipPayloadDoesNotBundleNode {
+function Get-ZipEntryLength {
     param(
         [Parameter(Mandatory)]
         [IO.Compression.ZipArchive]$Archive,
 
         [Parameter(Mandatory)]
-        [string]$Path,
-
-        [Parameter(Mandatory)]
-        [string]$Architecture
+        [string]$Path
     )
 
     $entries = @($Archive.Entries | Where-Object {
@@ -93,39 +90,7 @@ function Assert-ZipPayloadDoesNotBundleNode {
         throw "Expected one '$Path' entry; found $($entries.Count)."
     }
 
-    $temporaryArchive = Join-Path $env:TEMP (
-        "openclaw-payload-$Architecture-$([guid]::NewGuid().ToString('N')).tar.gz"
-    )
-    $source = $entries[0].Open()
-    $destination = [IO.File]::Create($temporaryArchive)
-    try {
-        $source.CopyTo($destination)
-    }
-    finally {
-        $destination.Dispose()
-        $source.Dispose()
-    }
-
-    try {
-        $payloadEntries = @(& tar -tzf $temporaryArchive)
-        if ($LASTEXITCODE -ne 0) {
-            throw "Unable to inspect the embedded $architecture payload archive."
-        }
-
-        $bundledNodeEntries = @(
-            $payloadEntries |
-                Where-Object {
-                    $_ -match '(^|[\\/])node[.]exe$' -or
-                    [IO.Path]::GetFileName($_) -match '^node-v\d'
-                }
-        )
-        if ($bundledNodeEntries.Count -ne 0) {
-            throw "The embedded $architecture payload bundles Node.js."
-        }
-    }
-    finally {
-        Remove-Item -LiteralPath $temporaryArchive -Force -ErrorAction SilentlyContinue
-    }
+    return $entries[0].Length
 }
 
 $resolvedArtifactsDirectory = (
@@ -183,6 +148,9 @@ foreach ($architecture in @('x64', 'arm64')) {
         $metadata.payloadRepository -ne $policy.repository -or
         $metadata.payloadRequestedRef -ine $approvedCommit -or
         $metadata.payloadResolvedCommit -ine $approvedCommit -or
+        $metadata.payloadLayout -ne 'immutable-package' -or
+        $metadata.payloadFileCount -isnot [int64] -or
+        $metadata.payloadFileCount -le 0 -or
         $metadata.architecture -ne $architecture -or
         $metadata.archive -ne $msix.Name -or
         $metadata.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
@@ -237,37 +205,99 @@ foreach ($architecture in @('x64', 'arm64')) {
             throw "The $architecture MSIX manifest identity is unexpected."
         }
 
-        $payloadMetadataPath = 'payload/payload-metadata.json'
-        $payloadMetadata = Read-ZipEntryText `
+        $payloadFiles = Read-ZipEntryText `
             -Archive $packageArchive `
-            -Path $payloadMetadataPath |
+            -Path 'payload/payload-files.json' |
             ConvertFrom-Json
         if (
-            $payloadMetadata.repository -ne $policy.repository -or
-            $payloadMetadata.requestedRef -ine $approvedCommit -or
-            $payloadMetadata.resolvedCommit -ine $approvedCommit -or
-            $payloadMetadata.architecture -ne $architecture -or
-            $payloadMetadata.archive -notmatch '^app-(x64|arm64)\.tar\.gz$' -or
-            $payloadMetadata.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
-            $payloadMetadata.resolvedCommit -ine
-                $metadata.payloadResolvedCommit
+            $null -eq $payloadFiles.files -or
+            @($payloadFiles.files).Count -ne $metadata.payloadFileCount
         ) {
-            throw "The embedded $architecture payload metadata is not approved."
+            throw "The embedded $architecture payload inventory is invalid."
         }
 
-        $payloadArchivePath = "payload/$($payloadMetadata.archive)"
-        Assert-ZipPayloadDoesNotBundleNode `
-            -Archive $packageArchive `
-            -Path $payloadArchivePath `
-            -Architecture $architecture
-        $actualPayloadHash = Get-ZipEntrySha256 `
-            -Archive $packageArchive `
-            -Path $payloadArchivePath
+        $expectedApplicationPaths =
+            [System.Collections.Generic.HashSet[string]]::new(
+                [System.StringComparer]::OrdinalIgnoreCase
+            )
+        $hasEntryPoint = $false
+        foreach ($file in @($payloadFiles.files)) {
+            $relativePath = [string]$file.path
+            $segments = @($relativePath.Split('/'))
+            if (
+                [string]::IsNullOrWhiteSpace($relativePath) -or
+                $relativePath.StartsWith('/') -or
+                [IO.Path]::IsPathRooted($relativePath) -or
+                $relativePath.Contains('\') -or
+                $relativePath.Contains(':') -or
+                $segments -contains '' -or
+                $segments -contains '.' -or
+                $segments -contains '..' -or
+                $file.length -isnot [int64] -or
+                $file.length -lt 0 -or
+                $file.sha256 -notmatch '^[0-9a-fA-F]{64}$'
+            ) {
+                throw "The embedded $architecture payload inventory is invalid."
+            }
+
+            $packagePath = "app/$relativePath"
+            if (-not $expectedApplicationPaths.Add($packagePath)) {
+                throw (
+                    "The embedded $architecture payload inventory has " +
+                    'duplicate paths.'
+                )
+            }
+            if ($relativePath -ieq 'openclaw.mjs') {
+                $hasEntryPoint = $true
+            }
+
+            $actualLength = Get-ZipEntryLength `
+                -Archive $packageArchive `
+                -Path $packagePath
+            $actualHash = Get-ZipEntrySha256 `
+                -Archive $packageArchive `
+                -Path $packagePath
+            if (
+                $actualLength -ne $file.length -or
+                $actualHash -ine $file.sha256
+            ) {
+                throw (
+                    "The embedded $architecture application file is invalid: " +
+                    $relativePath
+                )
+            }
+        }
+
+        if (-not $hasEntryPoint) {
+            throw (
+                "The embedded $architecture payload inventory has no " +
+                'openclaw.mjs.'
+            )
+        }
+
+        $actualApplicationPaths = @(
+            $packageArchive.Entries |
+                Where-Object {
+                    -not [string]::IsNullOrEmpty($_.Name) -and
+                    $_.FullName.StartsWith(
+                        'app/',
+                        [StringComparison]::OrdinalIgnoreCase
+                    )
+                } |
+                ForEach-Object {
+                    [Uri]::UnescapeDataString($_.FullName)
+                }
+        )
         if (
-            $actualPayloadHash -ne
-                ([string]$payloadMetadata.sha256).ToLowerInvariant()
+            $actualApplicationPaths.Count -ne
+                $expectedApplicationPaths.Count -or
+            @($actualApplicationPaths | Where-Object {
+                -not $expectedApplicationPaths.Contains($_)
+            }).Count -ne 0
         ) {
-            throw "The embedded $architecture payload hash is invalid."
+            throw (
+                "The embedded $architecture application file set is invalid."
+            )
         }
     }
     finally {

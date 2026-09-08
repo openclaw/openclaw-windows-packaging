@@ -96,17 +96,14 @@ if ($Architecture -eq 'x64') {
     }
 }
 
-$archiveName = "app-$Architecture.tar.gz"
-$archivePath = Join-Path $OutputDirectory $archiveName
-Remove-Item $archivePath -Force -ErrorAction SilentlyContinue
-
-& tar -czf $archivePath -C $installedPackage .
-if ($LASTEXITCODE -ne 0) {
-    throw "tar failed with exit code $LASTEXITCODE."
+$applicationDirectory = Join-Path $OutputDirectory 'app'
+if (Test-Path -LiteralPath $applicationDirectory) {
+    Remove-Item -LiteralPath $applicationDirectory -Recurse -Force
 }
-
-$hash = (Get-FileHash $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
-"$hash  $archiveName" | Set-Content (Join-Path $OutputDirectory "$archiveName.sha256") -Encoding ascii
+Copy-Item `
+    -LiteralPath $installedPackage `
+    -Destination $applicationDirectory `
+    -Recurse
 
 $sourceMetadata = Get-Content $sourceMetadataPath -Raw | ConvertFrom-Json
 [ordered]@{
@@ -115,11 +112,16 @@ $sourceMetadata = Get-Content $sourceMetadataPath -Raw | ConvertFrom-Json
     resolvedCommit   = $sourceMetadata.resolvedCommit
     packageVersion   = $sourceMetadata.packageVersion
     architecture     = $Architecture
-    archive          = $archiveName
-    sha256           = $hash
+    layout            = 'expanded-directory'
     nodeVersion      = (& node --version)
     npmVersion       = (& npm --version)
 } | ConvertTo-Json | Set-Content (Join-Path $OutputDirectory 'payload-metadata.json') -Encoding utf8
 
-$size = (Get-Item $archivePath).Length / 1MB
-Write-Host ("Created {0} ({1:N1} MiB)" -f $archivePath, $size)
+$files = @(Get-ChildItem -LiteralPath $applicationDirectory -File -Recurse)
+$size = ($files | Measure-Object -Property Length -Sum).Sum / 1MB
+Write-Host (
+    "Created expanded payload at {0} ({1} files, {2:N1} MiB)" -f
+        $applicationDirectory,
+        $files.Count,
+        $size
+)

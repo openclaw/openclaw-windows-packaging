@@ -28,7 +28,7 @@ dotnet test .\OpenClaw.Gateway.MSIX.slnx `
 # Run one xUnit test by fully qualified name.
 dotnet test .\tests\OpenClaw.Gateway.Launcher.Tests\OpenClaw.Gateway.Launcher.Tests.csproj `
   --configuration Release `
-  --filter "FullyQualifiedName=OpenClaw.Gateway.Launcher.Tests.PayloadStagerTests.StageAsyncExtractsAndReusesVerifiedPayload"
+  --filter "FullyQualifiedName=OpenClaw.Launcher.Tests.ProgramTests.AgentLaunchResolvesNodeAndRunsPackagedApplication"
 
 # Exercise the official-signing policy checks.
 .\scripts\Test-SigningInputs.Tests.ps1
@@ -51,17 +51,12 @@ and ARM64 separately.
 - `OpenClaw.Gateway.Launcher` is a .NET 10 NativeAOT executable packaged as
   `openclaw.exe`. `Package.appxmanifest` exposes it through the `openclaw.exe`
   app execution alias and declares the `OpenClaw.Gateway` MSIX identity.
-- The package contains an architecture-specific OpenClaw tarball and official
-  Node.js runtime. `HostOptions` resolves packaged inputs and the prepared
-  per-user installation at `%USERPROFILE%\.openclaw-msix\app`.
-- Every launch goes through `PayloadStager`. It validates payload metadata,
-  architecture, and SHA-256; takes a non-inheritable cross-process install
-  lock; recovers interrupted promotions; and atomically replaces the prepared
-  directory through `.staging` and `.previous` siblings.
-- A no-argument launch is the preparation/repair UI. Existing installations
-  default to marker-based fast verification; the repair choice performs full
-  inventory and per-file verification. Any invocation with arguments stages
-  as needed, then forwards every argument unchanged to `openclaw.mjs`.
+- The package contains an expanded, read-only OpenClaw application tree.
+  `HostOptions` resolves `app\openclaw.mjs` directly from the package.
+- `openclaw` resolves device-installed Node.js, confirms the packaged entry
+  point exists, and forwards every argument unchanged to `openclaw.mjs`.
+- `clawctl setup` is a read-only readiness check for compatible Node.js and the
+  packaged entry point. Runtime launches do not hash or walk package files.
 - `GatewayLauncher` starts Node without a shell, uses `ArgumentList`, inherits
   the console streams, and sets `OPENCLAW_SUPERVISOR_MODE=external` plus
   `OPENCLAW_NO_AUTO_UPDATE=1`. The child process exit code is the launcher exit
@@ -71,9 +66,10 @@ and ARM64 separately.
   mutex so concurrent processes append complete records.
 - The GitHub workflow first builds and packs a pinned
   `openclaw/openclaw` revision on Linux. Windows matrix jobs use
-  `Build-Payload.ps1` to produce x64/ARM64 tarballs and metadata, then
-  `Build-MSIX.ps1` to verify the payload, download and verify Node.js, publish
-  the NativeAOT host, validate package contents, and emit MSIX metadata.
+  `Build-Payload.ps1` to produce x64/ARM64 expanded trees and build metadata,
+  then `Build-MSIX.ps1` to reject bundled Node.js, build the application
+  inventory, publish the NativeAOT host, validate package contents, and emit
+  MSIX metadata.
 - Unsigned artifacts are the normal PR/push output. Test signing uses a
   temporary runner-local certificate. Official signing is gated to `main` and
   the immutable upstream commit in `release-policy.json`; signing inputs are
@@ -88,12 +84,12 @@ and ARM64 separately.
 - Treat launcher arguments as OpenClaw-owned. Do not add host-only switches,
   consume `--`, rewrite arguments, or block upstream commands; tests explicitly
   protect transparent forwarding.
-- Preserve the staging transaction and fast-marker behavior when changing
-  payload preparation. The immutable packaged archive is always hashed, while
-  full extracted-file hashing is reserved for explicit repair or migration.
-- Payload extraction is a security boundary: retain entry-count and extracted
-  size limits, reject links and unsafe/duplicate Windows paths, build a trusted
-  inventory from the archive, and promote only after verification succeeds.
+- Preserve direct execution from the immutable package and the caller's
+  working directory. Do not add runtime extraction, copying, hashing, or
+  inventory walks.
+- The build-time inventory is a release trust boundary. Keep safe unique paths,
+  lengths, and SHA-256 values synchronized across composition and signing
+  validation.
 - Keep x64 and ARM64 behavior synchronized across the workflow matrix, scripts,
   project runtime identifiers, manifest content, payload metadata, and signing
   validation.
@@ -103,11 +99,9 @@ and ARM64 separately.
 - Keep the workflow's manual `openclaw_ref` default and automatic
   `env.OPENCLAW_REF` fallback identical. Official-release changes also update
   the reviewed immutable commit in `release-policy.json`.
-- Use source-generated `System.Text.Json` metadata through
-  `OpenClawJsonContext`; the launcher is NativeAOT and should not introduce
-  reflection-based serialization. `dotnet build` and the xUnit suite exercise
-  a JIT build, so run the NativeAOT publish path when changing host JSON,
-  reflection, interop, or trimming-sensitive code.
+- The launcher is NativeAOT. `dotnet build` and the xUnit suite exercise a JIT
+  build, so run the NativeAOT publish path when changing reflection, interop,
+  or trimming-sensitive code.
 - Package versions have four numeric components that each fit in `UInt16`.
   Package dependency versions belong in `Directory.Packages.props`.
 - PowerShell build scripts fail fast with `$ErrorActionPreference = 'Stop'`

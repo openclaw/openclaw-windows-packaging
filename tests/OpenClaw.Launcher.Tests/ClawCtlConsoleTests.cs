@@ -28,26 +28,19 @@ public sealed class ClawCtlConsoleTests : IDisposable
         Assert.DoesNotContain("gateway-service", help, StringComparison.Ordinal);
     }
 
-    [Theory]
-    [InlineData(true, "current and was reused")]
-    [InlineData(false, "verified and prepared")]
-    public void WritePreparationSummaryDescribesResult(
-        bool reused,
-        string expectedStatus)
+    [Fact]
+    public void WriteReadinessSummaryDescribesPackagedApplication()
     {
         var output = new StringWriter();
+        string applicationDirectory = Path.Combine(_testDirectory, "app");
 
-        ClawCtlConsole.WritePreparationSummary(
+        ClawCtlConsole.WriteReadinessSummary(
             output,
-            new StagedPayload(
-                Path.Combine(_testDirectory, "app"),
-                new string('a', 64),
-                reused));
+            applicationDirectory);
 
-        Assert.Contains(
-            expectedStatus,
-            output.ToString(),
-            StringComparison.Ordinal);
+        string summary = output.ToString();
+        Assert.Contains("package is ready", summary, StringComparison.Ordinal);
+        Assert.Contains(applicationDirectory, summary, StringComparison.Ordinal);
     }
 
     public void Dispose()

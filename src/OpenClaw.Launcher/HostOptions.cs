@@ -1,37 +1,27 @@
-using System.Runtime.InteropServices;
-
 namespace OpenClaw.Launcher;
 
 public sealed record HostOptions(
-    string PayloadPath,
-    string MetadataPath,
-    string InstallDirectory,
+    string? PackagedApplicationDirectory,
     IReadOnlyList<string> OpenClawArguments)
 {
-    public static HostOptions Parse(IReadOnlyList<string> arguments)
-    {
-        string architecture = RuntimeInformation.ProcessArchitecture switch
-        {
-            Architecture.X64 => "x64",
-            Architecture.Arm64 => "arm64",
-            _ => throw new PlatformNotSupportedException(
-                $"Unsupported process architecture: {RuntimeInformation.ProcessArchitecture}.")
-        };
+    public static HostOptions Parse(IReadOnlyList<string> arguments) =>
+        Parse(arguments, AppContext.BaseDirectory);
 
-        string payloadDirectory = Path.Combine(AppContext.BaseDirectory, "payload");
-        string payloadPath = Path.Combine(payloadDirectory, $"app-{architecture}.tar.gz");
-        string metadataPath = Path.Combine(payloadDirectory, "payload-metadata.json");
-        string userProfile = Environment.GetFolderPath(
-            Environment.SpecialFolder.UserProfile);
-        string installDirectory = Path.Combine(
-            userProfile,
-            ".openclaw-msix",
+    internal static HostOptions Parse(
+        IReadOnlyList<string> arguments,
+        string baseDirectory)
+    {
+        string packagedApplicationDirectory = Path.Combine(
+            baseDirectory,
             "app");
+        string? directApplicationDirectory = File.Exists(Path.Combine(
+            packagedApplicationDirectory,
+            "openclaw.mjs"))
+                ? packagedApplicationDirectory
+                : null;
 
         return new HostOptions(
-            payloadPath,
-            metadataPath,
-            installDirectory,
+            directApplicationDirectory,
             arguments.ToArray());
     }
 }

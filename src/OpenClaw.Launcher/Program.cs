@@ -111,36 +111,40 @@ internal static class Program
     internal static async Task<int> RunAgentAsync(
         HostOptions options,
         Action<string> log,
-        Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null)
+        Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null,
+        Func<
+            string,
+            string,
+            IReadOnlyList<string>,
+            CancellationToken,
+            Action<string>?,
+            Task<int>>? launchOpenClaw = null)
     {
-        await PreparedPayloadResolver.ResolveAsync(
-            options,
-            CancellationToken.None);
         NodeRuntime nodeRuntime = await (
             resolveNode ?? NodeRuntimeResolver.ResolveAsync)(
                 CancellationToken.None);
         log(
             $"Using Node.js {nodeRuntime.Version} from " +
             $"{nodeRuntime.ExecutablePath}.");
-        using FileStream runtimeLease = PayloadRuntimeLock.AcquireForLaunch(
-            options.InstallDirectory);
-        string payloadDirectory = await PreparedPayloadResolver.ResolveAsync(
-            options,
-            CancellationToken.None);
-        return await GatewayLauncher.RunAsync(
+        string applicationDirectory = GetPackagedApplicationDirectory(options);
+        log("Using the OpenClaw application directly from the package.");
+        return await (launchOpenClaw ?? GatewayLauncher.RunAsync)(
             nodeRuntime.ExecutablePath,
-            payloadDirectory,
+            applicationDirectory,
             options.OpenClawArguments,
             CancellationToken.None,
             log);
     }
 
-    private static async Task<int> RunControlAsync(
+    internal static async Task<int> RunControlAsync(
         HostOptions options,
         IReadOnlyList<string> args,
         Action<string> log,
-        Action<string> writeError)
+        Action<string> writeError,
+        Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null,
+        TextWriter? output = null)
     {
+        TextWriter commandOutput = output ?? Console.Out;
         ClawCtlCommandParseResult parsed = ClawCtlCommandParser.Parse(args);
         if (parsed.Error is not null)
         {
@@ -152,38 +156,45 @@ internal static class Program
         switch (parsed.Command)
         {
             case ClawCtlCommand.Help:
-                ClawCtlConsole.WriteHelp(Console.Out);
+                ClawCtlConsole.WriteHelp(commandOutput);
                 return 0;
             case ClawCtlCommand.Version:
-                Console.Out.WriteLine(
+                commandOutput.WriteLine(
                     Assembly.GetExecutingAssembly().GetName().Version?.ToString() ??
                     "unknown");
                 return 0;
             case ClawCtlCommand.Setup:
             {
-                NodeRuntime nodeRuntime = await NodeRuntimeResolver.ResolveAsync(
-                    CancellationToken.None);
-                ClawCtlConsole.WriteNodeRuntimeSummary(Console.Out, nodeRuntime);
-                void ReportProgress(string message)
-                {
-                    log(message);
-                    writeError($"clawctl: {message}");
-                }
-
-                var stager = new PayloadStager(
-                    options.InstallDirectory,
-                    ReportProgress);
-                StagedPayload payload = await stager.StageAsync(
-                    options.PayloadPath,
-                    options.MetadataPath,
-                    CancellationToken.None);
-                ClawCtlConsole.WritePreparationSummary(
-                    Console.Out,
-                    payload);
+                NodeRuntime nodeRuntime = await (
+                    resolveNode ?? NodeRuntimeResolver.ResolveAsync)(
+                        CancellationToken.None);
+                ClawCtlConsole.WriteNodeRuntimeSummary(commandOutput, nodeRuntime);
+                string applicationDirectory =
+                    GetPackagedApplicationDirectory(options);
+                log("Confirmed the packaged OpenClaw application is present.");
+                ClawCtlConsole.WriteReadinessSummary(
+                    commandOutput,
+                    applicationDirectory);
                 return 0;
             }
             default:
                 throw new InvalidOperationException("Unknown clawctl command.");
         }
+    }
+
+    private static string GetPackagedApplicationDirectory(HostOptions options)
+    {
+        string? applicationDirectory = options.PackagedApplicationDirectory;
+        string entryPoint = Path.Combine(
+            applicationDirectory ?? Path.Combine(AppContext.BaseDirectory, "app"),
+            "openclaw.mjs");
+        if (applicationDirectory is null || !File.Exists(entryPoint))
+        {
+            throw new FileNotFoundException(
+                "The packaged OpenClaw entry point was not found.",
+                entryPoint);
+        }
+
+        return applicationDirectory;
     }
 }

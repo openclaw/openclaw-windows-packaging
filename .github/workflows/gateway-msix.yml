@@ -168,7 +168,7 @@ jobs:
           name: openclaw-gateway-npm-package
           path: ${{ runner.temp }}\openclaw-package
 
-      - name: Stage and archive payload
+      - name: Build expanded payload
         shell: pwsh
         run: |
           .\scripts\Build-Payload.ps1 `

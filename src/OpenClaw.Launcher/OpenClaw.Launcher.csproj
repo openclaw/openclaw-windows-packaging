@@ -75,28 +75,21 @@
   </Target>
 
   <ItemGroup Condition="'$(IncludePackagingContent)' == 'true'">
-    <Content Include="$(MSBuildThisFileDirectory)..\..\content\openclaw\app-x64.tar.gz"
-             Link="payload\app-x64.tar.gz"
-             CopyToOutputDirectory="PreserveNewest"
-             Condition="'$(Platform)' == 'x64'" />
-    <Content Include="$(MSBuildThisFileDirectory)..\..\content\openclaw\app-arm64.tar.gz"
-             Link="payload\app-arm64.tar.gz"
-             CopyToOutputDirectory="PreserveNewest"
-             Condition="'$(Platform)' == 'ARM64' Or '$(Platform)' == 'arm64'" />
-    <Content Include="$(MSBuildThisFileDirectory)..\..\content\openclaw\payload-metadata.json"
-             Link="payload\payload-metadata.json"
+    <Content Include="$(MSBuildThisFileDirectory)..\..\content\openclaw\app\**\*"
+             Link="app\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(MSBuildThisFileDirectory)..\..\content\openclaw\payload-files.json"
+             Link="payload\payload-files.json"
              CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <Target Name="ValidatePackagingContent"
           BeforeTargets="Build"
           Condition="'$(IncludePackagingContent)' == 'true'">
-    <Error Condition="'$(Platform)' == 'x64' And !Exists('$(MSBuildThisFileDirectory)..\..\content\openclaw\app-x64.tar.gz')"
-           Text="Missing content\openclaw\app-x64.tar.gz." />
-    <Error Condition="('$(Platform)' == 'ARM64' Or '$(Platform)' == 'arm64') And !Exists('$(MSBuildThisFileDirectory)..\..\content\openclaw\app-arm64.tar.gz')"
-           Text="Missing content\openclaw\app-arm64.tar.gz." />
-    <Error Condition="!Exists('$(MSBuildThisFileDirectory)..\..\content\openclaw\payload-metadata.json')"
-           Text="Missing content\openclaw\payload-metadata.json." />
+    <Error Condition="!Exists('$(MSBuildThisFileDirectory)..\..\content\openclaw\app\openclaw.mjs')"
+           Text="Missing expanded OpenClaw application content." />
+    <Error Condition="!Exists('$(MSBuildThisFileDirectory)..\..\content\openclaw\payload-files.json')"
+           Text="Missing content\openclaw\payload-files.json." />
   </Target>
 
   <Target Name="FinalizeNativeAotPackagePayload"

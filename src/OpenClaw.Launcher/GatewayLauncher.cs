@@ -40,20 +40,22 @@ public static class GatewayLauncher
 
     public static ProcessStartInfo CreateStartInfo(
         string nodePath,
-        string payloadDirectory,
-        IReadOnlyList<string> openClawArguments)
+        string applicationDirectory,
+        IReadOnlyList<string> openClawArguments,
+        string? workingDirectory = null)
     {
-        string entryPoint = Path.Combine(payloadDirectory, "openclaw.mjs");
+        string entryPoint = Path.Combine(applicationDirectory, "openclaw.mjs");
         if (!File.Exists(entryPoint))
         {
             throw new FileNotFoundException(
-                "The staged OpenClaw entry point was not found.",
+                "The packaged OpenClaw entry point was not found.",
                 entryPoint);
         }
 
         var startInfo = new ProcessStartInfo
         {
             FileName = nodePath,
+            WorkingDirectory = workingDirectory ?? Environment.CurrentDirectory,
             UseShellExecute = false,
             RedirectStandardInput = false,
             RedirectStandardOutput = false,

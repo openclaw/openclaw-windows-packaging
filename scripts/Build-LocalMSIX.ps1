@@ -99,14 +99,13 @@ else {
         }
 }
 
-$payloadArchive = Join-Path `
-    $resolvedPayloadDirectory `
-    "app-$Architecture.tar.gz"
+$payloadApplication = Join-Path $resolvedPayloadDirectory 'app'
 $payloadMetadata = Join-Path $resolvedPayloadDirectory 'payload-metadata.json'
-foreach ($requiredPath in @($payloadArchive, $payloadMetadata)) {
-    if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
-        throw "Required payload input was not found: $requiredPath"
-    }
+if (-not (Test-Path -LiteralPath $payloadApplication -PathType Container)) {
+    throw "Required payload input was not found: $payloadApplication"
+}
+if (-not (Test-Path -LiteralPath $payloadMetadata -PathType Leaf)) {
+    throw "Required payload input was not found: $payloadMetadata"
 }
 
 Push-Location $repositoryRoot
