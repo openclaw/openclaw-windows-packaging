@@ -18,56 +18,58 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
-function Get-DecodedZipEntries {
-    param(
-        [Parameter(Mandatory)]
-        [IO.Compression.ZipArchive]$Archive,
-
-        [Parameter(Mandatory)]
-        [string]$Path
-    )
-
-    return @($Archive.Entries | Where-Object {
-        [Uri]::UnescapeDataString($_.FullName) -eq $Path
-    })
-}
-
-function Assert-DecodedZipPathsAreUnique {
+function New-DecodedZipEntryIndex {
     param(
         [Parameter(Mandatory)]
         [IO.Compression.ZipArchive]$Archive
     )
 
-    $paths = [System.Collections.Generic.HashSet[string]]::new(
-        [System.StringComparer]::OrdinalIgnoreCase
-    )
+    $entriesByPath =
+        [System.Collections.Generic.Dictionary[string, object]]::new(
+            [System.StringComparer]::OrdinalIgnoreCase
+        )
     foreach ($entry in $Archive.Entries) {
         if ([string]::IsNullOrEmpty($entry.Name)) {
             continue
         }
 
         $decodedPath = [Uri]::UnescapeDataString($entry.FullName)
-        if (-not $paths.Add($decodedPath)) {
+        if ($entriesByPath.ContainsKey($decodedPath)) {
             throw "The MSIX contains a duplicate decoded path: $decodedPath"
         }
+        $entriesByPath.Add($decodedPath, $entry)
     }
+
+    return $entriesByPath
 }
 
-function Read-ZipEntryText {
+function Get-ZipEntry {
     param(
         [Parameter(Mandatory)]
-        [IO.Compression.ZipArchive]$Archive,
+        [System.Collections.Generic.Dictionary[string, object]]$EntriesByPath,
 
         [Parameter(Mandatory)]
         [string]$Path
     )
 
-    $entries = @(Get-DecodedZipEntries -Archive $Archive -Path $Path)
-    if ($entries.Count -ne 1) {
-        throw "Expected one '$Path' entry; found $($entries.Count)."
+    if (-not $EntriesByPath.ContainsKey($Path)) {
+        throw "Expected one '$Path' entry; found 0."
     }
 
-    $stream = $entries[0].Open()
+    return $EntriesByPath[$Path]
+}
+
+function Read-ZipEntryText {
+    param(
+        [Parameter(Mandatory)]
+        [System.Collections.Generic.Dictionary[string, object]]$EntriesByPath,
+
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    $entry = Get-ZipEntry -EntriesByPath $EntriesByPath -Path $Path
+    $stream = $entry.Open()
     $reader = [IO.StreamReader]::new($stream)
     try {
         return $reader.ReadToEnd()
@@ -81,18 +83,10 @@ function Read-ZipEntryText {
 function Get-ZipEntrySha256 {
     param(
         [Parameter(Mandatory)]
-        [IO.Compression.ZipArchive]$Archive,
-
-        [Parameter(Mandatory)]
-        [string]$Path
+        [IO.Compression.ZipArchiveEntry]$Entry
     )
 
-    $entries = @(Get-DecodedZipEntries -Archive $Archive -Path $Path)
-    if ($entries.Count -ne 1) {
-        throw "Expected one '$Path' entry; found $($entries.Count)."
-    }
-
-    $stream = $entries[0].Open()
+    $stream = $Entry.Open()
     $sha256 = [Security.Cryptography.SHA256]::Create()
     try {
         return [Convert]::ToHexString(
@@ -103,23 +97,6 @@ function Get-ZipEntrySha256 {
         $sha256.Dispose()
         $stream.Dispose()
     }
-}
-
-function Get-ZipEntryLength {
-    param(
-        [Parameter(Mandatory)]
-        [IO.Compression.ZipArchive]$Archive,
-
-        [Parameter(Mandatory)]
-        [string]$Path
-    )
-
-    $entries = @(Get-DecodedZipEntries -Archive $Archive -Path $Path)
-    if ($entries.Count -ne 1) {
-        throw "Expected one '$Path' entry; found $($entries.Count)."
-    }
-
-    return $entries[0].Length
 }
 
 $resolvedArtifactsDirectory = (
@@ -205,15 +182,12 @@ foreach ($architecture in @('x64', 'arm64')) {
 
     $packageArchive = [IO.Compression.ZipFile]::OpenRead($msix.FullName)
     try {
-        Assert-DecodedZipPathsAreUnique -Archive $packageArchive
+        $entriesByPath = New-DecodedZipEntryIndex -Archive $packageArchive
         $bundledNodeEntries = @(
-            $packageArchive.Entries |
+            $entriesByPath.Keys |
                 Where-Object {
-                    -not [string]::IsNullOrEmpty($_.Name) -and
-                    (
-                        $_.Name -ieq 'node.exe' -or
-                        $_.Name -match '^node-v\d'
-                    )
+                    [IO.Path]::GetFileName($_) -ieq 'node.exe' -or
+                    [IO.Path]::GetFileName($_) -match '^node-v\d'
                 }
         )
         if ($bundledNodeEntries.Count -ne 0) {
@@ -221,7 +195,7 @@ foreach ($architecture in @('x64', 'arm64')) {
         }
 
         [xml]$manifest = Read-ZipEntryText `
-            -Archive $packageArchive `
+            -EntriesByPath $entriesByPath `
             -Path 'AppxManifest.xml'
         $identity = $manifest.SelectSingleNode(
             "/*[local-name()='Package']/*[local-name()='Identity']"
@@ -236,7 +210,7 @@ foreach ($architecture in @('x64', 'arm64')) {
         }
 
         $payloadFiles = Read-ZipEntryText `
-            -Archive $packageArchive `
+            -EntriesByPath $entriesByPath `
             -Path 'payload/payload-files.json' |
             ConvertFrom-Json
         if (
@@ -281,12 +255,11 @@ foreach ($architecture in @('x64', 'arm64')) {
                 $hasEntryPoint = $true
             }
 
-            $actualLength = Get-ZipEntryLength `
-                -Archive $packageArchive `
+            $entry = Get-ZipEntry `
+                -EntriesByPath $entriesByPath `
                 -Path $packagePath
-            $actualHash = Get-ZipEntrySha256 `
-                -Archive $packageArchive `
-                -Path $packagePath
+            $actualLength = $entry.Length
+            $actualHash = Get-ZipEntrySha256 -Entry $entry
             if (
                 $actualLength -ne $file.length -or
                 $actualHash -ine $file.sha256
@@ -306,16 +279,12 @@ foreach ($architecture in @('x64', 'arm64')) {
         }
 
         $actualApplicationPaths = @(
-            $packageArchive.Entries |
+            $entriesByPath.Keys |
                 Where-Object {
-                    -not [string]::IsNullOrEmpty($_.Name) -and
-                    $_.FullName.StartsWith(
+                    $_.StartsWith(
                         'app/',
                         [StringComparison]::OrdinalIgnoreCase
                     )
-                } |
-                ForEach-Object {
-                    [Uri]::UnescapeDataString($_.FullName)
                 }
         )
         if (
