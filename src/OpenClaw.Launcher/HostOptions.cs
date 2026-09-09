@@ -11,6 +11,10 @@ public sealed record HostOptions(
         IReadOnlyList<string> arguments,
         string baseDirectory)
     {
+        // openclaw.mjs presence is the sole readiness signal: MSIX enforces
+        // package read-only integrity, so no separate hash/marker check is
+        // needed here. Null (rather than throwing) defers the "not found"
+        // failure to call sites, which can report it with more context.
         string packagedApplicationDirectory = Path.Combine(
             baseDirectory,
             "app");

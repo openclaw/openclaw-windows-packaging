@@ -123,6 +123,9 @@ internal static class Program
             resolveNode ?? NodeRuntimeResolver.ResolveAsync,
             GatewayLauncher.RunAsync);
 
+    // launchOpenClaw is a test seam: tests substitute a fake in place of
+    // GatewayLauncher.RunAsync so they can assert launch behavior without
+    // starting a real Node child process or Windows job object.
     internal static async Task<int> RunAgentAsync(
         HostOptions options,
         Action<string> log,
@@ -143,6 +146,9 @@ internal static class Program
             log);
     }
 
+    // output is a required parameter (not a Console.Out default) so tests
+    // can capture clawctl output without mutating global console state,
+    // which would be unsafe across parallel test runs.
     internal static async Task<int> RunControlAsync(
         HostOptions options,
         IReadOnlyList<string> args,
@@ -197,6 +203,9 @@ internal static class Program
 
     private static string GetPackagedApplicationDirectory(HostOptions options)
     {
+        // Re-check File.Exists here (HostOptions.Parse already checked it)
+        // so both a never-resolved and a since-removed application directory
+        // fail through the same FileNotFoundException message.
         string? applicationDirectory = options.PackagedApplicationDirectory;
         string entryPoint = Path.Combine(
             applicationDirectory ?? Path.Combine(AppContext.BaseDirectory, "app"),

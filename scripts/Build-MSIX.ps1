@@ -104,6 +104,10 @@ function Assert-ApplicationDoesNotBundleNode {
 }
 
 function Assert-ApplicationHasNoReparsePoints {
+    # npm installs can produce symlinks/junctions (e.g. workspace links).
+    # Reject them: the per-file inventory hashes file content by path, and a
+    # link could point outside the expanded tree or resolve differently than
+    # what was hashed at build time.
     param(
         [Parameter(Mandatory)]
         [string]$Path
@@ -194,6 +198,9 @@ if (
 }
 
 $payloadSymbols = @(
+    # MSBuild's own AppxPackagePayload step strips .pdb files when it later
+    # packages content\openclaw\app; remove them here too so the inventory
+    # built below matches what actually ends up in the MSIX.
     Get-ChildItem `
         -LiteralPath $applicationTarget `
         -Filter '*.pdb' `

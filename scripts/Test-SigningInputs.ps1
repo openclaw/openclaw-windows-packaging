@@ -238,6 +238,9 @@ foreach ($architecture in @('x64', 'arm64')) {
         foreach ($file in @($payloadFiles.files)) {
             $relativePath = [string]$file.path
             $segments = @($relativePath.Split('/'))
+            # Reject rooted/absolute paths and '.'/'..' segments: the
+            # inventory is untrusted signing input, and an unvalidated path
+            # here would let a malicious entry escape app/ when resolved.
             if (
                 [string]::IsNullOrWhiteSpace($relativePath) -or
                 $relativePath.StartsWith('/') -or
@@ -297,6 +300,10 @@ foreach ($architecture in @('x64', 'arm64')) {
                     )
                 }
         )
+        # The per-file loop above already verified every inventoried file's
+        # hash matches the package; this set-equality check additionally
+        # catches extra app/ files present in the MSIX but absent from the
+        # inventory, which would otherwise go unverified.
         if (
             $actualApplicationPaths.Count -ne
                 $expectedApplicationPaths.Count -or

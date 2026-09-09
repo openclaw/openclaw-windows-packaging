@@ -55,6 +55,9 @@ public static class GatewayLauncher
         var startInfo = new ProcessStartInfo
         {
             FileName = nodePath,
+            // Default to the caller's directory, not applicationDirectory:
+            // the package root is read-only, so OpenClaw's relative-path
+            // writes need a writable working directory.
             WorkingDirectory = workingDirectory ?? Environment.CurrentDirectory,
             UseShellExecute = false,
             RedirectStandardInput = false,
