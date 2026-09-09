@@ -99,6 +99,7 @@ function New-TestArtifact {
     [ordered]@{
         files = $payloadFiles
     } |
+        # Keep the nested inventory file records intact.
         ConvertTo-Json -Depth 4 |
         Set-Content `
             -LiteralPath (Join-Path $payloadDirectory 'payload-files.json') `
@@ -406,6 +407,7 @@ try {
             ConvertFrom-Json
         $inventory.files = @($inventory.files) + @($inventory.files)
         $inventory |
+            # Keep the nested inventory file records intact.
             ConvertTo-Json -Depth 4 |
             Set-Content -LiteralPath $inventoryPath -Encoding utf8
     }
@@ -430,6 +432,7 @@ try {
             ConvertFrom-Json
         $inventory.files[0].path = 'sub\..\openclaw.mjs'
         $inventory |
+            # Keep the nested inventory file records intact.
             ConvertTo-Json -Depth 4 |
             Set-Content -LiteralPath $inventoryPath -Encoding utf8
     }

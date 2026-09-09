@@ -87,7 +87,12 @@ internal static class Program
             WriteDiagnostic($"Host started through the {commandName} entrypoint.");
             HostOptions options = HostOptions.Parse(args);
             return entrypoint == HostEntrypoint.Control
-                ? await RunControlAsync(options, args, WriteDiagnostic, WriteConsoleError)
+                ? await RunControlAsync(
+                    options,
+                    args,
+                    WriteDiagnostic,
+                    WriteConsoleError,
+                    Console.Out)
                 : await RunAgentAsync(options, WriteDiagnostic);
         }
         catch (Exception exception)
@@ -111,24 +116,26 @@ internal static class Program
     internal static async Task<int> RunAgentAsync(
         HostOptions options,
         Action<string> log,
-        Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null,
-        Func<
-            string,
-            string,
-            IReadOnlyList<string>,
-            CancellationToken,
-            Action<string>?,
-            Task<int>>? launchOpenClaw = null)
+        Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null) =>
+        await RunAgentAsync(
+            options,
+            log,
+            resolveNode ?? NodeRuntimeResolver.ResolveAsync,
+            GatewayLauncher.RunAsync);
+
+    internal static async Task<int> RunAgentAsync(
+        HostOptions options,
+        Action<string> log,
+        Func<CancellationToken, Task<NodeRuntime>> resolveNode,
+        LaunchOpenClawAsync launchOpenClaw)
     {
-        NodeRuntime nodeRuntime = await (
-            resolveNode ?? NodeRuntimeResolver.ResolveAsync)(
-                CancellationToken.None);
+        NodeRuntime nodeRuntime = await resolveNode(CancellationToken.None);
         log(
             $"Using Node.js {nodeRuntime.Version} from " +
             $"{nodeRuntime.ExecutablePath}.");
         string applicationDirectory = GetPackagedApplicationDirectory(options);
         log("Using the OpenClaw application directly from the package.");
-        return await (launchOpenClaw ?? GatewayLauncher.RunAsync)(
+        return await launchOpenClaw(
             nodeRuntime.ExecutablePath,
             applicationDirectory,
             options.OpenClawArguments,
@@ -141,10 +148,9 @@ internal static class Program
         IReadOnlyList<string> args,
         Action<string> log,
         Action<string> writeError,
-        Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null,
-        TextWriter? output = null)
+        TextWriter output,
+        Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null)
     {
-        TextWriter commandOutput = output ?? Console.Out;
         ClawCtlCommandParseResult parsed = ClawCtlCommandParser.Parse(args);
         if (parsed.Error is not null)
         {
@@ -156,10 +162,10 @@ internal static class Program
         switch (parsed.Command)
         {
             case ClawCtlCommand.Help:
-                ClawCtlConsole.WriteHelp(commandOutput);
+                ClawCtlConsole.WriteHelp(output);
                 return 0;
             case ClawCtlCommand.Version:
-                commandOutput.WriteLine(
+                output.WriteLine(
                     Assembly.GetExecutingAssembly().GetName().Version?.ToString() ??
                     "unknown");
                 return 0;
@@ -168,12 +174,12 @@ internal static class Program
                 NodeRuntime nodeRuntime = await (
                     resolveNode ?? NodeRuntimeResolver.ResolveAsync)(
                         CancellationToken.None);
-                ClawCtlConsole.WriteNodeRuntimeSummary(commandOutput, nodeRuntime);
+                ClawCtlConsole.WriteNodeRuntimeSummary(output, nodeRuntime);
                 string applicationDirectory =
                     GetPackagedApplicationDirectory(options);
                 log("Confirmed the packaged OpenClaw application is present.");
                 ClawCtlConsole.WriteReadinessSummary(
-                    commandOutput,
+                    output,
                     applicationDirectory);
                 return 0;
             }
@@ -181,6 +187,13 @@ internal static class Program
                 throw new InvalidOperationException("Unknown clawctl command.");
         }
     }
+
+    internal delegate Task<int> LaunchOpenClawAsync(
+        string nodePath,
+        string applicationDirectory,
+        IReadOnlyList<string> openClawArguments,
+        CancellationToken cancellationToken,
+        Action<string>? log);
 
     private static string GetPackagedApplicationDirectory(HostOptions options)
     {

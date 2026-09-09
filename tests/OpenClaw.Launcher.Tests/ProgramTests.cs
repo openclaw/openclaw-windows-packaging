@@ -63,8 +63,8 @@ public sealed class ProgramTests : IDisposable
             ["setup"],
             _ => { },
             _ => { },
-            _ => Task.FromResult(nodeRuntime),
-            output);
+            output,
+            _ => Task.FromResult(nodeRuntime));
 
         Assert.Equal(0, exitCode);
         Assert.True(File.Exists(entryPoint));
@@ -90,6 +90,7 @@ public sealed class ProgramTests : IDisposable
             ["setup"],
             _ => { },
             _ => { },
+            new StringWriter(),
             _ =>
             {
                 nodeResolutionAttempted = true;
@@ -99,8 +100,7 @@ public sealed class ProgramTests : IDisposable
                         new Version(24, 15, 0),
                         System.Runtime.InteropServices.RuntimeInformation
                             .ProcessArchitecture));
-            },
-            new StringWriter()));
+            }));
 
         Assert.True(nodeResolutionAttempted);
     }

@@ -18,14 +18,17 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
-function New-DecodedZipEntryIndex {
+function New-PackageEntryIndex {
     param(
         [Parameter(Mandatory)]
         [IO.Compression.ZipArchive]$Archive
     )
 
     $entriesByPath =
-        [System.Collections.Generic.Dictionary[string, object]]::new(
+        [System.Collections.Generic.Dictionary[
+            string,
+            System.IO.Compression.ZipArchiveEntry
+        ]]::new(
             [System.StringComparer]::OrdinalIgnoreCase
         )
     foreach ($entry in $Archive.Entries) {
@@ -43,10 +46,13 @@ function New-DecodedZipEntryIndex {
     return $entriesByPath
 }
 
-function Get-ZipEntry {
+function Get-PackageEntry {
     param(
         [Parameter(Mandatory)]
-        [System.Collections.Generic.Dictionary[string, object]]$EntriesByPath,
+        [System.Collections.Generic.Dictionary[
+            string,
+            System.IO.Compression.ZipArchiveEntry
+        ]]$EntriesByPath,
 
         [Parameter(Mandatory)]
         [string]$Path
@@ -62,13 +68,16 @@ function Get-ZipEntry {
 function Read-ZipEntryText {
     param(
         [Parameter(Mandatory)]
-        [System.Collections.Generic.Dictionary[string, object]]$EntriesByPath,
+        [System.Collections.Generic.Dictionary[
+            string,
+            System.IO.Compression.ZipArchiveEntry
+        ]]$EntriesByPath,
 
         [Parameter(Mandatory)]
         [string]$Path
     )
 
-    $entry = Get-ZipEntry -EntriesByPath $EntriesByPath -Path $Path
+    $entry = Get-PackageEntry -EntriesByPath $EntriesByPath -Path $Path
     $stream = $entry.Open()
     $reader = [IO.StreamReader]::new($stream)
     try {
@@ -80,7 +89,7 @@ function Read-ZipEntryText {
     }
 }
 
-function Get-ZipEntrySha256 {
+function Get-PackageEntrySha256 {
     param(
         [Parameter(Mandatory)]
         [IO.Compression.ZipArchiveEntry]$Entry
@@ -182,7 +191,8 @@ foreach ($architecture in @('x64', 'arm64')) {
 
     $packageArchive = [IO.Compression.ZipFile]::OpenRead($msix.FullName)
     try {
-        $entriesByPath = New-DecodedZipEntryIndex -Archive $packageArchive
+        # MSIX percent-encodes some names, so index decoded paths once.
+        $entriesByPath = New-PackageEntryIndex -Archive $packageArchive
         $bundledNodeEntries = @(
             $entriesByPath.Keys |
                 Where-Object {
@@ -255,11 +265,11 @@ foreach ($architecture in @('x64', 'arm64')) {
                 $hasEntryPoint = $true
             }
 
-            $entry = Get-ZipEntry `
+            $entry = Get-PackageEntry `
                 -EntriesByPath $entriesByPath `
                 -Path $packagePath
             $actualLength = $entry.Length
-            $actualHash = Get-ZipEntrySha256 -Entry $entry
+            $actualHash = Get-PackageEntrySha256 -Entry $entry
             if (
                 $actualLength -ne $file.length -or
                 $actualHash -ine $file.sha256

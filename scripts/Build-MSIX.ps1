@@ -235,6 +235,7 @@ $payloadInventoryPath = Join-Path $openClawContent 'payload-files.json'
 [ordered]@{
     files = $payloadFiles
 } |
+    # Keep the nested inventory file records intact.
     ConvertTo-Json -Depth 4 |
     Set-Content -LiteralPath $payloadInventoryPath -Encoding utf8
 

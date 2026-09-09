@@ -4,12 +4,12 @@ public static class ClawCtlConsole
 {
     public static void WriteHelp(TextWriter output)
     {
-        output.WriteLine("clawctl - OpenClaw package management");
+        output.WriteLine("clawctl - OpenClaw package preparation");
         output.WriteLine();
         WriteUsage(output);
         output.WriteLine();
         output.WriteLine("Commands:");
-        output.WriteLine("  setup   Check that packaged OpenClaw is ready.");
+        output.WriteLine("  setup   Prepare the packaged OpenClaw environment.");
         output.WriteLine();
         WriteNodePrerequisite(output);
         output.WriteLine();
