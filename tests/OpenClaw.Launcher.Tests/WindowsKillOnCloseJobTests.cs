@@ -109,7 +109,9 @@ public sealed class WindowsKillOnCloseJobTests
             await process.WaitForExitAsync(timeout.Token);
 
             Assert.Equal(0, process.ExitCode);
-            Assert.Equal(expectedContent, File.ReadAllText(outputPath));
+            string actualContent =
+                await File.ReadAllTextAsync(outputPath, timeout.Token);
+            Assert.Equal(expectedContent, actualContent);
         }
         finally
         {

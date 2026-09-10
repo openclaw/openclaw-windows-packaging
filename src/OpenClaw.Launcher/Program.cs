@@ -92,8 +92,9 @@ internal static class Program
                     args,
                     WriteDiagnostic,
                     WriteConsoleError,
-                    Console.Out)
-                : await RunAgentAsync(options, WriteDiagnostic);
+                    Console.Out).ConfigureAwait(false)
+                : await RunAgentAsync(options, WriteDiagnostic)
+                    .ConfigureAwait(false);
         }
         catch (Exception exception)
         {
@@ -121,7 +122,7 @@ internal static class Program
             options,
             log,
             resolveNode ?? NodeRuntimeResolver.ResolveAsync,
-            GatewayLauncher.RunAsync);
+            GatewayLauncher.RunAsync).ConfigureAwait(false);
 
     // launchOpenClaw is a test seam: tests substitute a fake in place of
     // GatewayLauncher.RunAsync so they can assert launch behavior without
@@ -132,7 +133,8 @@ internal static class Program
         Func<CancellationToken, Task<NodeRuntime>> resolveNode,
         LaunchOpenClawAsync launchOpenClaw)
     {
-        NodeRuntime nodeRuntime = await resolveNode(CancellationToken.None);
+        NodeRuntime nodeRuntime = await resolveNode(CancellationToken.None)
+            .ConfigureAwait(false);
         log(
             $"Using Node.js {nodeRuntime.Version} from " +
             $"{nodeRuntime.ExecutablePath}.");
@@ -143,7 +145,7 @@ internal static class Program
             applicationDirectory,
             options.OpenClawArguments,
             CancellationToken.None,
-            log);
+            log).ConfigureAwait(false);
     }
 
     // output is a required parameter (not a Console.Out default) so tests
@@ -171,15 +173,15 @@ internal static class Program
                 ClawCtlConsole.WriteHelp(output);
                 return 0;
             case ClawCtlCommand.Version:
-                output.WriteLine(
+                await output.WriteLineAsync(
                     Assembly.GetExecutingAssembly().GetName().Version?.ToString() ??
-                    "unknown");
+                    "unknown").ConfigureAwait(false);
                 return 0;
             case ClawCtlCommand.Setup:
             {
                 NodeRuntime nodeRuntime = await (
                     resolveNode ?? NodeRuntimeResolver.ResolveAsync)(
-                        CancellationToken.None);
+                        CancellationToken.None).ConfigureAwait(false);
                 ClawCtlConsole.WriteNodeRuntimeSummary(output, nodeRuntime);
                 string applicationDirectory =
                     GetPackagedApplicationDirectory(options);

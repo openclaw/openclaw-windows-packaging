@@ -57,7 +57,8 @@ internal static partial class NodeRuntimeResolver
         {
             try
             {
-                string output = await queryVersion(candidate, cancellationToken);
+                string output = await queryVersion(candidate, cancellationToken)
+                    .ConfigureAwait(false);
                 Version version = ParseVersion(output);
                 if (!IsSupported(version))
                 {
@@ -187,9 +188,9 @@ internal static partial class NodeRuntimeResolver
                 timeout.Token);
             Task<string> standardError = process.StandardError.ReadToEndAsync(
                 timeout.Token);
-            await process.WaitForExitAsync(timeout.Token);
-            string output = await standardOutput;
-            string error = await standardError;
+            await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+            string output = await standardOutput.ConfigureAwait(false);
+            string error = await standardError.ConfigureAwait(false);
             if (process.ExitCode != 0)
             {
                 throw new InvalidOperationException(
@@ -204,7 +205,8 @@ internal static partial class NodeRuntimeResolver
             if (!process.HasExited)
             {
                 process.Kill(entireProcessTree: true);
-                await process.WaitForExitAsync(CancellationToken.None);
+                await process.WaitForExitAsync(CancellationToken.None)
+                    .ConfigureAwait(false);
             }
             throw new TimeoutException("Node.js version query timed out.");
         }

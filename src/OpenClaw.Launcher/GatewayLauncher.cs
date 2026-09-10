@@ -22,7 +22,8 @@ internal static class GatewayLauncher
 
         try
         {
-            await process.WaitForExitAsync(cancellationToken);
+            await process.WaitForExitAsync(cancellationToken)
+                .ConfigureAwait(false);
             log?.Invoke($"OpenClaw child process exited with code {process.ExitCode}.");
             return process.ExitCode;
         }
@@ -31,7 +32,8 @@ internal static class GatewayLauncher
             if (!process.HasExited)
             {
                 process.Kill(entireProcessTree: true);
-                await process.WaitForExitAsync(CancellationToken.None);
+                await process.WaitForExitAsync(CancellationToken.None)
+                    .ConfigureAwait(false);
             }
 
             throw;
