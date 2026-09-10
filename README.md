@@ -149,6 +149,35 @@ Test-signing private keys are generated only on the temporary GitHub runner
 and are deleted before artifacts are uploaded. No signing secret or private
 key is stored in the repository.
 
+### Official signing setup
+
+The `release-signing` GitHub environment must define these environment
+variables (they are identifiers, not credentials):
+
+- `AZURE_CLIENT_ID`: application (client) ID of the Entra application used by
+  the Windows Companion release workflow;
+- `AZURE_TENANT_ID`: Entra tenant ID;
+- `AZURE_SUBSCRIPTION_ID`: Azure subscription containing the signing resource.
+
+Do not create an `AZURE_CLIENT_SECRET`. The `sign-msix` job requests a
+short-lived Azure token with GitHub OIDC. The Entra application must have a
+federated identity credential with:
+
+- issuer: `https://token.actions.githubusercontent.com`;
+- subject:
+  `repo:openclaw@252820863/openclaw-windows-packaging@1347889239:environment:release-signing`;
+- audience: `api://AzureADTokenExchange`.
+
+This repository was created after GitHub's immutable OIDC subject rollout, so
+the subject includes the organization and repository IDs. The older mutable
+`repo:openclaw/openclaw-windows-packaging:...` form will not match its tokens.
+
+The service principal must have `Artifact Signing Certificate Profile Signer`
+on the `openclaw` certificate profile (or a containing scope). The workflow
+uses account `openclaw`, certificate profile `openclaw`, and endpoint
+`https://eus.codesigning.azure.net/`. The expected public certificate subject
+is recorded in `release-policy.json`.
+
 ## Installed data
 
 | Data | Default path |
