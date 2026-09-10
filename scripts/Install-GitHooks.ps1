@@ -7,7 +7,11 @@
     checks continuous integration runs are reported locally first. It is
     deliberately opt in.
 
-    Installation copies hooks\pre-push into this clone's .git\hooks directory.
+    Installation writes hooks\pre-push into the hooks directory Git actually
+    consults for this working tree, which Git reports itself. A clone keeps one
+    hooks directory, so installing or removing from a linked worktree affects
+    every worktree of that clone. Other clones are unaffected.
+
     Nothing outside this clone changes: global Git configuration and
     core.hooksPath are never modified. If core.hooksPath is already set, the
     script stops rather than writing a hook that Git would ignore.
@@ -55,7 +59,7 @@ if (-not (Test-Path -LiteralPath $sourceHook -PathType Leaf)) {
     throw "Could not find the tracked hook at '$sourceHook'."
 }
 
-$gitDirectory = & git -C $RepositoryRoot rev-parse --absolute-git-dir 2>$null
+& git -C $RepositoryRoot rev-parse --is-inside-work-tree 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) {
     throw "'$RepositoryRoot' is not a Git working tree."
 }
@@ -64,13 +68,23 @@ $configuredHooksPath = & git -C $RepositoryRoot config --get core.hooksPath 2>$n
 if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($configuredHooksPath)) {
     throw (
         "core.hooksPath is set to '$configuredHooksPath', so Git would ignore " +
-        "a hook installed in .git\hooks. This script does not change Git " +
-        "configuration. Clear core.hooksPath first, or install the hook into " +
-        'that directory yourself.'
+        'a hook installed in the default hooks directory. This script does ' +
+        'not change Git configuration. Clear core.hooksPath first, or install ' +
+        'the hook into that directory yourself.'
     )
 }
 
-$hooksDirectory = Join-Path $gitDirectory 'hooks'
+# Ask Git for the hooks directory rather than composing one. A linked
+# worktree's own Git directory is not where Git looks for hooks; the clone's
+# common hooks directory is, and only Git knows which that is.
+$reportedHooksDirectory =
+    & git -C $RepositoryRoot rev-parse --path-format=absolute --git-path hooks 2>$null
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($reportedHooksDirectory)) {
+    throw "Git did not report a hooks directory for '$RepositoryRoot'."
+}
+
+# Git reports forward slashes even on Windows.
+$hooksDirectory = [System.IO.Path]::GetFullPath($reportedHooksDirectory)
 $targetHook = Join-Path $hooksDirectory $hookName
 
 function Test-ManagedHook {
@@ -99,6 +113,7 @@ if ($Remove) {
 
     Remove-Item -LiteralPath $targetHook -Force
     Write-Host "Removed the managed $hookName hook from '$targetHook'."
+    Write-Host 'Every worktree of this clone stops running it.'
     return
 }
 
@@ -124,4 +139,5 @@ $hookContent = [System.IO.File]::ReadAllText($sourceHook) -replace "`r`n", "`n"
 
 Write-Host "Installed the $hookName hook at '$targetHook'."
 Write-Host 'It runs scripts\Test-DotNetQuality.ps1 before every push.'
+Write-Host 'Every worktree of this clone shares that hook.'
 Write-Host 'Bypass a single push with `git push --no-verify`.'

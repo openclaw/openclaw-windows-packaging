@@ -115,13 +115,18 @@ CI. The hook is opt in and local to your clone:
 .\scripts\Install-GitHooks.ps1
 ```
 
-That copies the tracked `hooks\pre-push` into this clone's `.git\hooks`. It
-runs `Test-DotNetQuality.ps1` and nothing else, so it reports exactly what CI
-reports. To remove it:
+That writes the tracked `hooks\pre-push` into the hooks directory Git consults
+for your working tree. It runs `Test-DotNetQuality.ps1` and nothing else, so it
+reports exactly what CI reports. To remove it:
 
 ```powershell
 .\scripts\Install-GitHooks.ps1 -Remove
 ```
+
+A clone has one hooks directory, shared by every linked worktree
+(`git worktree add`). Installing or removing from any worktree therefore
+affects all of them, and each push runs the quality script from the worktree
+you pushed. Other clones are unaffected.
 
 Both operations are idempotent. Installation refuses to overwrite a `pre-push`
 hook it did not write, removal only deletes a hook carrying its own marker, and

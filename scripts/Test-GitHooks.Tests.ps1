@@ -11,6 +11,10 @@
     throwaway repository with a stub, then perform a real `git push` to a local
     bare remote. That proves Git actually invokes the hook and that the hook's
     exit code decides whether the push proceeds, without running a full build.
+
+    Every case runs twice: once in an ordinary clone and once against a linked
+    worktree of that clone, because Git keeps one hooks directory per clone but
+    runs the pushing worktree's quality script.
 #>
 [CmdletBinding()]
 param()
@@ -36,13 +40,34 @@ function Invoke-Git {
     return $output
 }
 
+function New-QualityStub {
+    param(
+        [Parameter(Mandatory)]
+        [int]$ExitCode,
+
+        [Parameter(Mandatory)]
+        [string]$Label
+    )
+
+    return "Write-Host 'stub quality check ($Label)'`nexit $ExitCode`n"
+}
+
 function New-TestRepository {
     <#
         Creates a work tree wired to a local bare remote, seeded with the
         tracked hook and a stub quality script that exits with $StubExitCode.
+
+        With -Layout Worktree the repository also gains a linked worktree on
+        its own branch, and that linked worktree becomes the target the case
+        operates on. The primary work tree then carries the opposite stub exit
+        code, so a push from the linked worktree can only behave as the case
+        expects if Git ran the pushing worktree's quality script.
     #>
     param(
-        [int]$StubExitCode = 0
+        [int]$StubExitCode = 0,
+
+        [ValidateSet('Clone', 'Worktree')]
+        [string]$Layout = 'Clone'
     )
 
     $root = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString('n'))
@@ -62,19 +87,44 @@ function New-TestRepository {
     $hookContent = [System.IO.File]::ReadAllText($trackedHook) -replace "`r`n", "`n"
     [System.IO.File]::WriteAllText((Join-Path $work 'hooks\pre-push'), $hookContent)
 
-    $stub = "Write-Host 'stub quality check'`nexit $StubExitCode`n"
+    $primaryExitCode = $StubExitCode
+    if ($Layout -eq 'Worktree') {
+        $primaryExitCode = if ($StubExitCode -eq 0) { 1 } else { 0 }
+    }
+
     [System.IO.File]::WriteAllText(
         (Join-Path $work 'scripts\Test-DotNetQuality.ps1'),
-        $stub)
+        (New-QualityStub -ExitCode $primaryExitCode -Label 'primary'))
 
     [System.IO.File]::WriteAllText((Join-Path $work 'seed.txt'), "seed`n")
     Invoke-Git -C $work add --all | Out-Null
     Invoke-Git -C $work commit -m 'seed' | Out-Null
 
+    $target = $work
+    $branch = 'main'
+    if ($Layout -eq 'Worktree') {
+        $linked = Join-Path $root 'linked'
+        Invoke-Git -C $work worktree add -b feature $linked | Out-Null
+        [System.IO.File]::WriteAllText(
+            (Join-Path $linked 'scripts\Test-DotNetQuality.ps1'),
+            (New-QualityStub -ExitCode $StubExitCode -Label 'linked'))
+        Invoke-Git -C $linked add --all | Out-Null
+        Invoke-Git -C $linked commit -m 'linked stub' | Out-Null
+
+        $target = $linked
+        $branch = 'feature'
+    }
+
     return [pscustomobject]@{
         Root      = $root
         Work      = $work
         Remote    = $remote
+        Layout    = $Layout
+        Target    = $target
+        Branch    = $branch
+
+        # The clone's common hooks directory, which Git consults for every
+        # worktree. Stated independently of the installer on purpose.
         HookPath  = Join-Path $work '.git\hooks\pre-push'
     }
 }
@@ -129,23 +179,28 @@ function Invoke-Case {
         [Parameter(Mandatory)]
         [scriptblock]$Body,
 
-        [int]$StubExitCode = 0
+        [int]$StubExitCode = 0,
+
+        [ValidateSet('Clone', 'Worktree')]
+        [string[]]$Layouts = @('Clone', 'Worktree')
     )
 
-    $repository = New-TestRepository -StubExitCode $StubExitCode
-    try {
-        & $Body $repository
-        Write-Host "PASS $Name"
-    }
-    finally {
-        Remove-Item -LiteralPath $repository.Root -Recurse -Force -ErrorAction SilentlyContinue
+    foreach ($layout in $Layouts) {
+        $repository = New-TestRepository -StubExitCode $StubExitCode -Layout $layout
+        try {
+            & $Body $repository
+            Write-Host "PASS $Name [$layout]"
+        }
+        finally {
+            Remove-Item -LiteralPath $repository.Root -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
 Invoke-Case 'installs the managed hook' {
     param($repository)
 
-    & $installScript -RepositoryRoot $repository.Work | Out-Null
+    & $installScript -RepositoryRoot $repository.Target | Out-Null
 
     Assert-True `
         -Condition (Test-Path -LiteralPath $repository.HookPath -PathType Leaf) `
@@ -163,8 +218,8 @@ Invoke-Case 'installs the managed hook' {
 Invoke-Case 'installing twice is idempotent' {
     param($repository)
 
-    & $installScript -RepositoryRoot $repository.Work | Out-Null
-    & $installScript -RepositoryRoot $repository.Work | Out-Null
+    & $installScript -RepositoryRoot $repository.Target | Out-Null
+    & $installScript -RepositoryRoot $repository.Target | Out-Null
 
     Assert-True `
         -Condition (Test-Path -LiteralPath $repository.HookPath -PathType Leaf) `
@@ -174,11 +229,11 @@ Invoke-Case 'installing twice is idempotent' {
 Invoke-Case 'a passing check allows the push' {
     param($repository)
 
-    & $installScript -RepositoryRoot $repository.Work | Out-Null
-    Invoke-Git -C $repository.Work push origin main | Out-Null
+    & $installScript -RepositoryRoot $repository.Target | Out-Null
+    Invoke-Git -C $repository.Target push origin $($repository.Branch) | Out-Null
 
-    $remoteHead = Invoke-Git --git-dir=$($repository.Remote) rev-parse main
-    $localHead = Invoke-Git -C $repository.Work rev-parse main
+    $remoteHead = Invoke-Git --git-dir=$($repository.Remote) rev-parse $($repository.Branch)
+    $localHead = Invoke-Git -C $repository.Target rev-parse $($repository.Branch)
     Assert-True `
         -Condition ($remoteHead -eq $localHead) `
         -Message 'The push did not reach the remote.'
@@ -187,14 +242,14 @@ Invoke-Case 'a passing check allows the push' {
 Invoke-Case 'a failing check blocks the push' -StubExitCode 1 {
     param($repository)
 
-    & $installScript -RepositoryRoot $repository.Work | Out-Null
+    & $installScript -RepositoryRoot $repository.Target | Out-Null
 
     Assert-Fails `
         -Case 'failing check' `
         -MessagePattern 'failed' `
-        -Action { Invoke-Git -C $repository.Work push origin main }
+        -Action { Invoke-Git -C $repository.Target push origin $($repository.Branch) }
 
-    & git --git-dir=$($repository.Remote) rev-parse --verify main 2>&1 | Out-Null
+    & git --git-dir=$($repository.Remote) rev-parse --verify $($repository.Branch) 2>&1 | Out-Null
     Assert-True `
         -Condition ($LASTEXITCODE -ne 0) `
         -Message 'A blocked push still updated the remote.'
@@ -203,10 +258,10 @@ Invoke-Case 'a failing check blocks the push' -StubExitCode 1 {
 Invoke-Case 'a failing check is bypassable with --no-verify' -StubExitCode 1 {
     param($repository)
 
-    & $installScript -RepositoryRoot $repository.Work | Out-Null
-    Invoke-Git -C $repository.Work push --no-verify origin main | Out-Null
+    & $installScript -RepositoryRoot $repository.Target | Out-Null
+    Invoke-Git -C $repository.Target push --no-verify origin $($repository.Branch) | Out-Null
 
-    $remoteHead = Invoke-Git --git-dir=$($repository.Remote) rev-parse main
+    $remoteHead = Invoke-Git --git-dir=$($repository.Remote) rev-parse $($repository.Branch)
     Assert-True `
         -Condition (-not [string]::IsNullOrWhiteSpace($remoteHead)) `
         -Message '--no-verify did not bypass the failing hook.'
@@ -215,8 +270,8 @@ Invoke-Case 'a failing check is bypassable with --no-verify' -StubExitCode 1 {
 Invoke-Case 'removes the managed hook' {
     param($repository)
 
-    & $installScript -RepositoryRoot $repository.Work | Out-Null
-    & $installScript -RepositoryRoot $repository.Work -Remove | Out-Null
+    & $installScript -RepositoryRoot $repository.Target | Out-Null
+    & $installScript -RepositoryRoot $repository.Target -Remove | Out-Null
 
     Assert-True `
         -Condition (-not (Test-Path -LiteralPath $repository.HookPath)) `
@@ -226,9 +281,9 @@ Invoke-Case 'removes the managed hook' {
 Invoke-Case 'removing twice is idempotent' {
     param($repository)
 
-    & $installScript -RepositoryRoot $repository.Work | Out-Null
-    & $installScript -RepositoryRoot $repository.Work -Remove | Out-Null
-    & $installScript -RepositoryRoot $repository.Work -Remove | Out-Null
+    & $installScript -RepositoryRoot $repository.Target | Out-Null
+    & $installScript -RepositoryRoot $repository.Target -Remove | Out-Null
+    & $installScript -RepositoryRoot $repository.Target -Remove | Out-Null
 }
 
 Invoke-Case 'refuses to overwrite an unmanaged hook' {
@@ -241,7 +296,7 @@ Invoke-Case 'refuses to overwrite an unmanaged hook' {
     Assert-Fails `
         -Case 'unmanaged install' `
         -MessagePattern 'not be overwritten' `
-        -Action { & $installScript -RepositoryRoot $repository.Work }
+        -Action { & $installScript -RepositoryRoot $repository.Target }
 
     $preserved = [System.IO.File]::ReadAllText($repository.HookPath)
     Assert-True `
@@ -259,7 +314,7 @@ Invoke-Case 'refuses to remove an unmanaged hook' {
     Assert-Fails `
         -Case 'unmanaged remove' `
         -MessagePattern 'will not be removed' `
-        -Action { & $installScript -RepositoryRoot $repository.Work -Remove }
+        -Action { & $installScript -RepositoryRoot $repository.Target -Remove }
 
     Assert-True `
         -Condition (Test-Path -LiteralPath $repository.HookPath -PathType Leaf) `
@@ -269,12 +324,61 @@ Invoke-Case 'refuses to remove an unmanaged hook' {
 Invoke-Case 'stops when core.hooksPath is set' {
     param($repository)
 
-    Invoke-Git -C $repository.Work config core.hooksPath 'custom-hooks' | Out-Null
+    Invoke-Git -C $repository.Target config core.hooksPath 'custom-hooks' | Out-Null
 
     Assert-Fails `
         -Case 'core.hooksPath' `
         -MessagePattern 'core\.hooksPath' `
-        -Action { & $installScript -RepositoryRoot $repository.Work }
+        -Action { & $installScript -RepositoryRoot $repository.Target }
+}
+
+Invoke-Case 'installs into the clone-wide hooks directory' -Layouts 'Worktree' {
+    param($repository)
+
+    & $installScript -RepositoryRoot $repository.Target | Out-Null
+
+    Assert-True `
+        -Condition (Test-Path -LiteralPath $repository.HookPath -PathType Leaf) `
+        -Message 'Installing from a linked worktree did not reach the shared hooks directory.'
+
+    $privateHooks = Get-ChildItem `
+        -Path (Join-Path $repository.Work '.git\worktrees') `
+        -Recurse -Filter 'pre-push' -File -ErrorAction SilentlyContinue
+    Assert-True `
+        -Condition ($null -eq $privateHooks) `
+        -Message 'The hook was written into a private worktree directory Git does not consult.'
+
+    # The primary work tree sees the same hook, so installing again is a no-op
+    # rather than a second installation.
+    & $installScript -RepositoryRoot $repository.Work | Out-Null
+
+    Assert-True `
+        -Condition (Test-Path -LiteralPath $repository.HookPath -PathType Leaf) `
+        -Message 'Reinstalling from another worktree removed the shared hook.'
+}
+
+Invoke-Case 'removal from one worktree applies to the whole clone' -StubExitCode 1 -Layouts 'Worktree' {
+    param($repository)
+
+    & $installScript -RepositoryRoot $repository.Target | Out-Null
+
+    Assert-Fails `
+        -Case 'shared hook before removal' `
+        -MessagePattern 'failed' `
+        -Action { Invoke-Git -C $repository.Target push origin $($repository.Branch) }
+
+    & $installScript -RepositoryRoot $repository.Work -Remove | Out-Null
+
+    Assert-True `
+        -Condition (-not (Test-Path -LiteralPath $repository.HookPath)) `
+        -Message 'Removing from the primary work tree left the shared hook in place.'
+
+    Invoke-Git -C $repository.Target push origin $($repository.Branch) | Out-Null
+
+    $remoteHead = Invoke-Git --git-dir=$($repository.Remote) rev-parse $($repository.Branch)
+    Assert-True `
+        -Condition (-not [string]::IsNullOrWhiteSpace($remoteHead)) `
+        -Message 'The linked worktree still ran a hook after it was removed.'
 }
 
 Write-Host 'All Git hook tests passed.'
