@@ -91,6 +91,14 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
         }
 
         string commandLine = BuildCommandLine(startInfo);
+
+        // CreateProcessW may write to lpCommandLine, so it needs a writable,
+        // null-terminated buffer rather than a marshalled immutable string.
+        // The array is one element longer than the command line, and the extra
+        // trailing element is already '\0'. The buffer is never read back.
+        char[] commandLineBuffer = new char[commandLine.Length + 1];
+        commandLine.CopyTo(0, commandLineBuffer, 0, commandLine.Length);
+
         IntPtr environment = BuildEnvironmentBlock(startInfo);
         var startupInfo = new StartupInfo
         {
@@ -105,7 +113,7 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
         {
             if (!CreateProcessW(
                     startInfo.FileName,
-                    new StringBuilder(commandLine),
+                    commandLineBuffer,
                     IntPtr.Zero,
                     IntPtr.Zero,
                     inheritHandles: true,
@@ -256,7 +264,7 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CreateProcessW(
         string applicationName,
-        StringBuilder commandLine,
+        char[] commandLine,
         IntPtr processAttributes,
         IntPtr threadAttributes,
         [MarshalAs(UnmanagedType.Bool)] bool inheritHandles,

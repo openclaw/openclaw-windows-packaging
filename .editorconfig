@@ -244,8 +244,8 @@ dotnet_diagnostic.IDE0305.severity = error
 dotnet_diagnostic.IDE0330.severity = error
 
 # Interop and security.
-dotnet_diagnostic.CA5392.severity = warning
-dotnet_diagnostic.CA1838.severity = warning
+dotnet_diagnostic.CA5392.severity = error
+dotnet_diagnostic.CA1838.severity = error
 
 # Public contracts and globalization.
 dotnet_diagnostic.CA1062.severity = warning
