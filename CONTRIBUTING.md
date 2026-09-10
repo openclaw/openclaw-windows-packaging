@@ -43,6 +43,7 @@ or package version logic:
 ```powershell
 .\scripts\Test-SigningInputs.Tests.ps1
 .\scripts\Test-WorkflowPackageVersion.Tests.ps1
+.\scripts\Test-GitHooks.Tests.ps1
 ```
 
 Run the NativeAOT publish when you change host JSON, reflection, interop, or
@@ -81,11 +82,18 @@ dotnet format style .\OpenClaw.Gateway.MSIX.slnx --verify-no-changes
 
 `--verify-no-changes` exits with code 2 when it finds violations.
 
-The analysis policy is being rolled out in stages. Rules currently reported as
-warnings are a known backlog rather than an invitation to add new violations;
-each is being cleared and promoted to `error` one family at a time. Do not
-commit a generated suppression baseline. Fix the diagnostic, or add a narrow
-suppression with a written rationale.
+The build is warning-free and `TreatWarningsAsErrors` is on, so any new warning
+fails the build. That includes compiler diagnostics and analyzers this
+repository has never seen, such as those introduced by an SDK upgrade. When one
+appears, fix it or add a narrow suppression with a written rationale next to
+the code it applies to. Do not commit a generated suppression baseline, and do
+not relax a rule repository-wide to get past a single site.
+
+NuGet audit advisories (`NU1901`-`NU1904`) are deliberately excluded from the
+error gate. A newly published advisory can appear against an unchanged
+dependency graph, and breaking `main` with no committed change and no in-build
+fix helps nobody. They stay visible as warnings and are triaged as security
+work.
 
 `.gitattributes` normalizes tracked text to LF and `.editorconfig` sets
 `end_of_line = lf`. Avoid whole-file rewrites through `Set-Content` or
@@ -97,6 +105,31 @@ can fail the whitespace check before its first commit with
 `error ENDOFLINE: Fix end of line marker`. Run
 `dotnet format whitespace .\OpenClaw.Gateway.MSIX.slnx` to normalize it, or
 configure your editor to write LF for this repository.
+
+## Optional pre-push hook
+
+You can have the quality gate run before every push instead of finding out from
+CI. The hook is opt in and local to your clone:
+
+```powershell
+.\scripts\Install-GitHooks.ps1
+```
+
+That copies the tracked `hooks\pre-push` into this clone's `.git\hooks`. It
+runs `Test-DotNetQuality.ps1` and nothing else, so it reports exactly what CI
+reports. To remove it:
+
+```powershell
+.\scripts\Install-GitHooks.ps1 -Remove
+```
+
+Both operations are idempotent. Installation refuses to overwrite a `pre-push`
+hook it did not write, removal only deletes a hook carrying its own marker, and
+neither touches your global Git configuration or `core.hooksPath`.
+
+Skip the hook for a single push with `git push --no-verify`. The hook is a
+latency shortcut, not a policy boundary: it lives in one clone, it is
+bypassable, and required CI checks remain authoritative.
 
 ## Repository conventions
 

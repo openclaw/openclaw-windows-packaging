@@ -16,9 +16,9 @@
     Nothing here rewrites source. Run `dotnet format whitespace` and
     `dotnet format style` without `--verify-no-changes` to apply fixes locally.
 
-    Analyzer severity is configured in .editorconfig rather than here. While
-    rules are still being cleared they report as warnings and this script
-    succeeds; once a rule family is promoted to error the same command fails.
+    Analyzer severity is configured in .editorconfig rather than here, and
+    TreatWarningsAsErrors in Directory.Build.props closes the gate, so any
+    warning this repository has not already classified fails the build.
 
 .PARAMETER Configuration
     The MSBuild configuration to rebuild. Defaults to Release, which matches

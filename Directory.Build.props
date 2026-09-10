@@ -13,16 +13,31 @@
     a command-line build instead of only inside an editor.
 
     `EnforceCodeStyleInBuild` runs the IDE rules but does not set their
-    severity. Severity lives in the root `.editorconfig`. IDE style and naming
-    rules are errors; the remaining CA rules are a known backlog reported as
-    warnings. Later PRs in this stack promote one rule family at a time to
-    `error`, and the final PR turns on `TreatWarningsAsErrors`.
+    severity. Severity lives in the root `.editorconfig`, which records the
+    per-rule policy this repository arrived at one family at a time.
+
+    `TreatWarningsAsErrors` closes the gate. The explicit per-rule `error`
+    entries in `.editorconfig` remain as readable policy history; this switch
+    is what catches warnings nobody has classified yet, including new compiler
+    diagnostics and new analyzers introduced by a future SDK bump. When an SDK
+    upgrade surfaces something new, that is a deliberate decision to make, not
+    a warning to scroll past.
   -->
   <PropertyGroup>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <AnalysisLevel>latest</AnalysisLevel>
     <AnalysisMode>All</AnalysisMode>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
+    <!--
+      NuGet audit diagnostics are excluded from the error gate. They are
+      published vulnerability advisories, so a new one can appear against an
+      unchanged dependency graph and would otherwise break `main` with no code
+      change and no way to fix it in the failing build. They stay visible as
+      warnings and are triaged as security work.
+    -->
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
 
     <!--
       Build-time IDE0005 (unnecessary using directives) only reports when

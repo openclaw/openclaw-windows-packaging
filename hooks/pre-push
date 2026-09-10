@@ -1,0 +1,23 @@
+#!/bin/sh
+# openclaw-managed-hook: pre-push
+#
+# Installed by scripts/Install-GitHooks.ps1 and removed by the same script with
+# -Remove. The marker comment on the second line is how the installer
+# recognises a hook it owns, so do not delete it.
+#
+# This hook runs the same command as continuous integration. It is a latency
+# shortcut, not a policy boundary: it is local to one clone, it is opt in, and
+# `git push --no-verify` skips it. Required CI checks remain authoritative.
+
+set -e
+
+if ! command -v pwsh >/dev/null 2>&1; then
+    echo "pre-push: PowerShell 7 (pwsh) was not found on PATH." >&2
+    echo "pre-push: Install it, or push with --no-verify and rely on CI." >&2
+    exit 1
+fi
+
+repository_root=$(git rev-parse --show-toplevel)
+
+echo "pre-push: running scripts/Test-DotNetQuality.ps1"
+exec pwsh -NoProfile -File "$repository_root/scripts/Test-DotNetQuality.ps1"

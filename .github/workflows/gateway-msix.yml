@@ -74,6 +74,11 @@ jobs:
         run: >
           .\scripts\Test-WorkflowPackageVersion.Tests.ps1
 
+      - name: Test Git hooks
+        shell: pwsh
+        run: >
+          .\scripts\Test-GitHooks.Tests.ps1
+
   build-package:
     name: Build OpenClaw npm package
     runs-on: ubuntu-latest

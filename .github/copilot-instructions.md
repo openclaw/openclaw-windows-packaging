@@ -85,10 +85,16 @@ and ARM64 separately.
   `Directory.Build.props` sets `AnalysisMode=All`, `EnforceCodeStyleInBuild`,
   and `GenerateDocumentationFile` (required for build-time `IDE0005`), and
   suppresses `CS1591`. Rule severity belongs in the root `.editorconfig`, not
-  in the project files. Rules currently reported as warnings are a known
-  backlog being cleared and promoted to `error` one family at a time. Do not
-  commit a generated suppression baseline; fix the diagnostic or add a narrow
-  suppression with a written rationale.
+  in the project files. `TreatWarningsAsErrors` is on and the build is
+  warning-free, so any new warning fails the build; only NuGet audit
+  advisories (`NU1901`-`NU1904`) are excluded, because a new advisory can break
+  an unchanged dependency graph. Do not commit a generated suppression
+  baseline; fix the diagnostic or add a narrow suppression with a written
+  rationale.
+- The pre-push hook is opt in. `scripts\Install-GitHooks.ps1` copies the
+  tracked `hooks\pre-push` into the current clone and `-Remove` deletes it.
+  Never change `core.hooksPath` or global Git configuration, and never
+  overwrite a hook the repository did not write.
 - `.gitattributes` normalizes tracked text to LF and `.editorconfig` sets
   `end_of_line = lf`. Avoid whole-file rewrites through `Set-Content` or
   `Out-File`, which reintroduce CRLF.
