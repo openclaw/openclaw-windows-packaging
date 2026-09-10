@@ -4,7 +4,10 @@ public enum ClawCtlCommand
 {
     Help,
     Version,
-    Setup
+    Setup,
+    GatewayIsolationStatus,
+    GatewayIsolationEnable,
+    GatewayIsolationDisable
 }
 
 public sealed record ClawCtlCommandParseResult(
@@ -30,6 +33,21 @@ public static class ClawCtlCommandParser
             return new ClawCtlCommandParseResult(ClawCtlCommand.Setup);
         }
 
+        if (IsPair(args, "gateway-isolation", "status"))
+        {
+            return new ClawCtlCommandParseResult(ClawCtlCommand.GatewayIsolationStatus);
+        }
+
+        if (IsPair(args, "gateway-isolation", "enable"))
+        {
+            return new ClawCtlCommandParseResult(ClawCtlCommand.GatewayIsolationEnable);
+        }
+
+        if (IsPair(args, "gateway-isolation", "disable"))
+        {
+            return new ClawCtlCommandParseResult(ClawCtlCommand.GatewayIsolationDisable);
+        }
+
         return new ClawCtlCommandParseResult(
             ClawCtlCommand.Help,
             $"Unknown command or option: {string.Join(' ', args)}");
@@ -38,4 +56,12 @@ public static class ClawCtlCommandParser
     private static bool IsSingle(IReadOnlyList<string> args, string value) =>
         args.Count == 1 &&
         string.Equals(args[0], value, StringComparison.Ordinal);
+
+    private static bool IsPair(
+        IReadOnlyList<string> args,
+        string first,
+        string second) =>
+        args.Count == 2 &&
+        string.Equals(args[0], first, StringComparison.Ordinal) &&
+        string.Equals(args[1], second, StringComparison.Ordinal);
 }

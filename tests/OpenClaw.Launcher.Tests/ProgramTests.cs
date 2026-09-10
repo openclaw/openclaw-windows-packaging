@@ -80,6 +80,38 @@ public sealed class ProgramTests : IDisposable
     }
 
     [Fact]
+    public async Task GatewayIsolationCommandPersistsTheRequestedNextRestartMode()
+    {
+        string statePath = Path.Combine(_testDirectory, "isolation.json");
+        var store = new GatewayIsolationStore(statePath);
+        var enableOutput = new StringWriter();
+
+        int enableExitCode = await Program.RunControlAsync(
+            new HostOptions(null, []),
+            ["gateway-isolation", "enable"],
+            _ => { },
+            _ => { },
+            enableOutput,
+            gatewayIsolationStore: store);
+
+        Assert.Equal(0, enableExitCode);
+        Assert.True(store.Read().Enabled);
+        Assert.Contains("next manual Gateway restart", enableOutput.ToString());
+
+        var statusOutput = new StringWriter();
+        int statusExitCode = await Program.RunControlAsync(
+            new HostOptions(null, []),
+            ["gateway-isolation", "status"],
+            _ => { },
+            _ => { },
+            statusOutput,
+            gatewayIsolationStore: store);
+
+        Assert.Equal(0, statusExitCode);
+        Assert.Contains("requested: enabled", statusOutput.ToString());
+    }
+
+    [Fact]
     public async Task SetupResolvesNodeBeforeReportingMissingApplication()
     {
         bool nodeResolutionAttempted = false;

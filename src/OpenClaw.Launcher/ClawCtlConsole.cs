@@ -10,6 +10,9 @@ public static class ClawCtlConsole
         output.WriteLine();
         output.WriteLine("Commands:");
         output.WriteLine("  setup   Prepare the packaged OpenClaw environment.");
+        output.WriteLine("  gateway-isolation status   Show the requested isolation mode.");
+        output.WriteLine("  gateway-isolation enable   Apply isolation after the next manual Gateway restart.");
+        output.WriteLine("  gateway-isolation disable  Disable isolation after the next manual Gateway restart.");
         output.WriteLine();
         WriteNodePrerequisite(output);
         output.WriteLine();
@@ -17,7 +20,20 @@ public static class ClawCtlConsole
     }
 
     public static void WriteUsage(TextWriter output) =>
-        output.WriteLine("Usage: clawctl setup");
+        output.WriteLine("Usage: clawctl <setup|gateway-isolation>");
+
+    public static void WriteGatewayIsolationStatus(
+        TextWriter output,
+        GatewayIsolationState state) =>
+        output.WriteLine(
+            $"Gateway isolation is requested: {(state.Enabled ? "enabled" : "disabled")}. " +
+            "Changes take effect after the next manual Gateway restart.");
+
+    public static void WriteGatewayIsolationUpdated(
+        TextWriter output,
+        GatewayIsolationState state) =>
+        output.WriteLine(
+            $"Gateway isolation has been {(state.Enabled ? "enabled" : "disabled")} for the next manual Gateway restart.");
 
     public static void WriteNodePrerequisite(TextWriter output)
     {

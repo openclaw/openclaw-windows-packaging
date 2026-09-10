@@ -72,6 +72,16 @@ public sealed class GatewayLauncherTests : IDisposable
             startInfo.ArgumentList);
     }
 
+    [Fact]
+    public void CreateStartInfoRejectsRequestedIsolationUntilABoundaryExists()
+    {
+        Assert.Throws<PlatformNotSupportedException>(() => GatewayLauncher.CreateStartInfo(
+            "node",
+            _payloadDirectory,
+            [],
+            gatewayIsolation: new GatewayIsolationState(true)));
+    }
+
     [Theory]
     [InlineData("update", "--yes")]
     [InlineData("--update")]

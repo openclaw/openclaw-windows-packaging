@@ -155,7 +155,8 @@ internal static class Program
         Action<string> log,
         Action<string> writeError,
         TextWriter output,
-        Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null)
+        Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null,
+        GatewayIsolationStore? gatewayIsolationStore = null)
     {
         ClawCtlCommandParseResult parsed = ClawCtlCommandParser.Parse(args);
         if (parsed.Error is not null)
@@ -187,6 +188,20 @@ internal static class Program
                 ClawCtlConsole.WriteReadinessSummary(
                     output,
                     applicationDirectory);
+                return 0;
+            }
+            case ClawCtlCommand.GatewayIsolationStatus:
+                ClawCtlConsole.WriteGatewayIsolationStatus(
+                    output,
+                    (gatewayIsolationStore ?? new GatewayIsolationStore()).Read());
+                return 0;
+            case ClawCtlCommand.GatewayIsolationEnable:
+            case ClawCtlCommand.GatewayIsolationDisable:
+            {
+                var state = new GatewayIsolationState(
+                    parsed.Command == ClawCtlCommand.GatewayIsolationEnable);
+                (gatewayIsolationStore ?? new GatewayIsolationStore()).Write(state);
+                ClawCtlConsole.WriteGatewayIsolationUpdated(output, state);
                 return 0;
             }
             default:

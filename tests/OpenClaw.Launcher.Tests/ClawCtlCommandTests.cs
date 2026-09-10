@@ -6,6 +6,9 @@ public sealed class ClawCtlCommandTests
     [InlineData(ClawCtlCommand.Help)]
     [InlineData(ClawCtlCommand.Setup, "setup")]
     [InlineData(ClawCtlCommand.Version, "--version")]
+    [InlineData(ClawCtlCommand.GatewayIsolationStatus, "gateway-isolation", "status")]
+    [InlineData(ClawCtlCommand.GatewayIsolationEnable, "gateway-isolation", "enable")]
+    [InlineData(ClawCtlCommand.GatewayIsolationDisable, "gateway-isolation", "disable")]
     public void ParseAcceptsOnlyThePublicManagementSurface(
         ClawCtlCommand expected,
         params string[] args)

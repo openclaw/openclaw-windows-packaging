@@ -42,7 +42,8 @@ public static class GatewayLauncher
         string nodePath,
         string applicationDirectory,
         IReadOnlyList<string> openClawArguments,
-        string? workingDirectory = null)
+        string? workingDirectory = null,
+        GatewayIsolationState? gatewayIsolation = null)
     {
         string entryPoint = Path.Combine(applicationDirectory, "openclaw.mjs");
         if (!File.Exists(entryPoint))
@@ -67,6 +68,12 @@ public static class GatewayLauncher
         startInfo.Environment["OPENCLAW_SUPERVISOR_MODE"] = "external";
         startInfo.Environment["OPENCLAW_SERVICE_REPAIR_POLICY"] = "external";
         startInfo.Environment["OPENCLAW_NO_AUTO_UPDATE"] = "1";
+        if (gatewayIsolation?.Enabled == true)
+        {
+            throw new PlatformNotSupportedException(
+                "Gateway isolation was requested, but this launcher build does not yet provide an isolation boundary.");
+        }
+
         startInfo.ArgumentList.Add(entryPoint);
 
         foreach (string argument in openClawArguments)
