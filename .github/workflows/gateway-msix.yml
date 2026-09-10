@@ -51,6 +51,13 @@ jobs:
       - name: Restore
         run: dotnet restore .\OpenClaw.Gateway.MSIX.slnx
 
+      - name: Static analysis
+        shell: pwsh
+        run: >
+          .\scripts\Test-DotNetQuality.ps1
+          -Configuration Release
+          -SkipRestore
+
       - name: Test
         run: >
           dotnet test .\OpenClaw.Gateway.MSIX.slnx

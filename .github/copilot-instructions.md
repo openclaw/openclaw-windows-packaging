@@ -10,6 +10,10 @@ Run commands from the repository root in PowerShell 7 (`pwsh`).
 dotnet restore .\OpenClaw.Gateway.MSIX.slnx
 dotnet build .\OpenClaw.Gateway.MSIX.slnx --configuration Release --no-restore
 
+# Canonical quality gate: restore plus a Release rebuild with static analysis.
+# Used by local development, CI, and the optional pre-push hook.
+.\scripts\Test-DotNetQuality.ps1
+
 # Publish the launcher through the NativeAOT toolchain without MSIX content.
 $vsInstaller = Join-Path `
   ([Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFilesX86)) `
@@ -77,6 +81,17 @@ and ARM64 separately.
 
 ## Repository conventions
 
+- Static analysis uses only the analyzers shipped by the pinned SDK.
+  `Directory.Build.props` sets `AnalysisMode=All`, `EnforceCodeStyleInBuild`,
+  and `GenerateDocumentationFile` (required for build-time `IDE0005`), and
+  suppresses `CS1591`. Rule severity belongs in the root `.editorconfig`, not
+  in the project files. Rules currently reported as warnings are a known
+  backlog being cleared and promoted to `error` one family at a time. Do not
+  commit a generated suppression baseline; fix the diagnostic or add a narrow
+  suppression with a written rationale.
+- `.gitattributes` normalizes tracked text to LF and `.editorconfig` sets
+  `end_of_line = lf`. Avoid whole-file rewrites through `Set-Content` or
+  `Out-File`, which reintroduce CRLF.
 - Ordinary builds and tests must leave `IncludePackagingContent` unset.
   Packaging builds set it to `true`, supply a runtime identifier and platform,
   and use `obj\packaging` through `Directory.Build.props` to isolate MSIX

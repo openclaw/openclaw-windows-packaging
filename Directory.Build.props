@@ -4,4 +4,35 @@
     <MSBuildProjectExtensionsPath Condition="'$(IncludePackagingContent)' == 'true'">$(MSBuildProjectDirectory)\obj\packaging\</MSBuildProjectExtensionsPath>
   </PropertyGroup>
 
+  <!--
+    Static analysis policy.
+
+    This repository uses only the analyzers that ship with the pinned .NET SDK.
+    `AnalysisMode=All` opts into the full CA rule set rather than the smaller
+    default, and `EnforceCodeStyleInBuild` makes the IDE style rules run during
+    a command-line build instead of only inside an editor.
+
+    `EnforceCodeStyleInBuild` runs the IDE rules but does not set their
+    severity. Severity lives in the root `.editorconfig`, which currently
+    reports every rule as a warning. Later PRs in this stack promote one rule
+    family at a time to `error` in the same change that clears it, and the
+    final PR turns on `TreatWarningsAsErrors`.
+  -->
+  <PropertyGroup>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <AnalysisMode>All</AnalysisMode>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+
+    <!--
+      Build-time IDE0005 (unnecessary using directives) only reports when
+      documentation generation is enabled. See dotnet/roslyn#41640. Generating
+      documentation also turns on CS1591, which would demand XML comments on
+      every symbol, so CS1591 is suppressed deliberately rather than satisfied
+      with low-value comments.
+    -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
 </Project>
