@@ -1,9 +1,19 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 
 namespace OpenClaw.Launcher;
 
 internal static class Program
 {
+    [SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification =
+            "Main is the process last-chance handler. Every narrower catch in " +
+            "this assembly uses an exception filter; this one deliberately does " +
+            "not, because narrowing it would replace the diagnostic log entry, " +
+            "the user-facing error message, and the deterministic exit code 1 " +
+            "with an unhandled-exception crash.")]
     public static async Task<int> Main(string[] args)
     {
         HostEntrypoint entrypoint = HostEntrypointResolver.Resolve();

@@ -257,10 +257,10 @@ dotnet_diagnostic.CA2007.severity = error
 dotnet_diagnostic.CA1849.severity = error
 
 # Lifetime and design.
-dotnet_diagnostic.CA2000.severity = warning
-dotnet_diagnostic.CA1031.severity = warning
+dotnet_diagnostic.CA2000.severity = error
+dotnet_diagnostic.CA1031.severity = error
 dotnet_diagnostic.CA1515.severity = error
-dotnet_diagnostic.CA1859.severity = warning
+dotnet_diagnostic.CA1859.severity = error
 
 [tests/**/*.cs]
 # xUnit theory and member data intentionally expose public members, and test

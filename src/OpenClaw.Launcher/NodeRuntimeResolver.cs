@@ -122,7 +122,7 @@ internal static partial class NodeRuntimeResolver
         $"  {InstallCommand}{Environment.NewLine}" +
         "Then open a new terminal and retry.";
 
-    private static IReadOnlyList<string> FindPathCandidates()
+    private static List<string> FindPathCandidates()
     {
         string? pathValue = Environment.GetEnvironmentVariable("PATH");
         if (string.IsNullOrWhiteSpace(pathValue))

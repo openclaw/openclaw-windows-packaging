@@ -56,7 +56,7 @@ public sealed class ProgramTests : IDisposable
             Path.Combine(_testDirectory, "node.exe"),
             new Version(24, 15, 0),
             System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture);
-        var output = new StringWriter();
+        using var output = new StringWriter();
 
         int exitCode = await Program.RunControlAsync(
             options,

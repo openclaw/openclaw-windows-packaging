@@ -7,7 +7,7 @@ public sealed class ClawCtlConsoleTests : IDisposable
     [Fact]
     public void WriteHelpListsOnlyThePublicCommands()
     {
-        var output = new StringWriter();
+        using var output = new StringWriter();
 
         ClawCtlConsole.WriteHelp(output);
 
@@ -31,7 +31,7 @@ public sealed class ClawCtlConsoleTests : IDisposable
     [Fact]
     public void WriteReadinessSummaryDescribesPackagedApplication()
     {
-        var output = new StringWriter();
+        using var output = new StringWriter();
         string applicationDirectory = Path.Combine(_testDirectory, "app");
 
         ClawCtlConsole.WriteReadinessSummary(
