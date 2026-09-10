@@ -31,31 +31,31 @@ max_line_length = 100
 #### .NET code style ####
 
 # `this.` qualification is not used anywhere in this repository.
-dotnet_style_qualification_for_field = false:warning
-dotnet_style_qualification_for_property = false:warning
-dotnet_style_qualification_for_method = false:warning
-dotnet_style_qualification_for_event = false:warning
+dotnet_style_qualification_for_field = false:error
+dotnet_style_qualification_for_property = false:error
+dotnet_style_qualification_for_method = false:error
+dotnet_style_qualification_for_event = false:error
 
-dotnet_style_predefined_type_for_locals_parameters_members = true:warning
-dotnet_style_predefined_type_for_member_access = true:warning
+dotnet_style_predefined_type_for_locals_parameters_members = true:error
+dotnet_style_predefined_type_for_member_access = true:error
 
 dotnet_style_object_initializer = true:suggestion
 dotnet_style_collection_initializer = true:suggestion
 dotnet_style_prefer_auto_properties = true:suggestion
-dotnet_style_explicit_tuple_names = true:warning
+dotnet_style_explicit_tuple_names = true:error
 dotnet_style_prefer_inferred_tuple_names = true:suggestion
 dotnet_style_prefer_inferred_anonymous_type_member_names = true:suggestion
 # IDE0045/IDE0046: collapsing guard clauses into conditional expressions hurts
 # readability in this codebase, which uses early-return validation throughout.
 dotnet_style_prefer_conditional_expression_over_assignment = false:silent
 dotnet_style_prefer_conditional_expression_over_return = false:silent
-dotnet_style_prefer_compound_assignment = true:warning
-dotnet_style_prefer_simplified_boolean_expressions = true:warning
-dotnet_style_prefer_simplified_interpolation = true:warning
-dotnet_style_null_propagation = true:warning
-dotnet_style_coalesce_expression = true:warning
-dotnet_style_prefer_is_null_check_over_reference_equality_method = true:warning
-dotnet_style_readonly_field = true:warning
+dotnet_style_prefer_compound_assignment = true:error
+dotnet_style_prefer_simplified_boolean_expressions = true:error
+dotnet_style_prefer_simplified_interpolation = true:error
+dotnet_style_null_propagation = true:error
+dotnet_style_coalesce_expression = true:error
+dotnet_style_prefer_is_null_check_over_reference_equality_method = true:error
+dotnet_style_readonly_field = true:error
 dotnet_style_operator_placement_when_wrapping = beginning_of_line
 dotnet_style_namespace_match_folder = true:suggestion
 
@@ -66,7 +66,7 @@ dotnet_style_parentheses_in_other_operators = never_if_unnecessary:suggestion
 
 # Accessibility modifiers are written explicitly, except where C# requires
 # them to be omitted (for example interface members).
-dotnet_style_require_accessibility_modifiers = for_non_interface_members:warning
+dotnet_style_require_accessibility_modifiers = for_non_interface_members:error
 
 #### C# code style ####
 
@@ -86,22 +86,22 @@ csharp_style_expression_bodied_accessors = true:suggestion
 csharp_style_expression_bodied_lambdas = true:suggestion
 csharp_style_expression_bodied_local_functions = when_on_single_line:suggestion
 
-csharp_style_pattern_matching_over_is_with_cast_check = true:warning
-csharp_style_pattern_matching_over_as_with_null_check = true:warning
-csharp_style_prefer_not_pattern = true:warning
+csharp_style_pattern_matching_over_is_with_cast_check = true:error
+csharp_style_pattern_matching_over_as_with_null_check = true:error
+csharp_style_prefer_not_pattern = true:error
 csharp_style_prefer_pattern_matching = true:suggestion
 csharp_style_prefer_switch_expression = true:suggestion
 csharp_style_prefer_extended_property_pattern = true:suggestion
 
-csharp_style_inlined_variable_declaration = true:warning
+csharp_style_inlined_variable_declaration = true:error
 csharp_style_deconstructed_variable_declaration = true:suggestion
 # Guard clauses that throw read better than ternary `throw` expressions, and
 # this codebase already uses them consistently.
 csharp_style_throw_expression = false:silent
-csharp_style_conditional_delegate_call = true:warning
+csharp_style_conditional_delegate_call = true:error
 csharp_style_prefer_index_operator = true:suggestion
 csharp_style_prefer_range_operator = true:suggestion
-csharp_style_prefer_null_check_over_type_check = true:warning
+csharp_style_prefer_null_check_over_type_check = true:error
 csharp_style_prefer_tuple_swap = true:suggestion
 csharp_style_prefer_utf8_string_literals = true:suggestion
 csharp_style_prefer_readonly_struct = true:suggestion
@@ -109,19 +109,19 @@ csharp_style_prefer_readonly_struct_member = true:suggestion
 csharp_style_prefer_primary_constructors = false:suggestion
 
 csharp_prefer_simple_using_statement = true:suggestion
-csharp_prefer_static_local_function = true:warning
+csharp_prefer_static_local_function = true:error
 csharp_prefer_static_anonymous_function = true:suggestion
-csharp_prefer_braces = true:warning
-csharp_style_namespace_declarations = file_scoped:warning
+csharp_prefer_braces = true:error
+csharp_style_namespace_declarations = file_scoped:error
 csharp_style_prefer_method_group_conversion = true:suggestion
 csharp_style_prefer_top_level_statements = false:suggestion
 # IDE0058: requiring `_ =` on every ignored return value is noise. Ignoring the
 # result of calls such as `Directory.CreateDirectory` is ordinary C#.
 csharp_style_unused_value_expression_statement_preference = discard_variable:silent
 # IDE0059 catches dead stores, which are a real defect signal.
-csharp_style_unused_value_assignment_preference = discard_variable:warning
+csharp_style_unused_value_assignment_preference = discard_variable:error
 
-csharp_using_directive_placement = outside_namespace:warning
+csharp_using_directive_placement = outside_namespace:error
 
 #### C# formatting ####
 
@@ -201,44 +201,47 @@ dotnet_naming_symbols.parameters_and_locals.applicable_kinds = parameter, local
 
 dotnet_naming_rule.interfaces_are_prefixed.symbols = interfaces
 dotnet_naming_rule.interfaces_are_prefixed.style = interface_prefix
-dotnet_naming_rule.interfaces_are_prefixed.severity = warning
+dotnet_naming_rule.interfaces_are_prefixed.severity = error
 
 dotnet_naming_rule.type_parameters_are_prefixed.symbols = type_parameters
 dotnet_naming_rule.type_parameters_are_prefixed.style = type_parameter_prefix
-dotnet_naming_rule.type_parameters_are_prefixed.severity = warning
+dotnet_naming_rule.type_parameters_are_prefixed.severity = error
 
 dotnet_naming_rule.constants_are_pascal_case.symbols = constants
 dotnet_naming_rule.constants_are_pascal_case.style = pascal_case
-dotnet_naming_rule.constants_are_pascal_case.severity = warning
+dotnet_naming_rule.constants_are_pascal_case.severity = error
 
 dotnet_naming_rule.static_readonly_fields_are_pascal_case.symbols = static_readonly_fields
 dotnet_naming_rule.static_readonly_fields_are_pascal_case.style = pascal_case
-dotnet_naming_rule.static_readonly_fields_are_pascal_case.severity = warning
+dotnet_naming_rule.static_readonly_fields_are_pascal_case.severity = error
 
 dotnet_naming_rule.instance_fields_are_underscore_camel_case.symbols = instance_fields
 dotnet_naming_rule.instance_fields_are_underscore_camel_case.style = underscore_camel_case
-dotnet_naming_rule.instance_fields_are_underscore_camel_case.severity = warning
+dotnet_naming_rule.instance_fields_are_underscore_camel_case.severity = error
 
 dotnet_naming_rule.parameters_and_locals_are_camel_case.symbols = parameters_and_locals
 dotnet_naming_rule.parameters_and_locals_are_camel_case.style = camel_case
-dotnet_naming_rule.parameters_and_locals_are_camel_case.severity = warning
+dotnet_naming_rule.parameters_and_locals_are_camel_case.severity = error
 
 dotnet_naming_rule.types_and_members_are_pascal_case.symbols = types_and_members
 dotnet_naming_rule.types_and_members_are_pascal_case.style = pascal_case
-dotnet_naming_rule.types_and_members_are_pascal_case.severity = warning
+dotnet_naming_rule.types_and_members_are_pascal_case.severity = error
 
 #### Analyzer severities ####
 #
-# This layer reports every rule below as a warning so the diagnostic backlog is
-# visible without blocking the build. Later PRs in this stack promote one
-# cohesive rule family at a time to `error` in the same change that clears it.
+# IDE style and naming rules above are errors: the tree is clean of them and
+# CI must reject new drift.
+#
+# The CA rules below are still a known backlog and report as warnings. Later
+# PRs in this stack promote one cohesive family at a time to `error` in the
+# same change that clears it.
 
 # Unnecessary usings. Requires `GenerateDocumentationFile` to run at build time.
-dotnet_diagnostic.IDE0005.severity = warning
+dotnet_diagnostic.IDE0005.severity = error
 
-# Style rules with findings in the current tree.
-dotnet_diagnostic.IDE0305.severity = warning
-dotnet_diagnostic.IDE0330.severity = warning
+# Style rules cleared by the formatting layer.
+dotnet_diagnostic.IDE0305.severity = error
+dotnet_diagnostic.IDE0330.severity = error
 
 # Interop and security.
 dotnet_diagnostic.CA5392.severity = warning

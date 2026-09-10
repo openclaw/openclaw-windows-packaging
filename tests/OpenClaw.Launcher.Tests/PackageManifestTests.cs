@@ -19,12 +19,11 @@ public sealed class PackageManifestTests
             "openclaw.exe",
             (string?)extension.Attribute("Executable"));
 
-        string[] aliases = extension.Descendants()
+        string[] aliases = [.. extension.Descendants()
             .Where(element => element.Name.LocalName == "ExecutionAlias")
             .Select(element => (string?)element.Attribute("Alias"))
             .OfType<string>()
-            .OrderBy(value => value, StringComparer.Ordinal)
-            .ToArray();
+            .OrderBy(value => value, StringComparer.Ordinal)];
         Assert.Equal(["clawctl.exe", "openclaw.exe"], aliases);
     }
 }

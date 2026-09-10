@@ -13,10 +13,10 @@
     a command-line build instead of only inside an editor.
 
     `EnforceCodeStyleInBuild` runs the IDE rules but does not set their
-    severity. Severity lives in the root `.editorconfig`, which currently
-    reports every rule as a warning. Later PRs in this stack promote one rule
-    family at a time to `error` in the same change that clears it, and the
-    final PR turns on `TreatWarningsAsErrors`.
+    severity. Severity lives in the root `.editorconfig`. IDE style and naming
+    rules are errors; the remaining CA rules are a known backlog reported as
+    warnings. Later PRs in this stack promote one rule family at a time to
+    `error`, and the final PR turns on `TreatWarningsAsErrors`.
   -->
   <PropertyGroup>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>

@@ -25,8 +25,9 @@ dotnet test .\OpenClaw.Gateway.MSIX.slnx --configuration Release --no-restore
 
 `Test-DotNetQuality.ps1` is the single entry point used by local development,
 continuous integration, and the optional pre-push hook, so all three report the
-same result. It always rebuilds: an up-to-date project is skipped and reports no
-analyzer diagnostics at all.
+same result. It rebuilds with static analysis and then verifies whitespace and
+code style. It always rebuilds: an up-to-date project is skipped and reports no
+analyzer diagnostics at all. It never rewrites source.
 
 Run one test by fully qualified name:
 
@@ -89,6 +90,13 @@ suppression with a written rationale.
 `.gitattributes` normalizes tracked text to LF and `.editorconfig` sets
 `end_of_line = lf`. Avoid whole-file rewrites through `Set-Content` or
 `Out-File`, which can reintroduce CRLF. Verify with `git ls-files --eol`.
+
+A checkout always produces LF, so this only bites on files you have just
+created. Many Windows editors write CRLF by default, so a brand-new `.cs` file
+can fail the whitespace check before its first commit with
+`error ENDOFLINE: Fix end of line marker`. Run
+`dotnet format whitespace .\OpenClaw.Gateway.MSIX.slnx` to normalize it, or
+configure your editor to write LF for this repository.
 
 ## Repository conventions
 

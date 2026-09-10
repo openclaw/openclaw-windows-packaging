@@ -9,7 +9,7 @@ public sealed class HostDiagnosticLog : IDisposable
 {
     private const int ErrorInsufficientBuffer = 122;
     private const int AppModelErrorNoPackage = 15700;
-    private readonly object _sync = new();
+    private readonly Lock _sync = new();
     private readonly Mutex _writeMutex;
     private bool _disposed;
 

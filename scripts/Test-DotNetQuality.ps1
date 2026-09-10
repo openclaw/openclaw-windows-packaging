@@ -7,10 +7,14 @@
     integration, and the optional pre-push hook, so every surface reports the
     same result.
 
-    The script performs a full restore and a Release rebuild with the analyzer
-    policy from Directory.Build.props and the root .editorconfig. A rebuild is
-    required because an up-to-date project is skipped and reports no analyzer
+    The script performs a full restore, a Release rebuild with the analyzer
+    policy from Directory.Build.props and the root .editorconfig, and
+    check-only whitespace and code-style verification. A rebuild is required
+    because an up-to-date project is skipped and reports no analyzer
     diagnostics at all.
+
+    Nothing here rewrites source. Run `dotnet format whitespace` and
+    `dotnet format style` without `--verify-no-changes` to apply fixes locally.
 
     Analyzer severity is configured in .editorconfig rather than here. While
     rules are still being cleared they report as warnings and this script
@@ -76,5 +80,20 @@ Invoke-CheckedCommand `
             -t:Rebuild
     } `
     -FailureMessage 'Static analysis build failed.'
+
+# Verification only. This never rewrites source, including in CI. Run
+# `dotnet format whitespace` and `dotnet format style` without
+# `--verify-no-changes` to apply fixes locally, then review the diff.
+Write-Host 'Verifying whitespace formatting...'
+Invoke-CheckedCommand `
+    -Command { dotnet format whitespace $solution --verify-no-changes } `
+    -FailureMessage ('Whitespace formatting check failed. Run ' +
+        '"dotnet format whitespace .\OpenClaw.Gateway.MSIX.slnx" to fix.')
+
+Write-Host 'Verifying code style...'
+Invoke-CheckedCommand `
+    -Command { dotnet format style $solution --verify-no-changes } `
+    -FailureMessage ('Code style check failed. Run ' +
+        '"dotnet format style .\OpenClaw.Gateway.MSIX.slnx" to fix.')
 
 Write-Host 'Static analysis completed successfully.'

@@ -26,6 +26,6 @@ public sealed record HostOptions(
 
         return new HostOptions(
             directApplicationDirectory,
-            arguments.ToArray());
+            [.. arguments]);
     }
 }
