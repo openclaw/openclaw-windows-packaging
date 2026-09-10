@@ -1,6 +1,6 @@
 namespace OpenClaw.Launcher;
 
-public sealed record HostOptions(
+internal sealed record HostOptions(
     string? PackagedApplicationDirectory,
     IReadOnlyList<string> OpenClawArguments)
 {

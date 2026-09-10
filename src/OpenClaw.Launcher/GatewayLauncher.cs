@@ -2,7 +2,7 @@ using System.Diagnostics;
 
 namespace OpenClaw.Launcher;
 
-public static class GatewayLauncher
+internal static class GatewayLauncher
 {
     public static async Task<int> RunAsync(
         string nodePath,

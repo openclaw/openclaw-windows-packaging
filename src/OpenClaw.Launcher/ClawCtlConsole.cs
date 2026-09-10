@@ -1,6 +1,6 @@
 namespace OpenClaw.Launcher;
 
-public static class ClawCtlConsole
+internal static class ClawCtlConsole
 {
     public static void WriteHelp(TextWriter output)
     {

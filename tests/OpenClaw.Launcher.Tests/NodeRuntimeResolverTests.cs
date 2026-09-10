@@ -29,8 +29,8 @@ public sealed class NodeRuntimeResolverTests
                 Architecture.X64,
                 Architecture.X64));
 
-        Assert.Contains("not found on PATH", exception.Message);
-        Assert.Contains(NodeRuntimeResolver.InstallCommand, exception.Message);
+        Assert.Contains("not found on PATH", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(NodeRuntimeResolver.InstallCommand, exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -44,8 +44,8 @@ public sealed class NodeRuntimeResolverTests
                 Architecture.X64,
                 Architecture.X64));
 
-        Assert.Contains("version 24.14.0 is unsupported", exception.Message);
-        Assert.Contains(NodeRuntimeResolver.SupportedVersions, exception.Message);
+        Assert.Contains("version 24.14.0 is unsupported", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(NodeRuntimeResolver.SupportedVersions, exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -59,7 +59,7 @@ public sealed class NodeRuntimeResolverTests
                 Architecture.X64,
                 Architecture.X64));
 
-        Assert.Contains("invalid version", exception.Message);
+        Assert.Contains("invalid version", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public sealed class NodeRuntimeResolverTests
                 Architecture.X64,
                 Architecture.X64));
 
-        Assert.Contains("invalid version", exception.Message);
+        Assert.Contains("invalid version", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public sealed class NodeRuntimeResolverTests
                 Architecture.Arm64,
                 Architecture.X64));
 
-        Assert.Contains("architecture Arm64 does not match X64", exception.Message);
+        Assert.Contains("architecture Arm64 does not match X64", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -102,8 +102,8 @@ public sealed class NodeRuntimeResolverTests
                 Architecture.X64,
                 Architecture.X64));
 
-        Assert.Contains("query failed", exception.Message);
-        Assert.Contains(NodeRuntimeResolver.InstallCommand, exception.Message);
+        Assert.Contains("query failed", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(NodeRuntimeResolver.InstallCommand, exception.Message, StringComparison.Ordinal);
     }
 
     [Theory]

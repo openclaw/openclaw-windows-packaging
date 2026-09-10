@@ -2,18 +2,32 @@ namespace OpenClaw.Launcher.Tests;
 
 public sealed class ClawCtlCommandTests
 {
-    [Theory]
-    [InlineData(ClawCtlCommand.Help)]
-    [InlineData(ClawCtlCommand.Setup, "setup")]
-    [InlineData(ClawCtlCommand.Version, "--version")]
-    public void ParseAcceptsOnlyThePublicManagementSurface(
-        ClawCtlCommand expected,
-        params string[] args)
+    [Fact]
+    public void ParseReturnsHelpWhenNoArgumentsAreProvided()
     {
-        ClawCtlCommandParseResult result = ClawCtlCommandParser.Parse(args);
+        ClawCtlCommandParseResult result = ClawCtlCommandParser.Parse([]);
 
         Assert.Null(result.Error);
-        Assert.Equal(expected, result.Command);
+        Assert.Equal(ClawCtlCommand.Help, result.Command);
+    }
+
+    [Fact]
+    public void ParseReturnsSetupForTheSetupCommand()
+    {
+        ClawCtlCommandParseResult result = ClawCtlCommandParser.Parse(["setup"]);
+
+        Assert.Null(result.Error);
+        Assert.Equal(ClawCtlCommand.Setup, result.Command);
+    }
+
+    [Fact]
+    public void ParseReturnsVersionForTheVersionOption()
+    {
+        ClawCtlCommandParseResult result =
+            ClawCtlCommandParser.Parse(["--version"]);
+
+        Assert.Null(result.Error);
+        Assert.Equal(ClawCtlCommand.Version, result.Command);
     }
 
     [Theory]

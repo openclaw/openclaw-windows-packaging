@@ -1,17 +1,17 @@
 namespace OpenClaw.Launcher;
 
-public enum ClawCtlCommand
+internal enum ClawCtlCommand
 {
     Help,
     Version,
     Setup
 }
 
-public sealed record ClawCtlCommandParseResult(
+internal sealed record ClawCtlCommandParseResult(
     ClawCtlCommand Command,
     string? Error = null);
 
-public static class ClawCtlCommandParser
+internal static class ClawCtlCommandParser
 {
     public static ClawCtlCommandParseResult Parse(IReadOnlyList<string> args)
     {

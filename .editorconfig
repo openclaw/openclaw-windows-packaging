@@ -248,9 +248,9 @@ dotnet_diagnostic.CA5392.severity = error
 dotnet_diagnostic.CA1838.severity = error
 
 # Public contracts and globalization.
-dotnet_diagnostic.CA1062.severity = warning
-dotnet_diagnostic.CA1307.severity = warning
-dotnet_diagnostic.CA1308.severity = warning
+dotnet_diagnostic.CA1062.severity = error
+dotnet_diagnostic.CA1307.severity = error
+dotnet_diagnostic.CA1308.severity = error
 
 # Asynchronous code.
 dotnet_diagnostic.CA2007.severity = warning
@@ -259,7 +259,7 @@ dotnet_diagnostic.CA1849.severity = warning
 # Lifetime and design.
 dotnet_diagnostic.CA2000.severity = warning
 dotnet_diagnostic.CA1031.severity = warning
-dotnet_diagnostic.CA1515.severity = warning
+dotnet_diagnostic.CA1515.severity = error
 dotnet_diagnostic.CA1859.severity = warning
 
 [tests/**/*.cs]
