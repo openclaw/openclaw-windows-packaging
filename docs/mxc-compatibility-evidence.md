@@ -135,6 +135,44 @@ Also confirmed for the execution path:
 
 Out of scope for this proof; it belongs with the managed-gateway slice.
 
+## G6: detached gateway lifetime — **PASS**
+
+Measured because it decides the shape of the managed-gateway slice: if a
+detached process cannot outlive the one-shot `exec` that started it, the host
+must keep a long-lived supervisor alive for as long as the gateway runs. It
+can, so it does not.
+
+Test-owned session, agent `C2-G8`, workspace `C:\Users\C2-G8\Shared`, since
+deprovisioned; the account, `C:\Users\C2-G8`, and the child process were all
+verified gone afterwards.
+
+A guest launcher script started a hidden child through `Start-Process` and
+recorded its PID and process start time. The launching `exec` returned
+immediately with exit 0.
+
+| Observation | Result |
+|---|---|
+| Child alive 8s after the launching `exec` returned | **Yes** (pid 147252) |
+| Recorded start time still matches | Yes |
+| Loopback listener the child opened | Still listening (port 57908) |
+| Child alive 23s later, via a second independent `exec` | **Yes**, same PID, still listening |
+| Child identity | `paulcam-tr\c2-g8` — the isolated agent, not the caller |
+| After sandbox `stop` then `start` | **Gone.** `alive:false`, listener closed |
+
+Two consequences for the gateway slice:
+
+1. **No host-side supervisor is required.** The gateway can run detached inside
+   the session, and a later `exec` can inspect and control it. This matches the
+   internal precedent, which proves ownership from a persisted PID *and* process
+   creation time rather than keeping an owner process alive.
+2. **`stop` is a real boundary.** Stopping the sandbox terminates detached work
+   without notifying anything, so recorded gateway state can outlive the process
+   it describes. Stale owned state must be reconciled before a restart, and
+   status must never infer liveness from the record alone.
+
+The start-time check is not ceremony: it is what distinguishes the recorded
+process from an unrelated one that inherited its PID after Windows reused it.
+
 ## Lifecycle notes for the session slice
 
 - `stop` succeeds and leaves the provision intact; a subsequent `exec` fails
