@@ -61,10 +61,17 @@ the read-only application directory the workspace.
 | `clawctl session status` | Report the isolated session this installation has recorded. |
 | `clawctl session stop` | Stop the isolated session, keeping its guest profile and data. |
 | `clawctl session remove` | Stop and deprovision the isolated session, destroying its guest profile and workspace contents. |
+| `clawctl gateway-service install` | Start the gateway in the isolated session and restart it at sign-in. |
+| `clawctl gateway-service status` | Report the gateway and its sign-in recovery, without starting either. |
+| `clawctl gateway-service start` | Start the gateway if it is not already running. |
+| `clawctl gateway-service stop` | Stop the gateway, keeping the session and its data. |
+| `clawctl gateway-service uninstall` | Stop the gateway and remove sign-in recovery. |
 
 Bare `clawctl` and `clawctl --help` print help without changing state.
 Commands such as `doctor`, `gateway`, and `uninstall` belong to the OpenClaw
-CLI and must be invoked through `openclaw`.
+CLI and must be invoked through `openclaw`. The host verb that manages the
+background gateway is deliberately spelled `gateway-service`, because a host
+`gateway` noun would shadow OpenClaw's own `openclaw gateway run`.
 
 `setup` requires a compatible device-installed Node.js runtime. Missing,
 outdated, malformed, or architecture-incompatible runtimes produce an
@@ -96,6 +103,13 @@ host. See [docs/session-routing.md](docs/session-routing.md).
 provisions, never contacts the backend, and deliberately does not claim whether
 the session is currently running, because the backend offers no authoritative
 session enumeration to answer that with.
+
+`clawctl gateway-service` runs the gateway in that session and restores it at
+sign-in. Ownership is proven from inside the session on every query — a live
+process, a matching creation time, and a listener belonging to that process or a
+descendant — so a recorded gateway is never assumed to still be running. "Could
+not be determined" is reported as such and never as "stopped", because the two
+call for opposite actions. See [docs/gateway-service.md](docs/gateway-service.md).
 
 The launcher places Node.js in a Windows job configured with
 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. The launcher remains alive while Node.js

@@ -23,11 +23,13 @@ public sealed class SessionRuntime
     private SessionRuntime(
         SessionCoordinator coordinator,
         SessionExecutor executor,
+        IMxcSessionClient backend,
         string helperPath,
         string applicationId)
     {
         Coordinator = coordinator;
         Executor = executor;
+        Backend = backend;
         HelperPath = helperPath;
         ApplicationId = applicationId;
     }
@@ -35,6 +37,12 @@ public sealed class SessionRuntime
     public SessionCoordinator Coordinator { get; }
 
     public SessionExecutor Executor { get; }
+
+    /// <summary>
+    /// The one backend instance this process uses, so the gateway and ordinary
+    /// invocations cannot end up talking to differently configured clients.
+    /// </summary>
+    public IMxcSessionClient Backend { get; }
 
     public string HelperPath { get; }
 
@@ -79,6 +87,7 @@ public sealed class SessionRuntime
         return new SessionRuntime(
             coordinator,
             new SessionExecutor(client, log),
+            client,
             ResolveHelperPath(baseDirectory),
             applicationId);
     }

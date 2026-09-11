@@ -7,7 +7,12 @@ public enum ClawCtlCommand
     Setup,
     SessionStatus,
     SessionStop,
-    SessionRemove
+    SessionRemove,
+    GatewayInstall,
+    GatewayStatus,
+    GatewayStart,
+    GatewayStop,
+    GatewayUninstall
 }
 
 public sealed record ClawCtlCommandParseResult(
@@ -39,9 +44,52 @@ public static class ClawCtlCommandParser
             return ParseSession(args);
         }
 
+        // Deliberately `gateway-service`, not `gateway`. OpenClaw itself owns
+        // `openclaw gateway run`, and a host `gateway` noun would shadow it.
+        if (args.Count >= 1 &&
+            string.Equals(args[0], "gateway-service", StringComparison.Ordinal))
+        {
+            return ParseGatewayService(args);
+        }
+
         return new ClawCtlCommandParseResult(
             ClawCtlCommand.Help,
             $"Unknown command or option: {string.Join(' ', args)}");
+    }
+
+    private static ClawCtlCommandParseResult ParseGatewayService(
+        IReadOnlyList<string> args)
+    {
+        // A bare noun is a missing sub-command, never a default. `install` and
+        // `uninstall` change machine state, so a mistyped verb must not resolve
+        // to a different operation than the user typed.
+        if (args.Count == 1)
+        {
+            return new ClawCtlCommandParseResult(
+                ClawCtlCommand.Help,
+                "`clawctl gateway-service` requires a sub-command: " +
+                "install, status, start, stop, or uninstall.");
+        }
+
+        if (args.Count > 2)
+        {
+            return new ClawCtlCommandParseResult(
+                ClawCtlCommand.Help,
+                "Unexpected arguments after " +
+                $"`clawctl gateway-service {args[1]}`: {string.Join(' ', args.Skip(2))}");
+        }
+
+        return args[1] switch
+        {
+            "install" => new ClawCtlCommandParseResult(ClawCtlCommand.GatewayInstall),
+            "status" => new ClawCtlCommandParseResult(ClawCtlCommand.GatewayStatus),
+            "start" => new ClawCtlCommandParseResult(ClawCtlCommand.GatewayStart),
+            "stop" => new ClawCtlCommandParseResult(ClawCtlCommand.GatewayStop),
+            "uninstall" => new ClawCtlCommandParseResult(ClawCtlCommand.GatewayUninstall),
+            _ => new ClawCtlCommandParseResult(
+                ClawCtlCommand.Help,
+                $"Unknown gateway-service sub-command: {args[1]}")
+        };
     }
 
     private static ClawCtlCommandParseResult ParseSession(

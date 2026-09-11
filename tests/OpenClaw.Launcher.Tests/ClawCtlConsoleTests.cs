@@ -27,7 +27,6 @@ public sealed class ClawCtlConsoleTests : IDisposable
             help,
             StringComparison.Ordinal);
         Assert.DoesNotContain("update-package", help, StringComparison.Ordinal);
-        Assert.DoesNotContain("gateway-service", help, StringComparison.Ordinal);
     }
 
     [Fact]

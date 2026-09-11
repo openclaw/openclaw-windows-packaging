@@ -258,7 +258,7 @@ public sealed class GatewayControllerTests : IDisposable
             await controller.StartAsync("helper.exe", CancellationToken.None);
 
         Assert.True(result.AlreadyRunning);
-        Assert.Single(_client.Calls.Where(call => call == "start"));
+        Assert.Single(_client.Calls, call => call == "start");
     }
 
     [Fact]
@@ -287,7 +287,7 @@ public sealed class GatewayControllerTests : IDisposable
 
         await Assert.ThrowsAsync<SessionException>(
             () => controller.StartAsync("helper.exe", CancellationToken.None));
-        Assert.Single(_client.Calls.Where(call => call == "start"));
+        Assert.Single(_client.Calls, call => call == "start");
     }
 
     [Fact]

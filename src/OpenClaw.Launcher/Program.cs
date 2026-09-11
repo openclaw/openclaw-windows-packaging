@@ -1,4 +1,5 @@
 using System.Reflection;
+using OpenClaw.Launcher.Gateway;
 using OpenClaw.Launcher.Mxc;
 using OpenClaw.Launcher.Session;
 
@@ -226,7 +227,8 @@ internal static class Program
         TextWriter output,
         Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null,
         Func<CancellationToken, Task<MxcReadinessReport>>? probeMxcReadiness = null,
-        Func<Action<string>, SessionCoordinator>? createSessionCoordinator = null)
+        Func<Action<string>, SessionCoordinator>? createSessionCoordinator = null,
+        Func<HostOptions, Action<string>, GatewayRuntime>? createGatewayRuntime = null)
     {
         ClawCtlCommandParseResult parsed = ClawCtlCommandParser.Parse(args);
         if (parsed.Error is not null)
@@ -298,10 +300,75 @@ internal static class Program
                 ClawCtlConsole.WriteSessionRemoved(output, removal);
                 return 0;
             }
+            case ClawCtlCommand.GatewayStatus:
+            {
+                GatewayRuntime gateway = CreateGateway(createGatewayRuntime, options, log);
+
+                // Read-only: nothing is started, provisioned, registered, or
+                // written by asking what the state is.
+                GatewayStatusReport report = await gateway.Controller
+                    .GetStatusAsync(gateway.HelperPath, CancellationToken.None)
+                    .ConfigureAwait(false);
+                GatewayPersistenceStatus persistence = await gateway.Persistence
+                    .GetStatusAsync(CancellationToken.None)
+                    .ConfigureAwait(false);
+                ClawCtlConsole.WriteGatewayStatus(output, report, persistence);
+                return 0;
+            }
+            case ClawCtlCommand.GatewayInstall:
+            case ClawCtlCommand.GatewayStart:
+            {
+                GatewayRuntime gateway = CreateGateway(createGatewayRuntime, options, log);
+                GatewayStartResult started = await gateway.Controller
+                    .StartAsync(gateway.HelperPath, CancellationToken.None)
+                    .ConfigureAwait(false);
+                ClawCtlConsole.WriteGatewayStarted(output, started);
+
+                // Startup succeeds only when both the gateway and its sign-in
+                // recovery succeed, so a half-configured install is never
+                // reported as success.
+                return started.Persistence is { } persistence &&
+                       persistence.State is GatewayPersistenceState.ActionRequired
+                                         or GatewayPersistenceState.Unknown
+                    ? 1
+                    : 0;
+            }
+            case ClawCtlCommand.GatewayStop:
+            {
+                GatewayRuntime gateway = CreateGateway(createGatewayRuntime, options, log);
+                GatewayStopResult stopped = await gateway.Controller
+                    .StopAsync(gateway.HelperPath, CancellationToken.None)
+                    .ConfigureAwait(false);
+                ClawCtlConsole.WriteGatewayStopped(output, stopped);
+                return 0;
+            }
+            case ClawCtlCommand.GatewayUninstall:
+            {
+                GatewayRuntime gateway = CreateGateway(createGatewayRuntime, options, log);
+
+                // Stop first: removing the task while the gateway is still
+                // running would leave a process nothing is recorded as owning.
+                GatewayStopResult stop = await gateway.Controller
+                    .StopAsync(gateway.HelperPath, CancellationToken.None)
+                    .ConfigureAwait(false);
+                GatewayPersistenceRemovalResult removed = await gateway.Persistence
+                    .UninstallAsync(CancellationToken.None)
+                    .ConfigureAwait(false);
+                ClawCtlConsole.WriteGatewayUninstalled(output, stop, removed);
+                return removed.Succeeded ? 0 : 1;
+            }
             default:
                 throw new InvalidOperationException("Unknown clawctl command.");
         }
     }
+
+    private static GatewayRuntime CreateGateway(
+        Func<HostOptions, Action<string>, GatewayRuntime>? factory,
+        HostOptions options,
+        Action<string> log) =>
+        factory is not null
+            ? factory(options, log)
+            : GatewayRuntime.Create(options, log);
 
     private static SessionCoordinator CreateCoordinator(
         Func<Action<string>, SessionCoordinator>? factory,

@@ -1,3 +1,4 @@
+using OpenClaw.Launcher.Gateway;
 using OpenClaw.Launcher.Mxc;
 using OpenClaw.Launcher.Session;
 
@@ -17,10 +18,16 @@ public static class ClawCtlConsole
         output.WriteLine("  session stop     Stop the isolated session, keeping its data.");
         output.WriteLine("  session remove   Remove the isolated session and its guest data.");
         output.WriteLine();
+        output.WriteLine("  gateway-service install    Start the gateway and restart it at sign-in.");
+        output.WriteLine("  gateway-service status     Show the gateway and its sign-in recovery.");
+        output.WriteLine("  gateway-service start      Start the gateway if it is not running.");
+        output.WriteLine("  gateway-service stop       Stop the gateway, keeping its data.");
+        output.WriteLine("  gateway-service uninstall  Stop the gateway and remove sign-in recovery.");
+        output.WriteLine();
         output.WriteLine(
-            "`setup` and `session status` are read-only. They report Node.js, " +
-            "packaged application, and isolated session prerequisites without " +
-            "changing them.");
+            "`setup`, `session status`, and `gateway-service status` are " +
+            "read-only. They report Node.js, packaged application, isolated " +
+            "session, and gateway prerequisites without changing them.");
         output.WriteLine();
         WriteNodePrerequisite(output);
         output.WriteLine();
@@ -28,7 +35,9 @@ public static class ClawCtlConsole
     }
 
     public static void WriteUsage(TextWriter output) =>
-        output.WriteLine("Usage: clawctl setup | session <status|stop|remove>");
+        output.WriteLine(
+            "Usage: clawctl setup | session <status|stop|remove> | " +
+            "gateway-service <install|status|start|stop|uninstall>");
 
     public static void WriteNodePrerequisite(TextWriter output)
     {
@@ -204,4 +213,181 @@ public static class ClawCtlConsole
         output.WriteLine(
             "  Its guest profile and shared workspace contents are gone.");
     }
+
+    /// <summary>
+    /// Reports the gateway, keeping observed state and configured recovery
+    /// separate.
+    /// </summary>
+    /// <remarks>
+    /// "Not running" and "could not be determined" are never merged. A user who
+    /// is told the gateway is stopped will start another one, which is exactly
+    /// the wrong move when the truth is that nothing could be observed.
+    /// </remarks>
+    public static void WriteGatewayStatus(
+        TextWriter output,
+        GatewayStatusReport report,
+        GatewayPersistenceStatus? persistence)
+    {
+        switch (report.State)
+        {
+            case GatewayState.NotStarted:
+                output.WriteLine("No gateway has been started.");
+                output.WriteLine(
+                    "  Run `clawctl gateway-service install` to start it and " +
+                    "restart it at sign-in.");
+                break;
+
+            case GatewayState.Running:
+                output.WriteLine(report.Message);
+                if (report.Record is { } running)
+                {
+                    output.WriteLine($"  Started: {running.StartedUtc:u}");
+                    if (running.LogPath is { Length: > 0 } log)
+                    {
+                        output.WriteLine($"  Log: {log}");
+                    }
+                }
+
+                break;
+
+            case GatewayState.Stopped:
+                output.WriteLine("The gateway is not running.");
+                if (report.Detail is { Length: > 0 } stoppedDetail)
+                {
+                    output.WriteLine($"  {stoppedDetail}");
+                }
+
+                output.WriteLine("  Run `clawctl gateway-service start` to start it.");
+                break;
+
+            case GatewayState.Unhealthy:
+                output.WriteLine("The gateway is running but is not serving.");
+                if (report.Detail is { Length: > 0 } unhealthyDetail)
+                {
+                    output.WriteLine($"  {unhealthyDetail}");
+                }
+
+                if (report.Record?.LogPath is { Length: > 0 } unhealthyLog)
+                {
+                    output.WriteLine($"  Log: {unhealthyLog}");
+                }
+
+                output.WriteLine(
+                    "  Run `clawctl gateway-service stop` and then `start`.");
+                break;
+
+            case GatewayState.Unknown:
+                output.WriteLine("The gateway's state could not be determined.");
+                if (report.Detail is { Length: > 0 } unknownDetail)
+                {
+                    output.WriteLine($"  {unknownDetail}");
+                }
+
+                output.WriteLine(
+                    "  This is not the same as stopped. Starting another " +
+                    "gateway could leave two contending for one port.");
+                break;
+        }
+
+        if (persistence is not null)
+        {
+            output.WriteLine();
+            WriteGatewayPersistence(output, persistence);
+        }
+    }
+
+    public static void WriteGatewayPersistence(
+        TextWriter output,
+        GatewayPersistenceStatus status)
+    {
+        output.WriteLine($"Sign-in recovery: {Describe(status.State)}");
+
+        if (status.Lane == GatewayPersistenceLane.StartupFolderFallback)
+        {
+            output.WriteLine("  Configured through the Startup folder.");
+        }
+
+        if (status.Detail is { Length: > 0 } detail)
+        {
+            output.WriteLine($"  {detail}");
+        }
+
+        // Drift is reported with the command that repairs it rather than
+        // silently repaired behind an unexpected prompt.
+        if (status.Remediation is { Length: > 0 } remediation &&
+            status.State != GatewayPersistenceState.Ready)
+        {
+            output.WriteLine($"  Repair with: {remediation}");
+        }
+    }
+
+    public static void WriteGatewayStarted(
+        TextWriter output,
+        GatewayStartResult result)
+    {
+        output.WriteLine(result.Message);
+
+        if (result.Record.LogPath is { Length: > 0 } log)
+        {
+            output.WriteLine($"  Log: {log}");
+        }
+
+        if (result.Record.AutostartDisabled)
+        {
+            output.WriteLine(
+                "  Sign-in recovery stays off because it was explicitly " +
+                "disabled. Run `clawctl gateway-service install` to enable it.");
+            return;
+        }
+
+        if (result.Persistence is { } persistence)
+        {
+            output.WriteLine();
+            output.WriteLine($"Sign-in recovery: {Describe(persistence.State)}");
+            if (persistence.Detail is { Length: > 0 } detail)
+            {
+                output.WriteLine($"  {detail}");
+            }
+        }
+    }
+
+    public static void WriteGatewayStopped(TextWriter output, GatewayStopResult result)
+    {
+        output.WriteLine(result.Message);
+
+        if (result.Detail is { Length: > 0 } detail)
+        {
+            output.WriteLine($"  {detail}");
+        }
+    }
+
+    public static void WriteGatewayUninstalled(
+        TextWriter output,
+        GatewayStopResult stop,
+        GatewayPersistenceRemovalResult removal)
+    {
+        output.WriteLine(stop.Message);
+        if (stop.Detail is { Length: > 0 } stopDetail)
+        {
+            output.WriteLine($"  {stopDetail}");
+        }
+
+        output.WriteLine(removal.Message);
+        if (removal.Detail is { Length: > 0 } removalDetail)
+        {
+            output.WriteLine($"  {removalDetail}");
+        }
+
+        output.WriteLine(
+            "  The isolated session and its data are kept. Use " +
+            "`clawctl session remove` to discard those.");
+    }
+
+    private static string Describe(GatewayPersistenceState state) => state switch
+    {
+        GatewayPersistenceState.Ready => "configured",
+        GatewayPersistenceState.NotInstalled => "not configured",
+        GatewayPersistenceState.ActionRequired => "needs attention",
+        _ => "could not be determined"
+    };
 }
