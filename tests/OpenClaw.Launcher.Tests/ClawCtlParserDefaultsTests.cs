@@ -84,5 +84,21 @@ public sealed class ClawCtlParserDefaultsTests : IDisposable
             StringComparer.Ordinal);
     }
 
+    // The directive is the only completion path a shell can actually reach, so
+    // it is covered through the real dispatcher rather than the in-process
+    // completion API alone.
+    [Fact]
+    public async Task CompletionDirectiveWritesSuggestionsWithoutRunningSetup()
+    {
+        (int exitCode, string output) =
+            await RunAsync("[suggest:2]", "se").ConfigureAwait(true);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains(
+            ClawCtlCommandLine.SetupCommandName,
+            output,
+            StringComparison.Ordinal);
+    }
+
     public void Dispose() => Directory.Delete(_testDirectory, recursive: true);
 }

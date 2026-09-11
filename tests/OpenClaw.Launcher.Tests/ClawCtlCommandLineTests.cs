@@ -117,6 +117,23 @@ public sealed class ClawCtlCommandLineTests
             output.Trim());
     }
 
+    // The old parser rejected `--version` combined with anything else. The
+    // library's version action clears parse errors instead, so trailing
+    // garbage is ignored. This is a deliberate consequence of adopting the
+    // standard UX, recorded here so the change is visible rather than
+    // discovered by a user.
+    [Fact]
+    public async Task VersionWinsOverTrailingArguments()
+    {
+        (int exitCode, string output, _) =
+            await RunAsync("--version", "bogus").ConfigureAwait(true);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(
+            typeof(Program).Assembly.GetName().Version?.ToString(),
+            output.Trim());
+    }
+
     [Theory]
     [InlineData("bogus")]
     [InlineData("--bogus")]
