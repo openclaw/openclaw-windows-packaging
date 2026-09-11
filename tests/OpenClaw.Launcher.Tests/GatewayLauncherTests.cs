@@ -79,6 +79,20 @@ public sealed class GatewayLauncherTests : IDisposable
     [InlineData("gateway", "install")]
     [InlineData("setup", "--install-daemon")]
     [InlineData("onboard", "--mode", "local")]
+
+    // clawctl now parses its own arguments with System.CommandLine. These
+    // tokens are the ones that library would claim, so they prove the openclaw
+    // entrypoint still forwards instead of parsing.
+    [InlineData("--help")]
+    [InlineData("-h")]
+    [InlineData("-?")]
+    [InlineData("--version")]
+    [InlineData("--")]
+    [InlineData("--", "--version")]
+    [InlineData("@arguments.rsp")]
+    [InlineData("[suggest:3]", "se")]
+    [InlineData("")]
+    [InlineData("chat", "", "--prompt", "value with spaces")]
     public void CreateStartInfoForwardsCommandsWithoutInterpretation(
         params string[] arguments)
     {

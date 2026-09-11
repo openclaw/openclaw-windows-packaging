@@ -61,6 +61,12 @@ and ARM64 separately.
   point exists, and forwards every argument unchanged to `openclaw.mjs`.
 - `clawctl setup` is a read-only readiness check for compatible Node.js and the
   packaged entry point. Runtime launches do not hash or walk package files.
+- `clawctl` parses its own arguments with System.CommandLine
+  (`ClawCtlCommandLine` builds the tree; `Program.RunControlAsync` invokes it).
+  Help, usage, version, and completion are library behavior; parse errors exit
+  `1`. Response-file expansion is disabled, so `@file` is an ordinary
+  unrecognized argument. The library is scoped to `clawctl` only and must never
+  see `openclaw` arguments.
 - `GatewayLauncher` starts Node without a shell, uses `ArgumentList`, inherits
   the console streams, and sets `OPENCLAW_SUPERVISOR_MODE=external` plus
   `OPENCLAW_NO_AUTO_UPDATE=1`. The child process exit code is the launcher exit

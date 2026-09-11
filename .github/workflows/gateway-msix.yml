@@ -64,6 +64,17 @@ jobs:
           --configuration Release
           --no-restore
 
+      # The xUnit suite runs under a JIT test host, so it cannot prove the
+      # native root command name or that System.CommandLine survives trimming
+      # and ahead-of-time compilation. x64 only: windows-latest cannot execute
+      # an ARM64 binary, and both architectures are still compiled by the
+      # packaging matrix.
+      - name: Test NativeAOT clawctl command line
+        shell: pwsh
+        run: >
+          .\scripts\Test-NativeAotCli.Tests.ps1
+          -Configuration Release
+
       - name: Test signing policy
         shell: pwsh
         run: >

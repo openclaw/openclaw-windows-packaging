@@ -59,6 +59,17 @@ dotnet publish .\src\OpenClaw.Launcher\OpenClaw.Launcher.csproj `
   --configuration Release --runtime win-x64 --self-contained
 ```
 
+Run the native `clawctl` gate when you change command-line parsing, help, or
+version output. The xUnit suite runs under a JIT test host, so it cannot see
+the root command name that System.CommandLine derives from native `argv[0]`,
+and a successful publish is not execution evidence. The script publishes
+win-x64 with NativeAOT into a temporary directory it owns, runs the binary as
+`clawctl.exe`, and removes the directory afterwards:
+
+```powershell
+.\scripts\Test-NativeAotCli.Tests.ps1
+```
+
 ## Formatting and static analysis
 
 Formatting and analyzer severity are defined by the root `.editorconfig`. The
@@ -141,7 +152,9 @@ bypassable, and required CI checks remain authoritative.
 - Ordinary builds and tests must leave `IncludePackagingContent` unset.
   Packaging builds set it to `true` and supply a runtime identifier.
 - Treat launcher arguments as OpenClaw-owned. Do not add host-only switches,
-  consume `--`, rewrite arguments, or block upstream commands.
+  consume `--`, rewrite arguments, or block upstream commands. The
+  System.CommandLine tree covers `clawctl` only; the `openclaw` entrypoint must
+  keep forwarding its argument vector without parsing it.
 - Preserve direct execution from the read-only MSIX package. `clawctl setup`
   is a readiness check; do not add runtime extraction, copying, repair, or
   launcher-managed package state under the user profile.

@@ -62,8 +62,8 @@ public sealed class ProgramTests : IDisposable
             options,
             ["setup"],
             _ => { },
-            _ => { },
             output,
+            TextWriter.Null,
             _ => Task.FromResult(nodeRuntime));
 
         Assert.Equal(0, exitCode);
@@ -89,8 +89,8 @@ public sealed class ProgramTests : IDisposable
             new HostOptions(null, []),
             ["setup"],
             _ => { },
-            _ => { },
-            new StringWriter(),
+            TextWriter.Null,
+            TextWriter.Null,
             _ =>
             {
                 nodeResolutionAttempted = true;

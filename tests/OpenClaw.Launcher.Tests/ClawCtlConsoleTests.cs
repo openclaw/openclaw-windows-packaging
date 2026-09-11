@@ -5,41 +5,6 @@ public sealed class ClawCtlConsoleTests : IDisposable
     private readonly string _testDirectory = TestDirectory.Create();
 
     [Fact]
-    public void WriteHelpListsOnlyThePublicCommands()
-    {
-        using var output = new StringWriter();
-
-        ClawCtlConsole.WriteHelp(output);
-
-        string help = output.ToString();
-        Assert.Contains("setup", help, StringComparison.Ordinal);
-        Assert.Contains("readiness", help, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("--version", help, StringComparison.Ordinal);
-        Assert.DoesNotContain(
-            "prepare",
-            help,
-            StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain(
-            $"{Environment.NewLine}  verify",
-            help,
-            StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain(
-            $"{Environment.NewLine}  repair",
-            help,
-            StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(
-            NodeRuntimeResolver.SupportedVersions,
-            help,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            NodeRuntimeResolver.InstallCommand,
-            help,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("update-package", help, StringComparison.Ordinal);
-        Assert.DoesNotContain("gateway-service", help, StringComparison.Ordinal);
-    }
-
-    [Fact]
     public void WriteReadinessSummaryDescribesPackagedApplication()
     {
         using var output = new StringWriter();
