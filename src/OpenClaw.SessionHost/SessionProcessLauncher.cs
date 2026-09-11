@@ -1,0 +1,71 @@
+using System.Diagnostics;
+using OpenClaw.SessionProtocol;
+
+namespace OpenClaw.SessionHost;
+
+/// <summary>
+/// Starts a process from a launch request, preserving the argument vector
+/// exactly.
+/// </summary>
+public interface ISessionProcessLauncher
+{
+    /// <summary>Runs the request to completion and returns its exit code.</summary>
+    int Run(SessionLaunchRequest request);
+}
+
+/// <summary>
+/// Launches the requested executable shell-free, so no quoting, metacharacter,
+/// or <c>%VAR%</c> interpretation can alter the arguments.
+/// </summary>
+public sealed class SessionProcessLauncher : ISessionProcessLauncher
+{
+    public int Run(SessionLaunchRequest request)
+    {
+        string workingDirectory = request.WorkingDirectory!;
+        if (!Directory.Exists(workingDirectory))
+        {
+            // Falling back to another directory would run the caller's command
+            // somewhere they never asked for, so this is fatal.
+            throw new SessionLaunchException(
+                $"The requested working directory does not exist: {workingDirectory}");
+        }
+
+        ProcessStartInfo startInfo = new()
+        {
+            FileName = request.Executable!,
+
+            // No shell, and no stream redirection: the isolated session's
+            // console handles are inherited so interactive and piped OpenClaw
+            // behave as they do on the host.
+            UseShellExecute = false,
+            WorkingDirectory = workingDirectory
+        };
+
+        foreach (string argument in request.Arguments!)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        foreach ((string name, string value) in request.Environment ?? new Dictionary<string, string>())
+        {
+            startInfo.Environment[name] = value;
+        }
+
+        using Process process = new() { StartInfo = startInfo };
+        try
+        {
+            process.Start();
+        }
+        catch (Exception exception) when (
+            exception is System.ComponentModel.Win32Exception or
+            InvalidOperationException or
+            PlatformNotSupportedException)
+        {
+            throw new SessionLaunchException(
+                $"Unable to start '{request.Executable}': {exception.Message}");
+        }
+
+        process.WaitForExit();
+        return process.ExitCode;
+    }
+}

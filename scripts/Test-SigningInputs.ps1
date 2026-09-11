@@ -191,6 +191,8 @@ foreach ($architecture in @('x64', 'arm64')) {
         $metadata.mxcRuntimeIntegrity -ne $mxcLock.tarballIntegrity -or
         $metadata.mxcRuntimeFileCount -isnot [int64] -or
         $metadata.mxcRuntimeFileCount -le 0 -or
+        $metadata.sessionHostFileName -ne 'openclaw-session-host.exe' -or
+        $metadata.sessionHostSha256 -notmatch '^[0-9a-f]{64}$' -or
         $metadata.architecture -ne $architecture -or
         $metadata.archive -ne $msix.Name -or
         $metadata.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
@@ -420,6 +422,42 @@ foreach ($architecture in @('x64', 'arm64')) {
         ) {
             throw (
                 "The embedded $architecture MXC runtime provenance is invalid."
+            )
+        }
+        # The guest helper executes inside the isolated session, so the package
+        # must carry exactly one and it must be the file the build recorded.
+        # An extra entry under this prefix would be reachable from inside the
+        # session without ever having been validated.
+        $sessionHostPrefix = "session-host/$architecture/"
+        $sessionHostEntry = "$sessionHostPrefix$($metadata.sessionHostFileName)"
+        $actualSessionHostEntries = @(
+            $entriesByPath.Keys |
+                Where-Object {
+                    $_.StartsWith(
+                        $sessionHostPrefix,
+                        [StringComparison]::OrdinalIgnoreCase
+                    )
+                }
+        )
+        if (
+            $actualSessionHostEntries.Count -ne 1 -or
+            $actualSessionHostEntries[0] -ine $sessionHostEntry
+        ) {
+            throw (
+                "The $architecture MSIX must contain exactly the guest " +
+                "helper '$sessionHostEntry'."
+            )
+        }
+
+        $actualSessionHostHash = Get-PackageEntrySha256 -Entry (
+            Get-PackageEntry `
+                -EntriesByPath $entriesByPath `
+                -Path $sessionHostEntry
+        )
+        if ($actualSessionHostHash -ne $metadata.sessionHostSha256) {
+            throw (
+                "The $architecture MSIX guest helper does not match the " +
+                'hash recorded at build time.'
             )
         }
     }

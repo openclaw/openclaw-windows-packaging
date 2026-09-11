@@ -67,6 +67,12 @@ and ARM64 separately.
   `@microsoft/mxc-sdk` binaries. Preview wire details stay inside
   `MxcWireProtocol` and `MxcCliSessionClient` so the official .NET SDK can
   replace the transport behind the same contract. See `docs\mxc-runtime.md`.
+- `src\OpenClaw.SessionHost` is a separate NativeAOT guest helper that runs
+  inside the isolated session, and `src\OpenClaw.SessionProtocol` holds the
+  launch request/result contract both executables share. The backend's
+  execution API flattens its command line through `cmd.exe`, so the argument
+  vector always travels as data and is never interpolated into that command
+  line. See `docs\session-host.md`.
 - `GatewayLauncher` starts Node without a shell, uses `ArgumentList`, inherits
   the console streams, and sets `OPENCLAW_SUPERVISOR_MODE=external` plus
   `OPENCLAW_NO_AUTO_UPDATE=1`. The child process exit code is the launcher exit

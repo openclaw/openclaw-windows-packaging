@@ -207,6 +207,18 @@ function New-TestArtifact {
         Get-ChildItem -LiteralPath $mxcDirectory -File
     ).Count
 
+    $sessionHostDirectory = Join-Path $staging "session-host\$Architecture"
+    New-Item -Path $sessionHostDirectory -ItemType Directory -Force | Out-Null
+    $sessionHostFileName = 'openclaw-session-host.exe'
+    $sessionHostPath = Join-Path $sessionHostDirectory $sessionHostFileName
+    Set-Content `
+        -LiteralPath $sessionHostPath `
+        -Value "session-host-$Architecture" `
+        -NoNewline
+    $sessionHostSha256 = (
+        Get-FileHash -LiteralPath $sessionHostPath -Algorithm SHA256
+    ).Hash.ToLowerInvariant()
+
     $msixName = "OpenClawGateway-$Architecture.msix"
     $msixPath = Join-Path $directory $msixName
     [IO.Compression.ZipFile]::CreateFromDirectory($staging, $msixPath)
@@ -229,6 +241,8 @@ function New-TestArtifact {
         mxcRuntimeVersion = $mxcVersion
         mxcRuntimeIntegrity = $mxcIntegrity
         mxcRuntimeFileCount = $mxcRuntimeFileCount
+        sessionHostFileName = $sessionHostFileName
+        sessionHostSha256 = $sessionHostSha256
         architecture = $Architecture
         archive = $msixName
         sha256 = $msixHash
@@ -604,6 +618,65 @@ try {
     $x64MxcMetadata |
         ConvertTo-Json |
         Set-Content -LiteralPath $x64MxcMetadataPath -Encoding utf8
+    Assert-Fails `
+        -MessagePattern 'not eligible for signing' `
+        -Action {
+            Invoke-PolicyValidation -Root $testRoot
+        }
+
+    # The guest helper runs inside the isolated session, so substitution,
+    # removal, an extra reachable file, and metadata drift must each be caught.
+    Reset-TestArtifacts
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        Set-Content `
+            -LiteralPath (
+                Join-Path $Expanded 'session-host\x64\openclaw-session-host.exe'
+            ) `
+            -Value 'substituted-helper' `
+            -NoNewline
+    }
+    Assert-Fails `
+        -MessagePattern 'guest helper does not match' `
+        -Action {
+            Invoke-PolicyValidation -Root $testRoot
+        }
+
+    Reset-TestArtifacts
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        Remove-Item -LiteralPath (
+            Join-Path $Expanded 'session-host\x64\openclaw-session-host.exe'
+        )
+    }
+    Assert-Fails `
+        -MessagePattern 'must contain exactly the guest helper' `
+        -Action {
+            Invoke-PolicyValidation -Root $testRoot
+        }
+
+    Reset-TestArtifacts
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        Set-Content `
+            -LiteralPath (Join-Path $Expanded 'session-host\x64\extra.dll') `
+            -Value 'unverified' `
+            -NoNewline
+    }
+    Assert-Fails `
+        -MessagePattern 'must contain exactly the guest helper' `
+        -Action {
+            Invoke-PolicyValidation -Root $testRoot
+        }
+
+    Reset-TestArtifacts
+    $x64HelperMetadataPath = Join-Path $testRoot 'x64\msix-metadata.json'
+    $x64HelperMetadata = Get-Content -LiteralPath $x64HelperMetadataPath -Raw |
+        ConvertFrom-Json
+    $x64HelperMetadata.sessionHostFileName = 'something-else.exe'
+    $x64HelperMetadata |
+        ConvertTo-Json |
+        Set-Content -LiteralPath $x64HelperMetadataPath -Encoding utf8
     Assert-Fails `
         -MessagePattern 'not eligible for signing' `
         -Action {

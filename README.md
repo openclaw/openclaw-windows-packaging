@@ -69,10 +69,15 @@ actionable error rather than a later process-launch failure.
 
 `clawctl setup` is read-only. It performs no extraction, hashing, inventory
 walk, or state mutation. It also reports whether the pinned MXC runtime for the
-current architecture is present and whether this Windows build supports
-isolated agent sessions. Neither condition fails `setup`, because today's
-execution does not depend on them. See
+current architecture is present and whether the isolated-session backend is
+usable on this machine, which it measures with the runtime's own non-mutating
+probe rather than inferring from the Windows build number. Neither condition
+fails `setup`, because today's execution does not depend on them. See
 [docs/mxc-runtime.md](docs/mxc-runtime.md).
+
+Isolated execution uses a small NativeAOT guest helper,
+`openclaw-session-host.exe`, because the backend's execution API cannot carry an
+argument vector safely. See [docs/session-host.md](docs/session-host.md).
 
 The launcher places Node.js in a Windows job configured with
 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. The launcher remains alive while Node.js
@@ -133,8 +138,9 @@ architecture-specific application tree. `scripts\Get-MxcRuntime.ps1` stages the
 pinned, integrity-verified MXC native runtime described in
 [docs/mxc-runtime.md](docs/mxc-runtime.md). `scripts\Build-MSIX.ps1` copies the
 application tree into package content, rejects any Node.js executable or
-runtime archive, stages the MXC runtime, creates a per-file inventory, and then
-creates an unsigned NativeAOT MSIX. `scripts\Build-LocalMSIX.ps1` can reuse a
+runtime archive, stages the MXC runtime, publishes the guest helper described
+in [docs/session-host.md](docs/session-host.md), creates a per-file inventory,
+and then creates an unsigned NativeAOT MSIX. `scripts\Build-LocalMSIX.ps1` can reuse a
 successful workflow payload or a local payload directory. The Node.js used by
 the payload build jobs is build infrastructure only and is not copied into the
 MSIX.

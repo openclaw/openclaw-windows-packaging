@@ -25,6 +25,10 @@ $repositoryRoot = Split-Path $PSScriptRoot -Parent
 $projectPath = Join-Path `
     $repositoryRoot `
     'src\OpenClaw.Launcher\OpenClaw.Launcher.csproj'
+$sessionHostProjectPath = Join-Path `
+    $repositoryRoot `
+    'src\OpenClaw.SessionHost\OpenClaw.SessionHost.csproj'
+$sessionHostFileName = 'openclaw-session-host.exe'
 $publisher = (
     'CN=OpenClaw Foundation, O=OpenClaw Foundation, L=Mill Valley, ' +
     'S=California, C=US'
@@ -285,6 +289,62 @@ if ($mxcProvenance.architecture -ne $Architecture) {
     )
 }
 
+# The guest helper runs inside the isolated session and is published
+# separately: it is not a packaged app and must not participate in MSIX
+# tooling. Staging it here keeps it on the same verified footing as the MXC
+# runtime rather than letting MSBuild produce it as a side effect.
+$sessionHostContent = Join-Path $contentRoot "session-host\$Architecture"
+Remove-DirectoryIfPresent -Path $sessionHostContent
+Invoke-CheckedCommand `
+    -FailureMessage 'Publishing the isolated-session guest helper failed.' `
+    -Command {
+        & dotnet publish $sessionHostProjectPath `
+            --configuration Release `
+            --runtime "win-$Architecture" `
+            --self-contained `
+            --no-restore `
+            "-p:Platform=$Architecture" `
+            "-p:RuntimeIdentifiers=win-$Architecture" `
+            -p:PublishAot=true `
+            "-p:AssemblyVersion=$PackageVersion" `
+            "-p:FileVersion=$PackageVersion" `
+            -p:DebugType=None `
+            --output $sessionHostContent `
+            --nologo
+    }
+
+$sessionHostPath = Join-Path $sessionHostContent $sessionHostFileName
+if (-not (Test-Path -LiteralPath $sessionHostPath -PathType Leaf)) {
+    throw "The guest helper was not published to '$sessionHostPath'."
+}
+
+# A NativeAOT publish must leave no managed host artifacts behind; shipping
+# them would put unverified files inside the session's trust boundary.
+$sessionHostFiles = @(
+    Get-ChildItem -LiteralPath $sessionHostContent -File -Force -Recurse |
+        ForEach-Object {
+            [ordered]@{
+                path = (
+                    [IO.Path]::GetRelativePath($sessionHostContent, $_.FullName)
+                ).Replace('\', '/')
+                sha256 = (
+                    Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256
+                ).Hash.ToLowerInvariant()
+            }
+        } |
+        Sort-Object path
+)
+$unexpectedSessionHostFiles = @(
+    $sessionHostFiles |
+        Where-Object { $_.path -ne $sessionHostFileName }
+)
+if ($unexpectedSessionHostFiles.Count -ne 0) {
+    throw (
+        'The published guest helper contains unexpected files: ' +
+        (($unexpectedSessionHostFiles | ForEach-Object { $_.path }) -join ', ')
+    )
+}
+
 $temporaryRoot = if ($env:RUNNER_TEMP) {
     $env:RUNNER_TEMP
 }
@@ -372,6 +432,14 @@ try {
             "mxc/$Architecture/$($mxcRuntimeFile.path)",
             [pscustomobject]@{
                 Hash = $mxcRuntimeFile.sha256
+            }
+        )
+    }
+    foreach ($sessionHostFile in $sessionHostFiles) {
+        $expectedPackageFiles.Add(
+            "session-host/$Architecture/$($sessionHostFile.path)",
+            [pscustomobject]@{
+                Hash = $sessionHostFile.sha256
             }
         )
     }
@@ -514,6 +582,11 @@ try {
         mxcRuntimeVersion = $mxcProvenance.version
         mxcRuntimeIntegrity = $mxcProvenance.tarballIntegrity
         mxcRuntimeFileCount = $mxcRuntimeFiles.Count
+        sessionHostFileName = $sessionHostFileName
+        sessionHostSha256 = (
+            $sessionHostFiles |
+                Where-Object { $_.path -eq $sessionHostFileName }
+        ).sha256
         architecture = $Architecture
         archive = $msixName
         sha256 = $msixHash
