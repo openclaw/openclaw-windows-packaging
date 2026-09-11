@@ -24,6 +24,23 @@ public interface IMxcExecutorInvoker
 }
 
 /// <summary>
+/// Runs the MXC executor with the host's console streams attached.
+/// </summary>
+/// <remarks>
+/// Interactive OpenClaw cannot be served by the buffered invoker: reading both
+/// streams to completion only returns after the child exits, so a prompt would
+/// never reach the terminal and typed input would never reach the child.
+/// Nothing is captured here, so the caller cannot read a dispatch error
+/// envelope off standard output and must establish the outcome another way.
+/// </remarks>
+public interface IMxcAttachedExecutorInvoker
+{
+    Task<int> InvokeAttachedAsync(
+        MxcExecutorInvocation invocation,
+        CancellationToken cancellationToken);
+}
+
+/// <summary>
 /// Temporary <see cref="IMxcSessionClient"/> transport over the executor
 /// published in <c>@microsoft/mxc-sdk</c>.
 /// </summary>
@@ -37,13 +54,18 @@ public sealed class MxcCliSessionClient : IMxcSessionClient
 {
     private readonly MxcRuntimeLocation _runtime;
     private readonly IMxcExecutorInvoker _invoker;
+    private readonly IMxcAttachedExecutorInvoker _attachedInvoker;
 
     public MxcCliSessionClient(
         MxcRuntimeLocation runtime,
-        IMxcExecutorInvoker? invoker = null)
+        IMxcExecutorInvoker? invoker = null,
+        IMxcAttachedExecutorInvoker? attachedInvoker = null)
     {
         _runtime = runtime;
         _invoker = invoker ?? new ProcessMxcExecutorInvoker();
+        _attachedInvoker = attachedInvoker ??
+            invoker as IMxcAttachedExecutorInvoker ??
+            new ProcessMxcExecutorInvoker();
     }
 
     public async Task<MxcProvisionResult> ProvisionAsync(
@@ -115,6 +137,29 @@ public sealed class MxcCliSessionClient : IMxcSessionClient
             outcome.StandardError);
     }
 
+    /// <summary>
+    /// Runs a command with the host's console streams attached.
+    /// </summary>
+    /// <remarks>
+    /// Nothing is captured, so a dispatch failure cannot be read back as a
+    /// structured envelope and would instead print to the user's terminal. The
+    /// caller establishes the real outcome from the guest helper's control
+    /// result, which distinguishes "the application exited with this code" from
+    /// "the command never started".
+    /// </remarks>
+    public Task<int> ExecuteAttachedAsync(
+        MxcSandboxId sandboxId,
+        MxcExecutionRequest request,
+        string? correlationVector,
+        CancellationToken cancellationToken) =>
+        _attachedInvoker.InvokeAttachedAsync(
+            BuildInvocation(MxcWireProtocol.BuildPhaseEnvelope(
+                MxcWireProtocol.ExecPhase,
+                sandboxId,
+                correlationVector,
+                request.CommandLine)),
+            cancellationToken);
+
     public async Task StopAsync(
         MxcSandboxId sandboxId,
         string? correlationVector,
@@ -165,19 +210,20 @@ public sealed class MxcCliSessionClient : IMxcSessionClient
     private Task<MxcExecutorOutcome> InvokeAsync(
         MxcRequestEnvelope envelope,
         CancellationToken cancellationToken) =>
-        _invoker.InvokeAsync(
-            new MxcExecutorInvocation(
-                _runtime.ExecutorPath,
-                [
-                    "--config-base64",
-                    MxcWireProtocol.EncodeConfig(envelope),
+        _invoker.InvokeAsync(BuildInvocation(envelope), cancellationToken);
 
-                    // The state-aware lifecycle surface is gated behind this
-                    // flag in the pinned runtime; without it the executor
-                    // rejects the request before reading the envelope.
-                    "--experimental"
-                ]),
-            cancellationToken);
+    private MxcExecutorInvocation BuildInvocation(MxcRequestEnvelope envelope) =>
+        new(
+            _runtime.ExecutorPath,
+            [
+                "--config-base64",
+                MxcWireProtocol.EncodeConfig(envelope),
+
+                // The state-aware lifecycle surface is gated behind this
+                // flag in the pinned runtime; without it the executor
+                // rejects the request before reading the envelope.
+                "--experimental"
+            ]);
 
     private static System.Text.Json.JsonElement ReadResult(
         MxcExecutorOutcome outcome)
@@ -203,7 +249,8 @@ public sealed class MxcCliSessionClient : IMxcSessionClient
             : $"Executor diagnostics: {standardError.Trim()}";
 }
 
-internal sealed class ProcessMxcExecutorInvoker : IMxcExecutorInvoker
+internal sealed class ProcessMxcExecutorInvoker
+    : IMxcExecutorInvoker, IMxcAttachedExecutorInvoker
 {
     public async Task<MxcExecutorOutcome> InvokeAsync(
         MxcExecutorInvocation invocation,
@@ -254,5 +301,73 @@ internal sealed class ProcessMxcExecutorInvoker : IMxcExecutorInvoker
             process.ExitCode,
             await standardOutput,
             await standardError);
+    }
+
+    public async Task<int> InvokeAttachedAsync(
+        MxcExecutorInvocation invocation,
+        CancellationToken cancellationToken)
+    {
+        ProcessStartInfo startInfo = new()
+        {
+            FileName = invocation.ExecutorPath,
+
+            // Nothing is redirected, so the child inherits this process's
+            // console handles. That is the point: OpenClaw draws its own
+            // prompts and reads typed input, and any interposed pipe would
+            // both buffer that output and hide the terminal from the child.
+            UseShellExecute = false
+        };
+
+        foreach (string argument in invocation.Arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using Process process = new() { StartInfo = startInfo };
+        try
+        {
+            process.Start();
+        }
+        catch (Exception exception) when (
+            exception is System.ComponentModel.Win32Exception or
+            InvalidOperationException)
+        {
+            throw new MxcException(
+                MxcErrorCode.RuntimeUnavailable,
+                $"The MXC executor could not be started: {exception.Message}",
+                innerException: exception);
+        }
+
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // Only this invocation's process tree is killed. The session itself
+            // outlives the command, and other OpenClaw invocations own their
+            // own executor processes.
+            TryKill(process);
+            throw;
+        }
+
+        return process.ExitCode;
+    }
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException or
+            System.ComponentModel.Win32Exception or
+            NotSupportedException)
+        {
+        }
     }
 }

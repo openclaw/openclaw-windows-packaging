@@ -122,6 +122,24 @@ public interface IMxcSessionClient
         string? correlationVector,
         CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Runs a command with the caller's console attached, returning its exit
+    /// code. Nothing is captured.
+    /// </summary>
+    /// <remarks>
+    /// Interactive OpenClaw requires this: a buffered execution only returns
+    /// after the child exits, so prompts would never reach the terminal and
+    /// typed input would never reach the child. Because nothing is captured, a
+    /// dispatch failure cannot be read back as a structured envelope, and the
+    /// caller must establish the outcome from the guest helper's control
+    /// result instead.
+    /// </remarks>
+    Task<int> ExecuteAttachedAsync(
+        MxcSandboxId sandboxId,
+        MxcExecutionRequest request,
+        string? correlationVector,
+        CancellationToken cancellationToken);
+
     Task StopAsync(
         MxcSandboxId sandboxId,
         string? correlationVector,

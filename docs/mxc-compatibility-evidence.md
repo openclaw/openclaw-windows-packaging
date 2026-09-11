@@ -139,6 +139,14 @@ Out of scope for this proof; it belongs with the managed-gateway slice.
 
 - `stop` succeeds and leaves the provision intact; a subsequent `exec` fails
   with `backend_error` rather than silently restarting the session.
+- **`start` is idempotent.** Measured directly, because session reuse depends
+  on it: the coordinator cannot ask whether a session is running, so it issues
+  `start` on every invocation. Against a second test-owned session
+  (`T5-Y2`, deprovisioned; no residue), three consecutive `start` calls on one
+  sandbox all succeeded, and `exec` afterwards returned exit 0 with the
+  expected stdout. A `start` issued after `stop` also succeeded and restored
+  execution (`exit=0`). Reuse and recovery from a stopped session therefore
+  need no liveness query and no tolerated error code.
 - `deprovision` is **idempotent**: a second call returned `{"result":{}}`
   rather than `stale_id`. Absence of an error is therefore not proof that this
   caller owned the resource, and ownership must be tracked locally.
