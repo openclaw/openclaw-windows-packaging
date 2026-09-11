@@ -26,6 +26,13 @@ public sealed record SessionLaunchRequest
     [JsonPropertyName("requestId")]
     public string? RequestId { get; init; }
 
+    /// <summary>
+    /// Whether the helper waits for the application or leaves it running.
+    /// </summary>
+    [JsonPropertyName("mode")]
+    [JsonConverter(typeof(JsonStringEnumConverter<SessionLaunchMode>))]
+    public SessionLaunchMode Mode { get; init; } = SessionLaunchMode.Attached;
+
     [JsonPropertyName("executable")]
     public string? Executable { get; init; }
 
@@ -42,6 +49,46 @@ public sealed record SessionLaunchRequest
 
     [JsonPropertyName("environment")]
     public IReadOnlyDictionary<string, string>? Environment { get; init; }
+
+    /// <summary>
+    /// Detached only. Where the application's output is written, because a
+    /// detached process has no console to inherit and the pipe it was started
+    /// through closes as soon as the launching execution returns.
+    /// </summary>
+    [JsonPropertyName("logPath")]
+    public string? LogPath { get; init; }
+
+    /// <summary>
+    /// Detached only. Where the supervising helper records that this launch
+    /// generation is running or has exited.
+    /// </summary>
+    /// <remarks>
+    /// The path is unguessable and unique per launch, so a process left behind
+    /// by an earlier launch cannot write to it and cannot make itself look like
+    /// the current generation.
+    /// </remarks>
+    [JsonPropertyName("statusPath")]
+    public string? StatusPath { get; init; }
+}
+
+/// <summary>
+/// Whether a launch is awaited or left running.
+/// </summary>
+public enum SessionLaunchMode
+{
+    /// <summary>
+    /// The helper waits for the application and returns its exit code. The
+    /// console is inherited, so interactive and piped OpenClaw behave as they
+    /// do on the host.
+    /// </summary>
+    Attached,
+
+    /// <summary>
+    /// The helper leaves the application running and reports the identity of
+    /// the process that supervises it. Used for the gateway, which must outlive
+    /// the execution that started it.
+    /// </summary>
+    Detached,
 }
 
 /// <summary>
@@ -68,6 +115,24 @@ public sealed record SessionLaunchResult
     [JsonPropertyName("exitCode")]
     public int? ExitCode { get; init; }
 
+    /// <summary>
+    /// Detached only. The supervising process's identifier.
+    /// </summary>
+    [JsonPropertyName("processId")]
+    public int? ProcessId { get; init; }
+
+    /// <summary>
+    /// Detached only. The supervising process's creation time.
+    /// </summary>
+    /// <remarks>
+    /// Recorded with the identifier because Windows reuses process
+    /// identifiers. The identifier alone would eventually name an unrelated
+    /// process, which the gateway would then claim as its own and, worse,
+    /// could be asked to stop.
+    /// </remarks>
+    [JsonPropertyName("processStartTimeUtc")]
+    public DateTimeOffset? ProcessStartTimeUtc { get; init; }
+
     [JsonPropertyName("error")]
     public string? Error { get; init; }
 }
@@ -93,7 +158,7 @@ public static class SessionLaunchProtocol
     /// or a mixed installation and is always an error rather than something to
     /// interpret leniently.
     /// </summary>
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     /// <summary>
     /// Exit code used when the helper itself fails. It is deliberately
@@ -163,6 +228,25 @@ public static class SessionLaunchProtocol
         {
             throw new SessionLaunchException(
                 "The launch request has no working directory.");
+        }
+
+        if (request.Mode == SessionLaunchMode.Detached)
+        {
+            // A detached process has no console to inherit and the pipe it was
+            // started through closes as soon as the launching execution
+            // returns. Without a log it would write into a dead handle and
+            // leave nothing behind to explain a failed start.
+            if (string.IsNullOrWhiteSpace(request.LogPath))
+            {
+                throw new SessionLaunchException(
+                    "A detached launch request has no log path.");
+            }
+
+            if (string.IsNullOrWhiteSpace(request.StatusPath))
+            {
+                throw new SessionLaunchException(
+                    "A detached launch request has no status path.");
+            }
         }
 
         return request;

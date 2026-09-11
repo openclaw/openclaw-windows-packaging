@@ -10,16 +10,33 @@ public sealed class SessionHostProgramTests
     {
         public SessionLaunchRequest? Request { get; private set; }
 
+        public SessionLaunchRequest? DetachedRequest { get; private set; }
+
+        public string? HelperPath { get; private set; }
+
+        public SessionDetachedProcess Detached { get; set; } =
+            new(4321, new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
         public int Run(SessionLaunchRequest request)
         {
             Request = request;
             return exitCode;
+        }
+
+        public SessionDetachedProcess Start(SessionLaunchRequest request, string helperPath)
+        {
+            DetachedRequest = request;
+            HelperPath = helperPath;
+            return Detached;
         }
     }
 
     private sealed class ThrowingLauncher(string message) : ISessionProcessLauncher
     {
         public int Run(SessionLaunchRequest request) =>
+            throw new SessionLaunchException(message);
+
+        public SessionDetachedProcess Start(SessionLaunchRequest request, string helperPath) =>
             throw new SessionLaunchException(message);
     }
 

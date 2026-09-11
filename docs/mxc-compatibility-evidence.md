@@ -210,6 +210,56 @@ and fills in defaults; and a definition that simply omits a setting parses to
 Task Scheduler's own default, which is the opposite of what this build wants
 for battery gating and the execution time limit.
 
+## Detached gateway: in-session ownership — **PASS, with one correction**
+
+Measured with the published NativeAOT helper (`openclaw-session-host.exe`,
+`win-x64`) on this workstation, using a stand-in application that opens a
+loopback listener and stays up. This exercises the guest helper directly; it
+does not depend on an MXC session, so it is evidence about the helper's own
+contract rather than about the backend.
+
+Note on naming: the in-session intermediate is called a *supervisor*, but it is
+not the host-side supervisor that the detached-lifetime gate removed. Nothing on
+the host stays alive. It is the in-session equivalent of the internal build's
+launcher script: the process whose identity is recorded, with the gateway as its
+child.
+
+| Observation | Result |
+|---|---|
+| The launching execution returns immediately | ✅ exit 0, gateway still starting |
+| It reports the supervisor's identity and creation time | ✅ |
+| The application's output reaches a real log | ✅ redirected by the supervisor |
+| A later, independent inspection finds it | ✅ `processFound`, `startTimeMatches` |
+| The listener belongs to the recorded process tree | ✅ `listenerOwned` |
+| A recorded creation time that does not match | ✅ rejected, and its listener is not credited |
+| After the supervisor is gone | ✅ reported as not found |
+
+`listenerOwned` is the part that could not be taken on trust. It resolves the
+port's owning process through the extended TCP table and walks the parent chain,
+so a gateway that is a *child* of the recorded process is recognized while an
+unrelated program that merely holds the port is not.
+
+**The correction.** Killing the recorded supervisor left the application
+running and still listening:
+
+```text
+before the fix: processFound:false  portListening:true   <- orphan holds the port
+after the fix : processFound:false  portListening:false
+```
+
+Nothing owned that process: a later start would have found the port taken by
+something it could not prove was its own and could not safely stop. The
+supervisor now places the application in a kill-on-job-close job, so the
+application cannot outlive the identity recorded as owning it. The job is
+created before the application starts, and an application that cannot be joined
+to it is stopped rather than left running.
+
+One consequence is deliberate and remains. A supervisor that is killed never
+writes its own final status, so the status file can still read `running` after
+the process is gone. Health therefore never rests on that file: it requires a
+live process with a matching creation time, and the status is reported only as
+corroborating detail.
+
 ## Lifecycle notes for the session slice
 
 - `stop` succeeds and leaves the provision intact; a subsequent `exec` fails
