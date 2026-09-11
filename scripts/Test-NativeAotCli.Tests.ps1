@@ -167,3 +167,9 @@ finally {
         Remove-Item -LiteralPath $publishRoot -Recurse -Force
     }
 }
+
+# The last assertion deliberately runs a native command that exits non-zero, and
+# $LASTEXITCODE is still set when the script ends. GitHub Actions exits a pwsh
+# step with that value, so a fully successful run would otherwise report
+# failure. Any assertion failure throws instead and never reaches this line.
+exit 0
