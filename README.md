@@ -58,6 +58,9 @@ the read-only application directory the workspace.
 | Command | Behavior |
 |---|---|
 | `clawctl setup` | Verify compatible Node.js is on `PATH`, confirm packaged `app\openclaw.mjs` exists, and report isolated-session prerequisites. |
+| `clawctl session status` | Report the isolated session this installation has recorded. |
+| `clawctl session stop` | Stop the isolated session, keeping its guest profile and data. |
+| `clawctl session remove` | Stop and deprovision the isolated session, destroying its guest profile and workspace contents. |
 
 Bare `clawctl` and `clawctl --help` print help without changing state.
 Commands such as `doctor`, `gateway`, and `uninstall` belong to the OpenClaw
@@ -80,6 +83,19 @@ Isolated execution uses a small NativeAOT guest helper,
 argument vector safely. See [docs/session-host.md](docs/session-host.md).
 Session ownership and this installation's writable state are described in
 [docs/session-state.md](docs/session-state.md).
+
+`openclaw` runs inside that isolated session wherever the backend's own probe
+reports support, so a capable machine gets isolation without being asked for it.
+A machine without the backend runs OpenClaw directly on the host, which is a
+capability difference rather than a hidden failure. `OPENCLAW_SESSION=0`
+disables session routing; `OPENCLAW_SESSION=1` requires it, and a machine that
+cannot provide one fails loudly instead of silently relocating work onto the
+host. See [docs/session-routing.md](docs/session-routing.md).
+
+`clawctl session status` reads only the local ownership record. It never
+provisions, never contacts the backend, and deliberately does not claim whether
+the session is currently running, because the backend offers no authoritative
+session enumeration to answer that with.
 
 The launcher places Node.js in a Windows job configured with
 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. The launcher remains alive while Node.js

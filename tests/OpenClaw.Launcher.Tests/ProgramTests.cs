@@ -1,4 +1,5 @@
 using OpenClaw.Launcher.Mxc;
+using OpenClaw.Launcher.Session;
 
 namespace OpenClaw.Launcher.Tests;
 
@@ -38,11 +39,91 @@ public sealed class ProgramTests : IDisposable
             Assert.Equal(applicationDirectory, appDirectory);
             Assert.Equal(arguments, forwardedArguments);
             return Task.FromResult(23);
-            });
+            },
+            _ => Task.FromResult(
+                new SessionRoutingDecision(
+                    SessionRouting.Direct,
+                    "test routes directly")),
+            (_, _, _, _, _) =>
+                throw new InvalidOperationException(
+                    "Direct routing must not enter a session."));
 
         Assert.True(nodeResolutionAttempted);
         Assert.True(launchAttempted);
         Assert.Equal(23, exitCode);
+    }
+
+    [Fact]
+    public async Task AgentLaunchRoutesThroughTheSessionWhenRoutingSelectsIt()
+    {
+        string applicationDirectory = Path.Combine(_testDirectory, "app");
+        Directory.CreateDirectory(applicationDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(applicationDirectory, "openclaw.mjs"),
+            "console.log('fixture');");
+        string[] arguments = ["gateway", "run", "--port", "12345"];
+        var options = new HostOptions(applicationDirectory, arguments);
+        var nodeRuntime = new NodeRuntime(
+            Path.Combine(_testDirectory, "node.exe"),
+            new Version(24, 15, 0),
+            System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture);
+        bool sessionAttempted = false;
+
+        int exitCode = await Program.RunAgentAsync(
+            options,
+            _ => { },
+            _ => Task.FromResult(nodeRuntime),
+            (_, _, _, _, _) =>
+                throw new InvalidOperationException(
+                    "Session routing must not launch on the host."),
+            _ => Task.FromResult(
+                new SessionRoutingDecision(
+                    SessionRouting.Session,
+                    "test routes through a session")),
+            (resolvedNode, appDirectory, forwardedArguments, _, _) =>
+            {
+            sessionAttempted = true;
+            Assert.Equal(nodeRuntime.ExecutablePath, resolvedNode.ExecutablePath);
+            Assert.Equal(applicationDirectory, appDirectory);
+            Assert.Equal(arguments, forwardedArguments);
+            return Task.FromResult(31);
+            });
+
+        Assert.True(sessionAttempted);
+        Assert.Equal(31, exitCode);
+    }
+
+    [Fact]
+    public async Task AgentLaunchSurfacesSessionFailuresInsteadOfFallingBack()
+    {
+        string applicationDirectory = Path.Combine(_testDirectory, "app");
+        Directory.CreateDirectory(applicationDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(applicationDirectory, "openclaw.mjs"),
+            "console.log('fixture');");
+        var options = new HostOptions(applicationDirectory, ["--help"]);
+        var nodeRuntime = new NodeRuntime(
+            Path.Combine(_testDirectory, "node.exe"),
+            new Version(24, 15, 0),
+            System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture);
+
+        SessionException failure =
+            await Assert.ThrowsAsync<SessionException>(
+                () => Program.RunAgentAsync(
+                    options,
+                    _ => { },
+                    _ => Task.FromResult(nodeRuntime),
+                    (_, _, _, _, _) =>
+                        throw new InvalidOperationException(
+                            "A failed session must never fall back to the host."),
+                    _ => Task.FromResult(
+                        new SessionRoutingDecision(
+                            SessionRouting.Session,
+                            "test routes through a session")),
+                    (_, _, _, _, _) =>
+                        throw new SessionException("the backend refused")));
+
+        Assert.Equal("the backend refused", failure.Message);
     }
 
     [Fact]

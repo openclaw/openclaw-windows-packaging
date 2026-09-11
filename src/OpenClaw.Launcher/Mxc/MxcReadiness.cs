@@ -74,6 +74,19 @@ public static class MxcReadiness
     /// </summary>
     public static readonly MxcHostBuild MinimumHostBuild = new(26340, 9212);
 
+    /// <summary>
+    /// A report for a caller that has already ruled the runtime out and must
+    /// not pay for, or fail on, a probe it will ignore.
+    /// </summary>
+    public static MxcReadinessReport Unavailable(string reason) =>
+        new(
+            null,
+            null,
+            reason,
+            MxcHostSupport.Unknown,
+            null,
+            MxcSupportEvidence.None);
+
     public static Task<MxcReadinessReport> ProbeAsync(
         CancellationToken cancellationToken) =>
         ProbeAsync(

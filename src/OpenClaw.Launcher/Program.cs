@@ -1,5 +1,6 @@
 using System.Reflection;
 using OpenClaw.Launcher.Mxc;
+using OpenClaw.Launcher.Session;
 
 namespace OpenClaw.Launcher;
 
@@ -122,22 +123,48 @@ internal static class Program
             options,
             log,
             resolveNode ?? NodeRuntimeResolver.ResolveAsync,
-            GatewayLauncher.RunAsync);
+            GatewayLauncher.RunAsync,
+            DecideSessionRoutingAsync,
+            ExecuteInSessionAsync);
 
     // launchOpenClaw is a test seam: tests substitute a fake in place of
     // GatewayLauncher.RunAsync so they can assert launch behavior without
     // starting a real Node child process or Windows job object.
+    // decideRouting and runInSession are seams for the same reason: neither a
+    // real MXC backend nor a packaged identity exists during tests.
     internal static async Task<int> RunAgentAsync(
         HostOptions options,
         Action<string> log,
         Func<CancellationToken, Task<NodeRuntime>> resolveNode,
-        LaunchOpenClawAsync launchOpenClaw)
+        LaunchOpenClawAsync launchOpenClaw,
+        Func<CancellationToken, Task<SessionRoutingDecision>> decideRouting,
+        RunInSessionAsync runInSession)
     {
         NodeRuntime nodeRuntime = await resolveNode(CancellationToken.None);
         log(
             $"Using Node.js {nodeRuntime.Version} from " +
             $"{nodeRuntime.ExecutablePath}.");
         string applicationDirectory = GetPackagedApplicationDirectory(options);
+
+        SessionRoutingDecision decision =
+            await decideRouting(CancellationToken.None).ConfigureAwait(false);
+        if (decision.Routing == SessionRouting.Session)
+        {
+            log($"Using an isolated session: {decision.Reason}");
+
+            // There is no fallback from here. A backend that fails on a
+            // supported machine must surface rather than quietly relocating
+            // the user's work onto the host, where the profile and isolation
+            // both differ.
+            return await runInSession(
+                nodeRuntime,
+                applicationDirectory,
+                options.OpenClawArguments,
+                log,
+                CancellationToken.None).ConfigureAwait(false);
+        }
+
+        log($"Running OpenClaw directly on the host: {decision.Reason}");
         log("Using the OpenClaw application directly from the package.");
         return await launchOpenClaw(
             nodeRuntime.ExecutablePath,
@@ -145,6 +172,47 @@ internal static class Program
             options.OpenClawArguments,
             CancellationToken.None,
             log);
+    }
+
+    private static async Task<SessionRoutingDecision> DecideSessionRoutingAsync(
+        CancellationToken cancellationToken)
+    {
+        SessionMode mode = SessionRoutingPolicy.ReadMode(
+            Environment.GetEnvironmentVariable);
+
+        // The readiness probe is skipped when sessions are switched off, so a
+        // disabled installation never pays for it or fails because of it.
+        MxcReadinessReport readiness = mode == SessionMode.Disabled
+            ? MxcReadiness.Unavailable("Isolated sessions are disabled.")
+            : await MxcReadiness.ProbeAsync(cancellationToken).ConfigureAwait(false);
+
+        return SessionRoutingPolicy.Decide(
+            mode,
+            PackageIdentity.TryGetPackageFamilyName(),
+            readiness);
+    }
+
+    private static async Task<int> ExecuteInSessionAsync(
+        NodeRuntime nodeRuntime,
+        string applicationDirectory,
+        IReadOnlyList<string> openClawArguments,
+        Action<string> log,
+        CancellationToken cancellationToken)
+    {
+        SessionRuntime host = SessionRuntime.Create(log);
+        SessionRecord record = await host.Coordinator
+            .EnsureStartedAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return await host.Executor.ExecuteAsync(
+            record,
+            new SessionExecutionRequest(
+                host.HelperPath,
+                nodeRuntime.ExecutablePath,
+                applicationDirectory,
+                openClawArguments,
+                Environment.CurrentDirectory),
+            cancellationToken).ConfigureAwait(false);
     }
 
     // output is a required parameter (not a Console.Out default) so tests
@@ -157,7 +225,8 @@ internal static class Program
         Action<string> writeError,
         TextWriter output,
         Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null,
-        Func<CancellationToken, Task<MxcReadinessReport>>? probeMxcReadiness = null)
+        Func<CancellationToken, Task<MxcReadinessReport>>? probeMxcReadiness = null,
+        Func<Action<string>, SessionCoordinator>? createSessionCoordinator = null)
     {
         ClawCtlCommandParseResult parsed = ClawCtlCommandParser.Parse(args);
         if (parsed.Error is not null)
@@ -200,10 +269,46 @@ internal static class Program
                     $"(evidence: {readiness.SupportEvidence}).");
                 return 0;
             }
+            case ClawCtlCommand.SessionStatus:
+            {
+                SessionCoordinator coordinator =
+                    CreateCoordinator(createSessionCoordinator, log);
+                ClawCtlConsole.WriteSessionStatus(
+                    output,
+                    coordinator.GetRecordedStatus());
+                return 0;
+            }
+            case ClawCtlCommand.SessionStop:
+            {
+                SessionCoordinator coordinator =
+                    CreateCoordinator(createSessionCoordinator, log);
+                bool stopped = await coordinator
+                    .StopAsync(CancellationToken.None)
+                    .ConfigureAwait(false);
+                ClawCtlConsole.WriteSessionStopped(output, stopped);
+                return 0;
+            }
+            case ClawCtlCommand.SessionRemove:
+            {
+                SessionCoordinator coordinator =
+                    CreateCoordinator(createSessionCoordinator, log);
+                SessionRemovalResult removal = await coordinator
+                    .RemoveAsync(CancellationToken.None)
+                    .ConfigureAwait(false);
+                ClawCtlConsole.WriteSessionRemoved(output, removal);
+                return 0;
+            }
             default:
                 throw new InvalidOperationException("Unknown clawctl command.");
         }
     }
+
+    private static SessionCoordinator CreateCoordinator(
+        Func<Action<string>, SessionCoordinator>? factory,
+        Action<string> log) =>
+        factory is not null
+            ? factory(log)
+            : SessionRuntime.Create(log).Coordinator;
 
     internal delegate Task<int> LaunchOpenClawAsync(
         string nodePath,
@@ -211,6 +316,13 @@ internal static class Program
         IReadOnlyList<string> openClawArguments,
         CancellationToken cancellationToken,
         Action<string>? log);
+
+    internal delegate Task<int> RunInSessionAsync(
+        NodeRuntime nodeRuntime,
+        string applicationDirectory,
+        IReadOnlyList<string> openClawArguments,
+        Action<string> log,
+        CancellationToken cancellationToken);
 
     private static string GetPackagedApplicationDirectory(HostOptions options)
     {

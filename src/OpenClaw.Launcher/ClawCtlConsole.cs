@@ -1,4 +1,5 @@
 using OpenClaw.Launcher.Mxc;
+using OpenClaw.Launcher.Session;
 
 namespace OpenClaw.Launcher;
 
@@ -11,11 +12,15 @@ public static class ClawCtlConsole
         WriteUsage(output);
         output.WriteLine();
         output.WriteLine("Commands:");
-        output.WriteLine("  setup   Prepare the packaged OpenClaw environment.");
+        output.WriteLine("  setup            Prepare the packaged OpenClaw environment.");
+        output.WriteLine("  session status   Show the recorded isolated session.");
+        output.WriteLine("  session stop     Stop the isolated session, keeping its data.");
+        output.WriteLine("  session remove   Remove the isolated session and its guest data.");
         output.WriteLine();
         output.WriteLine(
-            "`setup` is read-only. It reports Node.js, packaged application, " +
-            "and isolated session prerequisites without changing them.");
+            "`setup` and `session status` are read-only. They report Node.js, " +
+            "packaged application, and isolated session prerequisites without " +
+            "changing them.");
         output.WriteLine();
         WriteNodePrerequisite(output);
         output.WriteLine();
@@ -23,7 +28,7 @@ public static class ClawCtlConsole
     }
 
     public static void WriteUsage(TextWriter output) =>
-        output.WriteLine("Usage: clawctl setup");
+        output.WriteLine("Usage: clawctl setup | session <status|stop|remove>");
 
     public static void WriteNodePrerequisite(TextWriter output)
     {
@@ -125,5 +130,78 @@ public static class ClawCtlConsole
             output.WriteLine(
                 "  Isolated sessions are unavailable on this machine.");
         }
+    }
+
+    /// <summary>
+    /// Reports the recorded session without contacting the backend.
+    /// </summary>
+    /// <remarks>
+    /// Recorded identity and live evidence are reported separately on purpose.
+    /// The backend offers no authoritative session enumeration, so claiming a
+    /// session is "running" here would be a guess presented as a fact.
+    /// </remarks>
+    public static void WriteSessionStatus(
+        TextWriter output,
+        SessionStatus status)
+    {
+        switch (status.Availability)
+        {
+            case SessionAvailability.None:
+                output.WriteLine("No isolated session is recorded.");
+                output.WriteLine(
+                    "  Running `openclaw` creates one on a supported machine.");
+                return;
+
+            case SessionAvailability.Unusable:
+                output.WriteLine("The recorded isolated session is unusable.");
+                output.WriteLine($"  Reason: {status.Detail}");
+                output.WriteLine(
+                    "  Run `clawctl session remove` to discard it and start over.");
+                return;
+        }
+
+        SessionRecord record = status.Record!;
+        output.WriteLine("An isolated session is recorded for this installation.");
+        output.WriteLine($"  Recorded: {record.CreatedUtc:u}");
+        if (record.AgentUserName is { Length: > 0 } agent)
+        {
+            output.WriteLine($"  Guest account: {agent}");
+        }
+
+        if (record.WorkspacePath is { Length: > 0 } workspace)
+        {
+            output.WriteLine($"  Shared workspace: {workspace}");
+        }
+
+        output.WriteLine(
+            "  Live state is not queried; the backend does not report it.");
+    }
+
+    public static void WriteSessionStopped(TextWriter output, bool stopped) =>
+        output.WriteLine(
+            stopped
+                ? "Stopped the isolated session. Its profile and data are kept."
+                : "No isolated session is recorded, so there was nothing to stop.");
+
+    public static void WriteSessionRemoved(
+        TextWriter output,
+        SessionRemovalResult result)
+    {
+        if (!result.Removed)
+        {
+            output.WriteLine(
+                "No isolated session is recorded, so there was nothing to remove.");
+            return;
+        }
+
+        if (result.StopFailure is { Length: > 0 } stopFailure)
+        {
+            output.WriteLine($"Warning: stopping the session failed: {stopFailure}");
+            output.WriteLine("  Removal continued so the guest account is released.");
+        }
+
+        output.WriteLine("Removed the isolated session.");
+        output.WriteLine(
+            "  Its guest profile and shared workspace contents are gone.");
     }
 }

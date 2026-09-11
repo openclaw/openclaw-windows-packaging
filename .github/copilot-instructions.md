@@ -78,6 +78,16 @@ and ARM64 separately.
   application id. `SessionStateStore` records the owned session; ownership is
   never inferred from machine state, because `deprovision` is idempotent and
   unrelated agent accounts can already exist. See `docs\session-state.md`.
+- `SessionCoordinator` owns the session lifecycle, `SessionExecutor` runs a
+  single OpenClaw invocation inside it through the guest helper, and
+  `SessionRuntime` composes both from the running installation. The backend
+  client is constructed lazily so `clawctl session status` stays readable on a
+  machine without the MXC runtime.
+- `SessionRoutingPolicy` decides between session and host execution.
+  Sessions are default-on wherever the backend probe reports support; an
+  unsupported machine runs directly, and a *required* session that cannot be
+  provided fails loudly rather than falling back to the host. See
+  `docs\session-routing.md`.
 - `GatewayLauncher` starts Node without a shell, uses `ArgumentList`, inherits
   the console streams, and sets `OPENCLAW_SUPERVISOR_MODE=external` plus
   `OPENCLAW_NO_AUTO_UPDATE=1`. The child process exit code is the launcher exit
