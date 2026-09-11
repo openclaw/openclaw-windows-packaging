@@ -57,7 +57,7 @@ the read-only application directory the workspace.
 
 | Command | Behavior |
 |---|---|
-| `clawctl setup` | Verify compatible Node.js is on `PATH` and confirm packaged `app\openclaw.mjs` exists. |
+| `clawctl setup` | Verify compatible Node.js is on `PATH`, confirm packaged `app\openclaw.mjs` exists, and report isolated-session prerequisites. |
 
 Bare `clawctl` and `clawctl --help` print help without changing state.
 Commands such as `doctor`, `gateway`, and `uninstall` belong to the OpenClaw
@@ -68,7 +68,11 @@ outdated, malformed, or architecture-incompatible runtimes produce an
 actionable error rather than a later process-launch failure.
 
 `clawctl setup` is read-only. It performs no extraction, hashing, inventory
-walk, or state mutation.
+walk, or state mutation. It also reports whether the pinned MXC runtime for the
+current architecture is present and whether this Windows build supports
+isolated agent sessions. Neither condition fails `setup`, because today's
+execution does not depend on them. See
+[docs/mxc-runtime.md](docs/mxc-runtime.md).
 
 The launcher places Node.js in a Windows job configured with
 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. The launcher remains alive while Node.js
@@ -125,12 +129,15 @@ dotnet test .\OpenClaw.Gateway.MSIX.slnx `
 ```
 
 `scripts\Build-Payload.ps1` npm-installs an OpenClaw package into an expanded,
-architecture-specific application tree. `scripts\Build-MSIX.ps1` copies that
-tree into package content, rejects any Node.js executable or runtime archive,
-creates a per-file inventory, and then creates an unsigned NativeAOT MSIX.
-`scripts\Build-LocalMSIX.ps1` can reuse a successful workflow payload or a
-local payload directory. The Node.js used by the payload build jobs is build
-infrastructure only and is not copied into the MSIX.
+architecture-specific application tree. `scripts\Get-MxcRuntime.ps1` stages the
+pinned, integrity-verified MXC native runtime described in
+[docs/mxc-runtime.md](docs/mxc-runtime.md). `scripts\Build-MSIX.ps1` copies the
+application tree into package content, rejects any Node.js executable or
+runtime archive, stages the MXC runtime, creates a per-file inventory, and then
+creates an unsigned NativeAOT MSIX. `scripts\Build-LocalMSIX.ps1` can reuse a
+successful workflow payload or a local payload directory. The Node.js used by
+the payload build jobs is build infrastructure only and is not copied into the
+MSIX.
 
 Normal pull-request and push workflows publish unsigned packages for
 validation. Manual runs support three signing modes:
@@ -185,7 +192,9 @@ The longer-term design is to run the Gateway payload in a dedicated isolated
 agent session rather than the interactive session where the human user is
 logged in. This will provide a boundary similar in purpose to running the
 Gateway in WSL, using the forthcoming isolated-session capabilities. That
-isolation is not provided by the current MSIX implementation.
+isolation is not provided by the current MSIX implementation; the package
+currently carries only the pinned MXC runtime and the readiness check described
+in [docs/mxc-runtime.md](docs/mxc-runtime.md).
 
 ## Contributors
 

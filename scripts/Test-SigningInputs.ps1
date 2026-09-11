@@ -11,7 +11,9 @@ param(
 
     [Parameter(Mandatory)]
     [ValidatePattern('^[0-9a-fA-F]{40}$')]
-    [string]$PackagingCommit
+    [string]$PackagingCommit,
+
+    [string]$MxcRuntimeLockPath
 )
 
 Set-StrictMode -Version Latest
@@ -136,6 +138,24 @@ if (
 }
 
 $expectedPackagingCommit = $PackagingCommit.ToLowerInvariant()
+if (-not $MxcRuntimeLockPath) {
+    $MxcRuntimeLockPath = Join-Path `
+        (Split-Path $PSScriptRoot -Parent) `
+        'mxc-runtime.lock.json'
+}
+if (-not (Test-Path -LiteralPath $MxcRuntimeLockPath -PathType Leaf)) {
+    throw "Missing the pinned MXC runtime lock: $MxcRuntimeLockPath"
+}
+
+$mxcLock = Get-Content -LiteralPath $MxcRuntimeLockPath -Raw | ConvertFrom-Json
+if (
+    $mxcLock.package -ne '@microsoft/mxc-sdk' -or
+    [string]::IsNullOrWhiteSpace([string]$mxcLock.version) -or
+    $mxcLock.tarballIntegrity -notmatch '^sha512-[A-Za-z0-9+/]+={0,2}$'
+) {
+    throw 'The pinned MXC runtime lock is invalid.'
+}
+
 $expectedPackageVersion = $null
 foreach ($architecture in @('x64', 'arm64')) {
     $directory = Join-Path $resolvedArtifactsDirectory $architecture
@@ -166,6 +186,11 @@ foreach ($architecture in @('x64', 'arm64')) {
         $metadata.payloadLayout -ne 'immutable-package' -or
         $metadata.payloadFileCount -isnot [int64] -or
         $metadata.payloadFileCount -le 0 -or
+        $metadata.mxcRuntimePackage -ne $mxcLock.package -or
+        $metadata.mxcRuntimeVersion -ne $mxcLock.version -or
+        $metadata.mxcRuntimeIntegrity -ne $mxcLock.tarballIntegrity -or
+        $metadata.mxcRuntimeFileCount -isnot [int64] -or
+        $metadata.mxcRuntimeFileCount -le 0 -or
         $metadata.architecture -ne $architecture -or
         $metadata.archive -ne $msix.Name -or
         $metadata.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
@@ -313,6 +338,88 @@ foreach ($architecture in @('x64', 'arm64')) {
         ) {
             throw (
                 "The embedded $architecture application file set is invalid."
+            )
+        }
+
+        # The MXC runtime is redistributed native code, so the package must
+        # carry exactly the pinned files: the provenance record alone is not
+        # evidence, and an extra mxc/ entry would ship unverified.
+        $mxcPrefix = "mxc/$architecture/"
+        $mxcProvenanceEntry = "${mxcPrefix}mxc-runtime.json"
+        $expectedMxcEntries =
+            [System.Collections.Generic.Dictionary[string, string]]::new(
+                [System.StringComparer]::OrdinalIgnoreCase
+            )
+        $pinnedMxcFiles =
+            @($mxcLock.architectures.$architecture.files) +
+            @($mxcLock.licenseFiles)
+        foreach ($pinnedMxcFile in $pinnedMxcFiles) {
+            $expectedMxcEntries.Add(
+                "$mxcPrefix$($pinnedMxcFile.stagedPath)",
+                ([string]$pinnedMxcFile.sha256).ToLowerInvariant()
+            )
+        }
+
+        $actualMxcEntries = @(
+            $entriesByPath.Keys |
+                Where-Object {
+                    $_.StartsWith(
+                        $mxcPrefix,
+                        [StringComparison]::OrdinalIgnoreCase
+                    )
+                }
+        )
+        if ($actualMxcEntries.Count -ne ($expectedMxcEntries.Count + 1)) {
+            throw (
+                "The $architecture MSIX MXC runtime file set does not match " +
+                'mxc-runtime.lock.json.'
+            )
+        }
+
+        foreach ($actualMxcEntry in $actualMxcEntries) {
+            # The provenance record is generated per build, so it is validated
+            # by content below rather than by a pinned hash.
+            if ($actualMxcEntry -ieq $mxcProvenanceEntry) {
+                continue
+            }
+
+            $expectedMxcHash = $null
+            if (-not $expectedMxcEntries.TryGetValue(
+                    $actualMxcEntry,
+                    [ref]$expectedMxcHash
+                )) {
+                throw (
+                    "The $architecture MSIX contains an unpinned MXC file: " +
+                    $actualMxcEntry
+                )
+            }
+
+            $actualMxcHash = Get-PackageEntrySha256 -Entry (
+                Get-PackageEntry `
+                    -EntriesByPath $entriesByPath `
+                    -Path $actualMxcEntry
+            )
+            if ($actualMxcHash -ne $expectedMxcHash) {
+                throw (
+                    "The $architecture MSIX MXC file '$actualMxcEntry' does " +
+                    'not match its pinned hash.'
+                )
+            }
+        }
+
+        $packagedMxcProvenance = Read-ZipEntryText `
+            -EntriesByPath $entriesByPath `
+            -Path $mxcProvenanceEntry |
+            ConvertFrom-Json
+        if (
+            $packagedMxcProvenance.package -ne $mxcLock.package -or
+            $packagedMxcProvenance.version -ne $mxcLock.version -or
+            $packagedMxcProvenance.architecture -ne $architecture -or
+            $packagedMxcProvenance.tarballIntegrity -ne
+                $mxcLock.tarballIntegrity
+        ) {
+            throw (
+                "The embedded $architecture MXC runtime provenance is invalid."
             )
         }
     }

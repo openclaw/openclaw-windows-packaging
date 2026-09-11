@@ -74,12 +74,26 @@
     </ItemGroup>
   </Target>
 
+  <!--
+    The MXC runtime is staged per architecture by scripts\Get-MxcRuntime.ps1,
+    which verifies archive integrity, file hashes, and PE machine type. It is
+    never restored from a NuGet feed or downloaded during the build itself.
+  -->
+  <PropertyGroup Condition="'$(IncludePackagingContent)' == 'true'">
+    <MxcRuntimeArchitecture Condition="'$(RuntimeIdentifier)' == 'win-x64'">x64</MxcRuntimeArchitecture>
+    <MxcRuntimeArchitecture Condition="'$(RuntimeIdentifier)' == 'win-arm64'">arm64</MxcRuntimeArchitecture>
+    <MxcRuntimeContentDirectory>$(MSBuildThisFileDirectory)..\..\content\mxc\$(MxcRuntimeArchitecture)\</MxcRuntimeContentDirectory>
+  </PropertyGroup>
+
   <ItemGroup Condition="'$(IncludePackagingContent)' == 'true'">
     <Content Include="$(MSBuildThisFileDirectory)..\..\content\openclaw\app\**\*"
              Link="app\%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" />
     <Content Include="$(MSBuildThisFileDirectory)..\..\content\openclaw\payload-files.json"
              Link="payload\payload-files.json"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(MxcRuntimeContentDirectory)**\*"
+             Link="mxc\$(MxcRuntimeArchitecture)\%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
@@ -90,6 +104,12 @@
            Text="Missing expanded OpenClaw application content." />
     <Error Condition="!Exists('$(MSBuildThisFileDirectory)..\..\content\openclaw\payload-files.json')"
            Text="Missing content\openclaw\payload-files.json." />
+    <Error Condition="'$(MxcRuntimeArchitecture)' == ''"
+           Text="Packaging requires RuntimeIdentifier win-x64 or win-arm64 to select the MXC runtime." />
+    <Error Condition="!Exists('$(MxcRuntimeContentDirectory)wxc-exec.exe')"
+           Text="Missing the staged MXC runtime. Run scripts\Get-MxcRuntime.ps1 -Architecture $(MxcRuntimeArchitecture)." />
+    <Error Condition="!Exists('$(MxcRuntimeContentDirectory)mxc-runtime.json')"
+           Text="Missing MXC runtime provenance. Run scripts\Get-MxcRuntime.ps1 -Architecture $(MxcRuntimeArchitecture)." />
   </Target>
 
   <Target Name="FinalizeNativeAotPackagePayload"

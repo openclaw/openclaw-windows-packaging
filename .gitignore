@@ -5,6 +5,7 @@ uninstall-validation-output/
 # Generated payloads and build output
 content/openclaw/*
 !content/openclaw/.gitkeep
+content/mxc/
 artifacts/
 test-signed/
 bin/

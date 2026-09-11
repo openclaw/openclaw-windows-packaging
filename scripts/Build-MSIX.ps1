@@ -246,6 +246,45 @@ $payloadInventoryPath = Join-Path $openClawContent 'payload-files.json'
     ConvertTo-Json -Depth 4 |
     Set-Content -LiteralPath $payloadInventoryPath -Encoding utf8
 
+# The MXC runtime is a release trust-chain input, so it is staged and verified
+# before the packaging build rather than downloaded by MSBuild.
+$mxcContent = Join-Path $contentRoot "mxc\$Architecture"
+Invoke-CheckedCommand `
+    -FailureMessage 'Staging the pinned MXC runtime failed.' `
+    -Command {
+        & pwsh -NoProfile -File (
+            Join-Path $PSScriptRoot 'Get-MxcRuntime.ps1'
+        ) -Architecture $Architecture -OutputDirectory $mxcContent
+    }
+
+$mxcRuntimeFiles = @(
+    Get-ChildItem -LiteralPath $mxcContent -File -Force -Recurse |
+        ForEach-Object {
+            [ordered]@{
+                path = (
+                    [IO.Path]::GetRelativePath($mxcContent, $_.FullName)
+                ).Replace('\', '/')
+                sha256 = (
+                    Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256
+                ).Hash.ToLowerInvariant()
+            }
+        } |
+        Sort-Object path
+)
+if ($mxcRuntimeFiles.Count -eq 0) {
+    throw "Staged MXC runtime '$mxcContent' contains no files."
+}
+$mxcProvenance = Get-Content `
+    -LiteralPath (Join-Path $mxcContent 'mxc-runtime.json') `
+    -Raw |
+    ConvertFrom-Json
+if ($mxcProvenance.architecture -ne $Architecture) {
+    throw (
+        "Staged MXC runtime provenance reports architecture " +
+        "'$($mxcProvenance.architecture)' but this package is $Architecture."
+    )
+}
+
 $temporaryRoot = if ($env:RUNNER_TEMP) {
     $env:RUNNER_TEMP
 }
@@ -328,6 +367,14 @@ try {
             ).Hash.ToLowerInvariant()
         }
     )
+    foreach ($mxcRuntimeFile in $mxcRuntimeFiles) {
+        $expectedPackageFiles.Add(
+            "mxc/$Architecture/$($mxcRuntimeFile.path)",
+            [pscustomobject]@{
+                Hash = $mxcRuntimeFile.sha256
+            }
+        )
+    }
     $packageEntries = [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::OrdinalIgnoreCase
     )
@@ -463,6 +510,10 @@ try {
         payloadResolvedCommit = $payloadInfo.resolvedCommit.ToLowerInvariant()
         payloadLayout = 'immutable-package'
         payloadFileCount = $payloadFiles.Count
+        mxcRuntimePackage = $mxcProvenance.package
+        mxcRuntimeVersion = $mxcProvenance.version
+        mxcRuntimeIntegrity = $mxcProvenance.tarballIntegrity
+        mxcRuntimeFileCount = $mxcRuntimeFiles.Count
         architecture = $Architecture
         archive = $msixName
         sha256 = $msixHash

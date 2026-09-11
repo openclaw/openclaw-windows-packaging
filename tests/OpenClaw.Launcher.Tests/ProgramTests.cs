@@ -1,3 +1,5 @@
+using OpenClaw.Launcher.Mxc;
+
 namespace OpenClaw.Launcher.Tests;
 
 public sealed class ProgramTests : IDisposable
@@ -64,7 +66,13 @@ public sealed class ProgramTests : IDisposable
             _ => { },
             _ => { },
             output,
-            _ => Task.FromResult(nodeRuntime));
+            _ => Task.FromResult(nodeRuntime),
+            () => new MxcReadinessReport(
+                @"C:\package\mxc\x64",
+                new MxcRuntimeProvenance("@microsoft/mxc-sdk", "0.8.0", "x64"),
+                RuntimeUnavailableReason: null,
+                MxcHostSupport.Supported,
+                MxcReadiness.MinimumHostBuild));
 
         Assert.Equal(0, exitCode);
         Assert.True(File.Exists(entryPoint));
@@ -75,6 +83,52 @@ public sealed class ProgramTests : IDisposable
             StringComparison.Ordinal);
         Assert.Contains(
             applicationDirectory,
+            output.ToString(),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "0.8.0",
+            output.ToString(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SetupReportsMissingSessionSupportWithoutFailingOverall()
+    {
+        // OpenClaw still runs without isolated sessions, so setup keeps its
+        // successful exit code and simply says the feature is unavailable.
+        string applicationDirectory = Path.Combine(_testDirectory, "app");
+        Directory.CreateDirectory(applicationDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(applicationDirectory, "openclaw.mjs"),
+            "console.log('fixture');");
+        var output = new StringWriter();
+
+        int exitCode = await Program.RunControlAsync(
+            new HostOptions(applicationDirectory, []),
+            ["setup"],
+            _ => { },
+            _ => { },
+            output,
+            _ => Task.FromResult(
+                new NodeRuntime(
+                    Path.Combine(_testDirectory, "node.exe"),
+                    new Version(24, 15, 0),
+                    System.Runtime.InteropServices.RuntimeInformation
+                        .ProcessArchitecture)),
+            () => new MxcReadinessReport(
+                RuntimeDirectory: null,
+                Provenance: null,
+                "wxc-exec.exe is missing.",
+                MxcHostSupport.Unsupported,
+                new MxcHostBuild(26100, 1)));
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains(
+            "wxc-exec.exe is missing.",
+            output.ToString(),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Isolated sessions are unavailable",
             output.ToString(),
             StringComparison.Ordinal);
     }

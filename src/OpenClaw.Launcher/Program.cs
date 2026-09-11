@@ -1,4 +1,5 @@
 using System.Reflection;
+using OpenClaw.Launcher.Mxc;
 
 namespace OpenClaw.Launcher;
 
@@ -155,7 +156,8 @@ internal static class Program
         Action<string> log,
         Action<string> writeError,
         TextWriter output,
-        Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null)
+        Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null,
+        Func<MxcReadinessReport>? probeMxcReadiness = null)
     {
         ClawCtlCommandParseResult parsed = ClawCtlCommandParser.Parse(args);
         if (parsed.Error is not null)
@@ -187,6 +189,13 @@ internal static class Program
                 ClawCtlConsole.WriteReadinessSummary(
                     output,
                     applicationDirectory);
+                MxcReadinessReport readiness =
+                    (probeMxcReadiness ?? MxcReadiness.Probe)();
+                ClawCtlConsole.WriteMxcReadinessSummary(output, readiness);
+                log(
+                    "MXC runtime available: " +
+                    $"{readiness.RuntimeAvailable}; host support: " +
+                    $"{readiness.HostSupport}.");
                 return 0;
             }
             default:
