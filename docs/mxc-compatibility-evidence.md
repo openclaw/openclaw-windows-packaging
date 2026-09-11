@@ -173,6 +173,43 @@ Two consequences for the gateway slice:
 The start-time check is not ceremony: it is what distinguishes the recorded
 process from an unrelated one that inherited its PID after Windows reused it.
 
+## Task Scheduler round trip — **PASS, with one correction**
+
+Measured on this workstation, unelevated, against the inbox `schtasks.exe`,
+using a test-only package family name so the task could not collide with any
+real installation. The task was registered, queried, reinstalled, and deleted;
+its action was never triggered, and nothing was left behind.
+
+| Observation | Result |
+|---|---|
+| The generated task XML is accepted | ✅ registered from a UTF-16 file |
+| A missing task is distinguishable from a refused read | ✅ `ERROR: The system cannot find the file specified.`, exit 1 |
+| `NotInstalled` → `install` → `Ready / TaskScheduler` | ✅ |
+| `status` immediately afterwards | ✅ `Ready`, no drift reported |
+| A second `install` | ✅ no change, no re-registration |
+| `uninstall` → `NotInstalled` | ✅ task, launcher, and fallback all gone |
+
+**The correction.** Task Scheduler does not store back what it was given.
+Registering a logon trigger whose `UserId` is a SID returns a trigger whose
+`UserId` is the *account name*, while the principal keeps its SID:
+
+```text
+registered: <UserId>S-1-12-1-…-467001824</UserId>
+read back : <UserId>REDMOND\paulcam</UserId>
+```
+
+Comparing those as text reports drift on every probe. That would have made
+`status` permanently wrong and made `install` re-register on every run — and no
+test using a fake scheduler could have caught it, because the fake returns
+exactly what it was handed. Account identity is therefore compared by resolved
+SID, falling back to a literal comparison when an account cannot be resolved.
+
+Two further consequences are already handled: the definition is compared field
+by field rather than as XML text, because Task Scheduler also reorders elements
+and fills in defaults; and a definition that simply omits a setting parses to
+Task Scheduler's own default, which is the opposite of what this build wants
+for battery gating and the execution time limit.
+
 ## Lifecycle notes for the session slice
 
 - `stop` succeeds and leaves the provision intact; a subsequent `exec` fails

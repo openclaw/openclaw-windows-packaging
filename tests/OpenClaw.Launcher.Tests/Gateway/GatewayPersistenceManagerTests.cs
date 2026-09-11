@@ -34,7 +34,14 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
                 StartupFolderPath: StartupFolder,
                 WorkingDirectory: StateRoot,
                 AliasCommand: "clawctl.exe",
-                CommandProcessorPath: @"C:\Windows\System32\cmd.exe"));
+                CommandProcessorPath: @"C:\Windows\System32\cmd.exe"),
+            log: null,
+            toSid: value => value switch
+            {
+                "S-1-5-21-1" or "CONTOSO\\owner" => "S-1-5-21-1",
+                "S-1-5-21-999" or "CONTOSO\\other" => "S-1-5-21-999",
+                _ => null
+            });
 
     private GatewayTaskSnapshot DesiredSnapshot() =>
         GatewayTaskDefinition.CreateSnapshot(
@@ -232,6 +239,39 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
         Assert.Equal(GatewayPersistenceState.Ready, status.State);
         Assert.Equal(GatewayPersistenceLane.TaskScheduler, status.Lane);
         Assert.Null(status.Detail);
+    }
+
+    [Fact]
+    public async Task ATriggerTaskSchedulerRewroteToAnAccountNameIsNotDrift()
+    {
+        // Observed on Windows: registering a logon trigger whose UserId is a
+        // SID returns a trigger whose UserId is the account name, while the
+        // principal keeps its SID. Comparing as text reported drift on every
+        // probe, so status was permanently wrong and install re-registered
+        // forever.
+        GatewayPersistenceManager manager = CreateManager();
+        await manager.InstallAsync(CancellationToken.None);
+        _scheduler.Probe = GatewayTaskProbe.Present(
+            DesiredSnapshot() with { LogonTriggerUserId = "CONTOSO\\owner" });
+
+        GatewayPersistenceStatus status =
+            await manager.GetStatusAsync(CancellationToken.None);
+
+        Assert.Equal(GatewayPersistenceState.Ready, status.State);
+    }
+
+    [Fact]
+    public async Task ATriggerForAnotherAccountIsStillDrift()
+    {
+        GatewayPersistenceManager manager = CreateManager();
+        await manager.InstallAsync(CancellationToken.None);
+        _scheduler.Probe = GatewayTaskProbe.Present(
+            DesiredSnapshot() with { LogonTriggerUserId = "CONTOSO\\other" });
+
+        GatewayPersistenceStatus status =
+            await manager.GetStatusAsync(CancellationToken.None);
+
+        Assert.Equal(GatewayPersistenceState.ActionRequired, status.State);
     }
 
     [Fact]

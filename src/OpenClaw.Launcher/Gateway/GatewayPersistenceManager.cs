@@ -23,12 +23,14 @@ public sealed class GatewayPersistenceManager
     private readonly IGatewayTaskScheduler _scheduler;
     private readonly GatewayPersistenceOptions _options;
     private readonly GatewayTaskIdentity _identity;
+    private readonly Func<string, string?> _toSid;
     private readonly Action<string> _log;
 
     public GatewayPersistenceManager(
         IGatewayTaskScheduler scheduler,
         GatewayPersistenceOptions options,
-        Action<string>? log = null)
+        Action<string>? log = null,
+        Func<string, string?>? toSid = null)
     {
         ArgumentNullException.ThrowIfNull(scheduler);
         ArgumentNullException.ThrowIfNull(options);
@@ -39,6 +41,7 @@ public sealed class GatewayPersistenceManager
             options.PackageFamilyName,
             options.UserSid);
         _log = log ?? (_ => { });
+        _toSid = toSid ?? WindowsAccountIdentifier.ToSid;
     }
 
     public string TaskName => _identity.Name;
@@ -237,12 +240,12 @@ public sealed class GatewayPersistenceManager
         {
             differences.Add("The logon trigger is disabled.");
         }
-        else if (!Same(actual.LogonTriggerUserId, desired.LogonTriggerUserId))
+        else if (!SameAccount(actual.LogonTriggerUserId, desired.LogonTriggerUserId))
         {
             differences.Add("The logon trigger is scoped to a different user.");
         }
 
-        if (!Same(actual.UserId, desired.UserId))
+        if (!SameAccount(actual.UserId, desired.UserId))
         {
             differences.Add("The task runs as a different user.");
         }
@@ -440,4 +443,7 @@ public sealed class GatewayPersistenceManager
 
     private static bool Same(string left, string right) =>
         string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
+
+    private bool SameAccount(string left, string right) =>
+        WindowsAccountIdentifier.SameAccount(left, right, _toSid);
 }
