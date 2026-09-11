@@ -23,6 +23,7 @@ public static class ClawCtlConsole
         output.WriteLine("  gateway-service start      Start the gateway if it is not running.");
         output.WriteLine("  gateway-service stop       Stop the gateway, keeping its data.");
         output.WriteLine("  gateway-service uninstall  Stop the gateway and remove sign-in recovery.");
+        output.WriteLine("  gateway-service diagnose   Explain why the gateway is or is not running.");
         output.WriteLine();
         output.WriteLine(
             "`setup`, `session status`, and `gateway-service status` are " +
@@ -37,7 +38,7 @@ public static class ClawCtlConsole
     public static void WriteUsage(TextWriter output) =>
         output.WriteLine(
             "Usage: clawctl setup | session <status|stop|remove> | " +
-            "gateway-service <install|status|start|stop|uninstall>");
+            "gateway-service <install|status|start|stop|uninstall|diagnose>");
 
     public static void WriteNodePrerequisite(TextWriter output)
     {
@@ -390,4 +391,58 @@ public static class ClawCtlConsole
         GatewayPersistenceState.ActionRequired => "needs attention",
         _ => "could not be determined"
     };
+
+    /// <summary>
+    /// Reports that the gateway stack could not even be assembled.
+    /// </summary>
+    /// <remarks>
+    /// Written as a diagnostic rather than thrown as an error, because this is
+    /// the answer <c>diagnose</c> was asked for: the chain broke at its first
+    /// link.
+    /// </remarks>
+    internal static void WriteGatewayUnavailable(TextWriter output, string reason)
+    {
+        output.WriteLine("Gateway diagnostics");
+        output.WriteLine();
+        output.WriteLine($"  [FAIL] Gateway: {reason}");
+        output.WriteLine();
+        output.WriteLine(
+            "No further checks were possible. Install the OpenClaw package " +
+            "and run this from its `clawctl` alias.");
+    }
+
+    /// <summary>
+    /// Prints the whole chain, so a user can see which link broke without
+    /// attaching a debugger.
+    /// </summary>
+    internal static void WriteGatewayDiagnostics(
+        TextWriter output,
+        GatewayDiagnosticReport report)
+    {
+        output.WriteLine("Gateway diagnostics");
+        output.WriteLine();
+
+        foreach (GatewayDiagnostic check in report.Checks)
+        {
+            // Unknown is its own mark. Rendering it as a failure would send the
+            // user chasing a problem that may not exist.
+            string mark = check.Ok switch
+            {
+                true => "ok  ",
+                false => "FAIL",
+                _ => "?   "
+            };
+
+            output.WriteLine($"  [{mark}] {check.Name}: {check.Detail}");
+        }
+
+        output.WriteLine();
+        WriteGatewayStatus(output, report.Status, report.Persistence);
+
+        if (report.LogPath is { Length: > 0 } log)
+        {
+            output.WriteLine();
+            output.WriteLine($"Gateway log: {log}");
+        }
+    }
 }

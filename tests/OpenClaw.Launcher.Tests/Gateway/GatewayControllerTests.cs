@@ -116,7 +116,7 @@ public sealed class GatewayControllerTests : IDisposable
                 NodePath: @"C:\Program Files\nodejs\node.exe",
                 ApplicationDirectory: Path.Combine(_root, "app"),
                 WorkingDirectory: _root,
-                Port: GatewayController.DefaultPort),
+                Port: GatewayLaunchConfiguration.DefaultPort),
             _ => { },
             withPersistence ? CreatePersistence() : null);
 
@@ -134,7 +134,7 @@ public sealed class GatewayControllerTests : IDisposable
             SandboxId = "sandbox-1",
             ProcessId = processId,
             ProcessStartTimeUtc = new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero),
-            Port = GatewayController.DefaultPort,
+            Port = GatewayLaunchConfiguration.DefaultPort,
             StatusPath = "status.json",
             AutostartDisabled = autostartDisabled
         });
@@ -234,7 +234,7 @@ public sealed class GatewayControllerTests : IDisposable
         Assert.Equal(
             _client.StartOutcome.ProcessStartTimeUtc,
             result.Record.ProcessStartTimeUtc);
-        Assert.Equal(GatewayController.DefaultPort, result.Record.Port);
+        Assert.Equal(GatewayLaunchConfiguration.DefaultPort, result.Record.Port);
     }
 
     [Fact]

@@ -202,6 +202,44 @@ public sealed class ClawCtlGatewayDispatchTests : IDisposable
     }
 
     [Fact]
+    public async Task DiagnoseSurvivesTheFailuresItExistsToExplain()
+    {
+        // Diagnose is what a user runs when something is already wrong. It must
+        // report a broken first link rather than refuse to run because of it.
+        var output = new StringWriter();
+        var errors = new List<string>();
+
+        int exitCode = await Program.RunControlAsync(
+            new HostOptions(Path.Combine(_root, "app"), []),
+            ["gateway-service", "diagnose"],
+            _log.Add,
+            errors.Add,
+            output,
+            createGatewayRuntime: (_, _) => throw new SessionException(
+                "OpenClaw is not running from its installed package."),
+            resolveNode: _ => throw new InvalidOperationException(
+                "Node must not be resolved once the stack is unavailable."));
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Gateway diagnostics", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("not running from its installed package", output.ToString());
+    }
+
+    [Fact]
+    public async Task DiagnoseChangesNothing()
+    {
+        (int exitCode, string text, _) = await RunAsync("gateway-service", "diagnose");
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Gateway diagnostics", text, StringComparison.Ordinal);
+        Assert.Empty(_backend.Calls);
+        Assert.Empty(_client.Calls);
+        Assert.DoesNotContain(
+            _scheduler.Calls,
+            call => call.StartsWith("register:", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task AnUnobservableGatewayIsNotReplaced()
     {
         _client.Inspection = Healthy();

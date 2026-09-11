@@ -57,8 +57,6 @@ public sealed record GatewayStopResult(bool Stopped, string Message, string? Det
 /// </remarks>
 public sealed class GatewayController
 {
-    public const int DefaultPort = 4517;
-
     private readonly SessionCoordinator _sessions;
     private readonly ISessionGatewayClient _client;
     private readonly GatewayStateStore _store;

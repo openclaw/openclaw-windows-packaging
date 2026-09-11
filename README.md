@@ -66,6 +66,7 @@ the read-only application directory the workspace.
 | `clawctl gateway-service start` | Start the gateway if it is not already running. |
 | `clawctl gateway-service stop` | Stop the gateway, keeping the session and its data. |
 | `clawctl gateway-service uninstall` | Stop the gateway and remove sign-in recovery. |
+| `clawctl gateway-service diagnose` | Report each link in the chain that starts the gateway, without changing any of them. |
 
 Bare `clawctl` and `clawctl --help` print help without changing state.
 Commands such as `doctor`, `gateway`, and `uninstall` belong to the OpenClaw

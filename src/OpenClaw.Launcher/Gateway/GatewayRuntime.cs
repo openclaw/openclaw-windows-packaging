@@ -17,16 +17,33 @@ public sealed class GatewayRuntime
     private GatewayRuntime(
         GatewayController controller,
         GatewayPersistenceManager persistence,
+        GatewayConfigurationStore configuration,
+        SessionRuntime session,
+        HostPaths paths,
         string helperPath)
     {
         Controller = controller;
         Persistence = persistence;
+        Configuration = configuration;
+        Session = session;
+        Paths = paths;
         HelperPath = helperPath;
     }
 
     public GatewayController Controller { get; }
 
     public GatewayPersistenceManager Persistence { get; }
+
+    public GatewayConfigurationStore Configuration { get; }
+
+    /// <summary>
+    /// The session stack this gateway runs on. Held so diagnostics report the
+    /// same session the gateway actually uses, rather than resolving a second
+    /// one from the machine.
+    /// </summary>
+    public SessionRuntime Session { get; }
+
+    public HostPaths Paths { get; }
 
     public string HelperPath { get; }
 
@@ -79,21 +96,31 @@ public sealed class GatewayRuntime
                     "cmd.exe")),
             log);
 
+        var configuration = new GatewayConfigurationStore(
+            paths.GatewayConfigurationPath);
+
         var controller = new GatewayController(
             session.Coordinator,
             client ?? new SessionGatewayClient(session.Backend, log),
             new GatewayStateStore(paths.GatewayStatePath),
-            () => CreateStartRequest(options, session, paths),
+            () => CreateStartRequest(options, session, paths, configuration),
             log,
             persistence);
 
-        return new GatewayRuntime(controller, persistence, session.HelperPath);
+        return new GatewayRuntime(
+            controller,
+            persistence,
+            configuration,
+            session,
+            paths,
+            session.HelperPath);
     }
 
     private static GatewayStartRequest CreateStartRequest(
         HostOptions options,
         SessionRuntime session,
-        HostPaths paths)
+        HostPaths paths,
+        GatewayConfigurationStore configuration)
     {
         string? applicationDirectory = options.PackagedApplicationDirectory;
         if (applicationDirectory is null)
@@ -103,6 +130,8 @@ public sealed class GatewayRuntime
                 "gateway cannot be started.");
         }
 
+        GatewayLaunchConfiguration launch = configuration.Resolve(paths.StateRoot);
+
         return new GatewayStartRequest(
             HelperPath: session.HelperPath,
             NodePath: NodeRuntimeResolver.ResolveAsync(CancellationToken.None)
@@ -110,8 +139,8 @@ public sealed class GatewayRuntime
                 .GetResult()
                 .ExecutablePath,
             ApplicationDirectory: applicationDirectory,
-            WorkingDirectory: paths.StateRoot,
-            Port: GatewayController.DefaultPort);
+            WorkingDirectory: launch.WorkingDirectory!,
+            Port: launch.Port);
     }
 
     /// <summary>

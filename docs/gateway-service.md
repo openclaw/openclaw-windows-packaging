@@ -9,10 +9,11 @@ clawctl gateway-service status     Show the gateway and its sign-in recovery.
 clawctl gateway-service start      Start the gateway if it is not running.
 clawctl gateway-service stop       Stop the gateway, keeping its data.
 clawctl gateway-service uninstall  Stop the gateway and remove sign-in recovery.
+clawctl gateway-service diagnose   Explain why the gateway is or is not running.
 ```
 
-`status` is read-only. It never starts a gateway, provisions a session, or
-registers anything.
+`status` and `diagnose` are read-only. They never start a gateway, provision a
+session, or register anything.
 
 ## Why `gateway-service` and not `gateway`
 
@@ -92,6 +93,27 @@ Neither touches the isolated session, its guest profile, or your data — use
 
 ## Troubleshooting
 
+Start with `clawctl gateway-service diagnose`. It walks the whole chain that has
+to work for the gateway to run and says which link broke:
+
+```text
+Gateway diagnostics
+
+  [ok  ] Package identity: OpenClaw.Gateway_8wekyb3d8bbwe
+  [ok  ] Packaged application: C:\Program Files\WindowsApps\...\app\openclaw.mjs
+  [ok  ] Node.js: 24.15.0 at C:\Program Files\nodejs\node.exe
+  [ok  ] Session helper: ...\session-host\x64\openclaw-session-host.exe
+  [?   ] Isolated session: No session is recorded yet; starting the gateway creates one.
+  [ok  ] Launch configuration: Port 4517, working directory ...
+  [?   ] Sign-in launcher: Not written yet: ...\gateway-launcher.cmd
+```
+
+`?` means the answer is genuinely unknown, which is not the same as a failure —
+an unprovisioned session before the first start is normal, not a problem to
+chase. `diagnose` also runs when the stack cannot be assembled at all, because
+that is exactly when you need it; it reports the broken first link rather than
+refusing to start.
+
 Drift is reported together with the command that repairs it, rather than
 repaired silently behind an unexpected elevation prompt. If `status` says
 sign-in recovery needs attention, it names `clawctl gateway-service install`.
@@ -100,5 +122,25 @@ A task that cannot be *read* is reported as unreadable, not as missing.
 Re-registering on a refused read would be an unbounded retry whose write is as
 likely to be refused as the read was.
 
-The gateway's output is written to a log inside the session; `status` names its
-path whenever the gateway is running or unhealthy.
+The gateway's output is written to a log inside the session; `status` and
+`diagnose` name its path whenever the gateway is running or unhealthy.
+
+## Choosing a port
+
+The gateway listens on port 4517 by default. The chosen port is recorded, so the
+logon task starts on the same port the interactive command did — otherwise
+clients would silently fail to find it after a sign-in.
+
+`OPENCLAW_GATEWAY_PORT` overrides the port for a single invocation, for
+diagnosing a conflict without changing what the next sign-in will use. An
+unusable value is refused rather than ignored: falling back to the configured
+port would start the gateway somewhere you did not ask for while appearing to
+honor the override.
+
+A configuration file that cannot be read is an error rather than a silent
+return to defaults, for the same reason — starting on the wrong port with
+nothing explaining why is worse than not starting.
+
+The gateway's working directory is recorded too, rather than inherited. A logon
+task starts in the system directory, and an interactive caller's directory would
+make the gateway's behavior depend on where it happened to be started from.

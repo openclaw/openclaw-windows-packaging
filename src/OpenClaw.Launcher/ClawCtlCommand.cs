@@ -12,7 +12,8 @@ public enum ClawCtlCommand
     GatewayStatus,
     GatewayStart,
     GatewayStop,
-    GatewayUninstall
+    GatewayUninstall,
+    GatewayDiagnose
 }
 
 public sealed record ClawCtlCommandParseResult(
@@ -68,7 +69,7 @@ public static class ClawCtlCommandParser
             return new ClawCtlCommandParseResult(
                 ClawCtlCommand.Help,
                 "`clawctl gateway-service` requires a sub-command: " +
-                "install, status, start, stop, or uninstall.");
+                "install, status, start, stop, uninstall, or diagnose.");
         }
 
         if (args.Count > 2)
@@ -86,6 +87,7 @@ public static class ClawCtlCommandParser
             "start" => new ClawCtlCommandParseResult(ClawCtlCommand.GatewayStart),
             "stop" => new ClawCtlCommandParseResult(ClawCtlCommand.GatewayStop),
             "uninstall" => new ClawCtlCommandParseResult(ClawCtlCommand.GatewayUninstall),
+            "diagnose" => new ClawCtlCommandParseResult(ClawCtlCommand.GatewayDiagnose),
             _ => new ClawCtlCommandParseResult(
                 ClawCtlCommand.Help,
                 $"Unknown gateway-service sub-command: {args[1]}")

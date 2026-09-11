@@ -116,6 +116,13 @@ public sealed class HostPaths
     /// </summary>
     public string GatewayStatePath => Path.Combine(StateRoot, "gateway.json");
 
+    /// <summary>
+    /// The gateway's launch configuration, kept separate from its recorded
+    /// process so that stopping the gateway never discards the user's port.
+    /// </summary>
+    public string GatewayConfigurationPath =>
+        Path.Combine(StateRoot, "gateway-config.json");
+
     public static HostPaths Create() =>
         Create(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),

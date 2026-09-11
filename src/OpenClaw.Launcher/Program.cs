@@ -357,6 +357,37 @@ internal static class Program
                 ClawCtlConsole.WriteGatewayUninstalled(output, stop, removed);
                 return removed.Succeeded ? 0 : 1;
             }
+            case ClawCtlCommand.GatewayDiagnose:
+            {
+                // Diagnose is what a user runs when something is already wrong,
+                // so it must survive the failures it exists to explain rather
+                // than refusing to start.
+                GatewayRuntime gateway;
+                try
+                {
+                    gateway = CreateGateway(createGatewayRuntime, options, log);
+                }
+                catch (Exception exception) when (
+                    exception is SessionException or GatewayConfigurationException)
+                {
+                    ClawCtlConsole.WriteGatewayUnavailable(output, exception.Message);
+                    return 1;
+                }
+
+                // Read-only, like status: diagnosing a gateway must never be
+                // the thing that starts or registers one.
+                GatewayDiagnosticReport report = await GatewayDiagnostics
+                    .CollectAsync(
+                        gateway,
+                        gateway.Paths,
+                        options,
+                        gateway.Session.Coordinator,
+                        resolveNode ?? NodeRuntimeResolver.ResolveAsync,
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
+                ClawCtlConsole.WriteGatewayDiagnostics(output, report);
+                return 0;
+            }
             default:
                 throw new InvalidOperationException("Unknown clawctl command.");
         }
