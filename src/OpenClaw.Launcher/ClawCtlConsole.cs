@@ -76,23 +76,48 @@ public static class ClawCtlConsole
             output.WriteLine($"  MXC runtime: unavailable. {report.RuntimeUnavailableReason}");
         }
 
-        switch (report.HostSupport)
+        switch (report.SupportEvidence)
         {
-            case MxcHostSupport.Supported:
+            case MxcSupportEvidence.BackendProbe:
+                // Measured, so report what the host actually supports rather
+                // than what its build number predicts.
                 output.WriteLine(
-                    $"  Windows build: {report.HostBuild} meets the " +
-                    $"{MxcReadiness.MinimumHostBuild} minimum.");
+                    report.HostSupport == MxcHostSupport.Supported
+                        ? "  Backend: the isolated-session backend is available."
+                        : "  Backend: the isolated-session backend is not " +
+                          "available on this host.");
+                if (report.BackendProbe is { Tier: { Length: > 0 } tier })
+                {
+                    output.WriteLine($"  Backend tier: {tier}");
+                }
+
+                foreach (string warning in report.BackendProbe?.Warnings ?? [])
+                {
+                    output.WriteLine($"  Backend warning: {warning}");
+                }
+
                 break;
-            case MxcHostSupport.Unsupported:
+
+            case MxcSupportEvidence.HostBuild:
                 output.WriteLine(
-                    $"  Windows build: {report.HostBuild} is below the " +
-                    $"{MxcReadiness.MinimumHostBuild} minimum.");
+                    report.HostSupport == MxcHostSupport.Supported
+                        ? $"  Windows build: {report.HostBuild} meets the " +
+                          $"{MxcReadiness.MinimumHostBuild} minimum (the " +
+                          "backend itself could not be queried)."
+                        : $"  Windows build: {report.HostBuild} is below the " +
+                          $"{MxcReadiness.MinimumHostBuild} minimum.");
                 break;
+
             default:
                 output.WriteLine(
                     "  Windows build: could not be determined; the minimum is " +
                     $"{MxcReadiness.MinimumHostBuild}.");
                 break;
+        }
+
+        if (report.BackendProbeFailureReason is { Length: > 0 } probeFailure)
+        {
+            output.WriteLine($"  Backend probe failed: {probeFailure}");
         }
 
         if (!report.RuntimeAvailable || report.HostSupport != MxcHostSupport.Supported)

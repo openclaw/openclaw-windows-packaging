@@ -157,7 +157,7 @@ internal static class Program
         Action<string> writeError,
         TextWriter output,
         Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null,
-        Func<MxcReadinessReport>? probeMxcReadiness = null)
+        Func<CancellationToken, Task<MxcReadinessReport>>? probeMxcReadiness = null)
     {
         ClawCtlCommandParseResult parsed = ClawCtlCommandParser.Parse(args);
         if (parsed.Error is not null)
@@ -189,13 +189,15 @@ internal static class Program
                 ClawCtlConsole.WriteReadinessSummary(
                     output,
                     applicationDirectory);
-                MxcReadinessReport readiness =
-                    (probeMxcReadiness ?? MxcReadiness.Probe)();
+                MxcReadinessReport readiness = await
+                    (probeMxcReadiness ?? MxcReadiness.ProbeAsync)(
+                        CancellationToken.None).ConfigureAwait(false);
                 ClawCtlConsole.WriteMxcReadinessSummary(output, readiness);
                 log(
                     "MXC runtime available: " +
                     $"{readiness.RuntimeAvailable}; host support: " +
-                    $"{readiness.HostSupport}.");
+                    $"{readiness.HostSupport} " +
+                    $"(evidence: {readiness.SupportEvidence}).");
                 return 0;
             }
             default:

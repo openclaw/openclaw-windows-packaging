@@ -57,7 +57,8 @@ public sealed class ClawCtlConsoleTests : IDisposable
                 new MxcRuntimeProvenance("@microsoft/mxc-sdk", "0.8.0", "x64"),
                 RuntimeUnavailableReason: null,
                 MxcHostSupport.Supported,
-                new MxcHostBuild(26340, 9300)));
+                new MxcHostBuild(26340, 9300),
+                MxcSupportEvidence.HostBuild));
 
         string summary = output.ToString();
         Assert.Contains("@microsoft/mxc-sdk 0.8.0", summary, StringComparison.Ordinal);
@@ -78,7 +79,8 @@ public sealed class ClawCtlConsoleTests : IDisposable
                 new MxcRuntimeProvenance("@microsoft/mxc-sdk", "0.8.0", "x64"),
                 RuntimeUnavailableReason: null,
                 MxcHostSupport.Unsupported,
-                new MxcHostBuild(26100, 3194)));
+                new MxcHostBuild(26100, 3194),
+                MxcSupportEvidence.HostBuild));
 
         string summary = output.ToString();
         Assert.Contains("26100.3194", summary, StringComparison.Ordinal);
@@ -88,6 +90,62 @@ public sealed class ClawCtlConsoleTests : IDisposable
             StringComparison.Ordinal);
         Assert.Contains(
             "Isolated sessions are unavailable",
+            summary,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MxcReadinessSummaryPrefersTheMeasuredBackendVerdict()
+    {
+        // A build number above the documented minimum must not be reported as
+        // support when the backend itself says the feature is unusable here.
+        var output = new StringWriter();
+
+        ClawCtlConsole.WriteMxcReadinessSummary(
+            output,
+            new MxcReadinessReport(
+                @"C:\package\mxc\x64",
+                new MxcRuntimeProvenance("@microsoft/mxc-sdk", "0.8.0", "x64"),
+                RuntimeUnavailableReason: null,
+                MxcHostSupport.Unsupported,
+                new MxcHostBuild(27000, 1),
+                MxcSupportEvidence.BackendProbe,
+                new MxcBackendProbe(false, "none", ["host preparation required"])));
+
+        string summary = output.ToString();
+        Assert.Contains("not available on this host", summary, StringComparison.Ordinal);
+        Assert.Contains("host preparation required", summary, StringComparison.Ordinal);
+        Assert.Contains(
+            "Isolated sessions are unavailable",
+            summary,
+            StringComparison.Ordinal);
+
+        // The build number predicted support, so quoting it here would
+        // contradict the measured verdict.
+        Assert.DoesNotContain("27000.1", summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MxcReadinessSummaryReportsAFailedBackendProbeAlongsideTheFallback()
+    {
+        var output = new StringWriter();
+
+        ClawCtlConsole.WriteMxcReadinessSummary(
+            output,
+            new MxcReadinessReport(
+                @"C:\package\mxc\x64",
+                new MxcRuntimeProvenance("@microsoft/mxc-sdk", "0.8.0", "x64"),
+                RuntimeUnavailableReason: null,
+                MxcHostSupport.Supported,
+                new MxcHostBuild(27000, 1),
+                MxcSupportEvidence.HostBuild,
+                BackendProbe: null,
+                BackendProbeFailureReason: "the probe exited with code 1"));
+
+        string summary = output.ToString();
+        Assert.Contains("could not be queried", summary, StringComparison.Ordinal);
+        Assert.Contains(
+            "the probe exited with code 1",
             summary,
             StringComparison.Ordinal);
     }
@@ -104,7 +162,8 @@ public sealed class ClawCtlConsoleTests : IDisposable
                 Provenance: null,
                 "wxc-exec.exe is missing.",
                 MxcHostSupport.Unknown,
-                HostBuild: null));
+                HostBuild: null,
+                MxcSupportEvidence.None));
 
         string summary = output.ToString();
         Assert.Contains("could not be determined", summary, StringComparison.Ordinal);

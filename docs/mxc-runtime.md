@@ -99,7 +99,18 @@ sessions are usable, without provisioning anything:
 
 - whether a pinned runtime is present next to the launcher for the current
   process architecture, and which package version it came from;
-- whether the current Windows build satisfies `minimumWindowsBuild`.
+- whether the OS IsolationSession backend is actually usable here.
+
+Backend support is **measured**, not inferred. When the runtime is present,
+`setup` runs the executor's own non-mutating host capability detector
+(`wxc-exec --probe`), which creates no sandbox, and reports its verdict plus the
+backend tier and any warnings it raises. A build number only predicts support;
+the detector is the one signal that notices a host where the feature is present
+but unusable.
+
+If the runtime is missing, or the detector cannot run, `setup` falls back to
+comparing the current Windows build against `minimumWindowsBuild`, says so in
+the output, and reports the probe failure reason when there is one.
 
 An unavailable runtime or an unsupported host is reported plainly and does not
 fail `setup`, because Node.js and the packaged entry point can still be correct

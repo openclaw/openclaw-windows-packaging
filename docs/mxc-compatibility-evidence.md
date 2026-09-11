@@ -24,8 +24,11 @@ inferred from source reading.
 ```
 
 `--probe` is non-mutating and is the correct readiness signal for a host check.
-The current `clawctl setup` check infers support from the Windows build number
-alone; `--probe` is strictly better evidence and should replace it.
+`clawctl setup` now uses it as the primary support verdict and falls back to the
+Windows build comparison only when the runtime is missing or the detector itself
+cannot run, reporting which evidence it used. Verified end to end against a
+NativeAOT `clawctl setup`, which reported `Backend tier: base-container` from
+this live output.
 
 ## G1: published runtime contract
 

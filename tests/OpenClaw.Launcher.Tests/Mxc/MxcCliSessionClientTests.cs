@@ -215,6 +215,40 @@ public sealed class MxcCliSessionClientTests
         Assert.Null(invoker.Invocation);
     }
 
+    [Fact]
+    public async Task ProbeAsksTheExecutorWithoutAnEnvelopeOrSandbox()
+    {
+        // The probe must stay non-mutating: no config envelope, no
+        // experimental lifecycle flag, and therefore no sandbox is created on
+        // the read-only setup path.
+        var invoker = new RecordingInvoker(
+            """{"tier":"base-container","warnings":[],"probes":{"isolationSessionAvailable":true}}""");
+        var client = new MxcCliSessionClient(Runtime, invoker);
+
+        MxcBackendProbe probe = await client.ProbeBackendAsync(
+            CancellationToken.None);
+
+        Assert.True(probe.IsolationSessionAvailable);
+        Assert.Equal(Runtime.ExecutorPath, invoker.Invocation!.ExecutorPath);
+        Assert.Equal(["--probe"], invoker.Invocation.Arguments);
+    }
+
+    [Fact]
+    public async Task AFailedProbeInvocationSurfacesAsRuntimeUnavailable()
+    {
+        var invoker = new RecordingInvoker(
+            standardOutput: string.Empty,
+            exitCode: 1,
+            standardError: "probe unsupported");
+        var client = new MxcCliSessionClient(Runtime, invoker);
+
+        MxcException exception = await Assert.ThrowsAsync<MxcException>(
+            () => client.ProbeBackendAsync(CancellationToken.None));
+
+        Assert.Equal(MxcErrorCode.RuntimeUnavailable, exception.Code);
+        Assert.Contains("probe unsupported", exception.Message);
+    }
+
     private sealed class RecordingInvoker(
         string standardOutput,
         int exitCode = 0,

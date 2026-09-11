@@ -204,6 +204,41 @@ internal static class MxcWireProtocol
         }
     }
 
+    /// <summary>
+    /// Reads the executor's <c>--probe</c> output. This is plain JSON, not a
+    /// lifecycle result/error envelope, so it is parsed separately.
+    /// </summary>
+    public static MxcBackendProbe ReadProbeResponse(string standardOutput)
+    {
+        MxcProbeResponse? payload;
+        try
+        {
+            payload = JsonSerializer.Deserialize(
+                standardOutput,
+                MxcJsonContext.Default.MxcProbeResponse);
+        }
+        catch (JsonException exception)
+        {
+            throw new MxcException(
+                MxcErrorCode.ProtocolViolation,
+                "The MXC host capability probe returned malformed JSON.",
+                innerException: exception);
+        }
+
+        if (payload?.Probes?.IsolationSessionAvailable is not bool available)
+        {
+            throw new MxcException(
+                MxcErrorCode.ProtocolViolation,
+                "The MXC host capability probe did not report " +
+                "isolationSessionAvailable.");
+        }
+
+        return new MxcBackendProbe(
+            available,
+            payload.Tier,
+            payload.Warnings ?? []);
+    }
+
     private static MxcException ToException(MxcErrorEnvelope error)
     {
         string message = error.Message is { Length: > 0 }

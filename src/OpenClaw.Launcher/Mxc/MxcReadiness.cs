@@ -19,46 +19,86 @@ public enum MxcHostSupport
     Unsupported
 }
 
+/// <summary>
+/// How <see cref="MxcReadinessReport.HostSupport"/> was established. The
+/// distinction matters: the documented minimum build predicts support, while
+/// the backend probe measures it, and only the probe notices a host where the
+/// feature is present but unusable.
+/// </summary>
+public enum MxcSupportEvidence
+{
+    /// <summary>Nothing could be established.</summary>
+    None,
+
+    /// <summary>Inferred from the Windows build against the documented minimum.</summary>
+    HostBuild,
+
+    /// <summary>Measured by the runtime's own host capability detector.</summary>
+    BackendProbe
+}
+
+/// <summary>
+/// Result of the runtime's non-mutating host capability detector.
+/// </summary>
+public sealed record MxcBackendProbe(
+    bool IsolationSessionAvailable,
+    string? Tier,
+    IReadOnlyList<string> Warnings);
+
 public sealed record MxcReadinessReport(
     string? RuntimeDirectory,
     MxcRuntimeProvenance? Provenance,
     string? RuntimeUnavailableReason,
     MxcHostSupport HostSupport,
-    MxcHostBuild? HostBuild)
+    MxcHostBuild? HostBuild,
+    MxcSupportEvidence SupportEvidence,
+    MxcBackendProbe? BackendProbe = null,
+    string? BackendProbeFailureReason = null)
 {
     public bool RuntimeAvailable => RuntimeUnavailableReason is null;
 }
 
 /// <summary>
-/// Read-only MXC prerequisite probe. It inspects the staged runtime and the
-/// host build only; it never provisions, starts, or otherwise mutates state.
+/// Read-only MXC prerequisite probe. It inspects the staged runtime, asks the
+/// runtime's own capability detector about the host, and falls back to the
+/// documented minimum build when that detector cannot run. It never provisions,
+/// starts, or otherwise mutates state.
 /// </summary>
 public static class MxcReadiness
 {
     /// <summary>
     /// Minimum Windows build documented by the pinned runtime for the
-    /// IsolationSession backend.
+    /// IsolationSession backend. Used only when the backend probe is
+    /// unavailable, because a build number predicts support rather than
+    /// measuring it.
     /// </summary>
     public static readonly MxcHostBuild MinimumHostBuild = new(26340, 9212);
 
-    public static MxcReadinessReport Probe() =>
-        Probe(
+    public static Task<MxcReadinessReport> ProbeAsync(
+        CancellationToken cancellationToken) =>
+        ProbeAsync(
             AppContext.BaseDirectory,
             Environment.GetEnvironmentVariable,
-            WindowsHostBuild.TryRead);
+            WindowsHostBuild.TryRead,
+            static (location, token) =>
+                new MxcCliSessionClient(location).ProbeBackendAsync(token),
+            cancellationToken);
 
-    internal static MxcReadinessReport Probe(
+    internal static async Task<MxcReadinessReport> ProbeAsync(
         string baseDirectory,
         Func<string, string?> readEnvironmentVariable,
-        Func<MxcHostBuild?> readHostBuild)
+        Func<MxcHostBuild?> readHostBuild,
+        Func<MxcRuntimeLocation, CancellationToken, Task<MxcBackendProbe>> probeBackend,
+        CancellationToken cancellationToken)
     {
         string? runtimeDirectory = null;
         MxcRuntimeProvenance? provenance = null;
         string? unavailableReason = null;
+        MxcRuntimeLocation? location = null;
 
         try
         {
-            MxcRuntimeLocation location = MxcRuntimeLocator.Locate(
+            location = MxcRuntimeLocator.Locate(
                 baseDirectory,
                 readEnvironmentVariable);
             runtimeDirectory = location.Directory;
@@ -70,12 +110,54 @@ public static class MxcReadiness
         }
 
         MxcHostBuild? hostBuild = readHostBuild();
+        MxcBackendProbe? backendProbe = null;
+        string? probeFailure = null;
+
+        if (location is not null)
+        {
+            try
+            {
+                backendProbe = await probeBackend(location, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (MxcException exception)
+            {
+                probeFailure = exception.Message;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+
+            // A host detector that cannot run is a readiness gap, not a reason
+            // to fail setup, so any other launch failure degrades to the build
+            // check rather than propagating.
+            catch (Exception exception)
+            {
+                probeFailure = exception.Message;
+            }
+        }
+
+        (MxcHostSupport support, MxcSupportEvidence evidence) =
+            backendProbe is not null
+                ? (backendProbe.IsolationSessionAvailable
+                    ? MxcHostSupport.Supported
+                    : MxcHostSupport.Unsupported,
+                   MxcSupportEvidence.BackendProbe)
+                : (Classify(hostBuild),
+                   hostBuild is null
+                       ? MxcSupportEvidence.None
+                       : MxcSupportEvidence.HostBuild);
+
         return new MxcReadinessReport(
             runtimeDirectory,
             provenance,
             unavailableReason,
-            Classify(hostBuild),
-            hostBuild);
+            support,
+            hostBuild,
+            evidence,
+            backendProbe,
+            probeFailure);
     }
 
     private static MxcHostSupport Classify(MxcHostBuild? hostBuild)

@@ -264,6 +264,56 @@ public sealed class MxcWireProtocolTests
             result.Metadata.EphemeralWorkspacePath);
     }
 
+    [Fact]
+    public void ProbeResponseIsReadFromTheCapturedRuntimeOutput()
+    {
+        // Verbatim `wxc-exec --probe` output captured from the pinned runtime
+        // on a capable host; see docs\mxc-compatibility-evidence.md (G5).
+        const string Captured = """
+            {"tier":"base-container","needsDaclAugmentation":false,"warnings":[],"probes":{"baseContainerApiPresent":true,"isolationSessionAvailable":true}}
+            """;
+
+        MxcBackendProbe probe = MxcWireProtocol.ReadProbeResponse(Captured);
+
+        Assert.True(probe.IsolationSessionAvailable);
+        Assert.Equal("base-container", probe.Tier);
+        Assert.Empty(probe.Warnings);
+    }
+
+    [Fact]
+    public void ProbeResponseCarriesWarningsAndAnUnavailableBackend()
+    {
+        const string Payload = """
+            {"tier":"none","warnings":["host preparation required"],"probes":{"isolationSessionAvailable":false}}
+            """;
+
+        MxcBackendProbe probe = MxcWireProtocol.ReadProbeResponse(Payload);
+
+        Assert.False(probe.IsolationSessionAvailable);
+        Assert.Equal("none", probe.Tier);
+        Assert.Equal("host preparation required", Assert.Single(probe.Warnings));
+    }
+
+    [Fact]
+    public void AProbeResponseMissingTheAvailabilityFlagIsRejected()
+    {
+        // Defaulting a missing flag either way would silently invent a support
+        // verdict, so the absent field must surface as a protocol violation.
+        MxcException exception = Assert.Throws<MxcException>(
+            () => MxcWireProtocol.ReadProbeResponse("""{"tier":"base-container"}"""));
+
+        Assert.Equal(MxcErrorCode.ProtocolViolation, exception.Code);
+    }
+
+    [Fact]
+    public void AMalformedProbeResponseIsRejected()
+    {
+        MxcException exception = Assert.Throws<MxcException>(
+            () => MxcWireProtocol.ReadProbeResponse("not json"));
+
+        Assert.Equal(MxcErrorCode.ProtocolViolation, exception.Code);
+    }
+
     private static JsonElement Decode(string configBase64) =>
         JsonDocument
             .Parse(Encoding.UTF8.GetString(Convert.FromBase64String(configBase64)))

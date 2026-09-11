@@ -67,12 +67,14 @@ public sealed class ProgramTests : IDisposable
             _ => { },
             output,
             _ => Task.FromResult(nodeRuntime),
-            () => new MxcReadinessReport(
+            _ => Task.FromResult(new MxcReadinessReport(
                 @"C:\package\mxc\x64",
                 new MxcRuntimeProvenance("@microsoft/mxc-sdk", "0.8.0", "x64"),
                 RuntimeUnavailableReason: null,
                 MxcHostSupport.Supported,
-                MxcReadiness.MinimumHostBuild));
+                MxcReadiness.MinimumHostBuild,
+                MxcSupportEvidence.BackendProbe,
+                new MxcBackendProbe(true, "base-container", []))));
 
         Assert.Equal(0, exitCode);
         Assert.True(File.Exists(entryPoint));
@@ -115,12 +117,13 @@ public sealed class ProgramTests : IDisposable
                     new Version(24, 15, 0),
                     System.Runtime.InteropServices.RuntimeInformation
                         .ProcessArchitecture)),
-            () => new MxcReadinessReport(
+            _ => Task.FromResult(new MxcReadinessReport(
                 RuntimeDirectory: null,
                 Provenance: null,
                 "wxc-exec.exe is missing.",
                 MxcHostSupport.Unsupported,
-                new MxcHostBuild(26100, 1)));
+                new MxcHostBuild(26100, 1),
+                MxcSupportEvidence.HostBuild)));
 
         Assert.Equal(0, exitCode);
         Assert.Contains(

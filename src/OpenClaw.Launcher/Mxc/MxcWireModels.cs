@@ -133,6 +133,27 @@ internal sealed class MxcProvisionMetadataPayload
     public string? EphemeralWorkspacePath { get; set; }
 }
 
+internal sealed class MxcProbeResponse
+{
+    [JsonPropertyName("tier")]
+    public string? Tier { get; set; }
+
+    [JsonPropertyName("warnings")]
+    public string[]? Warnings { get; set; }
+
+    [JsonPropertyName("probes")]
+    public MxcProbeDetails? Probes { get; set; }
+}
+
+internal sealed class MxcProbeDetails
+{
+    [JsonPropertyName("isolationSessionAvailable")]
+    public bool? IsolationSessionAvailable { get; set; }
+
+    [JsonPropertyName("baseContainerApiPresent")]
+    public bool? BaseContainerApiPresent { get; set; }
+}
+
 // Source generation keeps serialization reflection-free so the NativeAOT
 // executable behaves the same as the JIT test build.
 [JsonSourceGenerationOptions(
@@ -140,4 +161,5 @@ internal sealed class MxcProvisionMetadataPayload
 [JsonSerializable(typeof(MxcRequestEnvelope))]
 [JsonSerializable(typeof(MxcResponseEnvelope))]
 [JsonSerializable(typeof(MxcProvisionResultPayload))]
+[JsonSerializable(typeof(MxcProbeResponse))]
 internal sealed partial class MxcJsonContext : JsonSerializerContext;

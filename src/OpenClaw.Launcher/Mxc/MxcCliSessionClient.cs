@@ -137,6 +137,31 @@ public sealed class MxcCliSessionClient : IMxcSessionClient
                 correlationVector),
             cancellationToken));
 
+    /// <summary>
+    /// Runs the executor's host capability detector. This is the authoritative
+    /// answer to whether the IsolationSession backend is usable here; the
+    /// documented minimum Windows build only predicts it. The detector does not
+    /// spawn a sandbox, so this is safe on the read-only setup path.
+    /// </summary>
+    public async Task<MxcBackendProbe> ProbeBackendAsync(
+        CancellationToken cancellationToken)
+    {
+        MxcExecutorOutcome outcome = await _invoker.InvokeAsync(
+            new MxcExecutorInvocation(_runtime.ExecutorPath, ["--probe"]),
+            cancellationToken).ConfigureAwait(false);
+
+        if (outcome.ExitCode != 0 || string.IsNullOrWhiteSpace(outcome.StandardOutput))
+        {
+            throw new MxcException(
+                MxcErrorCode.RuntimeUnavailable,
+                "The MXC host capability probe failed " +
+                $"(exit code {outcome.ExitCode}). " +
+                Describe(outcome.StandardError));
+        }
+
+        return MxcWireProtocol.ReadProbeResponse(outcome.StandardOutput);
+    }
+
     private Task<MxcExecutorOutcome> InvokeAsync(
         MxcRequestEnvelope envelope,
         CancellationToken cancellationToken) =>
