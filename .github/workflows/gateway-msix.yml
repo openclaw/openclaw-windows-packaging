@@ -65,10 +65,14 @@ jobs:
           --no-restore
 
       # The xUnit suite runs under a JIT test host, so it cannot prove the
-      # native root command name or that System.CommandLine survives trimming
-      # and ahead-of-time compilation. x64 only: windows-latest cannot execute
-      # an ARM64 binary, and both architectures are still compiled by the
-      # packaging matrix.
+      # native entrypoint alias and root command name, or that
+      # System.CommandLine survives trimming and ahead-of-time compilation.
+      # This publishes the scenario driver in tests\OpenClaw.Launcher.AotSmoke,
+      # which runs the shared startup path with fixture-owned diagnostics
+      # instead of the production Main, so nothing is written outside the
+      # temporary directory the script owns. x64 only: windows-latest cannot
+      # execute an ARM64 binary, and both architectures are still compiled by
+      # the packaging matrix.
       - name: Test NativeAOT clawctl command line
         shell: pwsh
         run: >

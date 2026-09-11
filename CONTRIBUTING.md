@@ -59,16 +59,28 @@ dotnet publish .\src\OpenClaw.Launcher\OpenClaw.Launcher.csproj `
   --configuration Release --runtime win-x64 --self-contained
 ```
 
-Run the native `clawctl` gate when you change command-line parsing, help, or
-version output. The xUnit suite runs under a JIT test host, so it cannot see
-the root command name that System.CommandLine derives from native `argv[0]`,
-and a successful publish is not execution evidence. The script publishes
-win-x64 with NativeAOT into a temporary directory it owns, runs the binary as
-`clawctl.exe`, and removes the directory afterwards:
+Run the native `clawctl` gate when you change command-line parsing, help,
+version output, or the host startup path. The xUnit suite runs under a JIT test
+host, so it cannot see the entrypoint alias or root command name that the
+launcher derives from native `argv[0]`, and a successful publish is not
+execution evidence. The script publishes the scenario driver in
+`tests\OpenClaw.Launcher.AotSmoke` for win-x64 with NativeAOT into a temporary
+directory it owns, runs it as `clawctl.exe`, repeats the run under a wrong
+executable name to prove the alias check is real, and removes the directory
+afterwards:
 
 ```powershell
 .\scripts\Test-NativeAotCli.Tests.ps1
 ```
+
+The driver calls the same `Program.RunAsync` that the shipped `Main` calls, so
+startup diagnostics, argument routing, the error boundary, and disposal are all
+covered. It must never call `Main` itself: `Main` resolves the diagnostic log
+under the user's profile, so a gate built on it would append to your real
+`%LOCALAPPDATA%\OpenClawGatewayMSIX` log. Add scenarios by injecting
+fixture-owned collaborators through `HostStartup` — an explicit temporary
+diagnostic path, in-memory writers, and Node/launch delegates that cannot start
+a real process.
 
 ## Formatting and static analysis
 

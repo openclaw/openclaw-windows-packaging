@@ -67,6 +67,13 @@ and completion come from
 Invalid management input is rejected with exit code `1` and a parse diagnostic
 on standard error; no readiness check runs.
 
+Help and version requests take precedence over the rest of the command line.
+`clawctl --version bogus` prints the launcher version and exits `0` rather than
+reporting `bogus`, because the version request is satisfied before the
+remaining arguments are validated. The version printed is always the packaged
+launcher's assembly version, including when the launcher is hosted by another
+process.
+
 Response-file expansion is disabled. A leading `@` has no meaning to `clawctl`
 and is reported as an unrecognized argument rather than read from disk.
 

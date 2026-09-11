@@ -56,6 +56,7 @@
     </AppxManifest>
     <Content Include="Images\**\*.png" />
     <InternalsVisibleTo Include="OpenClaw.Launcher.Tests" />
+    <InternalsVisibleTo Include="OpenClaw.Launcher.AotSmoke" />
   </ItemGroup>
 
   <Target Name="GenerateVersionedAppxManifest"

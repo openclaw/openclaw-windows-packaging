@@ -5,19 +5,24 @@ namespace OpenClaw.Launcher;
 
 internal static class Program
 {
+    public static async Task<int> Main(string[] args) =>
+        await RunAsync(args, HostStartup.CreateProduction()).ConfigureAwait(false);
+
+    // The whole startup path lives here rather than in Main so that tests can
+    // drive it with fixture-owned diagnostics and writers. Main is only the
+    // production adapter that supplies the real collaborators.
     [SuppressMessage(
         "Design",
         "CA1031:Do not catch general exception types",
         Justification =
-            "Main is the process last-chance handler. Every narrower catch in " +
+            "This is the process last-chance handler. Every narrower catch in " +
             "this assembly uses an exception filter; this one deliberately does " +
             "not, because narrowing it would replace the diagnostic log entry, " +
             "the user-facing error message, and the deterministic exit code 1 " +
             "with an unhandled-exception crash.")]
-    public static async Task<int> Main(string[] args)
+    internal static async Task<int> RunAsync(string[] args, HostStartup startup)
     {
-        HostEntrypoint entrypoint = HostEntrypointResolver.Resolve();
-        string commandName = entrypoint == HostEntrypoint.Control
+        string commandName = startup.Entrypoint == HostEntrypoint.Control
             ? HostEntrypointResolver.ControlCommandName
             : HostEntrypointResolver.AgentCommandName;
         HostDiagnosticLog? diagnostics = null;
@@ -28,7 +33,7 @@ internal static class Program
         {
             try
             {
-                Console.Error.WriteLine(message);
+                startup.Error.WriteLine(message);
             }
             catch (Exception exception) when (
                 exception is IOException or ObjectDisposedException)
@@ -44,7 +49,7 @@ internal static class Program
 
         try
         {
-            diagnostics = HostDiagnosticLog.Create();
+            diagnostics = startup.CreateDiagnostics();
         }
         catch (Exception exception) when (
             exception is IOException or
@@ -95,15 +100,20 @@ internal static class Program
         try
         {
             WriteDiagnostic($"Host started through the {commandName} entrypoint.");
-            HostOptions options = HostOptions.Parse(args);
-            return entrypoint == HostEntrypoint.Control
+            HostOptions options = HostOptions.Parse(args, startup.BaseDirectory);
+            return startup.Entrypoint == HostEntrypoint.Control
                 ? await RunControlAsync(
                     options,
                     args,
                     WriteDiagnostic,
-                    Console.Out,
-                    Console.Error).ConfigureAwait(false)
-                : await RunAgentAsync(options, WriteDiagnostic)
+                    startup.Output,
+                    startup.Error,
+                    startup.ResolveNode).ConfigureAwait(false)
+                : await RunAgentAsync(
+                    options,
+                    WriteDiagnostic,
+                    startup.ResolveNode ?? NodeRuntimeResolver.ResolveAsync,
+                    startup.LaunchOpenClaw ?? GatewayLauncher.RunAsync)
                     .ConfigureAwait(false);
         }
         catch (Exception exception)
