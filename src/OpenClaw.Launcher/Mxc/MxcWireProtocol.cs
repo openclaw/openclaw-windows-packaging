@@ -204,11 +204,28 @@ internal static class MxcWireProtocol
         }
     }
 
-    private static MxcException ToException(MxcErrorEnvelope error) =>
-        new(
+    private static MxcException ToException(MxcErrorEnvelope error)
+    {
+        string message = error.Message is { Length: > 0 }
+            ? error.Message
+            : $"MXC reported error '{error.Code ?? "unspecified"}'.";
+
+        // The backend's own remediation text names the recovery step more
+        // precisely than this package can infer from the code alone, so it is
+        // appended verbatim rather than replaced with a generic hint.
+        if (error.Remediation is { Length: > 0 })
+        {
+            message = $"{message} {error.Remediation}";
+        }
+
+        if (error.NativeCode is { Length: > 0 })
+        {
+            message = $"{message} (native code {error.NativeCode})";
+        }
+
+        return new MxcException(
             MxcException.Classify(error.Code),
-            error.Message is { Length: > 0 }
-                ? error.Message
-                : $"MXC reported error '{error.Code ?? "unspecified"}'.",
+            message,
             error.Code);
+    }
 }

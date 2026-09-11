@@ -89,6 +89,24 @@ internal sealed class MxcErrorEnvelope
 
     [JsonPropertyName("message")]
     public string? Message { get; set; }
+
+    /// <summary>
+    /// Backend operation that failed. Observed on IsolationSession exec
+    /// failures, e.g. "IsoSessionOps.RunProcessWithOptionsAsync".
+    /// </summary>
+    [JsonPropertyName("operation")]
+    public string? Operation { get; set; }
+
+    /// <summary>Underlying Windows status, e.g. "0x80070520".</summary>
+    [JsonPropertyName("nativeCode")]
+    public string? NativeCode { get; set; }
+
+    /// <summary>
+    /// Backend-authored guidance. Surfaced verbatim because it names the
+    /// actual recovery step more precisely than this package can infer.
+    /// </summary>
+    [JsonPropertyName("remediation")]
+    public string? Remediation { get; set; }
 }
 
 internal sealed class MxcProvisionResultPayload

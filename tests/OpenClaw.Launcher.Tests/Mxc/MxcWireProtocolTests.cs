@@ -64,7 +64,10 @@ public sealed class MxcWireProtocolTests
             encoded.GetProperty("process").GetProperty("commandLine").GetString());
 
         // network and appId are fixed at provision and are rejected on later
-        // phases, so resending them would fail the whole request.
+        // phases, so resending them would fail the whole request. Confirmed
+        // against wxc-exec.exe 0.8.0, which rejects a post-provision
+        // containment with malformed_request: "State-aware 'stop' requests
+        // must not carry 'containment'".
         Assert.False(encoded.TryGetProperty("network", out _));
         Assert.False(encoded.TryGetProperty("containment", out _));
         Assert.False(encoded.TryGetProperty("experimental", out _));
@@ -186,6 +189,79 @@ public sealed class MxcWireProtocolTests
                 """));
 
         Assert.Null(result.Metadata);
+    }
+
+    // The envelopes below are verbatim captures from @microsoft/mxc-sdk 0.8.0
+    // wxc-exec.exe running against the Windows IsolationSession backend, so
+    // they pin the real contract rather than an assumed one.
+
+    [Theory]
+    [InlineData("malformed_id", MxcErrorCode.MalformedId)]
+    [InlineData("stale_id", MxcErrorCode.StaleId)]
+    [InlineData("policy_validation", MxcErrorCode.PolicyValidation)]
+    [InlineData("malformed_request", MxcErrorCode.MalformedRequest)]
+    [InlineData("unsupported_containment", MxcErrorCode.UnsupportedContainment)]
+    [InlineData("backend_error", MxcErrorCode.BackendError)]
+    [InlineData("some_future_code", MxcErrorCode.Unknown)]
+    public void ObservedBackendCodesAreClassified(
+        string backendCode,
+        MxcErrorCode expected)
+    {
+        MxcException exception = Assert.Throws<MxcException>(
+            () => MxcWireProtocol.ParseNonExecutionResponse(
+                $"{{\"error\":{{\"code\":\"{backendCode}\",\"message\":\"m\"}}}}"));
+
+        Assert.Equal(expected, exception.Code);
+
+        // The verbatim code survives classification, including when this
+        // package has no specific handling for it.
+        Assert.Equal(backendCode, exception.BackendCode);
+    }
+
+    [Fact]
+    public void ExecutionAgainstStoppedSessionSurfacesBackendRemediation()
+    {
+        // Captured from an exec issued after a successful stop.
+        const string Envelope = """
+            {"error":{"code":"backend_error",
+            "message":"No active session exists.",
+            "operation":"IsoSessionOps.RunProcessWithOptionsAsync",
+            "nativeCode":"0x80070520",
+            "remediation":"No active session found for this agent user. Start a session first, then retry."}}
+            """;
+
+        MxcException exception = Assert.Throws<MxcException>(
+            () => MxcWireProtocol.ParseNonExecutionResponse(Envelope));
+
+        Assert.Equal(MxcErrorCode.BackendError, exception.Code);
+
+        // Operators need the backend's own recovery step and native status,
+        // not just the one-line summary.
+        Assert.Contains("No active session exists.", exception.Message);
+        Assert.Contains("Start a session first", exception.Message);
+        Assert.Contains("0x80070520", exception.Message);
+    }
+
+    [Fact]
+    public void ProvisionResultReadsRealIsolationSessionPayload()
+    {
+        // Captured from a real provision on Windows build 26686.1000.
+        const string Envelope = """
+            {"result":{"metadata":{"agentUserName":"C8-H2",
+            "agentUserSid":"S-1-5-21-3955704215-4282272831-1814204317-1321",
+            "ephemeralWorkspacePath":"C:\\Users\\C8-H2\\Shared"},
+            "sandboxId":"iso:eyJ2ZXJzaW9uIjoxfQ"}}
+            """;
+
+        MxcProvisionResult result = MxcWireProtocol.ReadProvisionResult(
+            MxcWireProtocol.ParseNonExecutionResponse(Envelope));
+
+        Assert.Equal("iso:eyJ2ZXJzaW9uIjoxfQ", result.SandboxId.Value);
+        Assert.NotNull(result.Metadata);
+        Assert.Equal("C8-H2", result.Metadata!.AgentUserName);
+        Assert.Equal(
+            @"C:\Users\C8-H2\Shared",
+            result.Metadata.EphemeralWorkspacePath);
     }
 
     private static JsonElement Decode(string configBase64) =>
