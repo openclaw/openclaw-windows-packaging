@@ -97,6 +97,25 @@ public sealed class HostPaths
 
     public string SessionStatePath => Path.Combine(StateRoot, "session.json");
 
+    /// <summary>
+    /// The script the logon task runs.
+    /// </summary>
+    /// <remarks>
+    /// The task deliberately does not invoke the app alias directly. This file
+    /// is rewritten without elevation on every install, whereas changing the
+    /// task's own arguments requires re-registering it. Routing through it
+    /// keeps the launch command free to change, and keeps the Startup-folder
+    /// lane calling the same single definition instead of a second one that
+    /// can drift.
+    /// </remarks>
+    public string GatewayLauncherPath =>
+        Path.Combine(StateRoot, "gateway-launcher.cmd");
+
+    /// <summary>
+    /// Where the recorded gateway process and its persistence choices live.
+    /// </summary>
+    public string GatewayStatePath => Path.Combine(StateRoot, "gateway.json");
+
     public static HostPaths Create() =>
         Create(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
