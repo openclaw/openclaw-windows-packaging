@@ -29,7 +29,7 @@ public static class Program
             // is the one failure that can only surface on stderr.
             errorOutput.WriteLine(
                 "openclaw-session-host: usage: openclaw-session-host " +
-                "--request|--supervise|--inspect <path>");
+                "--request|--supervise|--inspect|--stop <path>");
             return SessionLaunchProtocol.HelperFailureExitCode;
         }
 
@@ -39,6 +39,8 @@ public static class Program
                 return SessionSupervisor.Run(requestPath, readFile, File.WriteAllText);
             case "--inspect":
                 return SessionInspector.Run(requestPath, readFile, File.WriteAllText);
+            case "--stop":
+                return SessionTerminator.Run(requestPath, readFile, File.WriteAllText);
         }
 
         string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
@@ -107,7 +109,7 @@ public static class Program
             return false;
         }
 
-        if (args[0] is not ("--request" or "--supervise" or "--inspect"))
+        if (args[0] is not ("--request" or "--supervise" or "--inspect" or "--stop"))
         {
             return false;
         }

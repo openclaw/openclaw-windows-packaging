@@ -232,6 +232,8 @@ child.
 | A later, independent inspection finds it | ✅ `processFound`, `startTimeMatches` |
 | The listener belongs to the recorded process tree | ✅ `listenerOwned` |
 | A recorded creation time that does not match | ✅ rejected, and its listener is not credited |
+| A stop whose recorded identity does not match | ✅ **nothing is terminated**; the process stays up |
+| A stop whose recorded identity matches | ✅ process gone, port released, no orphan left |
 | After the supervisor is gone | ✅ reported as not found |
 
 `listenerOwned` is the part that could not be taken on trust. It resolves the

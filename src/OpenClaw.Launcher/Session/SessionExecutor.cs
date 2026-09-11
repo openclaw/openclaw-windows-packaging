@@ -111,11 +111,14 @@ public sealed class SessionExecutor
     /// truncate the rest of the line, so a path containing either character is
     /// refused instead of being silently corrupted.
     /// </remarks>
-    internal static string BuildGuestCommandLine(string helperPath, string requestPath)
+    internal static string BuildGuestCommandLine(
+        string helperPath,
+        string requestPath,
+        string option = "--request")
     {
         Verify(helperPath, nameof(helperPath));
         Verify(requestPath, nameof(requestPath));
-        return $"\"{helperPath}\" --request \"{requestPath}\"";
+        return $"\"{helperPath}\" {option} \"{requestPath}\"";
 
         static void Verify(string value, string name)
         {
