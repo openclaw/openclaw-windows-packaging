@@ -14,7 +14,7 @@ namespace OpenClaw.Launcher.AotSmoke;
 // This driver runs the same Program.RunAsync that Main runs, so startup
 // diagnostics, argument routing, the operational error boundary, and disposal
 // are all exercised. Every collaborator it injects is fixture-owned: the
-// diagnostic log is created at an explicit temporary path, the writers are
+// diagnostic log is created at an explicit path the driver owns, the writers are
 // in-memory, and the Node and launch delegates cannot start a real process.
 // Nothing here reads or writes the user's profile.
 internal static class SmokeProgram
@@ -393,8 +393,13 @@ internal static class SmokeProgram
 
         private static string CreateRoot()
         {
+            // Scenario state lives under the driver's own output directory
+            // rather than %TEMP%. The gate script publishes into a directory it
+            // owns and deletes, so this stays isolated without reading an
+            // environment variable a caller could point somewhere else.
             string path = Path.Combine(
-                Path.GetTempPath(),
+                AppContext.BaseDirectory,
+                "scenarios",
                 $"clawctl-aot-scenario-{Guid.NewGuid():N}");
             Directory.CreateDirectory(path);
             return path;
