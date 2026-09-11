@@ -73,6 +73,11 @@ and ARM64 separately.
   execution API flattens its command line through `cmd.exe`, so the argument
   vector always travels as data and is never interpolated into that command
   line. See `docs\session-host.md`.
+- `HostPaths` derives every writable path from one state root, and
+  `PackageIdentity` supplies the package family name and the `PFN:` MXC
+  application id. `SessionStateStore` records the owned session; ownership is
+  never inferred from machine state, because `deprovision` is idempotent and
+  unrelated agent accounts can already exist. See `docs\session-state.md`.
 - `GatewayLauncher` starts Node without a shell, uses `ArgumentList`, inherits
   the console streams, and sets `OPENCLAW_SUPERVISOR_MODE=external` plus
   `OPENCLAW_NO_AUTO_UPDATE=1`. The child process exit code is the launcher exit

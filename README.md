@@ -78,6 +78,8 @@ fails `setup`, because today's execution does not depend on them. See
 Isolated execution uses a small NativeAOT guest helper,
 `openclaw-session-host.exe`, because the backend's execution API cannot carry an
 argument vector safely. See [docs/session-host.md](docs/session-host.md).
+Session ownership and this installation's writable state are described in
+[docs/session-state.md](docs/session-state.md).
 
 The launcher places Node.js in a Windows job configured with
 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. The launcher remains alive while Node.js
