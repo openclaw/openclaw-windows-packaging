@@ -75,6 +75,21 @@ type nul > "%output%"
         throw "MakeAppx did not receive the expected bundle version: $arguments"
     }
 
+    $zeroBundle = Join-Path $testRoot 'OpenClawGateway-zero.msixbundle'
+    & $scriptPath `
+        -X64Package $x64Package `
+        -Arm64Package $arm64Package `
+        -PackageVersion '0.0.0.0' `
+        -OutputPath $zeroBundle `
+        -MakeAppxPath $fakeMakeAppx
+    $arguments = Get-Content -LiteralPath $makeAppxArguments -Raw
+    if ($arguments -match '/bv') {
+        throw "MakeAppx received an invalid all-zero bundle version: $arguments"
+    }
+    if (-not (Test-Path -LiteralPath $zeroBundle -PathType Leaf)) {
+        throw 'The zero-version bundle builder did not preserve MakeAppx output.'
+    }
+
     Assert-Fails -MessagePattern 'must be different' -Action {
         & $scriptPath `
             -X64Package $x64Package `

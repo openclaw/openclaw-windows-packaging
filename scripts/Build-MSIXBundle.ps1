@@ -105,9 +105,16 @@ try {
         -Destination (Join-Path $bundleInput 'OpenClawGateway-arm64.msix')
 
     $resolvedMakeAppx = Resolve-MakeAppx
+    $bundleVersionArguments = @('/bv', $PackageVersion)
+    if ($PackageVersion -eq '0.0.0.0') {
+        # MakeAppx does not preserve an all-zero bundle identity version. Let
+        # it assign its date/time-based version while the embedded
+        # architecture packages retain the requested 0.0.0.0 identity.
+        $bundleVersionArguments = @()
+    }
     & $resolvedMakeAppx bundle `
         /v `
-        /bv $PackageVersion `
+        @bundleVersionArguments `
         /d $bundleInput `
         /p $resolvedOutputPath
     if ($LASTEXITCODE -ne 0) {

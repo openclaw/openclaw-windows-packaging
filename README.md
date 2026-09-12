@@ -186,6 +186,12 @@ contains a signed, multi-architecture
 deployment. The duplicate GitHub Actions artifacts remain short-lived transport
 and diagnostic copies.
 
+For the all-zero proof only, MakeAppx assigns the outer bundle identity its
+date/time-based version because it does not preserve `0.0.0.0` as a bundle
+version. The two embedded architecture packages retain identity version
+`0.0.0.0`; signing authorization verifies those versions and byte-compares both
+embedded packages with the approved standalone inputs.
+
 An `.msixbundle` is a single installable container for the x64 and ARM64 MSIX
 packages; Windows selects the package appropriate for the device. An
 `.appinstaller` file is separate update-channel metadata rather than an

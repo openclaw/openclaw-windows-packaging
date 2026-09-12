@@ -195,7 +195,9 @@ function New-TestBundle {
 
         [string]$X64Package = (Join-Path `
             $Root `
-            'x64\OpenClawGateway-x64.msix')
+            'x64\OpenClawGateway-x64.msix'),
+
+        [string]$BundleVersion = '2026.912.815.0'
     )
 
     $bundleDirectory = Join-Path $Root 'bundle'
@@ -226,7 +228,7 @@ function New-TestBundle {
 <Bundle xmlns="http://schemas.microsoft.com/appx/2013/bundle">
   <Identity Name="OpenClaw.Gateway"
             Publisher="$($policy.publisher)"
-            Version="$approvedPackageVersion" />
+            Version="$BundleVersion" />
   <Packages>
     <Package Type="application"
              Version="$approvedPackageVersion"

@@ -357,11 +357,30 @@ try {
     $bundleIdentity = $bundleManifest.SelectSingleNode(
         "/*[local-name()='Bundle']/*[local-name()='Identity']"
     )
+    $bundleVersion = if ($null -eq $bundleIdentity) {
+        ''
+    }
+    else {
+        [string]$bundleIdentity.Version
+    }
+    $bundleVersionMatch = [regex]::Match(
+        $bundleVersion,
+        '^(?<major>\d+)\.(?<minor>\d+)\.(?<build>\d+)\.(?<revision>\d+)$'
+    )
+    $bundleVersionIsValid = $bundleVersionMatch.Success
+    if ($bundleVersionIsValid) {
+        foreach ($groupName in @('major', 'minor', 'build', 'revision')) {
+            if ([long]::Parse($bundleVersionMatch.Groups[$groupName].Value) -gt 65534) {
+                $bundleVersionIsValid = $false
+                break
+            }
+        }
+    }
     if (
         $null -eq $bundleIdentity -or
         $bundleIdentity.Name -ne 'OpenClaw.Gateway' -or
         $bundleIdentity.Publisher -ne $policy.publisher -or
-        $bundleIdentity.Version -ne $expectedPackageVersion
+        -not $bundleVersionIsValid
     ) {
         throw 'The MSIX bundle manifest identity is unexpected.'
     }
@@ -422,5 +441,6 @@ finally {
 
 Write-Host (
     "Authorized official signing for OpenClaw commit $approvedCommit " +
-    "and Gateway MSIX version $expectedPackageVersion."
+    "and Gateway MSIX version $expectedPackageVersion " +
+    "(bundle version $bundleVersion)."
 )
