@@ -154,8 +154,8 @@ key is stored in the repository.
 The `release-signing` GitHub environment must define these environment
 variables (they are identifiers, not credentials):
 
-- `AZURE_CLIENT_ID`: application (client) ID of the Entra application used by
-  the Windows Companion release workflow;
+- `AZURE_CLIENT_ID`: application (client) ID of the dedicated
+  `openclaw-windows-packaging-signing` Entra application;
 - `AZURE_TENANT_ID`: Entra tenant ID;
 - `AZURE_SUBSCRIPTION_ID`: Azure subscription containing the signing resource.
 
