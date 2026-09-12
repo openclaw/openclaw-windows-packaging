@@ -117,12 +117,20 @@ $policy = Get-Content -LiteralPath $resolvedPolicyPath -Raw |
 
 if (
     $policy.repository -ne 'https://github.com/openclaw/openclaw' -or
+    [string]::IsNullOrWhiteSpace([string]$policy.releaseTag) -or
     $policy.approvedCommit -notmatch '^[0-9a-fA-F]{40}$' -or
     [string]::IsNullOrWhiteSpace([string]$policy.publisher)
 ) {
     throw 'The Gateway MSIX release policy is invalid.'
 }
 
+$approvedPackageVersion = & (
+    Join-Path $PSScriptRoot 'Get-WorkflowPackageVersion.ps1'
+) `
+    -RunNumber 1 `
+    -RunAttempt 1 `
+    -ReleaseTag ([string]$policy.releaseTag)
+$approvedPayloadVersion = ([string]$policy.releaseTag).Substring(1) -replace '-\d+$', ''
 $approvedCommit = ([string]$policy.approvedCommit).ToLowerInvariant()
 $normalizedRequestedRef = $RequestedRef.Trim().ToLowerInvariant()
 if (
@@ -163,6 +171,7 @@ foreach ($architecture in @('x64', 'arm64')) {
         $metadata.payloadRepository -ne $policy.repository -or
         $metadata.payloadRequestedRef -ine $approvedCommit -or
         $metadata.payloadResolvedCommit -ine $approvedCommit -or
+        $metadata.payloadPackageVersion -ne $approvedPayloadVersion -or
         $metadata.payloadLayout -ne 'immutable-package' -or
         $metadata.payloadFileCount -isnot [int64] -or
         $metadata.payloadFileCount -le 0 -or
@@ -170,6 +179,7 @@ foreach ($architecture in @('x64', 'arm64')) {
         $metadata.archive -ne $msix.Name -or
         $metadata.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
         $metadata.signed -ne $false -or
+        $metadata.packageVersion -ne $approvedPackageVersion -or
         $metadata.publisher -ne $policy.publisher
     ) {
         throw "The $architecture MSIX metadata is not eligible for signing."

@@ -166,6 +166,7 @@ if (
     $payloadInfo.repository -ne 'https://github.com/openclaw/openclaw' -or
     $payloadInfo.architecture -ne $Architecture -or
     $payloadInfo.layout -ne 'expanded-directory' -or
+    [string]::IsNullOrWhiteSpace([string]$payloadInfo.packageVersion) -or
     $payloadInfo.requestedRef -isnot [string] -or
     [string]::IsNullOrWhiteSpace($payloadInfo.requestedRef) -or
     $payloadInfo.resolvedCommit -notmatch '^[0-9a-fA-F]{40}$'
@@ -461,6 +462,7 @@ try {
         payloadRepository = $payloadInfo.repository
         payloadRequestedRef = $payloadInfo.requestedRef
         payloadResolvedCommit = $payloadInfo.resolvedCommit.ToLowerInvariant()
+        payloadPackageVersion = [string]$payloadInfo.packageVersion
         payloadLayout = 'immutable-package'
         payloadFileCount = $payloadFiles.Count
         architecture = $Architecture

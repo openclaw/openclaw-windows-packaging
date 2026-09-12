@@ -130,8 +130,9 @@ OpenClaw commit, while embedded `payload-files.json` records every packaged
 application file's path, length, and SHA-256.
 
 `release-policy.json` records the immutable OpenClaw commit approved for
-official signing. Updating that policy requires a reviewed repository change.
-Official signing runs only from `main` and verifies the workflow input, both
+official signing and its corresponding stable Gateway tag. Updating that
+policy requires a reviewed repository change. Official signing runs only from
+`main` and verifies the workflow input, release-derived package version, both
 architecture metadata files, both MSIX hashes, the embedded manifests, and
 every file against the embedded application inventory before requesting Azure
 credentials.
@@ -162,13 +163,29 @@ validation. Manual runs support three signing modes:
   temporary self-signed certificate plus the public `.cer` needed for local
   installation;
 - `official` requires the approved immutable commit from
-  `release-policy.json` and may run only from `main`.
+  `release-policy.json`, may run only from `main`, and publishes the signed
+  packages as permanent assets on a GitHub Release named for the approved
+  Gateway tag.
 
 Official signing uses the protected `release-signing` environment, Azure OIDC,
 and the existing OpenClaw Artifact Signing account and certificate profile.
 Test-signing private keys are generated only on the temporary GitHub runner
 and are deleted before artifacts are uploaded. No signing secret or private
 key is stored in the repository.
+
+Official releases use the Gateway tag from `release-policy.json` for the
+GitHub Release tag and MSIX identity version. Stable tags map directly to a
+four-part Windows version, and numbered corrections use the fourth component:
+
+- `v2026.9.4` becomes `2026.9.4.0`;
+- `v2026.7.1-2` becomes `2026.7.1.2`.
+
+Prerelease tags such as `v2026.9.1-beta.1` are not eligible for official MSIX
+publication because mapping them directly would make Windows upgrade ordering
+incorrect when the stable package is installed. The release contains durable
+`OpenClawGateway-<version>-x64.msix` and
+`OpenClawGateway-<version>-arm64.msix` assets. The duplicate GitHub Actions
+artifacts remain short-lived transport and diagnostic copies.
 
 ### Official signing setup
 
