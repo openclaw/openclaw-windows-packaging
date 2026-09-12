@@ -57,15 +57,26 @@ the read-only application directory the workspace.
 
 | Command | Behavior |
 |---|---|
-| `clawctl setup` | Verify compatible Node.js is on `PATH` and confirm packaged `app\openclaw.mjs` exists. |
+| `clawctl setup` | Verify compatible Node.js is on `PATH`, confirm packaged `app\openclaw.mjs` exists, and report isolated-session prerequisites. |
+| `clawctl session status` | Report the isolated session this installation has recorded. |
+| `clawctl session stop` | Stop the isolated session, keeping its guest profile and data. |
+| `clawctl session remove` | Stop and deprovision the isolated session, destroying its guest profile and workspace contents. |
+| `clawctl gateway-service install` | Start the gateway in the isolated session and restart it at sign-in. |
+| `clawctl gateway-service status` | Report the gateway and its sign-in recovery, without starting either. |
+| `clawctl gateway-service start` | Start the gateway if it is not already running. |
+| `clawctl gateway-service stop` | Stop the gateway, keeping the session and its data. |
+| `clawctl gateway-service uninstall` | Stop the gateway and remove sign-in recovery. |
+| `clawctl gateway-service diagnose` | Report each link in the chain that starts the gateway, without changing any of them. |
 | `clawctl --version` | Print the packaged launcher version. |
 
 Bare `clawctl`, `clawctl -h`, and `clawctl --help` print help without changing
-state. `clawctl setup --help` prints help for that command alone. Help, usage,
-and completion come from
+state. A bare noun such as `clawctl session` does the same for its own
+sub-commands: it lists them rather than choosing one, so a mistyped destructive
+verb can never resolve to an operation you did not type. Help, usage, and
+completion come from
 [System.CommandLine](https://learn.microsoft.com/en-us/dotnet/standard/commandline/).
-Invalid management input is rejected with exit code `1` and a parse diagnostic
-on standard error; no readiness check runs.
+Invalid management input is rejected with a parse diagnostic on standard error;
+no operation runs.
 
 Help and version requests take precedence over the rest of the command line.
 `clawctl --version bogus` prints the launcher version and exits `0` rather than
@@ -82,14 +93,47 @@ argument to the OpenClaw CLI verbatim, so a leading `@` or a directive-shaped
 token reaches that CLI uninterpreted.
 
 Commands such as `doctor`, `gateway`, and `uninstall` belong to the OpenClaw
-CLI and must be invoked through `openclaw`.
+CLI and must be invoked through `openclaw`. The host verb that manages the
+background gateway is deliberately spelled `gateway-service`, because a host
+`gateway` noun would shadow OpenClaw's own `openclaw gateway run`.
 
 `setup` requires a compatible device-installed Node.js runtime. Missing,
 outdated, malformed, or architecture-incompatible runtimes produce an
 actionable error rather than a later process-launch failure.
 
 `clawctl setup` is read-only. It performs no extraction, hashing, inventory
-walk, or state mutation.
+walk, or state mutation. It also reports whether the pinned MXC runtime for the
+current architecture is present and whether the isolated-session backend is
+usable on this machine, which it measures with the runtime's own non-mutating
+probe rather than inferring from the Windows build number. Neither condition
+fails `setup`, because today's execution does not depend on them. See
+[docs/mxc-runtime.md](docs/mxc-runtime.md).
+
+Isolated execution uses a small NativeAOT guest helper,
+`openclaw-session-host.exe`, because the backend's execution API cannot carry an
+argument vector safely. See [docs/session-host.md](docs/session-host.md).
+Session ownership and this installation's writable state are described in
+[docs/session-state.md](docs/session-state.md).
+
+`openclaw` runs inside that isolated session wherever the backend's own probe
+reports support, so a capable machine gets isolation without being asked for it.
+A machine without the backend runs OpenClaw directly on the host, which is a
+capability difference rather than a hidden failure. `OPENCLAW_SESSION=0`
+disables session routing; `OPENCLAW_SESSION=1` requires it, and a machine that
+cannot provide one fails loudly instead of silently relocating work onto the
+host. See [docs/session-routing.md](docs/session-routing.md).
+
+`clawctl session status` reads only the local ownership record. It never
+provisions, never contacts the backend, and deliberately does not claim whether
+the session is currently running, because the backend offers no authoritative
+session enumeration to answer that with.
+
+`clawctl gateway-service` runs the gateway in that session and restores it at
+sign-in. Ownership is proven from inside the session on every query — a live
+process, a matching creation time, and a listener belonging to that process or a
+descendant — so a recorded gateway is never assumed to still be running. "Could
+not be determined" is reported as such and never as "stopped", because the two
+call for opposite actions. See [docs/gateway-service.md](docs/gateway-service.md).
 
 The launcher places Node.js in a Windows job configured with
 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. The launcher remains alive while Node.js
@@ -146,12 +190,16 @@ dotnet test .\OpenClaw.Gateway.MSIX.slnx `
 ```
 
 `scripts\Build-Payload.ps1` npm-installs an OpenClaw package into an expanded,
-architecture-specific application tree. `scripts\Build-MSIX.ps1` copies that
-tree into package content, rejects any Node.js executable or runtime archive,
-creates a per-file inventory, and then creates an unsigned NativeAOT MSIX.
-`scripts\Build-LocalMSIX.ps1` can reuse a successful workflow payload or a
-local payload directory. The Node.js used by the payload build jobs is build
-infrastructure only and is not copied into the MSIX.
+architecture-specific application tree. `scripts\Get-MxcRuntime.ps1` stages the
+pinned, integrity-verified MXC native runtime described in
+[docs/mxc-runtime.md](docs/mxc-runtime.md). `scripts\Build-MSIX.ps1` copies the
+application tree into package content, rejects any Node.js executable or
+runtime archive, stages the MXC runtime, publishes the guest helper described
+in [docs/session-host.md](docs/session-host.md), creates a per-file inventory,
+and then creates an unsigned NativeAOT MSIX. `scripts\Build-LocalMSIX.ps1` can reuse a
+successful workflow payload or a local payload directory. The Node.js used by
+the payload build jobs is build infrastructure only and is not copied into the
+MSIX.
 
 Normal pull-request and push workflows publish unsigned packages for
 validation. Manual runs support three signing modes:
@@ -205,7 +253,9 @@ The longer-term design is to run the Gateway payload in a dedicated isolated
 agent session rather than the interactive session where the human user is
 logged in. This will provide a boundary similar in purpose to running the
 Gateway in WSL, using the forthcoming isolated-session capabilities. That
-isolation is not provided by the current MSIX implementation.
+isolation is not provided by the current MSIX implementation; the package
+currently carries only the pinned MXC runtime and the readiness check described
+in [docs/mxc-runtime.md](docs/mxc-runtime.md).
 
 ## Contributors
 

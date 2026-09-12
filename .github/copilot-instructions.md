@@ -19,7 +19,7 @@ $vsInstaller = Join-Path `
   ([Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFilesX86)) `
   'Microsoft Visual Studio\Installer'
 $env:Path = "$vsInstaller;$env:Path"
-dotnet publish .\src\OpenClaw.Gateway.Launcher\OpenClaw.Gateway.Launcher.csproj `
+dotnet publish .\src\OpenClaw.Launcher\OpenClaw.Launcher.csproj `
   --configuration Release `
   --runtime win-x64 `
   --self-contained
@@ -30,9 +30,12 @@ dotnet test .\OpenClaw.Gateway.MSIX.slnx `
   --no-restore
 
 # Run one xUnit test by fully qualified name.
-dotnet test .\tests\OpenClaw.Gateway.Launcher.Tests\OpenClaw.Gateway.Launcher.Tests.csproj `
+dotnet test .\tests\OpenClaw.Launcher.Tests\OpenClaw.Launcher.Tests.csproj `
   --configuration Release `
   --filter "FullyQualifiedName=OpenClaw.Launcher.Tests.ProgramTests.AgentLaunchResolvesNodeAndRunsPackagedApplication"
+
+# Stage the pinned MXC native runtime (packaging content only).
+.\scripts\Get-MxcRuntime.ps1 -Architecture x64
 
 # Exercise the official-signing policy checks.
 .\scripts\Test-SigningInputs.Tests.ps1
@@ -52,21 +55,57 @@ and ARM64 separately.
 
 ## Architecture
 
-- `OpenClaw.Gateway.Launcher` is a .NET 10 NativeAOT executable packaged as
-  `openclaw.exe`. `Package.appxmanifest` exposes it through the `openclaw.exe`
-  app execution alias and declares the `OpenClaw.Gateway` MSIX identity.
+- `OpenClaw.Launcher` (`src\OpenClaw.Launcher`) is a .NET 10 NativeAOT
+  executable packaged as `openclaw.exe`. `Package.appxmanifest` exposes it
+  through the `openclaw.exe` app execution alias and declares the
+  `OpenClaw.Gateway` MSIX identity.
 - The package contains an expanded, read-only OpenClaw application tree.
   `HostOptions` resolves `app\openclaw.mjs` directly from the package.
 - `openclaw` resolves device-installed Node.js, confirms the packaged entry
   point exists, and forwards every argument unchanged to `openclaw.mjs`.
-- `clawctl setup` is a read-only readiness check for compatible Node.js and the
-  packaged entry point. Runtime launches do not hash or walk package files.
 - `clawctl` parses its own arguments with System.CommandLine
   (`ClawCtlCommandLine` builds the tree; `Program.RunControlAsync` invokes it).
   Help, usage, version, and completion are library behavior; parse errors exit
   `1`. Response-file expansion is disabled, so `@file` is an ordinary
   unrecognized argument. The library is scoped to `clawctl` only and must never
-  see `openclaw` arguments.
+  see `openclaw` arguments. Operations reach the tree through `ClawCtlHandlers`
+  so parsing stays in the tree and the operations stay substitutable; a bare
+  noun prints its own help rather than defaulting to a sub-command.
+- `clawctl setup` is a read-only readiness check for compatible Node.js, the
+  packaged entry point, and isolated-session prerequisites. Runtime launches do
+  not hash or walk package files.
+- `src\OpenClaw.Launcher\Mxc` holds project-owned MXC lifecycle contracts
+  (`IMxcSessionClient`) and a temporary command-line transport over the pinned
+  `@microsoft/mxc-sdk` binaries. Preview wire details stay inside
+  `MxcWireProtocol` and `MxcCliSessionClient` so the official .NET SDK can
+  replace the transport behind the same contract. See `docs\mxc-runtime.md`.
+- `src\OpenClaw.SessionHost` is a separate NativeAOT guest helper that runs
+  inside the isolated session, and `src\OpenClaw.SessionProtocol` holds the
+  launch request/result contract both executables share. The backend's
+  execution API flattens its command line through `cmd.exe`, so the argument
+  vector always travels as data and is never interpolated into that command
+  line. See `docs\session-host.md`.
+- `HostPaths` derives every writable path from one state root, and
+  `PackageIdentity` supplies the package family name and the `PFN:` MXC
+  application id. `SessionStateStore` records the owned session; ownership is
+  never inferred from machine state, because `deprovision` is idempotent and
+  unrelated agent accounts can already exist. See `docs\session-state.md`.
+- `SessionCoordinator` owns the session lifecycle, `SessionExecutor` runs a
+  single OpenClaw invocation inside it through the guest helper, and
+  `SessionRuntime` composes both from the running installation. The backend
+  client is constructed lazily so `clawctl session status` stays readable on a
+  machine without the MXC runtime.
+- `SessionRoutingPolicy` decides between session and host execution.
+  Sessions are default-on wherever the backend probe reports support; an
+  unsupported machine runs directly, and a *required* session that cannot be
+  provided fails loudly rather than falling back to the host. See
+  `docs\session-routing.md`.
+- Gateway management lives under `clawctl gateway-service`, never `gateway`,
+  because OpenClaw itself owns `openclaw gateway run`. The gateway runs
+  detached inside the session; ownership is proven by a live process, a
+  matching creation time, and a listener resolved to that process or a
+  descendant, never by a recorded identifier alone. See
+  `docs\gateway-service.md`.
 - `GatewayLauncher` starts Node without a shell, uses `ArgumentList`, inherits
   the console streams, and sets `OPENCLAW_SUPERVISOR_MODE=external` plus
   `OPENCLAW_NO_AUTO_UPDATE=1`. The child process exit code is the launcher exit
@@ -117,6 +156,11 @@ and ARM64 separately.
 - The build-time inventory is a release trust boundary. Keep safe unique paths,
   lengths, and SHA-256 values synchronized across composition and signing
   validation.
+- `mxc-runtime.lock.json` is a reviewed release trust-chain input like
+  `release-policy.json`. Changing the pinned package, version, integrity value,
+  or per-file hashes requires updating acquisition, MSIX composition,
+  `msix-metadata.json` fields, signing validation, and the signing tests
+  together.
 - Keep x64 and ARM64 behavior synchronized across the workflow matrix, scripts,
   project runtime identifiers, manifest content, payload metadata, and signing
   validation.
