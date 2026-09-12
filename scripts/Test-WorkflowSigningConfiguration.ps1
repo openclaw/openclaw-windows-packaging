@@ -18,7 +18,11 @@ $requiredFragments = @(
     'tenant-id: ${{ vars.AZURE_TENANT_ID }}'
     'subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}'
     'uses: azure/artifact-signing-action@v2'
+    'name: Compose unsigned multi-architecture MSIX bundle'
+    'name: Upload unsigned multi-architecture MSIX bundle'
     'files-folder-recurse: true'
+    'files: ${{ github.workspace }}\artifacts\bundle\OpenClawGateway.msixbundle'
+    'name: Upload signed multi-architecture MSIX bundle'
     'endpoint: https://eus.codesigning.azure.net/'
     'signing-account-name: openclaw'
     'certificate-profile-name: openclaw'
@@ -26,8 +30,11 @@ $requiredFragments = @(
     'contents: write'
     'uses: softprops/action-gh-release@v3'
     'tag_name: ${{ needs.authorize-signing.outputs.release_tag }}'
+    'target_commitish: ${{ github.sha }}'
+    'generate_release_notes: true'
     'overwrite_files: false'
     'fail_on_unmatched_files: true'
+    'release-assets/*.msixbundle'
 )
 
 foreach ($fragment in $requiredFragments) {
