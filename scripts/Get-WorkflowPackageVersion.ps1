@@ -6,7 +6,7 @@ param(
     [Parameter(Mandatory)]
     [long]$RunAttempt,
 
-    [string]$ReleaseTag
+    [string]$ReleaseVersion
 )
 
 Set-StrictMode -Version Latest
@@ -15,15 +15,15 @@ $ErrorActionPreference = 'Stop'
 $maximumComponent = 65534L
 $componentBase = $maximumComponent + 1L
 
-if (-not [string]::IsNullOrWhiteSpace($ReleaseTag)) {
+if (-not [string]::IsNullOrWhiteSpace($ReleaseVersion)) {
     $releaseMatch = [regex]::Match(
-        $ReleaseTag.Trim(),
-        '^v(?<major>\d+)\.(?<minor>\d+)\.(?<build>\d+)(?:-(?<revision>[1-9]\d*))?$'
+        $ReleaseVersion.Trim(),
+        '^(?<major>\d+)\.(?<minor>\d+)\.(?<build>\d+)\.(?<revision>\d+)$'
     )
     if (-not $releaseMatch.Success) {
         throw (
-            "ReleaseTag '$ReleaseTag' must be a stable Gateway tag such as " +
-            'v2026.9.4 or a correction tag such as v2026.7.1-2.'
+            "ReleaseVersion '$ReleaseVersion' must contain exactly four " +
+            'numeric components, such as 0.0.0.0.'
         )
     }
 
@@ -31,17 +31,12 @@ if (-not [string]::IsNullOrWhiteSpace($ReleaseTag)) {
         [long]::Parse($releaseMatch.Groups['major'].Value),
         [long]::Parse($releaseMatch.Groups['minor'].Value),
         [long]::Parse($releaseMatch.Groups['build'].Value),
-        $(if ($releaseMatch.Groups['revision'].Success) {
-            [long]::Parse($releaseMatch.Groups['revision'].Value)
-        }
-        else {
-            0L
-        })
+        [long]::Parse($releaseMatch.Groups['revision'].Value)
     )
     foreach ($component in $components) {
         if ($component -gt $maximumComponent) {
             throw (
-                "ReleaseTag '$ReleaseTag' contains a component greater than " +
+                "ReleaseVersion '$ReleaseVersion' contains a component greater than " +
                 "$maximumComponent."
             )
         }

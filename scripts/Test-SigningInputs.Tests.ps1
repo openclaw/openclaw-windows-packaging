@@ -13,8 +13,8 @@ $approvedPackageVersion = & (
 ) `
     -RunNumber 1 `
     -RunAttempt 1 `
-    -ReleaseTag ([string]$policy.releaseTag)
-$approvedPayloadVersion = ([string]$policy.releaseTag).Substring(1) -replace '-\d+$', ''
+    -ReleaseVersion ([string]$policy.packageVersion)
+$approvedPayloadVersion = [string]$policy.payloadPackageVersion
 $packagingCommit = '1111111111111111111111111111111111111111'
 $testRoot = Join-Path $env:TEMP (
     "openclaw-signing-policy-$([guid]::NewGuid().ToString('N'))"

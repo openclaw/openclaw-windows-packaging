@@ -57,7 +57,7 @@ function Assert-Fails {
 function Assert-ReleaseVersion {
     param(
         [Parameter(Mandatory)]
-        [string]$ReleaseTag,
+        [string]$ReleaseVersion,
 
         [Parameter(Mandatory)]
         [string]$Expected
@@ -66,9 +66,9 @@ function Assert-ReleaseVersion {
     $actual = & $scriptPath `
         -RunNumber 1 `
         -RunAttempt 1 `
-        -ReleaseTag $ReleaseTag
+        -ReleaseVersion $ReleaseVersion
     if ($actual -ne $Expected) {
-        throw "Expected $ReleaseTag to produce $Expected; received $actual."
+        throw "Expected $ReleaseVersion to produce $Expected; received $actual."
     }
 }
 
@@ -81,20 +81,20 @@ Assert-Version -RunNumber 131069 -RunAttempt 1 -Expected '0.2.65534.1'
 Assert-Version -RunNumber 131070 -RunAttempt 1 -Expected '0.3.0.1'
 Assert-Version -RunNumber 1 -RunAttempt 65534 -Expected '0.1.1.65534'
 
-Assert-ReleaseVersion -ReleaseTag 'v2026.9.4' -Expected '2026.9.4.0'
-Assert-ReleaseVersion -ReleaseTag 'v2026.7.1-2' -Expected '2026.7.1.2'
+Assert-ReleaseVersion -ReleaseVersion '0.0.0.0' -Expected '0.0.0.0'
+Assert-ReleaseVersion -ReleaseVersion '2026.9.4.0' -Expected '2026.9.4.0'
 
-Assert-Fails -MessagePattern 'must be a stable Gateway tag' -Action {
+Assert-Fails -MessagePattern 'exactly four numeric components' -Action {
     & $scriptPath `
         -RunNumber 1 `
         -RunAttempt 1 `
-        -ReleaseTag 'v2026.9.1-beta.1'
+        -ReleaseVersion '2026.9.1-beta.1'
 }
 Assert-Fails -MessagePattern 'greater than 65534' -Action {
     & $scriptPath `
         -RunNumber 1 `
         -RunAttempt 1 `
-        -ReleaseTag 'v2026.9.4-65535'
+        -ReleaseVersion '2026.9.4.65535'
 }
 
 $maximumRunNumber = (65534L * 65535L) - 1L

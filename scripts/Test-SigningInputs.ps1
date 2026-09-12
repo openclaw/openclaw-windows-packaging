@@ -121,6 +121,9 @@ $policy = Get-Content -LiteralPath $resolvedPolicyPath -Raw |
 if (
     $policy.repository -ne 'https://github.com/openclaw/openclaw' -or
     [string]::IsNullOrWhiteSpace([string]$policy.releaseTag) -or
+    $policy.packageVersion -notmatch '^\d+\.\d+\.\d+\.\d+$' -or
+    $policy.releaseTag -ne "v$($policy.packageVersion)" -or
+    [string]::IsNullOrWhiteSpace([string]$policy.payloadPackageVersion) -or
     $policy.approvedCommit -notmatch '^[0-9a-fA-F]{40}$' -or
     [string]::IsNullOrWhiteSpace([string]$policy.publisher)
 ) {
@@ -132,8 +135,8 @@ $approvedPackageVersion = & (
 ) `
     -RunNumber 1 `
     -RunAttempt 1 `
-    -ReleaseTag ([string]$policy.releaseTag)
-$approvedPayloadVersion = ([string]$policy.releaseTag).Substring(1) -replace '-\d+$', ''
+    -ReleaseVersion ([string]$policy.packageVersion)
+$approvedPayloadVersion = [string]$policy.payloadPackageVersion
 $approvedCommit = ([string]$policy.approvedCommit).ToLowerInvariant()
 $normalizedRequestedRef = $RequestedRef.Trim().ToLowerInvariant()
 if (

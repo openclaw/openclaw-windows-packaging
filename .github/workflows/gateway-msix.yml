@@ -274,7 +274,7 @@ jobs:
           if ($env:SIGNING_MODE -eq 'official') {
             $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
               ConvertFrom-Json
-            $versionParameters.ReleaseTag = [string]$policy.releaseTag
+            $versionParameters.ReleaseVersion = [string]$policy.packageVersion
           }
           $packageVersion = .\scripts\Get-WorkflowPackageVersion.ps1 `
             @versionParameters
@@ -379,7 +379,7 @@ jobs:
           if ($env:SIGNING_MODE -eq 'official') {
             $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
               ConvertFrom-Json
-            $versionParameters.ReleaseTag = [string]$policy.releaseTag
+            $versionParameters.ReleaseVersion = [string]$policy.packageVersion
           }
           $packageVersion = .\scripts\Get-WorkflowPackageVersion.ps1 `
             @versionParameters
@@ -459,7 +459,7 @@ jobs:
           $packageVersion = .\scripts\Get-WorkflowPackageVersion.ps1 `
             -RunNumber '${{ github.run_number }}' `
             -RunAttempt '${{ github.run_attempt }}' `
-            -ReleaseTag $releaseTag
+            -ReleaseVersion ([string]$policy.packageVersion)
 
           "package_version=$packageVersion" >> $env:GITHUB_OUTPUT
           "release_tag=$releaseTag" >> $env:GITHUB_OUTPUT
