@@ -8,6 +8,13 @@ $repositoryRoot = Split-Path $PSScriptRoot -Parent
 $policyPath = Join-Path $repositoryRoot 'release-policy.json'
 $policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
 $approvedCommit = [string]$policy.approvedCommit
+$approvedPackageVersion = & (
+    Join-Path $PSScriptRoot 'Get-WorkflowPackageVersion.ps1'
+) `
+    -RunNumber 1 `
+    -RunAttempt 1 `
+    -ReleaseTag ([string]$policy.releaseTag)
+$approvedPayloadVersion = ([string]$policy.releaseTag).Substring(1) -replace '-\d+$', ''
 $packagingCommit = '1111111111111111111111111111111111111111'
 $testRoot = Join-Path $env:TEMP (
     "openclaw-signing-policy-$([guid]::NewGuid().ToString('N'))"
@@ -23,6 +30,8 @@ function New-TestArtifact {
         [string]$Architecture,
 
         [string]$PayloadCommit = $approvedCommit,
+
+        [string]$PayloadPackageVersion = $approvedPayloadVersion,
 
         [bool]$SourceTreeDirty = $false,
 
@@ -110,7 +119,7 @@ function New-TestArtifact {
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
   <Identity Name="OpenClaw.Gateway"
             Publisher="$($policy.publisher)"
-            Version="0.1.1.0"
+            Version="$approvedPackageVersion"
             ProcessorArchitecture="$Architecture" />
 </Package>
 "@ | Set-Content `
@@ -141,13 +150,14 @@ function New-TestArtifact {
         payloadRepository = $policy.repository
         payloadRequestedRef = $PayloadCommit
         payloadResolvedCommit = $PayloadCommit
+        payloadPackageVersion = $PayloadPackageVersion
         payloadLayout = 'immutable-package'
         payloadFileCount = $payloadFiles.Count
         architecture = $Architecture
         archive = $msixName
         sha256 = $msixHash
         signed = $false
-        packageVersion = '0.1.1.0'
+        packageVersion = $approvedPackageVersion
         publisher = $policy.publisher
     } |
         ConvertTo-Json |
@@ -269,6 +279,19 @@ try {
     $x64Metadata |
         ConvertTo-Json |
         Set-Content -LiteralPath $x64MetadataPath -Encoding utf8
+    Assert-Fails `
+        -MessagePattern 'metadata is not eligible' `
+        -Action {
+            Invoke-PolicyValidation -Root $testRoot
+        }
+
+    Remove-Item -LiteralPath $testRoot -Recurse -Force
+    New-Item -Path $testRoot -ItemType Directory | Out-Null
+    New-TestArtifact `
+        -Root $testRoot `
+        -Architecture x64 `
+        -PayloadPackageVersion '2026.9.4'
+    New-TestArtifact -Root $testRoot -Architecture arm64
     Assert-Fails `
         -MessagePattern 'metadata is not eligible' `
         -Action {

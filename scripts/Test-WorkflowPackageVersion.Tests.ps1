@@ -54,6 +54,24 @@ function Assert-Fails {
     throw "Expected failure matching '$MessagePattern', but the action succeeded."
 }
 
+function Assert-ReleaseVersion {
+    param(
+        [Parameter(Mandatory)]
+        [string]$ReleaseTag,
+
+        [Parameter(Mandatory)]
+        [string]$Expected
+    )
+
+    $actual = & $scriptPath `
+        -RunNumber 1 `
+        -RunAttempt 1 `
+        -ReleaseTag $ReleaseTag
+    if ($actual -ne $Expected) {
+        throw "Expected $ReleaseTag to produce $Expected; received $actual."
+    }
+}
+
 Assert-Version -RunNumber 1 -RunAttempt 1 -Expected '0.1.1.1'
 Assert-Version -RunNumber 65534 -RunAttempt 1 -Expected '0.1.65534.1'
 Assert-Version -RunNumber 65535 -RunAttempt 1 -Expected '0.2.0.1'
@@ -62,6 +80,22 @@ Assert-Version -RunNumber 65536 -RunAttempt 1 -Expected '0.2.1.1'
 Assert-Version -RunNumber 131069 -RunAttempt 1 -Expected '0.2.65534.1'
 Assert-Version -RunNumber 131070 -RunAttempt 1 -Expected '0.3.0.1'
 Assert-Version -RunNumber 1 -RunAttempt 65534 -Expected '0.1.1.65534'
+
+Assert-ReleaseVersion -ReleaseTag 'v2026.9.4' -Expected '2026.9.4.0'
+Assert-ReleaseVersion -ReleaseTag 'v2026.7.1-2' -Expected '2026.7.1.2'
+
+Assert-Fails -MessagePattern 'must be a stable Gateway tag' -Action {
+    & $scriptPath `
+        -RunNumber 1 `
+        -RunAttempt 1 `
+        -ReleaseTag 'v2026.9.1-beta.1'
+}
+Assert-Fails -MessagePattern 'greater than 65534' -Action {
+    & $scriptPath `
+        -RunNumber 1 `
+        -RunAttempt 1 `
+        -ReleaseTag 'v2026.9.4-65535'
+}
 
 $maximumRunNumber = (65534L * 65535L) - 1L
 Assert-Version `

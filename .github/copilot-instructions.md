@@ -125,7 +125,9 @@ and ARM64 separately.
   MSIX creation, signing validation, workflow artifacts, and tests.
 - Keep the workflow's manual `openclaw_ref` default and automatic
   `env.OPENCLAW_REF` fallback identical. Official-release changes also update
-  the reviewed immutable commit in `release-policy.json`.
+  the reviewed immutable commit and stable or correction tag in
+  `release-policy.json`. The tag determines the four-part MSIX identity
+  version and the permanent GitHub Release tag.
 - The launcher is NativeAOT. `dotnet build` and the xUnit suite exercise a JIT
   build, so run the NativeAOT publish path when changing reflection, interop,
   or trimming-sensitive code.

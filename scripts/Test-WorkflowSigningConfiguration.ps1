@@ -22,6 +22,12 @@ $requiredFragments = @(
     'endpoint: https://eus.codesigning.azure.net/'
     'signing-account-name: openclaw'
     'certificate-profile-name: openclaw'
+    'name: Publish signed Gateway MSIX release'
+    'contents: write'
+    'uses: softprops/action-gh-release@v3'
+    'tag_name: ${{ needs.authorize-signing.outputs.release_tag }}'
+    'overwrite_files: false'
+    'fail_on_unmatched_files: true'
 )
 
 foreach ($fragment in $requiredFragments) {

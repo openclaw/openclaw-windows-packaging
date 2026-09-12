@@ -259,10 +259,20 @@ jobs:
 
       - name: Compose unsigned MSIX
         shell: pwsh
+        env:
+          SIGNING_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode || 'unsigned' }}
         run: |
+          $versionParameters = @{
+            RunNumber = '${{ github.run_number }}'
+            RunAttempt = '${{ github.run_attempt }}'
+          }
+          if ($env:SIGNING_MODE -eq 'official') {
+            $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
+              ConvertFrom-Json
+            $versionParameters.ReleaseTag = [string]$policy.releaseTag
+          }
           $packageVersion = .\scripts\Get-WorkflowPackageVersion.ps1 `
-            -RunNumber '${{ github.run_number }}' `
-            -RunAttempt '${{ github.run_attempt }}'
+            @versionParameters
 
           .\scripts\Build-MSIX.ps1 `
             -PayloadDirectory '${{ runner.temp }}\openclaw-payload' `
@@ -348,6 +358,10 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode == 'official' && github.ref == 'refs/heads/main' }}
     needs: build-msix
     runs-on: windows-latest
+    outputs:
+      package_version: ${{ steps.release.outputs.package_version }}
+      release_tag: ${{ steps.release.outputs.release_tag }}
+      release_version: ${{ steps.release.outputs.release_version }}
     permissions:
       actions: read
       contents: read
@@ -368,6 +382,22 @@ jobs:
         with:
           name: openclaw-gateway-msix-unsigned-arm64
           path: artifacts\arm64
+
+      - name: Resolve official release metadata
+        id: release
+        shell: pwsh
+        run: |
+          $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
+            ConvertFrom-Json
+          $releaseTag = ([string]$policy.releaseTag).Trim()
+          $packageVersion = .\scripts\Get-WorkflowPackageVersion.ps1 `
+            -RunNumber '${{ github.run_number }}' `
+            -RunAttempt '${{ github.run_attempt }}' `
+            -ReleaseTag $releaseTag
+
+          "package_version=$packageVersion" >> $env:GITHUB_OUTPUT
+          "release_tag=$releaseTag" >> $env:GITHUB_OUTPUT
+          "release_version=$($releaseTag.Substring(1))" >> $env:GITHUB_OUTPUT
 
       - name: Enforce official signing policy
         shell: pwsh
@@ -475,3 +505,59 @@ jobs:
           path: artifacts\arm64\
           if-no-files-found: error
           retention-days: 7
+
+  publish-release:
+    name: Publish signed Gateway MSIX release
+    if: ${{ needs.sign-msix.result == 'success' }}
+    needs:
+      - authorize-signing
+      - sign-msix
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download signed x64 package
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-x64
+          path: signed/x64
+
+      - name: Download signed ARM64 package
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-arm64
+          path: signed/arm64
+
+      - name: Stage versioned release assets
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.authorize-signing.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          mkdir release-assets
+          cp signed/x64/OpenClawGateway-x64.msix \
+            "release-assets/OpenClawGateway-${RELEASE_VERSION}-x64.msix"
+          cp signed/arm64/OpenClawGateway-arm64.msix \
+            "release-assets/OpenClawGateway-${RELEASE_VERSION}-arm64.msix"
+
+      - name: Create permanent GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.authorize-signing.outputs.release_tag }}
+          target_commitish: ${{ github.sha }}
+          name: OpenClaw Gateway MSIX ${{ needs.authorize-signing.outputs.release_tag }}
+          generate_release_notes: true
+          prerelease: false
+          make_latest: true
+          overwrite_files: false
+          fail_on_unmatched_files: true
+          files: release-assets/*.msix
+          body: |
+            Packages OpenClaw Gateway `${{ needs.authorize-signing.outputs.release_tag }}`
+            from [`openclaw/openclaw@${{ inputs.openclaw_ref }}`](https://github.com/openclaw/openclaw/commit/${{ inputs.openclaw_ref }}).
+
+            ### Downloads
+            - **x64:** `OpenClawGateway-${{ needs.authorize-signing.outputs.release_version }}-x64.msix`
+            - **ARM64:** `OpenClawGateway-${{ needs.authorize-signing.outputs.release_version }}-arm64.msix`
+
+            The packages are signed by OpenClaw Foundation through Azure Artifact Signing.
