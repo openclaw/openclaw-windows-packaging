@@ -7,6 +7,9 @@ param(
     [string]$PolicyPath,
 
     [Parameter(Mandatory)]
+    [string]$BundlePath,
+
+    [Parameter(Mandatory)]
     [string]$RequestedRef,
 
     [Parameter(Mandatory)]
@@ -145,6 +148,7 @@ if (
 
 $expectedPackagingCommit = $PackagingCommit.ToLowerInvariant()
 $expectedPackageVersion = $null
+$expectedPackages = @{}
 foreach ($architecture in @('x64', 'arm64')) {
     $directory = Join-Path $resolvedArtifactsDirectory $architecture
     $metadataPath = Join-Path $directory 'msix-metadata.json'
@@ -197,6 +201,11 @@ foreach ($architecture in @('x64', 'arm64')) {
     ).Hash.ToLowerInvariant()
     if ($actualMsixHash -ne ([string]$metadata.sha256).ToLowerInvariant()) {
         throw "The $architecture MSIX hash does not match its metadata."
+    }
+    $expectedPackages[$architecture] = @{
+        Name = $msix.Name
+        Path = $msix.FullName
+        Sha256 = $actualMsixHash
     }
 
     $packageArchive = [IO.Compression.ZipFile]::OpenRead($msix.FullName)
@@ -329,6 +338,83 @@ foreach ($architecture in @('x64', 'arm64')) {
     finally {
         $packageArchive.Dispose()
     }
+}
+
+$resolvedBundlePath = (Resolve-Path -LiteralPath $BundlePath).Path
+if ([IO.Path]::GetExtension($resolvedBundlePath) -ine '.msixbundle') {
+    throw 'The official signing bundle must use the .msixbundle extension.'
+}
+
+$bundleArchive = [IO.Compression.ZipFile]::OpenRead($resolvedBundlePath)
+try {
+    $bundleEntries = New-PackageEntryIndex -Archive $bundleArchive
+    [xml]$bundleManifest = Read-ZipEntryText `
+        -EntriesByPath $bundleEntries `
+        -Path 'AppxMetadata/AppxBundleManifest.xml'
+    $bundleIdentity = $bundleManifest.SelectSingleNode(
+        "/*[local-name()='Bundle']/*[local-name()='Identity']"
+    )
+    if (
+        $null -eq $bundleIdentity -or
+        $bundleIdentity.Name -ne 'OpenClaw.Gateway' -or
+        $bundleIdentity.Publisher -ne $policy.publisher -or
+        $bundleIdentity.Version -ne $expectedPackageVersion
+    ) {
+        throw 'The MSIX bundle manifest identity is unexpected.'
+    }
+
+    $bundlePackages = @(
+        $bundleManifest.SelectNodes(
+            "/*[local-name()='Bundle']/*[local-name()='Packages']/*[local-name()='Package']"
+        )
+    )
+    if ($bundlePackages.Count -ne 2) {
+        throw 'The MSIX bundle must contain exactly two application packages.'
+    }
+
+    $seenArchitectures =
+        [System.Collections.Generic.HashSet[string]]::new(
+            [System.StringComparer]::OrdinalIgnoreCase
+        )
+    foreach ($bundlePackage in $bundlePackages) {
+        $architecture = [string]$bundlePackage.Architecture
+        if (
+            -not $expectedPackages.ContainsKey($architecture) -or
+            -not $seenArchitectures.Add($architecture) -or
+            $bundlePackage.Type -ne 'application' -or
+            $bundlePackage.Version -ne $expectedPackageVersion
+        ) {
+            throw 'The MSIX bundle package manifest is unexpected.'
+        }
+
+        $expectedPackage = $expectedPackages[$architecture]
+        $fileName = [string]$bundlePackage.FileName
+        if ($fileName -ne $expectedPackage.Name) {
+            throw "The bundled $architecture MSIX filename is unexpected."
+        }
+
+        $bundleEntry = Get-PackageEntry `
+            -EntriesByPath $bundleEntries `
+            -Path $fileName
+        $bundledHash = Get-PackageEntrySha256 -Entry $bundleEntry
+        if ($bundledHash -ne $expectedPackage.Sha256) {
+            throw (
+                "The bundled $architecture MSIX does not match the " +
+                'authorized standalone package.'
+            )
+        }
+    }
+
+    $embeddedMsixEntries = @(
+        $bundleEntries.Keys |
+            Where-Object { [IO.Path]::GetExtension($_) -ieq '.msix' }
+    )
+    if ($embeddedMsixEntries.Count -ne 2) {
+        throw 'The MSIX bundle contains an unexpected package file set.'
+    }
+}
+finally {
+    $bundleArchive.Dispose()
 }
 
 Write-Host (

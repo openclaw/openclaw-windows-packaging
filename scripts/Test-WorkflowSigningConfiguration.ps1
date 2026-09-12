@@ -20,6 +20,7 @@ $requiredFragments = @(
     'uses: azure/artifact-signing-action@v2'
     'name: Compose unsigned multi-architecture MSIX bundle'
     'name: Upload unsigned multi-architecture MSIX bundle'
+    '-BundlePath artifacts\bundle\OpenClawGateway.msixbundle'
     'files-folder-recurse: true'
     'files: ${{ github.workspace }}\artifacts\bundle\OpenClawGateway.msixbundle'
     'name: Upload signed multi-architecture MSIX bundle'
