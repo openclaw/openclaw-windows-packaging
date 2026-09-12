@@ -414,7 +414,9 @@ jobs:
   authorize-signing:
     name: Authorize official Gateway MSIX signing
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode == 'official' && github.ref == 'refs/heads/main' }}
-    needs: build-msix
+    needs:
+      - build-msix
+      - build-msix-bundle
     runs-on: windows-latest
     outputs:
       package_version: ${{ steps.release.outputs.package_version }}
@@ -441,6 +443,12 @@ jobs:
           name: openclaw-gateway-msix-unsigned-arm64
           path: artifacts\arm64
 
+      - name: Download unsigned multi-architecture bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-unsigned-bundle
+          path: artifacts\bundle
+
       - name: Resolve official release metadata
         id: release
         shell: pwsh
@@ -466,6 +474,7 @@ jobs:
           .\scripts\Test-SigningInputs.ps1 `
             -ArtifactsDirectory artifacts `
             -PolicyPath .\release-policy.json `
+            -BundlePath artifacts\bundle\OpenClawGateway.msixbundle `
             -RequestedRef $env:OPENCLAW_REF `
             -PackagingCommit $env:PACKAGING_COMMIT
 

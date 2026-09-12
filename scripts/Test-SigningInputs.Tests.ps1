@@ -171,14 +171,84 @@ function Invoke-PolicyValidation {
         [Parameter(Mandatory)]
         [string]$Root,
 
-        [string]$RequestedRef = $approvedCommit
+        [string]$RequestedRef = $approvedCommit,
+
+        [switch]$PreserveBundle
     )
+
+    if (-not $PreserveBundle) {
+        New-TestBundle -Root $Root
+    }
 
     & (Join-Path $PSScriptRoot 'Test-SigningInputs.ps1') `
         -ArtifactsDirectory $Root `
         -PolicyPath $policyPath `
+        -BundlePath (Join-Path $Root 'bundle\OpenClawGateway.msixbundle') `
         -RequestedRef $RequestedRef `
         -PackagingCommit $packagingCommit
+}
+
+function New-TestBundle {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Root,
+
+        [string]$X64Package = (Join-Path `
+            $Root `
+            'x64\OpenClawGateway-x64.msix')
+    )
+
+    $bundleDirectory = Join-Path $Root 'bundle'
+    $bundleStaging = Join-Path $Root '.bundle-package'
+    Remove-Item `
+        -LiteralPath $bundleDirectory, $bundleStaging `
+        -Recurse `
+        -Force `
+        -ErrorAction SilentlyContinue
+    $bundleMetadata = Join-Path $bundleStaging 'AppxMetadata'
+    New-Item `
+        -Path $bundleDirectory, $bundleMetadata `
+        -ItemType Directory `
+        -Force |
+        Out-Null
+
+    Copy-Item `
+        -LiteralPath $X64Package `
+        -Destination (Join-Path $bundleStaging 'OpenClawGateway-x64.msix')
+    Copy-Item `
+        -LiteralPath (Join-Path `
+            $Root `
+            'arm64\OpenClawGateway-arm64.msix') `
+        -Destination (Join-Path $bundleStaging 'OpenClawGateway-arm64.msix')
+
+    @"
+<?xml version="1.0" encoding="utf-8"?>
+<Bundle xmlns="http://schemas.microsoft.com/appx/2013/bundle">
+  <Identity Name="OpenClaw.Gateway"
+            Publisher="$($policy.publisher)"
+            Version="$approvedPackageVersion" />
+  <Packages>
+    <Package Type="application"
+             Version="$approvedPackageVersion"
+             Architecture="x64"
+             FileName="OpenClawGateway-x64.msix" />
+    <Package Type="application"
+             Version="$approvedPackageVersion"
+             Architecture="arm64"
+             FileName="OpenClawGateway-arm64.msix" />
+  </Packages>
+</Bundle>
+"@ | Set-Content `
+        -LiteralPath (Join-Path `
+            $bundleMetadata `
+            'AppxBundleManifest.xml') `
+        -Encoding utf8
+
+    [IO.Compression.ZipFile]::CreateFromDirectory(
+        $bundleStaging,
+        (Join-Path $bundleDirectory 'OpenClawGateway.msixbundle')
+    )
+    Remove-Item -LiteralPath $bundleStaging -Recurse -Force
 }
 
 function Assert-Fails {
@@ -473,6 +543,21 @@ try {
         -MessagePattern 'MSIX hash does not match' `
         -Action {
             Invoke-PolicyValidation -Root $testRoot
+        }
+
+    Reset-TestArtifacts
+    $substitutedX64 = Join-Path $testRoot 'substituted-x64.msix'
+    Copy-Item `
+        -LiteralPath (Join-Path `
+            $testRoot `
+            'x64\OpenClawGateway-x64.msix') `
+        -Destination $substitutedX64
+    Add-Content -LiteralPath $substitutedX64 -Value 'substituted'
+    New-TestBundle -Root $testRoot -X64Package $substitutedX64
+    Assert-Fails `
+        -MessagePattern 'does not match the authorized standalone package' `
+        -Action {
+            Invoke-PolicyValidation -Root $testRoot -PreserveBundle
         }
 
     Write-Host 'Gateway MSIX signing policy tests passed.'

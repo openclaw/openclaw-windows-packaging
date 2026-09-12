@@ -134,8 +134,9 @@ official signing and its corresponding stable Gateway tag. Updating that
 policy requires a reviewed repository change. Official signing runs only from
 `main` and verifies the workflow input, release-derived package version, both
 architecture metadata files, both MSIX hashes, the embedded manifests, and
-every file against the embedded application inventory before requesting Azure
-credentials.
+every file against the embedded application inventory. It also byte-compares
+the bundle's embedded packages with those authorized standalone packages before
+requesting Azure credentials.
 
 ## Build and test
 
