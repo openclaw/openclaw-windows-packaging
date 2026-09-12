@@ -2,7 +2,7 @@ using System.Diagnostics;
 
 namespace OpenClaw.Launcher;
 
-public static class GatewayLauncher
+internal static class GatewayLauncher
 {
     public static async Task<int> RunAsync(
         string nodePath,
@@ -22,7 +22,8 @@ public static class GatewayLauncher
 
         try
         {
-            await process.WaitForExitAsync(cancellationToken);
+            await process.WaitForExitAsync(cancellationToken)
+                .ConfigureAwait(false);
             log?.Invoke($"OpenClaw child process exited with code {process.ExitCode}.");
             return process.ExitCode;
         }
@@ -31,7 +32,8 @@ public static class GatewayLauncher
             if (!process.HasExited)
             {
                 process.Kill(entireProcessTree: true);
-                await process.WaitForExitAsync(CancellationToken.None);
+                await process.WaitForExitAsync(CancellationToken.None)
+                    .ConfigureAwait(false);
             }
 
             throw;

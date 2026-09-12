@@ -1,13 +1,28 @@
-using System.Reflection;
+using System.CommandLine;
+using System.Diagnostics.CodeAnalysis;
 
 namespace OpenClaw.Launcher;
 
 internal static class Program
 {
-    public static async Task<int> Main(string[] args)
+    public static async Task<int> Main(string[] args) =>
+        await RunAsync(args, HostStartup.CreateProduction()).ConfigureAwait(false);
+
+    // The whole startup path lives here rather than in Main so that tests can
+    // drive it with fixture-owned diagnostics and writers. Main is only the
+    // production adapter that supplies the real collaborators.
+    [SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification =
+            "This is the process last-chance handler. Every narrower catch in " +
+            "this assembly uses an exception filter; this one deliberately does " +
+            "not, because narrowing it would replace the diagnostic log entry, " +
+            "the user-facing error message, and the deterministic exit code 1 " +
+            "with an unhandled-exception crash.")]
+    internal static async Task<int> RunAsync(string[] args, HostStartup startup)
     {
-        HostEntrypoint entrypoint = HostEntrypointResolver.Resolve();
-        string commandName = entrypoint == HostEntrypoint.Control
+        string commandName = startup.Entrypoint == HostEntrypoint.Control
             ? HostEntrypointResolver.ControlCommandName
             : HostEntrypointResolver.AgentCommandName;
         HostDiagnosticLog? diagnostics = null;
@@ -18,7 +33,7 @@ internal static class Program
         {
             try
             {
-                Console.Error.WriteLine(message);
+                startup.Error.WriteLine(message);
             }
             catch (Exception exception) when (
                 exception is IOException or ObjectDisposedException)
@@ -34,7 +49,7 @@ internal static class Program
 
         try
         {
-            diagnostics = HostDiagnosticLog.Create();
+            diagnostics = startup.CreateDiagnostics();
         }
         catch (Exception exception) when (
             exception is IOException or
@@ -85,15 +100,21 @@ internal static class Program
         try
         {
             WriteDiagnostic($"Host started through the {commandName} entrypoint.");
-            HostOptions options = HostOptions.Parse(args);
-            return entrypoint == HostEntrypoint.Control
+            HostOptions options = HostOptions.Parse(args, startup.BaseDirectory);
+            return startup.Entrypoint == HostEntrypoint.Control
                 ? await RunControlAsync(
                     options,
                     args,
                     WriteDiagnostic,
-                    WriteConsoleError,
-                    Console.Out)
-                : await RunAgentAsync(options, WriteDiagnostic);
+                    startup.Output,
+                    startup.Error,
+                    startup.ResolveNode).ConfigureAwait(false)
+                : await RunAgentAsync(
+                    options,
+                    WriteDiagnostic,
+                    startup.ResolveNode ?? NodeRuntimeResolver.ResolveAsync,
+                    startup.LaunchOpenClaw ?? GatewayLauncher.RunAsync)
+                    .ConfigureAwait(false);
         }
         catch (Exception exception)
         {
@@ -121,7 +142,7 @@ internal static class Program
             options,
             log,
             resolveNode ?? NodeRuntimeResolver.ResolveAsync,
-            GatewayLauncher.RunAsync);
+            GatewayLauncher.RunAsync).ConfigureAwait(false);
 
     // launchOpenClaw is a test seam: tests substitute a fake in place of
     // GatewayLauncher.RunAsync so they can assert launch behavior without
@@ -132,7 +153,8 @@ internal static class Program
         Func<CancellationToken, Task<NodeRuntime>> resolveNode,
         LaunchOpenClawAsync launchOpenClaw)
     {
-        NodeRuntime nodeRuntime = await resolveNode(CancellationToken.None);
+        NodeRuntime nodeRuntime = await resolveNode(CancellationToken.None)
+            .ConfigureAwait(false);
         log(
             $"Using Node.js {nodeRuntime.Version} from " +
             $"{nodeRuntime.ExecutablePath}.");
@@ -143,55 +165,65 @@ internal static class Program
             applicationDirectory,
             options.OpenClawArguments,
             CancellationToken.None,
-            log);
+            log).ConfigureAwait(false);
     }
 
-    // output is a required parameter (not a Console.Out default) so tests
+    // output and error are required parameters (not Console defaults) so tests
     // can capture clawctl output without mutating global console state,
     // which would be unsafe across parallel test runs.
     internal static async Task<int> RunControlAsync(
         HostOptions options,
         IReadOnlyList<string> args,
         Action<string> log,
-        Action<string> writeError,
         TextWriter output,
+        TextWriter error,
         Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null)
     {
-        ClawCtlCommandParseResult parsed = ClawCtlCommandParser.Parse(args);
-        if (parsed.Error is not null)
-        {
-            writeError($"clawctl: {parsed.Error}");
-            ClawCtlConsole.WriteUsage(Console.Error);
-            return 2;
-        }
+        RootCommand command = ClawCtlCommandLine.Create(
+            cancellationToken => RunSetupAsync(
+                options,
+                log,
+                output,
+                resolveNode,
+                cancellationToken));
 
-        switch (parsed.Command)
+        InvocationConfiguration configuration = new()
         {
-            case ClawCtlCommand.Help:
-                ClawCtlConsole.WriteHelp(output);
-                return 0;
-            case ClawCtlCommand.Version:
-                output.WriteLine(
-                    Assembly.GetExecutingAssembly().GetName().Version?.ToString() ??
-                    "unknown");
-                return 0;
-            case ClawCtlCommand.Setup:
-            {
-                NodeRuntime nodeRuntime = await (
-                    resolveNode ?? NodeRuntimeResolver.ResolveAsync)(
-                        CancellationToken.None);
-                ClawCtlConsole.WriteNodeRuntimeSummary(output, nodeRuntime);
-                string applicationDirectory =
-                    GetPackagedApplicationDirectory(options);
-                log("Confirmed the packaged OpenClaw application is present.");
-                ClawCtlConsole.WriteReadinessSummary(
-                    output,
-                    applicationDirectory);
-                return 0;
-            }
-            default:
-                throw new InvalidOperationException("Unknown clawctl command.");
-        }
+            Output = output,
+            Error = error,
+
+            // Operational failures stay the host's responsibility. The default
+            // handler would print its own message and return its own exit code,
+            // losing the diagnostic log entry and the log path Main reports.
+            EnableDefaultExceptionHandler = false,
+
+            // Node lifetime is owned by the job object in GatewayLauncher. The
+            // library's termination timeout would add a second, conflicting
+            // forced-exit policy and process-wide signal handlers.
+            ProcessTerminationTimeout = null
+        };
+
+        return await command
+            .Parse(args, ClawCtlCommandLine.CreateParserConfiguration())
+            .InvokeAsync(configuration)
+            .ConfigureAwait(false);
+    }
+
+    private static async Task<int> RunSetupAsync(
+        HostOptions options,
+        Action<string> log,
+        TextWriter output,
+        Func<CancellationToken, Task<NodeRuntime>>? resolveNode,
+        CancellationToken cancellationToken)
+    {
+        NodeRuntime nodeRuntime = await (
+            resolveNode ?? NodeRuntimeResolver.ResolveAsync)(
+                cancellationToken).ConfigureAwait(false);
+        ClawCtlConsole.WriteNodeRuntimeSummary(output, nodeRuntime);
+        string applicationDirectory = GetPackagedApplicationDirectory(options);
+        log("Confirmed the packaged OpenClaw application is present.");
+        ClawCtlConsole.WriteReadinessSummary(output, applicationDirectory);
+        return 0;
     }
 
     internal delegate Task<int> LaunchOpenClawAsync(

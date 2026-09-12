@@ -53,13 +53,34 @@ the read-only application directory the workspace.
 
 ### `clawctl`
 
-`clawctl` owns the package readiness check:
+`clawctl` exposes package readiness and launcher version information:
 
 | Command | Behavior |
 |---|---|
 | `clawctl setup` | Verify compatible Node.js is on `PATH` and confirm packaged `app\openclaw.mjs` exists. |
+| `clawctl --version` | Print the packaged launcher version. |
 
-Bare `clawctl` and `clawctl --help` print help without changing state.
+Bare `clawctl`, `clawctl -h`, and `clawctl --help` print help without changing
+state. `clawctl setup --help` prints help for that command alone. Help, usage,
+and completion come from
+[System.CommandLine](https://learn.microsoft.com/en-us/dotnet/standard/commandline/).
+Invalid management input is rejected with exit code `1` and a parse diagnostic
+on standard error; no readiness check runs.
+
+Help and version requests take precedence over the rest of the command line.
+`clawctl --version bogus` prints the launcher version and exits `0` rather than
+reporting `bogus`, because the version request is satisfied before the
+remaining arguments are validated. The version printed is always the packaged
+launcher's assembly version, including when the launcher is hosted by another
+process.
+
+Response-file expansion is disabled. A leading `@` has no meaning to `clawctl`
+and is reported as an unrecognized argument rather than read from disk.
+
+These parser conveniences belong to `clawctl` only. `openclaw` forwards every
+argument to the OpenClaw CLI verbatim, so a leading `@` or a directive-shaped
+token reaches that CLI uninterpreted.
+
 Commands such as `doctor`, `gateway`, and `uninstall` belong to the OpenClaw
 CLI and must be invoked through `openclaw`.
 
@@ -73,7 +94,7 @@ walk, or state mutation.
 The launcher places Node.js in a Windows job configured with
 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. The launcher remains alive while Node.js
 runs; if the launcher exits or is terminated, Windows terminates Node.js and
-its child processes before releasing the payload lease.
+its child processes when the job handle closes.
 
 Install the current Node.js LTS release, open a new terminal, optionally check
 readiness, then use `openclaw`:
@@ -184,21 +205,20 @@ is recorded in `release-policy.json`.
 |---|---|
 | OpenClaw application files | Read-only MSIX package `app` directory |
 | OpenClaw configuration and user state | `%USERPROFILE%\.openclaw` |
-| Launcher and package-management diagnostics | `%LOCALAPPDATA%\Packages\<package-family>\LocalState\OpenClawGatewayMSIX\Logs\openclaw.log` |
+| Launcher diagnostics | `%LOCALAPPDATA%\Packages\<package-family>\LocalState\OpenClawGatewayMSIX\Logs\openclaw.log` |
 
 OpenClaw application files are owned and serviced by Windows as part of the
 immutable MSIX installation. OpenClaw user state remains outside the package.
 Updating or removing the MSIX does not automatically delete that state or stop
 a running Gateway. Use OpenClaw's documented
 [`openclaw uninstall`](https://docs.openclaw.ai/install/uninstall) flow before
-removing the MSIX. A `%USERPROFILE%\.openclaw-msix` directory left by an older
-staged-payload package may be removed manually after OpenClaw is stopped.
+removing the MSIX.
 
 ## Integrity and isolation boundary
 
 The payload build emits an expanded npm-installed application tree.
 `Build-MSIX.ps1` rejects bundled Node.js, copies the tree into package content,
-and records every application's file path, length, and SHA-256 in
+and records every application file's path, length, and SHA-256 in
 `payload-files.json`. Package construction verifies that exact inventory
 against the generated MSIX. Official signing authorization repeats the
 inventory validation, including rejecting missing, changed, duplicate, unsafe,

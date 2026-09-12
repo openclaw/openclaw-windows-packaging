@@ -29,6 +29,24 @@ if ([string]::IsNullOrWhiteSpace($publisher)) {
     throw 'The Gateway MSIX release policy publisher is missing.'
 }
 
+$architectures = @('x64', 'arm64')
+$architectureDirectories = @(
+    $architectures |
+        ForEach-Object {
+            $sourceDirectory = Join-Path $resolvedArtifactsDirectory $_
+            if (Test-Path -LiteralPath $sourceDirectory -PathType Container) {
+                $sourceDirectory
+            }
+        }
+)
+if ($architectureDirectories.Count -eq 0) {
+    throw (
+        "No architecture directories were found under " +
+        "'$resolvedArtifactsDirectory'. Expected at least one of: " +
+        ($architectures -join ', ') + '.'
+    )
+}
+
 $signtool = Get-ChildItem `
     -LiteralPath "${env:ProgramFiles(x86)}\Windows Kits\10\bin" `
     -Filter 'signtool.exe' `
@@ -75,7 +93,7 @@ try {
         -Password $password |
         Out-Null
 
-    foreach ($architecture in @('x64', 'arm64')) {
+    foreach ($architecture in $architectures) {
         $sourceDirectory = Join-Path $resolvedArtifactsDirectory $architecture
         if (-not (Test-Path -LiteralPath $sourceDirectory -PathType Container)) {
             continue

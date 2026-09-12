@@ -26,16 +26,16 @@ public sealed class ProgramTests : IDisposable
             _ => { },
             _ =>
             {
-            nodeResolutionAttempted = true;
-            return Task.FromResult(nodeRuntime);
+                nodeResolutionAttempted = true;
+                return Task.FromResult(nodeRuntime);
             },
             (nodePath, appDirectory, forwardedArguments, _, _) =>
             {
-            launchAttempted = true;
-            Assert.Equal(nodeRuntime.ExecutablePath, nodePath);
-            Assert.Equal(applicationDirectory, appDirectory);
-            Assert.Equal(arguments, forwardedArguments);
-            return Task.FromResult(23);
+                launchAttempted = true;
+                Assert.Equal(nodeRuntime.ExecutablePath, nodePath);
+                Assert.Equal(applicationDirectory, appDirectory);
+                Assert.Equal(arguments, forwardedArguments);
+                return Task.FromResult(23);
             });
 
         Assert.True(nodeResolutionAttempted);
@@ -56,14 +56,14 @@ public sealed class ProgramTests : IDisposable
             Path.Combine(_testDirectory, "node.exe"),
             new Version(24, 15, 0),
             System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture);
-        var output = new StringWriter();
+        using var output = new StringWriter();
 
         int exitCode = await Program.RunControlAsync(
             options,
             ["setup"],
             _ => { },
-            _ => { },
             output,
+            TextWriter.Null,
             _ => Task.FromResult(nodeRuntime));
 
         Assert.Equal(0, exitCode);
@@ -89,8 +89,8 @@ public sealed class ProgramTests : IDisposable
             new HostOptions(null, []),
             ["setup"],
             _ => { },
-            _ => { },
-            new StringWriter(),
+            TextWriter.Null,
+            TextWriter.Null,
             _ =>
             {
                 nodeResolutionAttempted = true;

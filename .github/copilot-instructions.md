@@ -10,6 +10,10 @@ Run commands from the repository root in PowerShell 7 (`pwsh`).
 dotnet restore .\OpenClaw.Gateway.MSIX.slnx
 dotnet build .\OpenClaw.Gateway.MSIX.slnx --configuration Release --no-restore
 
+# Canonical quality gate: restore plus a Release rebuild with static analysis.
+# Used by local development, CI, and the optional pre-push hook.
+.\scripts\Test-DotNetQuality.ps1
+
 # Publish the launcher through the NativeAOT toolchain without MSIX content.
 $vsInstaller = Join-Path `
   ([Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFilesX86)) `
@@ -57,6 +61,12 @@ and ARM64 separately.
   point exists, and forwards every argument unchanged to `openclaw.mjs`.
 - `clawctl setup` is a read-only readiness check for compatible Node.js and the
   packaged entry point. Runtime launches do not hash or walk package files.
+- `clawctl` parses its own arguments with System.CommandLine
+  (`ClawCtlCommandLine` builds the tree; `Program.RunControlAsync` invokes it).
+  Help, usage, version, and completion are library behavior; parse errors exit
+  `1`. Response-file expansion is disabled, so `@file` is an ordinary
+  unrecognized argument. The library is scoped to `clawctl` only and must never
+  see `openclaw` arguments.
 - `GatewayLauncher` starts Node without a shell, uses `ArgumentList`, inherits
   the console streams, and sets `OPENCLAW_SUPERVISOR_MODE=external` plus
   `OPENCLAW_NO_AUTO_UPDATE=1`. The child process exit code is the launcher exit
@@ -77,6 +87,23 @@ and ARM64 separately.
 
 ## Repository conventions
 
+- Static analysis uses only the analyzers shipped by the pinned SDK.
+  `Directory.Build.props` sets `AnalysisMode=All`, `EnforceCodeStyleInBuild`,
+  and `GenerateDocumentationFile` (required for build-time `IDE0005`), and
+  suppresses `CS1591`. Rule severity belongs in the root `.editorconfig`, not
+  in the project files. `TreatWarningsAsErrors` is on and the build is
+  warning-free, so any new warning fails the build; only NuGet audit
+  advisories (`NU1901`-`NU1904`) are excluded, because a new advisory can break
+  an unchanged dependency graph. Do not commit a generated suppression
+  baseline; fix the diagnostic or add a narrow suppression with a written
+  rationale.
+- The pre-push hook is opt in. `scripts\Install-GitHooks.ps1` copies the
+  tracked `hooks\pre-push` into the current clone and `-Remove` deletes it.
+  Never change `core.hooksPath` or global Git configuration, and never
+  overwrite a hook the repository did not write.
+- `.gitattributes` normalizes tracked text to LF and `.editorconfig` sets
+  `end_of_line = lf`. Avoid whole-file rewrites through `Set-Content` or
+  `Out-File`, which reintroduce CRLF.
 - Ordinary builds and tests must leave `IncludePackagingContent` unset.
   Packaging builds set it to `true`, supply a runtime identifier and platform,
   and use `obj\packaging` through `Directory.Build.props` to isolate MSIX

@@ -44,7 +44,7 @@ public sealed class HostDiagnosticLogTests : IDisposable
 
         string[] lines = File.ReadAllLines(path);
         Assert.Equal(200, lines.Length);
-        Assert.All(lines, line => Assert.Contains(" invocation ", line));
+        Assert.All(lines, line => Assert.Contains(" invocation ", line, StringComparison.Ordinal));
     }
 
     public void Dispose()

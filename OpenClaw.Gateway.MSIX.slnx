@@ -3,6 +3,7 @@
     <Project Path="src/OpenClaw.Launcher/OpenClaw.Launcher.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/OpenClaw.Launcher.AotSmoke/OpenClaw.Launcher.AotSmoke.csproj" />
     <Project Path="tests/OpenClaw.Launcher.Tests/OpenClaw.Launcher.Tests.csproj" />
   </Folder>
 </Solution>

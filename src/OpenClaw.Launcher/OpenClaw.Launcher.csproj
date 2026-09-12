@@ -32,6 +32,10 @@
     <WindowsAppSdkSelfContained Condition="'$(IncludePackagingContent)' == 'true'">true</WindowsAppSdkSelfContained>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" />
+  </ItemGroup>
+
   <ItemGroup Condition="'$(IncludePackagingContent)' == 'true'">
     <PackageReference Include="Microsoft.WindowsAppSDK.Base" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" />
@@ -52,6 +56,7 @@
     </AppxManifest>
     <Content Include="Images\**\*.png" />
     <InternalsVisibleTo Include="OpenClaw.Launcher.Tests" />
+    <InternalsVisibleTo Include="OpenClaw.Launcher.AotSmoke" />
   </ItemGroup>
 
   <Target Name="GenerateVersionedAppxManifest"
