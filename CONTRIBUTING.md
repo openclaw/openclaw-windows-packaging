@@ -203,8 +203,9 @@ Use the pull request template. Title the PR
 `improve`, `refactor`, `docs`, or `chore`. Describe the outcome rather than the
 mechanism.
 
-Every PR body should explain the problem it solves, why the change was made,
-the user or contributor impact, and the evidence that it works. Name the exact
+Lead with the problem and user or contributor impact in short, plain-language
+sentences, followed by a brief explanation and useful evidence. Keep technical
+details optional, but important risks and required actions visible. Name the exact
 head SHA your evidence came from and state which validation lanes you did not
 run.
 

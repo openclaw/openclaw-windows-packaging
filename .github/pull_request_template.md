@@ -13,10 +13,6 @@ For fixes, describe the user-visible symptom and trigger:
 fix: launcher exits without a diagnostic when Node is missing
 Avoid implementation details such as:
 fix: add null check to payload resolver
--->
-
-<details>
-<summary>Additional instructions</summary>
 
 **MUST:** Keep **Allow edits from maintainers** enabled for this PR so
 maintainers can help update the branch when needed.
@@ -24,37 +20,39 @@ maintainers can help update the branch when needed.
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for the validation commands this
 repository expects and for the packaging, signing, and NativeAOT rules that
 apply to launcher changes.
-
-</details>
+-->
 
 ## What Problem This Solves
 
 <!--
 Describe the concrete user, contributor, security, or operational problem.
-For fixes, begin with:
-"Fixes an issue where users <do X> would <experience Y> when <condition>."
+Use one short, plain-language sentence. For fixes, prefer:
+"Fixes: <what goes wrong> when <trigger or condition>."
+For other changes, describe the need without inventing a bug.
 
 Name the affected surface: the `openclaw.exe` launcher, packaged application,
 MSIX composition, the signing policy, or the GitHub Actions workflow. Do not
 describe the code-level cause here.
 -->
 
-## Why This Change Was Made
-
-<!--
-In one or two sentences, explain the complete shipped solution, key design
-decisions, and relevant boundaries or non-goals. Include implementation detail
-only when it helps reviewers understand user-visible behavior or risk.
-Avoid file-by-file narration.
--->
-
 ## User Impact
 
 <!--
-State what users, operators, or contributors can now do or expect. Lead with
-the concrete benefit. If there is no user-visible behavior change - which is
-normal for tooling and policy changes - say so plainly and name the
-contributor or reliability benefit instead.
+"User impact: <what users, operators, or contributors can now do or expect>."
+Lead with the concrete outcome in plain language, usually one sentence.
+For internal-only changes, say there is no user-visible change; do not invent a benefit.
+Keep important risks, breaking changes, migrations, and required user actions visible here.
+For tooling or policy changes, describe any actual contributor or reliability
+benefit without claiming a user-visible behavior change.
+-->
+
+## Why This Change Was Made
+
+<!--
+Briefly explain how the change addresses the problem without repeating the impact.
+Keep the body short. Leave file lists, internal acronyms, and root-cause walkthroughs
+in the diff or optional <details>; include technical detail only when it explains
+behavior or a material tradeoff. Do not hide risks or required actions in <details>.
 -->
 
 ## Evidence
@@ -73,4 +71,6 @@ Include CI links, artifact links, redacted logs, or terminal output. State
 which lanes you did not run and why. Reviewers will inspect the code, tests,
 and CI; use this section to make validation easy to understand rather than to
 restate the diff.
+Summarize what was checked and the result; note meaningful gaps. Link long output
+or put it in optional <details>, keeping the useful evidence summary visible.
 -->
