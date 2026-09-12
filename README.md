@@ -182,10 +182,20 @@ four-part Windows version, and numbered corrections use the fourth component:
 
 Prerelease tags such as `v2026.9.1-beta.1` are not eligible for official MSIX
 publication because mapping them directly would make Windows upgrade ordering
-incorrect when the stable package is installed. The release contains durable
+incorrect when the stable package is installed. The workflow creates the
+Gateway tag in this repository and a GitHub Release with generated release
+notes. Each release contains a signed, multi-architecture
+`OpenClawGateway-<version>.msixbundle` as the recommended download, plus signed
 `OpenClawGateway-<version>-x64.msix` and
-`OpenClawGateway-<version>-arm64.msix` assets. The duplicate GitHub Actions
-artifacts remain short-lived transport and diagnostic copies.
+`OpenClawGateway-<version>-arm64.msix` packages for architecture-specific
+deployment. The duplicate GitHub Actions artifacts remain short-lived transport
+and diagnostic copies.
+
+An `.msixbundle` is a single installable container for the x64 and ARM64 MSIX
+packages; Windows selects the package appropriate for the device. An
+`.appinstaller` file is separate update-channel metadata rather than an
+alternative package format. This repository does not publish one yet, so GitHub
+Release installs do not opt devices into automatic update checks.
 
 ### Official signing setup
 

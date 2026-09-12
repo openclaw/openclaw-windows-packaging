@@ -120,6 +120,10 @@ and ARM64 separately.
 - Keep x64 and ARM64 behavior synchronized across the workflow matrix, scripts,
   project runtime identifiers, manifest content, payload metadata, and signing
   validation.
+- Official releases combine the x64 and ARM64 packages into one signed
+  `.msixbundle` while retaining signed standalone packages for explicit
+  architecture-specific deployment. Compose the bundle before signing; bundle
+  signing recursively covers its contained packages.
 - Metadata files are part of the release trust chain, not incidental build
   output. Changes to their fields must be coordinated across payload creation,
   MSIX creation, signing validation, workflow artifacts, and tests.

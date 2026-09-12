@@ -94,6 +94,11 @@ jobs:
         run: >
           .\scripts\Test-WorkflowPackageVersion.Tests.ps1
 
+      - name: Test MSIX bundle build
+        shell: pwsh
+        run: >
+          .\scripts\Test-Build-MSIXBundle.Tests.ps1
+
       - name: Test Git hooks
         shell: pwsh
         run: >
@@ -340,6 +345,59 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  build-msix-bundle:
+    name: Build unsigned multi-architecture Gateway MSIX bundle
+    needs: build-msix
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Download unsigned x64 package
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-unsigned-x64
+          path: artifacts\x64
+
+      - name: Download unsigned ARM64 package
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-unsigned-arm64
+          path: artifacts\arm64
+
+      - name: Compose unsigned multi-architecture MSIX bundle
+        shell: pwsh
+        env:
+          SIGNING_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode || 'unsigned' }}
+        run: |
+          $versionParameters = @{
+            RunNumber = '${{ github.run_number }}'
+            RunAttempt = '${{ github.run_attempt }}'
+          }
+          if ($env:SIGNING_MODE -eq 'official') {
+            $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
+              ConvertFrom-Json
+            $versionParameters.ReleaseTag = [string]$policy.releaseTag
+          }
+          $packageVersion = .\scripts\Get-WorkflowPackageVersion.ps1 `
+            @versionParameters
+
+          .\scripts\Build-MSIXBundle.ps1 `
+            -X64Package artifacts\x64\OpenClawGateway-x64.msix `
+            -Arm64Package artifacts\arm64\OpenClawGateway-arm64.msix `
+            -PackageVersion $packageVersion `
+            -OutputPath artifacts\bundle\OpenClawGateway.msixbundle
+
+      - name: Upload unsigned multi-architecture MSIX bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: openclaw-gateway-msix-unsigned-bundle
+          path: artifacts\bundle\OpenClawGateway.msixbundle
+          if-no-files-found: error
+          retention-days: 7
+
   reject-untrusted-official-signing:
     name: Reject official signing outside main
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode == 'official' && github.ref != 'refs/heads/main' }}
@@ -416,6 +474,7 @@ jobs:
     if: ${{ needs.authorize-signing.result == 'success' }}
     needs:
       - build-msix
+      - build-msix-bundle
       - authorize-signing
     runs-on: windows-latest
     environment: release-signing
@@ -436,6 +495,12 @@ jobs:
           name: openclaw-gateway-msix-unsigned-arm64
           path: artifacts\arm64
 
+      - name: Download unsigned multi-architecture bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-unsigned-bundle
+          path: artifacts\bundle
+
       - name: Azure login
         uses: azure/login@v3
         with:
@@ -443,7 +508,7 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Sign MSIX packages
+      - name: Sign standalone MSIX packages
         uses: azure/artifact-signing-action@v2
         with:
           endpoint: https://eus.codesigning.azure.net/
@@ -453,6 +518,17 @@ jobs:
           files-folder-filter: msix
           files-folder-recurse: true
           files-folder-depth: 2
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Sign multi-architecture MSIX bundle
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: openclaw
+          certificate-profile-name: openclaw
+          files: ${{ github.workspace }}\artifacts\bundle\OpenClawGateway.msixbundle
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
@@ -490,6 +566,24 @@ jobs:
               Set-Content -LiteralPath $metadataPath -Encoding utf8
           }
 
+          $bundle = Get-Item `
+            -LiteralPath artifacts\bundle\OpenClawGateway.msixbundle
+          $bundleSignature = Get-AuthenticodeSignature `
+            -LiteralPath $bundle.FullName
+          if ($bundleSignature.Status -ne 'Valid') {
+            throw "$($bundle.Name) signature status was $($bundleSignature.Status)."
+          }
+          if (-not [string]::Equals(
+            $bundleSignature.SignerCertificate.Subject,
+            $expectedSubject,
+            [StringComparison]::OrdinalIgnoreCase
+          )) {
+            throw (
+              "$($bundle.Name) signer was unexpected: " +
+              $bundleSignature.SignerCertificate.Subject
+            )
+          }
+
       - name: Upload signed x64 MSIX
         uses: actions/upload-artifact@v7
         with:
@@ -503,6 +597,14 @@ jobs:
         with:
           name: openclaw-gateway-msix-arm64
           path: artifacts\arm64\
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload signed multi-architecture MSIX bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: openclaw-gateway-msix-bundle
+          path: artifacts\bundle\OpenClawGateway.msixbundle
           if-no-files-found: error
           retention-days: 7
 
@@ -528,6 +630,12 @@ jobs:
           name: openclaw-gateway-msix-arm64
           path: signed/arm64
 
+      - name: Download signed multi-architecture bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-bundle
+          path: signed/bundle
+
       - name: Stage versioned release assets
         shell: bash
         env:
@@ -539,6 +647,8 @@ jobs:
             "release-assets/OpenClawGateway-${RELEASE_VERSION}-x64.msix"
           cp signed/arm64/OpenClawGateway-arm64.msix \
             "release-assets/OpenClawGateway-${RELEASE_VERSION}-arm64.msix"
+          cp signed/bundle/OpenClawGateway.msixbundle \
+            "release-assets/OpenClawGateway-${RELEASE_VERSION}.msixbundle"
 
       - name: Create permanent GitHub release
         uses: softprops/action-gh-release@v3
@@ -551,12 +661,15 @@ jobs:
           make_latest: true
           overwrite_files: false
           fail_on_unmatched_files: true
-          files: release-assets/*.msix
+          files: |
+            release-assets/*.msix
+            release-assets/*.msixbundle
           body: |
             Packages OpenClaw Gateway `${{ needs.authorize-signing.outputs.release_tag }}`
             from [`openclaw/openclaw@${{ inputs.openclaw_ref }}`](https://github.com/openclaw/openclaw/commit/${{ inputs.openclaw_ref }}).
 
             ### Downloads
+            - **Recommended:** `OpenClawGateway-${{ needs.authorize-signing.outputs.release_version }}.msixbundle`
             - **x64:** `OpenClawGateway-${{ needs.authorize-signing.outputs.release_version }}-x64.msix`
             - **ARM64:** `OpenClawGateway-${{ needs.authorize-signing.outputs.release_version }}-arm64.msix`
 
