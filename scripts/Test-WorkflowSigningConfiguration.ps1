@@ -18,6 +18,7 @@ $requiredFragments = @(
     'tenant-id: ${{ vars.AZURE_TENANT_ID }}'
     'subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}'
     'uses: azure/artifact-signing-action@v2'
+    'files-folder-recurse: true'
     'endpoint: https://eus.codesigning.azure.net/'
     'signing-account-name: openclaw'
     'certificate-profile-name: openclaw'

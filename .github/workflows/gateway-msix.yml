@@ -421,6 +421,7 @@ jobs:
           certificate-profile-name: openclaw
           files-folder: artifacts
           files-folder-filter: msix
+          files-folder-recurse: true
           files-folder-depth: 2
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
