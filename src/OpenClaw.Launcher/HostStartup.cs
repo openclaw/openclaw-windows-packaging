@@ -1,3 +1,5 @@
+using OpenClaw.Launcher.Session;
+
 namespace OpenClaw.Launcher;
 
 // The collaborators the host startup path needs, so that startup itself can be
@@ -22,6 +24,13 @@ internal sealed class HostStartup
     public Func<CancellationToken, Task<NodeRuntime>>? ResolveNode { get; init; }
 
     public Program.LaunchOpenClawAsync? LaunchOpenClaw { get; init; }
+
+    // Session routing and in-session execution are seams for the same reason
+    // as the launch delegate: a test host has neither a packaged identity nor
+    // a real MXC backend, so production would resolve neither.
+    public Func<CancellationToken, Task<SessionRoutingDecision>>? DecideRouting { get; init; }
+
+    public Program.RunInSessionAsync? RunInSession { get; init; }
 
     public static HostStartup CreateProduction() => new()
     {

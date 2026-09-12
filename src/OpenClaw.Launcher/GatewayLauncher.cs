@@ -66,9 +66,7 @@ internal static class GatewayLauncher
             RedirectStandardOutput = false,
             RedirectStandardError = false
         };
-        startInfo.Environment["OPENCLAW_SUPERVISOR_MODE"] = "external";
-        startInfo.Environment["OPENCLAW_SERVICE_REPAIR_POLICY"] = "external";
-        startInfo.Environment["OPENCLAW_NO_AUTO_UPDATE"] = "1";
+        OpenClawRuntimeEnvironment.ApplyTo(startInfo.Environment);
         startInfo.ArgumentList.Add(entryPoint);
 
         foreach (string argument in openClawArguments)

@@ -4,13 +4,45 @@ using System.CommandLine.Invocation;
 
 namespace OpenClaw.Launcher;
 
-// The clawctl command tree. Only the package-readiness surface belongs here:
-// doctor, gateway, uninstall, and every other OpenClaw command is owned by the
-// bundled CLI and reached through `openclaw`, which forwards its arguments
-// without parsing them.
+// The operations the clawctl command tree invokes. Parsing, help, and
+// completion stay in the command tree; the operations themselves stay in
+// Program, where their collaborators can be substituted by tests.
+internal sealed record ClawCtlHandlers
+{
+    public required Func<CancellationToken, Task<int>> Setup { get; init; }
+
+    public required Func<CancellationToken, Task<int>> SessionStatus { get; init; }
+
+    public required Func<CancellationToken, Task<int>> SessionStop { get; init; }
+
+    public required Func<CancellationToken, Task<int>> SessionRemove { get; init; }
+
+    public required Func<CancellationToken, Task<int>> GatewayInstall { get; init; }
+
+    public required Func<CancellationToken, Task<int>> GatewayStatus { get; init; }
+
+    public required Func<CancellationToken, Task<int>> GatewayStart { get; init; }
+
+    public required Func<CancellationToken, Task<int>> GatewayStop { get; init; }
+
+    public required Func<CancellationToken, Task<int>> GatewayUninstall { get; init; }
+
+    public required Func<CancellationToken, Task<int>> GatewayDiagnose { get; init; }
+}
+
+// The clawctl command tree. Only host-owned package, session, and managed
+// gateway management belongs here: doctor, gateway, uninstall, and every other
+// OpenClaw command is owned by the bundled CLI and reached through `openclaw`,
+// which forwards its arguments without parsing them.
 internal static class ClawCtlCommandLine
 {
     public const string SetupCommandName = "setup";
+
+    public const string SessionCommandName = "session";
+
+    // Deliberately not `gateway`. OpenClaw itself owns `openclaw gateway run`,
+    // and a host command called `gateway` would shadow it.
+    public const string GatewayCommandName = "gateway-service";
 
     // Response-file expansion is off. A leading `@` means nothing to clawctl,
     // so it is reported as an unrecognized argument instead of silently reading
@@ -41,16 +73,18 @@ internal static class ClawCtlCommandLine
         Environment.NewLine +
         $"Requires Node.js {NodeRuntimeResolver.SupportedVersions}.";
 
-    // runSetup stays a delegate so the command tree owns parsing and help while
-    // Program keeps the readiness operation and its test seams.
-    public static RootCommand Create(Func<CancellationToken, Task<int>> runSetup)
+    public static RootCommand Create(ClawCtlHandlers handlers)
     {
+        ArgumentNullException.ThrowIfNull(handlers);
+
         Command setup = new(SetupCommandName, SetupDescription);
-        setup.SetAction((_, cancellationToken) => runSetup(cancellationToken));
+        setup.SetAction((_, cancellationToken) => handlers.Setup(cancellationToken));
 
         RootCommand root = new(RootDescription)
         {
-            setup
+            setup,
+            CreateSessionCommand(handlers),
+            CreateGatewayCommand(handlers)
         };
 
         // Bare `clawctl` is a discovery request, not a usage error, so the root
@@ -59,6 +93,84 @@ internal static class ClawCtlCommandLine
         UseLauncherVersion(root);
 
         return root;
+    }
+
+    private static Command CreateSessionCommand(ClawCtlHandlers handlers)
+    {
+        // A bare noun prints its own help rather than defaulting to a
+        // sub-command, so a mistyped destructive verb can never resolve to a
+        // different operation than the user typed.
+        Command session = new(
+            SessionCommandName,
+            "Inspect and manage the isolated session this installation owns.");
+
+        Command status = new(
+            "status",
+            "Show the recorded isolated session. Reads only; changes nothing.");
+        status.SetAction((_, token) => handlers.SessionStatus(token));
+
+        Command stop = new(
+            "stop",
+            "Stop the isolated session, keeping its profile and data.");
+        stop.SetAction((_, token) => handlers.SessionStop(token));
+
+        Command remove = new(
+            "remove",
+            "Stop and deprovision the isolated session. This destroys its " +
+            "guest profile and workspace contents.");
+        remove.SetAction((_, token) => handlers.SessionRemove(token));
+
+        session.Subcommands.Add(status);
+        session.Subcommands.Add(stop);
+        session.Subcommands.Add(remove);
+        session.SetAction((parseResult, _) => Task.FromResult(WriteHelp(parseResult)));
+        return session;
+    }
+
+    private static Command CreateGatewayCommand(ClawCtlHandlers handlers)
+    {
+        Command gateway = new(
+            GatewayCommandName,
+            "Manage the background OpenClaw gateway and its sign-in recovery.");
+
+        Command install = new(
+            "install",
+            "Start the gateway and restart it when you sign in to Windows.");
+        install.SetAction((_, token) => handlers.GatewayInstall(token));
+
+        Command status = new(
+            "status",
+            "Show the gateway and its sign-in recovery. Reads only; changes " +
+            "nothing.");
+        status.SetAction((_, token) => handlers.GatewayStatus(token));
+
+        Command start = new("start", "Start the gateway if it is not running.");
+        start.SetAction((_, token) => handlers.GatewayStart(token));
+
+        Command stop = new(
+            "stop",
+            "Stop the gateway, keeping the session and its data.");
+        stop.SetAction((_, token) => handlers.GatewayStop(token));
+
+        Command uninstall = new(
+            "uninstall",
+            "Stop the gateway and remove its sign-in recovery.");
+        uninstall.SetAction((_, token) => handlers.GatewayUninstall(token));
+
+        Command diagnose = new(
+            "diagnose",
+            "Explain why the gateway is or is not running. Reads only; " +
+            "changes nothing.");
+        diagnose.SetAction((_, token) => handlers.GatewayDiagnose(token));
+
+        gateway.Subcommands.Add(install);
+        gateway.Subcommands.Add(status);
+        gateway.Subcommands.Add(start);
+        gateway.Subcommands.Add(stop);
+        gateway.Subcommands.Add(uninstall);
+        gateway.Subcommands.Add(diagnose);
+        gateway.SetAction((parseResult, _) => Task.FromResult(WriteHelp(parseResult)));
+        return gateway;
     }
 
     private static int WriteHelp(ParseResult parseResult)

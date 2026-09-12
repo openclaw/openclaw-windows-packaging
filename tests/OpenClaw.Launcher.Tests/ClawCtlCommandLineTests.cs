@@ -69,17 +69,39 @@ public sealed class ClawCtlCommandLineTests
         Assert.Contains("openclaw <arguments>", help, StringComparison.Ordinal);
     }
 
-    // clawctl owns package readiness only. If an upstream command name ever
-    // becomes a clawctl subcommand, the host has started shadowing the bundled
-    // CLI instead of forwarding through `openclaw`.
+    // clawctl owns package readiness and host-side session and gateway
+    // management only. If an upstream command name ever becomes a clawctl
+    // subcommand, the host has started shadowing the bundled CLI instead of
+    // forwarding through `openclaw`.
     [Fact]
-    public void OnlyTheReadinessCommandIsExposed()
+    public void OnlyHostOwnedCommandsAreExposed()
     {
-        RootCommand root = ClawCtlCommandLine.Create(_ => Task.FromResult(0));
+        RootCommand root = ClawCtlCommandLine.Create(ClawCtlHandlerFixture.Inert());
 
         Assert.Equal(
-            [ClawCtlCommandLine.SetupCommandName],
+            [
+                ClawCtlCommandLine.SetupCommandName,
+                ClawCtlCommandLine.SessionCommandName,
+                ClawCtlCommandLine.GatewayCommandName
+            ],
             root.Subcommands.Select(command => command.Name));
+    }
+
+    // The management noun is `gateway-service` precisely so that it cannot
+    // collide with OpenClaw's own `gateway` command.
+    [Theory]
+    [InlineData("doctor")]
+    [InlineData("gateway")]
+    [InlineData("uninstall")]
+    [InlineData("update")]
+    public void UpstreamCommandNamesAreNotShadowed(string upstreamCommand)
+    {
+        RootCommand root = ClawCtlCommandLine.Create(ClawCtlHandlerFixture.Inert());
+
+        Assert.DoesNotContain(
+            upstreamCommand,
+            root.Subcommands.Select(command => command.Name),
+            StringComparer.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -141,7 +163,6 @@ public sealed class ClawCtlCommandLineTests
     [InlineData("verify")]
     [InlineData("repair")]
     [InlineData("update-package")]
-    [InlineData("gateway-service")]
     [InlineData("setup", "extra")]
     [InlineData("setup", "--bogus")]
     public async Task RejectedInputFailsWithoutStartingSetup(params string[] args)

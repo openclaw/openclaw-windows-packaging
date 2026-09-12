@@ -1,6 +1,8 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/OpenClaw.Launcher/OpenClaw.Launcher.csproj" />
+    <Project Path="src/OpenClaw.SessionHost/OpenClaw.SessionHost.csproj" />
+    <Project Path="src/OpenClaw.SessionProtocol/OpenClaw.SessionProtocol.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/OpenClaw.Launcher.AotSmoke/OpenClaw.Launcher.AotSmoke.csproj" />

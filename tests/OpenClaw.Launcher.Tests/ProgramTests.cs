@@ -1,3 +1,5 @@
+using OpenClaw.Launcher.Session;
+
 namespace OpenClaw.Launcher.Tests;
 
 public sealed class ProgramTests : IDisposable
@@ -36,7 +38,14 @@ public sealed class ProgramTests : IDisposable
                 Assert.Equal(applicationDirectory, appDirectory);
                 Assert.Equal(arguments, forwardedArguments);
                 return Task.FromResult(23);
-            });
+            },
+            _ => Task.FromResult(
+                new SessionRoutingDecision(
+                    SessionRouting.Direct,
+                    "this test routes directly")),
+            (_, _, _, _, _) =>
+                throw new InvalidOperationException(
+                    "Direct routing must not enter a session."));
 
         Assert.True(nodeResolutionAttempted);
         Assert.True(launchAttempted);

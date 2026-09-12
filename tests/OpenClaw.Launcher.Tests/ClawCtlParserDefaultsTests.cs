@@ -70,8 +70,8 @@ public sealed class ClawCtlParserDefaultsTests : IDisposable
     public void CompletionSuggestsCommandsWithoutResolvingNode()
     {
         RootCommand root = ClawCtlCommandLine.Create(
-            _ => throw new InvalidOperationException(
-                "Completion started the readiness operation."));
+            ClawCtlHandlerFixture.Forbidden(
+                "Completion started a management operation."));
 
         IEnumerable<string> completions = root
             .Parse("se", ClawCtlCommandLine.CreateParserConfiguration())
@@ -80,6 +80,10 @@ public sealed class ClawCtlParserDefaultsTests : IDisposable
 
         Assert.Contains(
             ClawCtlCommandLine.SetupCommandName,
+            completions,
+            StringComparer.Ordinal);
+        Assert.Contains(
+            ClawCtlCommandLine.SessionCommandName,
             completions,
             StringComparer.Ordinal);
     }

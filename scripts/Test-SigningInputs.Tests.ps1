@@ -13,6 +13,69 @@ $testRoot = Join-Path $env:TEMP (
     "openclaw-signing-policy-$([guid]::NewGuid().ToString('N'))"
 )
 
+# The validator checks staged MXC files against mxc-runtime.lock.json by hash.
+# Real 9 MB signed binaries cannot be fabricated here, so the fixture builds
+# small stand-ins and a matching lock, and the validator is pointed at it. The
+# production lock stays the pinned public one.
+$mxcFixtureRoot = Join-Path $env:TEMP (
+    "openclaw-signing-mxc-$([guid]::NewGuid().ToString('N'))"
+)
+$mxcLockPath = Join-Path $mxcFixtureRoot 'mxc-runtime.lock.json'
+$mxcPackage = '@microsoft/mxc-sdk'
+$mxcVersion = '0.8.0-test'
+$mxcIntegrity = 'sha512-' + [Convert]::ToBase64String(
+    [byte[]](1..64 | ForEach-Object { [byte]$_ })
+)
+
+function New-TestMxcFixture {
+    New-Item -Path $mxcFixtureRoot -ItemType Directory -Force | Out-Null
+    $architectureLocks = [ordered]@{}
+    foreach ($architecture in @('x64', 'arm64')) {
+        $source = Join-Path $mxcFixtureRoot $architecture
+        New-Item -Path $source -ItemType Directory -Force | Out-Null
+        $files = @()
+        foreach ($fileName in @('wxc-exec.exe', 'plm.exe')) {
+            $path = Join-Path $source $fileName
+            Set-Content `
+                -LiteralPath $path `
+                -Value "$fileName-$architecture" `
+                -NoNewline
+            $files += [ordered]@{
+                archivePath = "package/bin/$architecture/$fileName"
+                stagedPath = $fileName
+                length = (Get-Item -LiteralPath $path).Length
+                sha256 = (
+                    Get-FileHash -LiteralPath $path -Algorithm SHA256
+                ).Hash.ToLowerInvariant()
+            }
+        }
+
+        $licensePath = Join-Path $source 'LICENSE.md'
+        Set-Content -LiteralPath $licensePath -Value 'MIT' -NoNewline
+        $architectureLocks[$architecture] = [ordered]@{ files = $files }
+    }
+
+    $licenseSource = Join-Path $mxcFixtureRoot 'x64\LICENSE.md'
+    [ordered]@{
+        package = $mxcPackage
+        version = $mxcVersion
+        tarballIntegrity = $mxcIntegrity
+        architectures = $architectureLocks
+        licenseFiles = @(
+            [ordered]@{
+                archivePath = 'package/LICENSE.md'
+                stagedPath = 'LICENSE.md'
+                length = (Get-Item -LiteralPath $licenseSource).Length
+                sha256 = (
+                    Get-FileHash -LiteralPath $licenseSource -Algorithm SHA256
+                ).Hash.ToLowerInvariant()
+            }
+        )
+    } |
+        ConvertTo-Json -Depth 6 |
+        Set-Content -LiteralPath $mxcLockPath -Encoding utf8
+}
+
 function New-TestArtifact {
     param(
         [Parameter(Mandatory)]
@@ -125,6 +188,37 @@ function New-TestArtifact {
             -Value 'bundled-node'
     }
 
+    $mxcDirectory = Join-Path $staging "mxc\$Architecture"
+    New-Item -Path $mxcDirectory -ItemType Directory -Force | Out-Null
+    Copy-Item `
+        -Path (Join-Path $mxcFixtureRoot "$Architecture\*") `
+        -Destination $mxcDirectory
+    [ordered]@{
+        package = $mxcPackage
+        version = $mxcVersion
+        architecture = $Architecture
+        tarballIntegrity = $mxcIntegrity
+    } |
+        ConvertTo-Json |
+        Set-Content `
+            -LiteralPath (Join-Path $mxcDirectory 'mxc-runtime.json') `
+            -Encoding utf8
+    $mxcRuntimeFileCount = @(
+        Get-ChildItem -LiteralPath $mxcDirectory -File
+    ).Count
+
+    $sessionHostDirectory = Join-Path $staging "session-host\$Architecture"
+    New-Item -Path $sessionHostDirectory -ItemType Directory -Force | Out-Null
+    $sessionHostFileName = 'openclaw-session-host.exe'
+    $sessionHostPath = Join-Path $sessionHostDirectory $sessionHostFileName
+    Set-Content `
+        -LiteralPath $sessionHostPath `
+        -Value "session-host-$Architecture" `
+        -NoNewline
+    $sessionHostSha256 = (
+        Get-FileHash -LiteralPath $sessionHostPath -Algorithm SHA256
+    ).Hash.ToLowerInvariant()
+
     $msixName = "OpenClawGateway-$Architecture.msix"
     $msixPath = Join-Path $directory $msixName
     [IO.Compression.ZipFile]::CreateFromDirectory($staging, $msixPath)
@@ -143,6 +237,12 @@ function New-TestArtifact {
         payloadResolvedCommit = $PayloadCommit
         payloadLayout = 'immutable-package'
         payloadFileCount = $payloadFiles.Count
+        mxcRuntimePackage = $mxcPackage
+        mxcRuntimeVersion = $mxcVersion
+        mxcRuntimeIntegrity = $mxcIntegrity
+        mxcRuntimeFileCount = $mxcRuntimeFileCount
+        sessionHostFileName = $sessionHostFileName
+        sessionHostSha256 = $sessionHostSha256
         architecture = $Architecture
         archive = $msixName
         sha256 = $msixHash
@@ -168,7 +268,8 @@ function Invoke-PolicyValidation {
         -ArtifactsDirectory $Root `
         -PolicyPath $policyPath `
         -RequestedRef $RequestedRef `
-        -PackagingCommit $packagingCommit
+        -PackagingCommit $packagingCommit `
+        -MxcRuntimeLockPath $mxcLockPath
 }
 
 function Assert-Fails {
@@ -251,6 +352,7 @@ function Reset-TestArtifacts {
 
 try {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
+    New-TestMxcFixture
     Reset-TestArtifacts
     Invoke-PolicyValidation -Root $testRoot
 
@@ -452,8 +554,142 @@ try {
             Invoke-PolicyValidation -Root $testRoot
         }
 
+    Reset-TestArtifacts
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        Set-Content `
+            -LiteralPath (Join-Path $Expanded 'mxc\x64\wxc-exec.exe') `
+            -Value 'substituted-executor' `
+            -NoNewline
+    }
+    Assert-Fails `
+        -MessagePattern 'does not match its pinned hash' `
+        -Action {
+            Invoke-PolicyValidation -Root $testRoot
+        }
+
+    Reset-TestArtifacts
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        Set-Content `
+            -LiteralPath (Join-Path $Expanded 'mxc\x64\extra-tool.exe') `
+            -Value 'unpinned' `
+            -NoNewline
+    }
+    Assert-Fails `
+        -MessagePattern 'MXC runtime file set does not match' `
+        -Action {
+            Invoke-PolicyValidation -Root $testRoot
+        }
+
+    Reset-TestArtifacts
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        Remove-Item -LiteralPath (Join-Path $Expanded 'mxc\x64\plm.exe')
+    }
+    Assert-Fails `
+        -MessagePattern 'MXC runtime file set does not match' `
+        -Action {
+            Invoke-PolicyValidation -Root $testRoot
+        }
+
+    Reset-TestArtifacts
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        $provenancePath = Join-Path $Expanded 'mxc\x64\mxc-runtime.json'
+        $provenance = Get-Content -LiteralPath $provenancePath -Raw |
+            ConvertFrom-Json
+        $provenance.version = '0.9.0-unreviewed'
+        $provenance |
+            ConvertTo-Json |
+            Set-Content -LiteralPath $provenancePath -Encoding utf8
+    }
+    Assert-Fails `
+        -MessagePattern 'MXC runtime provenance is invalid' `
+        -Action {
+            Invoke-PolicyValidation -Root $testRoot
+        }
+
+    Reset-TestArtifacts
+    $x64MxcMetadataPath = Join-Path $testRoot 'x64\msix-metadata.json'
+    $x64MxcMetadata = Get-Content -LiteralPath $x64MxcMetadataPath -Raw |
+        ConvertFrom-Json
+    $x64MxcMetadata.mxcRuntimeVersion = '0.9.0-unreviewed'
+    $x64MxcMetadata |
+        ConvertTo-Json |
+        Set-Content -LiteralPath $x64MxcMetadataPath -Encoding utf8
+    Assert-Fails `
+        -MessagePattern 'not eligible for signing' `
+        -Action {
+            Invoke-PolicyValidation -Root $testRoot
+        }
+
+    # The guest helper runs inside the isolated session, so substitution,
+    # removal, an extra reachable file, and metadata drift must each be caught.
+    Reset-TestArtifacts
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        Set-Content `
+            -LiteralPath (
+                Join-Path $Expanded 'session-host\x64\openclaw-session-host.exe'
+            ) `
+            -Value 'substituted-helper' `
+            -NoNewline
+    }
+    Assert-Fails `
+        -MessagePattern 'guest helper does not match' `
+        -Action {
+            Invoke-PolicyValidation -Root $testRoot
+        }
+
+    Reset-TestArtifacts
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        Remove-Item -LiteralPath (
+            Join-Path $Expanded 'session-host\x64\openclaw-session-host.exe'
+        )
+    }
+    Assert-Fails `
+        -MessagePattern 'must contain exactly the guest helper' `
+        -Action {
+            Invoke-PolicyValidation -Root $testRoot
+        }
+
+    Reset-TestArtifacts
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        Set-Content `
+            -LiteralPath (Join-Path $Expanded 'session-host\x64\extra.dll') `
+            -Value 'unverified' `
+            -NoNewline
+    }
+    Assert-Fails `
+        -MessagePattern 'must contain exactly the guest helper' `
+        -Action {
+            Invoke-PolicyValidation -Root $testRoot
+        }
+
+    Reset-TestArtifacts
+    $x64HelperMetadataPath = Join-Path $testRoot 'x64\msix-metadata.json'
+    $x64HelperMetadata = Get-Content -LiteralPath $x64HelperMetadataPath -Raw |
+        ConvertFrom-Json
+    $x64HelperMetadata.sessionHostFileName = 'something-else.exe'
+    $x64HelperMetadata |
+        ConvertTo-Json |
+        Set-Content -LiteralPath $x64HelperMetadataPath -Encoding utf8
+    Assert-Fails `
+        -MessagePattern 'not eligible for signing' `
+        -Action {
+            Invoke-PolicyValidation -Root $testRoot
+        }
+
     Write-Host 'Gateway MSIX signing policy tests passed.'
 }
 finally {
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item `
+        -LiteralPath $mxcFixtureRoot `
+        -Recurse `
+        -Force `
+        -ErrorAction SilentlyContinue
 }
