@@ -106,11 +106,20 @@ internal sealed class SessionExecutor
     /// Builds the only command line the backend ever sees.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// The pinned runtime dispatches this string through <c>cmd.exe /c</c>.
+    /// When that string contains more than two quote characters, the command
+    /// processor strips the first and the last one and keeps the rest, so a
+    /// naturally quoted <c>"exe" --request "path"</c> arrives with its
+    /// executable path unquoted and fails at the first space. An outer pair is
+    /// therefore added deliberately: it is the pair that gets sacrificed, and
+    /// the inner quoting survives intact.
+    /// </para>
+    /// <para>
     /// Both values are paths this package controls, but they are still verified
-    /// rather than trusted. The pinned runtime flattens this string through
-    /// <c>cmd.exe</c>, which expands <c>%VAR%</c> and lets an embedded quote
-    /// truncate the rest of the line, so a path containing either character is
-    /// refused instead of being silently corrupted.
+    /// rather than trusted, because <c>cmd.exe</c> also expands <c>%VAR%</c>
+    /// and lets an embedded quote truncate the rest of the line.
+    /// </para>
     /// </remarks>
     internal static string BuildGuestCommandLine(
         string helperPath,
@@ -119,7 +128,7 @@ internal sealed class SessionExecutor
     {
         Verify(helperPath, nameof(helperPath));
         Verify(requestPath, nameof(requestPath));
-        return $"\"{helperPath}\" {option} \"{requestPath}\"";
+        return $"\"\"{helperPath}\" {option} \"{requestPath}\"\"";
 
         static void Verify(string value, string name)
         {

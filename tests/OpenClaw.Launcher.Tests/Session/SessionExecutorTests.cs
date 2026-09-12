@@ -183,10 +183,15 @@ public sealed class SessionExecutorTests : IDisposable
         await Create().ExecuteAsync(Record(), Request("chat"), CancellationToken.None);
 
         string commandLine = Assert.Single(_backend.AttachedCommandLines);
-        Assert.StartsWith(
-            "\"C:\\Package\\session-host\\x64\\openclaw-session-host.exe\" --request \"",
+
+        // The properties that matter are what the command line carries, not how
+        // it is shaped: the helper is named, and neither the user's arguments
+        // nor the Node path ever reach a string the command processor expands.
+        Assert.Contains(
+            @"C:\Package\session-host\x64\openclaw-session-host.exe",
             commandLine,
             StringComparison.Ordinal);
+        Assert.Contains("--request", commandLine, StringComparison.Ordinal);
         Assert.DoesNotContain("chat", commandLine, StringComparison.Ordinal);
         Assert.DoesNotContain("node.exe", commandLine, StringComparison.Ordinal);
     }
@@ -358,17 +363,10 @@ public sealed class SessionExecutorTests : IDisposable
                 @"C:\ws\%TEMP%.json"));
     }
 
-    [Fact]
-    public void PathsWithSpacesAreQuoted()
-    {
-        string commandLine = SessionExecutor.BuildGuestCommandLine(
-            @"C:\Program Files\helper.exe",
-            @"C:\Users\a b\r.json");
-
-        Assert.Equal(
-            "\"C:\\Program Files\\helper.exe\" --request \"C:\\Users\\a b\\r.json\"",
-            commandLine);
-    }
+    // Quoting is proven by dispatching the command line through the command
+    // processor the backend actually uses, in SessionGuestCommandLineTests.
+    // A string-equality assertion here previously passed against a command line
+    // that the command processor then broke apart at the first space.
 
     [Fact]
     public async Task CancellationPropagates()

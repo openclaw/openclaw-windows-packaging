@@ -173,6 +173,56 @@ Two consequences for the gateway slice:
 The start-time check is not ceremony: it is what distinguishes the recorded
 process from an unrelated one that inherited its PID after Windows reused it.
 
+## Guest command line: `cmd.exe` discards the outer quote pair
+
+Reported from a real installation, and reproduced exactly:
+
+```text
+openclaw
+'C:\Program' is not recognized as an internal or external command,
+operable program or batch file.
+openclaw: The isolated session did not report a launch result (executor exit code 1).
+```
+
+Every path in the command line was quoted. The string was not the problem; the
+command processor's treatment of it was. The pinned runtime dispatches the
+command through `cmd.exe /c`, and when the command line holds more than two
+quote characters, `cmd.exe` strips the **first and the last** one and keeps the
+rest. A naturally quoted command has four:
+
+```text
+sent     "<helper>" --request "<request>"
+executed  <helper>" --request "<request>
+```
+
+The executable path arrives unquoted and execution stops at its first space,
+which for a packaged helper under `C:\Program Files\WindowsApps\...` is always.
+
+### Mitigation, measured
+
+An outer pair is added deliberately, so that the pair `cmd.exe` discards is one
+this package supplied rather than one it needs:
+
+```text
+sent     ""<helper>" --request "<request>""
+executed  "<helper>" --request "<request>"
+```
+
+Measured against the real command processor with a probe that reports the
+argument vector it received. Without the outer pair, seven of the nine
+regression cases fail, including the reported one; with it, all pass. Coverage
+includes a space in the helper directory, a space in the request path, every
+helper mode the gateway drives, and a path with no spaces at all, so the fix
+for the harder case cannot silently break the ordinary one.
+
+The same construction is used by the internal packaging host for the same
+documented reason, which is corroboration rather than the source of the fix:
+the behavior above was reproduced and measured directly.
+
+Note that quoting alone remains insufficient for `%` and `"` in a path. Those
+are still refused rather than carried, because `cmd.exe` expands `%VAR%` and an
+embedded quote truncates the rest of the line regardless of the outer pair.
+
 ## Task Scheduler round trip — **PASS, with one correction**
 
 Measured on this workstation, unelevated, against the inbox `schtasks.exe`,
