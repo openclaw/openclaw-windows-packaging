@@ -51,6 +51,7 @@ $requiredFragments = @(
     'signing-account-name: openclaw'
     'certificate-profile-name: openclaw'
     'name: Publish signed Gateway MSIX release'
+    '.\scripts\Get-MSIXReleaseIdentity.ps1'
     'contents: write'
     'uses: softprops/action-gh-release@v3'
     'tag_name: ${{ needs.authorize-signing.outputs.release_tag }}'

@@ -153,22 +153,22 @@ $policy = Get-Content -LiteralPath $resolvedPolicyPath -Raw |
 
 if (
     $policy.repository -ne 'https://github.com/openclaw/openclaw' -or
-    [string]::IsNullOrWhiteSpace([string]$policy.releaseTag) -or
-    $policy.packageVersion -notmatch '^\d+\.\d+\.\d+\.\d+$' -or
-    $policy.releaseTag -ne "v$($policy.packageVersion)" -or
+    [string]::IsNullOrWhiteSpace([string]$policy.gatewayTag) -or
+    $policy.msixRevision -isnot [int64] -or
     [string]::IsNullOrWhiteSpace([string]$policy.payloadPackageVersion) -or
+    $policy.gatewayTag -ne "v$($policy.payloadPackageVersion)" -or
     $policy.approvedCommit -notmatch '^[0-9a-fA-F]{40}$' -or
     [string]::IsNullOrWhiteSpace([string]$policy.publisher)
 ) {
     throw 'The Gateway MSIX release policy is invalid.'
 }
 
-$approvedPackageVersion = & (
-    Join-Path $PSScriptRoot 'Get-WorkflowPackageVersion.ps1'
+$releaseIdentity = & (
+    Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1'
 ) `
-    -RunNumber 1 `
-    -RunAttempt 1 `
-    -ReleaseVersion ([string]$policy.packageVersion)
+    -GatewayTag ([string]$policy.gatewayTag) `
+    -MSIXRevision ([int]$policy.msixRevision)
+$approvedPackageVersion = $releaseIdentity.PackageVersion
 $approvedPayloadVersion = [string]$policy.payloadPackageVersion
 $approvedCommit = ([string]$policy.approvedCommit).ToLowerInvariant()
 $normalizedRequestedRef = $RequestedRef.Trim().ToLowerInvariant()
@@ -446,7 +446,8 @@ try {
         $null -eq $bundleIdentity -or
         $bundleIdentity.Name -ne 'OpenClaw.Gateway' -or
         $bundleIdentity.Publisher -ne $policy.publisher -or
-        -not $bundleVersionIsValid
+        -not $bundleVersionIsValid -or
+        $bundleVersion -ne $approvedPackageVersion
     ) {
         throw 'The MSIX bundle manifest identity is unexpected.'
     }

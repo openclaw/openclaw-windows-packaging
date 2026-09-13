@@ -164,6 +164,11 @@ jobs:
         run: >
           .\scripts\Test-Deploy-LocalPackage.Tests.ps1
 
+      - name: Test MSIX release identity
+        shell: pwsh
+        run: >
+          .\scripts\Test-MSIXReleaseIdentity.Tests.ps1
+
       - name: Test MSIX bundle build
         shell: pwsh
         run: >
@@ -431,7 +436,10 @@ jobs:
           if ($env:SIGNING_MODE -eq 'official') {
             $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
               ConvertFrom-Json
-            $versionParameters.ReleaseVersion = [string]$policy.packageVersion
+            $identity = .\scripts\Get-MSIXReleaseIdentity.ps1 `
+              -GatewayTag ([string]$policy.gatewayTag) `
+              -MSIXRevision ([int]$policy.msixRevision)
+            $versionParameters.ReleaseVersion = $identity.PackageVersion
           }
           $packageVersion = .\scripts\Get-WorkflowPackageVersion.ps1 `
             @versionParameters
@@ -536,7 +544,10 @@ jobs:
           if ($env:SIGNING_MODE -eq 'official') {
             $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
               ConvertFrom-Json
-            $versionParameters.ReleaseVersion = [string]$policy.packageVersion
+            $identity = .\scripts\Get-MSIXReleaseIdentity.ps1 `
+              -GatewayTag ([string]$policy.gatewayTag) `
+              -MSIXRevision ([int]$policy.msixRevision)
+            $versionParameters.ReleaseVersion = $identity.PackageVersion
           }
           $packageVersion = .\scripts\Get-WorkflowPackageVersion.ps1 `
             @versionParameters
@@ -612,15 +623,17 @@ jobs:
         run: |
           $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
             ConvertFrom-Json
-          $releaseTag = ([string]$policy.releaseTag).Trim()
+          $identity = .\scripts\Get-MSIXReleaseIdentity.ps1 `
+            -GatewayTag ([string]$policy.gatewayTag) `
+            -MSIXRevision ([int]$policy.msixRevision)
           $packageVersion = .\scripts\Get-WorkflowPackageVersion.ps1 `
             -RunNumber '${{ github.run_number }}' `
             -RunAttempt '${{ github.run_attempt }}' `
-            -ReleaseVersion ([string]$policy.packageVersion)
+            -ReleaseVersion $identity.PackageVersion
 
           "package_version=$packageVersion" >> $env:GITHUB_OUTPUT
-          "release_tag=$releaseTag" >> $env:GITHUB_OUTPUT
-          "release_version=$($releaseTag.Substring(1))" >> $env:GITHUB_OUTPUT
+          "release_tag=$($identity.ReleaseTag)" >> $env:GITHUB_OUTPUT
+          "release_version=$($identity.ReleaseVersion)" >> $env:GITHUB_OUTPUT
 
       - name: Enforce official signing policy
         shell: pwsh
