@@ -12,13 +12,45 @@ internal static class ClawCtlConsole
         output.WriteLine(
             $"Using Node.js {runtime.Version} from {runtime.ExecutablePath}");
 
-    public static void WriteReadinessSummary(
+    public static void WritePackageSummary(
         TextWriter output,
         string applicationDirectory)
     {
         output.WriteLine();
-        output.WriteLine("OpenClaw package is ready.");
-        output.WriteLine($"Read-only application files: {applicationDirectory}");
+        output.WriteLine("OpenClaw package is present.");
+        output.WriteLine($"Packaged application files: {applicationDirectory}");
+    }
+
+    internal static void WriteSetupSummary(
+        TextWriter output,
+        SessionRecord session,
+        GatewayLaunchConfiguration launch,
+        GatewayPersistenceInstallResult persistence)
+    {
+        output.WriteLine();
+        output.WriteLine(
+            persistence.State == GatewayPersistenceState.Ready
+                ? "OpenClaw setup is complete."
+                : "OpenClaw setup is incomplete.");
+        output.WriteLine($"  Isolated session: {session.SandboxId}");
+        output.WriteLine($"  Gateway port: {launch.Port}");
+        output.WriteLine($"  Sign-in recovery: {Describe(persistence.State)}");
+
+        if (persistence.Lane == GatewayPersistenceLane.StartupFolderFallback)
+        {
+            output.WriteLine("  Configured through the Startup folder.");
+        }
+
+        if (persistence.Detail is { Length: > 0 } detail)
+        {
+            output.WriteLine($"  {detail}");
+        }
+
+        if (persistence.State != GatewayPersistenceState.Ready)
+        {
+            output.WriteLine(
+                $"  Repair with: {GatewayPersistenceManager.RepairCommand}");
+        }
     }
 
     /// <summary>

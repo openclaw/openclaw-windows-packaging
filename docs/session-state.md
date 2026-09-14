@@ -1,7 +1,9 @@
 # Session state and ownership
 
 This installation records the isolated session it owns in a single versioned
-file. That record is the only evidence of ownership.
+file. It also records whether the explicit setup workflow completed. The
+session record is the evidence of backend ownership; the setup record is the
+evidence that `openclaw` may use it.
 
 ## Why ownership is recorded, not detected
 
@@ -35,6 +37,10 @@ adopt or destroy the other's session.
 `PackageIdentity.TryGetPackageFamilyName` returns null when unpackaged, because
 that is an ordinary development configuration rather than a failure.
 
+`HostPaths.SetupStatePath` stores `setup.json` beside `session.json`. Its
+application identity and schema are validated independently, so a session
+created by an older or partial workflow cannot unlock `openclaw`.
+
 ## What the record contains
 
 `SessionRecord` persists the backend identity and the provision metadata later
@@ -53,6 +59,20 @@ phases need:
 The sandbox id is opaque. It carries a backend routing prefix and the
 provisioning application identity, so it cannot be rebuilt from a session GUID
 and is never normalized on the way in or out.
+
+## What the setup marker contains
+
+`SetupRecord` persists:
+
+| Field | Why it is kept |
+|---|---|
+| `schemaVersion` | Lets a later build reject, rather than misread, a newer marker. |
+| `applicationId` | Prevents one package identity from adopting another's setup. |
+| `completedUtc` | Records when the complete setup workflow finished. |
+
+The marker is written atomically only after session startup, gateway launch
+configuration, and sign-in recovery all succeed. A failed first setup leaves no
+marker, so `openclaw` continues to direct the user to `clawctl setup`.
 
 ## Reading failures are distinct from having no session
 

@@ -298,6 +298,8 @@ Remove-DirectoryIfPresent -Path $sessionHostContent
 Invoke-CheckedCommand `
     -FailureMessage 'Publishing the isolated-session guest helper failed.' `
     -Command {
+        # Normal builds generate XML docs so IDE0005 can run; the packaged
+        # helper must remain a single NativeAOT executable.
         & dotnet publish $sessionHostProjectPath `
             --configuration Release `
             --runtime "win-$Architecture" `
@@ -309,6 +311,8 @@ Invoke-CheckedCommand `
             "-p:AssemblyVersion=$PackageVersion" `
             "-p:FileVersion=$PackageVersion" `
             -p:DebugType=None `
+            -p:GenerateDocumentationFile=false `
+            -p:EnforceCodeStyleInBuild=false `
             --output $sessionHostContent `
             --nologo
     }

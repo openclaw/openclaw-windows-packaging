@@ -49,7 +49,7 @@ public sealed class ClawCtlParserDefaultsTests : IDisposable
 
         Assert.Equal(1, exitCode);
         Assert.DoesNotContain(
-            "package is ready",
+            "package is present",
             output,
             StringComparison.Ordinal);
     }

@@ -1,3 +1,4 @@
+using OpenClaw.Launcher.Gateway;
 using OpenClaw.Launcher.Session;
 
 namespace OpenClaw.Launcher;
@@ -31,6 +32,10 @@ internal sealed class HostStartup
     public Func<CancellationToken, Task<SessionRoutingDecision>>? DecideRouting { get; init; }
 
     public Program.RunInSessionAsync? RunInSession { get; init; }
+
+    // Control tests can substitute the gateway composition so setup exercises
+    // the real lifecycle without registering a task or contacting MXC.
+    public Func<HostOptions, Action<string>, GatewayRuntime>? CreateGatewayRuntime { get; init; }
 
     public static HostStartup CreateProduction() => new()
     {

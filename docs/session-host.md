@@ -78,14 +78,22 @@ never something to interpret leniently.
 
 ## Build and packaging
 
-The helper is a separate NativeAOT executable. It is not a packaged app and
-takes no part in MSIX tooling.
+The helper is a separate NativeAOT executable. It is not a packaged app, has
+no app-execution alias, and takes no part in MSIX tooling.
 
 `scripts\Build-MSIX.ps1` publishes it per architecture into
 `content\session-host\<arch>\` before the packaging build, the same staged and
 verified footing the MXC runtime uses, and rejects the publish if it produced
 anything besides the single executable. `OpenClaw.Launcher.csproj` then carries
 that directory as package content and fails the packaging build if it is absent.
+
+The agent identity cannot execute the helper directly from another package's
+`C:\Program Files\WindowsApps` directory. During `clawctl setup`, the host
+copies the immutable packaged helper into a package-versioned directory under
+the OS-provided shared workspace. Every foreground, gateway start, inspection,
+and stop command uses that staged helper's fully qualified path. A package
+update therefore requires setup to run again before execution, so the new
+helper version is staged explicitly rather than silently reusing an older copy.
 
 `scripts\Test-SigningInputs.ps1` requires the package to contain exactly one
 `session-host/<arch>/openclaw-session-host.exe` matching the

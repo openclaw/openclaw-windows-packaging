@@ -73,6 +73,9 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
         ArgumentNullException.ThrowIfNull(request);
 
         string workspace = RequireWorkspace(session);
+        string helperPath = SessionHelperStager.RequireStaged(
+            request.HelperPath,
+            workspace);
 
         // Each launch gets its own unguessable evidence paths, so a process
         // left behind by an earlier launch cannot write to them and cannot make
@@ -114,7 +117,7 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
             MxcExecutionResult execution = await _backend.ExecuteAsync(
                 session.ToSandboxIdOrThrow(),
                 new MxcExecutionRequest(
-                    SessionExecutor.BuildGuestCommandLine(request.HelperPath, requestPath)),
+                    SessionExecutor.BuildGuestCommandLine(helperPath, requestPath)),
                 null,
                 cancellationToken).ConfigureAwait(false);
 
@@ -176,6 +179,9 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
         ArgumentNullException.ThrowIfNull(gateway);
 
         string workspace = RequireWorkspace(session);
+        string stagedHelperPath = SessionHelperStager.RequireStaged(
+            helperPath,
+            workspace);
         string requestId = Guid.NewGuid().ToString("N");
         string requestPath = Path.Combine(workspace, $"inspect-{requestId}.json");
         string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
@@ -198,7 +204,7 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
                 session.ToSandboxIdOrThrow(),
                 new MxcExecutionRequest(
                     SessionExecutor.BuildGuestCommandLine(
-                        helperPath,
+                        stagedHelperPath,
                         requestPath,
                         option)),
                 null,

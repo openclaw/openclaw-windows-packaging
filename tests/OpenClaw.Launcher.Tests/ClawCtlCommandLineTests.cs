@@ -172,7 +172,7 @@ public sealed class ClawCtlCommandLineTests
         Assert.Equal(1, exitCode);
         Assert.NotEmpty(error);
         Assert.DoesNotContain(
-            "package is ready",
+            "package is present",
             output,
             StringComparison.Ordinal);
     }

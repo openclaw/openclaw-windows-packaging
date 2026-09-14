@@ -1,6 +1,9 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
+using OpenClaw.Launcher.Gateway;
+using OpenClaw.Launcher.Mxc;
 using LauncherProgram = OpenClaw.Launcher.Program;
+using OpenClaw.Launcher.Session;
 
 namespace OpenClaw.Launcher.AotSmoke;
 
@@ -40,7 +43,7 @@ internal static class SmokeProgram
             ("unknown command fails", UnknownCommandFailsAsync),
             ("response-file token is not expanded", ResponseFileTokenIsNotExpandedAsync),
             ("completion directive suggests commands", CompletionDirectiveSuggestsAsync),
-            ("setup reports readiness and logs", SetupReportsReadinessAsync),
+            ("setup provisions state and logs", SetupProvisionsStateAsync),
             ("missing application reports diagnostics", MissingApplicationReportsAsync),
             ("openclaw forwards arguments verbatim", AgentForwardsArgumentsAsync)
         ];
@@ -202,7 +205,7 @@ internal static class SmokeProgram
         fixture.AssertNodeWasNotResolved();
     }
 
-    private static async Task SetupReportsReadinessAsync()
+    private static async Task SetupProvisionsStateAsync()
     {
         using Fixture fixture = await Fixture.CreateWithApplicationAsync().ConfigureAwait(false);
 
@@ -214,7 +217,7 @@ internal static class SmokeProgram
         fixture.AssertLogRecordsStartupAndExit();
         Assert(
             File.Exists(fixture.EntryPoint),
-            "The readiness check removed or replaced the fixture entry point.");
+            "Setup removed or replaced the fixture entry point.");
     }
 
     // The operational error boundary is part of startup, not of the parser.
@@ -228,8 +231,8 @@ internal static class SmokeProgram
         AssertExitCode(1, exitCode, fixture);
         AssertContains(fixture.Error.ToString(), fixture.LogPath, fixture);
         Assert(
-            !fixture.Output.ToString().Contains("package is ready", StringComparison.Ordinal),
-            "A failed readiness check still reported success.");
+            !fixture.Output.ToString().Contains("package is present", StringComparison.Ordinal),
+            "A failed setup still reported package success.");
         fixture.AssertLogRecordsStartupAndExit();
     }
 
@@ -333,6 +336,10 @@ internal static class SmokeProgram
             Directory.CreateDirectory(fixture.ApplicationDirectory);
             await File.WriteAllTextAsync(fixture.EntryPoint, "console.log('fixture');")
                 .ConfigureAwait(false);
+            string helperPath = SessionRuntime.ResolveHelperPath(fixture.Root);
+            Directory.CreateDirectory(Path.GetDirectoryName(helperPath)!);
+            await File.WriteAllTextAsync(helperPath, "scenario helper")
+                .ConfigureAwait(false);
             return fixture;
         }
 
@@ -358,10 +365,42 @@ internal static class SmokeProgram
                 {
                     ForwardedArguments = [.. forwarded];
                     return Task.FromResult(23);
-                }
+                },
+                CreateGatewayRuntime = CreateGatewayRuntime,
+                DecideRouting = _ => Task.FromResult(
+                    new SessionRoutingDecision(
+                        SessionRouting.Direct,
+                        "scenario direct execution"))
             };
 
             return await LauncherProgram.RunAsync(args, startup).ConfigureAwait(false);
+        }
+
+        private GatewayRuntime CreateGatewayRuntime(
+            HostOptions options,
+            Action<string> log)
+        {
+            string workspace = Path.Combine(Root, "workspace");
+            Directory.CreateDirectory(workspace);
+            HostPaths paths = HostPaths.ForRoot(
+                Root,
+                "OpenClaw.Gateway_aot");
+            SessionRuntime session = SessionRuntime.Create(
+                paths,
+                () => throw new InvalidOperationException(
+                    "The AOT setup scenario must not locate a real MXC runtime."),
+                Root,
+                log,
+                new ScenarioMxcSessionClient(workspace));
+
+            return GatewayRuntime.Create(
+                options,
+                paths,
+                session,
+                Root,
+                log,
+                userSid: "S-1-5-21-aot",
+                scheduler: new ScenarioTaskScheduler());
         }
 
         public void AssertNodeWasNotResolved() =>
@@ -404,5 +443,76 @@ internal static class SmokeProgram
             Directory.CreateDirectory(path);
             return path;
         }
+    }
+
+    private sealed class ScenarioMxcSessionClient(string workspace) : IMxcSessionClient
+    {
+        public Task<MxcProvisionResult> ProvisionAsync(
+            MxcProvisionRequest request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(
+                new MxcProvisionResult(
+                    MxcSandboxId.Parse("iso:aot"),
+                    new MxcProvisionMetadata(
+                        "aot-agent",
+                        "S-1-5-21-aot",
+                        workspace),
+                    null));
+
+        public Task StartAsync(
+            MxcSandboxId sandboxId,
+            string? correlationVector,
+            CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task<MxcExecutionResult> ExecuteAsync(
+            MxcSandboxId sandboxId,
+            MxcExecutionRequest request,
+            string? correlationVector,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
+
+        public Task<int> ExecuteAttachedAsync(
+            MxcSandboxId sandboxId,
+            MxcExecutionRequest request,
+            string? correlationVector,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(0);
+
+        public Task StopAsync(
+            MxcSandboxId sandboxId,
+            string? correlationVector,
+            CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task DeprovisionAsync(
+            MxcSandboxId sandboxId,
+            string? correlationVector,
+            CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class ScenarioTaskScheduler : IGatewayTaskScheduler
+    {
+        public Task<GatewayTaskProbe> QueryAsync(
+            string taskName,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(GatewayTaskProbe.Missing);
+
+        public Task<GatewayTaskOperation> RegisterAsync(
+            string taskName,
+            string taskXml,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(GatewayTaskOperation.Success);
+
+        public Task<GatewayTaskOperation> DeleteAsync(
+            string taskName,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(GatewayTaskOperation.Success);
+
+        public Task<GatewayTaskOperation> RunAsync(
+            string taskName,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(GatewayTaskOperation.Success);
     }
 }

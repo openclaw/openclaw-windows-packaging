@@ -25,13 +25,15 @@ internal sealed class SessionRuntime
         SessionExecutor executor,
         IMxcSessionClient backend,
         string helperPath,
-        string applicationId)
+        string applicationId,
+        SetupStateStore setupState)
     {
         Coordinator = coordinator;
         Executor = executor;
         Backend = backend;
         HelperPath = helperPath;
         ApplicationId = applicationId;
+        SetupState = setupState;
     }
 
     public SessionCoordinator Coordinator { get; }
@@ -47,6 +49,24 @@ internal sealed class SessionRuntime
     public string HelperPath { get; }
 
     public string ApplicationId { get; }
+
+    public SetupStateStore SetupState { get; }
+
+    public string StageHelper(SessionRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        return SessionHelperStager.Stage(
+            HelperPath,
+            RequireWorkspace(record));
+    }
+
+    public string RequireStagedHelper(SessionRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        return SessionHelperStager.RequireStaged(
+            HelperPath,
+            RequireWorkspace(record));
+    }
 
     public static SessionRuntime Create(Action<string> log) =>
         Create(
@@ -89,13 +109,51 @@ internal sealed class SessionRuntime
             new SessionExecutor(client, log),
             client,
             ResolveHelperPath(baseDirectory),
-            applicationId);
+            applicationId,
+            new SetupStateStore(paths.SetupStatePath));
+    }
+
+    /// <summary>
+    /// Requires both the explicit setup marker and the owned session record.
+    /// </summary>
+    /// <remarks>
+    /// This is read-only. Starting the session remains a separate operation so
+    /// a race with teardown cannot turn a stale marker into a new provision.
+    /// </remarks>
+    public SessionRecord RequireSetup()
+    {
+        SetupStateResult setup = SetupState.Read(ApplicationId);
+        if (setup.Record is null)
+        {
+            throw new SessionException(
+                setup.Fault == SetupStateFault.Missing
+                    ? "OpenClaw has not been set up. Run `clawctl setup` first."
+                    : setup.Detail!);
+        }
+
+        SessionStatus session = Coordinator.GetRecordedStatus();
+        if (session.Record is null)
+        {
+            throw new SessionException(
+                "OpenClaw setup is incomplete because its isolated session is " +
+                "not recorded. Run `clawctl setup` again.");
+        }
+
+        return session.Record;
     }
 
     internal static string ResolveHelperPath(string baseDirectory) =>
-        Path.Combine(
-            baseDirectory,
-            HelperDirectoryName,
-            MxcRuntimeLocator.CurrentArchitectureName(),
-            HelperFileName);
+        Path.GetFullPath(
+            Path.Combine(
+                baseDirectory,
+                HelperDirectoryName,
+                MxcRuntimeLocator.CurrentArchitectureName(),
+                HelperFileName));
+
+    private static string RequireWorkspace(SessionRecord record) =>
+        string.IsNullOrWhiteSpace(record.WorkspacePath)
+            ? throw new SessionException(
+                "The recorded session has no shared workspace, so the session " +
+                "helper cannot be staged.")
+            : record.WorkspacePath;
 }

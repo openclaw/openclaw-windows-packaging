@@ -57,7 +57,7 @@ internal static class ClawCtlCommandLine
     // Node guidance is part of help rather than only a launch-time failure so
     // that a user can discover the prerequisite before running anything.
     public static string RootDescription =>
-        "Verify that this device can run the packaged OpenClaw application." +
+        "Set up and manage the packaged OpenClaw application." +
         Environment.NewLine +
         Environment.NewLine +
         $"Prerequisite: install Node.js {NodeRuntimeResolver.SupportedVersions}." +
@@ -65,11 +65,11 @@ internal static class ClawCtlCommandLine
         $"  {NodeRuntimeResolver.InstallCommand}" +
         Environment.NewLine +
         Environment.NewLine +
-        "Run `openclaw <arguments>` to invoke the OpenClaw CLI.";
+        "Run `clawctl setup` once before `openclaw <arguments>`.";
 
     public static string SetupDescription =>
-        "Check for a compatible Node.js runtime and confirm the packaged " +
-        "OpenClaw application is present. Reads only; changes nothing." +
+        "Provision the isolated session, save the gateway launch configuration, " +
+        "and enable gateway startup at sign-in. The gateway is not started." +
         Environment.NewLine +
         $"Requires Node.js {NodeRuntimeResolver.SupportedVersions}.";
 

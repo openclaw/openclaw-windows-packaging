@@ -6,17 +6,17 @@ public sealed class ClawCtlConsoleTests : IDisposable
     private readonly string _testDirectory = TestDirectory.Create();
 
     [Fact]
-    public void WriteReadinessSummaryDescribesPackagedApplication()
+    public void WritePackageSummaryDescribesPackagedApplication()
     {
         using var output = new StringWriter();
         string applicationDirectory = Path.Combine(_testDirectory, "app");
 
-        ClawCtlConsole.WriteReadinessSummary(
+        ClawCtlConsole.WritePackageSummary(
             output,
             applicationDirectory);
 
         string summary = output.ToString();
-        Assert.Contains("package is ready", summary, StringComparison.Ordinal);
+        Assert.Contains("package is present", summary, StringComparison.Ordinal);
         Assert.Contains(applicationDirectory, summary, StringComparison.Ordinal);
     }
 

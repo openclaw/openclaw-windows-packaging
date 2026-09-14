@@ -53,6 +53,24 @@ public sealed class SessionRuntimeTests : IDisposable
     }
 
     [Fact]
+    public void RequireSetupRefusesAnUnmarkedInstallationWithoutContactingMxc()
+    {
+        var backend = new FakeMxcSessionClient();
+        SessionRuntime host = SessionRuntime.Create(
+            HostPaths.ForRoot(_root, "OpenClaw.Gateway_abc123"),
+            () => throw new InvalidOperationException("not reached"),
+            _root,
+            _ => { },
+            backend);
+
+        SessionException failure = Assert.Throws<SessionException>(
+            host.RequireSetup);
+
+        Assert.Contains("clawctl setup", failure.Message, StringComparison.Ordinal);
+        Assert.Empty(backend.Calls);
+    }
+
+    [Fact]
     public void TheGuestHelperIsResolvedPerArchitectureBesideTheMxcRuntime()
     {
         string helperPath = SessionRuntime.ResolveHelperPath(@"C:\package");

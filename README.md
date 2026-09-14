@@ -57,7 +57,7 @@ the read-only application directory the workspace.
 
 | Command | Behavior |
 |---|---|
-| `clawctl setup` | Verify compatible Node.js is on `PATH`, confirm packaged `app\openclaw.mjs` exists, and report isolated-session prerequisites. |
+| `clawctl setup` | Verify Node.js and package content, provision or reuse the isolated session, persist gateway launch configuration, and enable sign-in recovery without starting the gateway. |
 | `clawctl session status` | Report the isolated session this installation has recorded. |
 | `clawctl session stop` | Stop the isolated session, keeping its guest profile and data. |
 | `clawctl session remove` | Stop and deprovision the isolated session, destroying its guest profile and workspace contents. |
@@ -101,26 +101,26 @@ background gateway is deliberately spelled `gateway-service`, because a host
 outdated, malformed, or architecture-incompatible runtimes produce an
 actionable error rather than a later process-launch failure.
 
-`clawctl setup` is read-only. It performs no extraction, hashing, inventory
-walk, or state mutation. It also reports whether the pinned MXC runtime for the
-current architecture is present and whether the isolated-session backend is
-usable on this machine, which it measures with the runtime's own non-mutating
-probe rather than inferring from the Windows build number. Neither condition
-fails `setup`, because today's execution does not depend on them. See
-[docs/mxc-runtime.md](docs/mxc-runtime.md).
+`clawctl setup` is the explicit first-run lifecycle command. It performs no
+extraction, hashing, or inventory walk, but it does provision or reuse the
+owned session, persist the gateway launch configuration, enable sign-in
+recovery, and write a versioned setup marker. The gateway itself is not
+started. If setup cannot establish the isolated session, it fails rather than
+authorizing host execution. See [docs/mxc-runtime.md](docs/mxc-runtime.md).
 
 Isolated execution uses a small NativeAOT guest helper,
 `openclaw-session-host.exe`, because the backend's execution API cannot carry an
-argument vector safely. See [docs/session-host.md](docs/session-host.md).
+argument vector safely. The helper is not an app-execution alias: setup stages
+it from the immutable package into the session's shared workspace, and MXC
+invokes that staged fully qualified path because the agent identity cannot
+execute another package's WindowsApps binary directly. See
+[docs/session-host.md](docs/session-host.md).
 Session ownership and this installation's writable state are described in
 [docs/session-state.md](docs/session-state.md).
 
-`openclaw` runs inside that isolated session wherever the backend's own probe
-reports support, so a capable machine gets isolation without being asked for it.
-A machine without the backend runs OpenClaw directly on the host, which is a
-capability difference rather than a hidden failure. `OPENCLAW_SESSION=0`
-disables session routing; `OPENCLAW_SESSION=1` requires it, and a machine that
-cannot provide one fails loudly instead of silently relocating work onto the
+`openclaw` runs inside the package-owned isolated session after
+`clawctl setup`. Before setup it fails and names that command; after setup,
+session start failures fail loudly instead of silently relocating work onto the
 host. See [docs/session-routing.md](docs/session-routing.md).
 
 `clawctl session status` reads only the local ownership record. It never
@@ -140,8 +140,8 @@ The launcher places Node.js in a Windows job configured with
 runs; if the launcher exits or is terminated, Windows terminates Node.js and
 its child processes when the job handle closes.
 
-Install the current Node.js LTS release, open a new terminal, optionally check
-readiness, then use `openclaw`:
+Install the current Node.js LTS release, open a new terminal, run setup once,
+then use `openclaw`:
 
 ```powershell
 winget install --id OpenJS.NodeJS.LTS --exact --source winget
@@ -197,9 +197,28 @@ application tree into package content, rejects any Node.js executable or
 runtime archive, stages the MXC runtime, publishes the guest helper described
 in [docs/session-host.md](docs/session-host.md), creates a per-file inventory,
 and then creates an unsigned NativeAOT MSIX. `scripts\Build-LocalMSIX.ps1` can reuse a
-successful workflow payload or a local payload directory. The Node.js used by
+successful workflow payload or a local payload directory; it automatically
+applies a temporary test signature and emits the public `.cer` beside the
+package for local installation. Local builds reuse one retained private-key
+certificate when available, so only the first install for that certificate
+needs machine-wide trust. The Node.js used by
 the payload build jobs is build infrastructure only and is not copied into the
 MSIX.
+
+To trust the emitted certificate and install the newest local package for an
+architecture:
+
+```powershell
+.\scripts\Install-LocalMSIX.ps1 -Architecture x64
+```
+
+Use `-PackageVersion <version>` or `-PackageDirectory <path>` to select a
+specific build. The installer validates that the certificate, package
+signature, metadata, and architecture agree before importing the certificate
+into the machine's `TrustedPeople` store and calling `Add-AppxPackage`. The
+script requests elevation when that machine-wide trust entry is missing.
+Pass `-WhatIf` to preview both operations without changing the certificate
+store or installed packages.
 
 Normal pull-request and push workflows publish unsigned packages for
 validation. Manual runs support three signing modes:
@@ -244,18 +263,11 @@ inventory validation, including rejecting missing, changed, duplicate, unsafe,
 or unlisted application entries, before requesting signing credentials.
 
 At runtime, Windows' MSIX package integrity and read-only enforcement is the
-trust boundary. `openclaw` and `clawctl setup` only check that
-`app\openclaw.mjs` exists; neither performs file hashing or an inventory walk.
-This avoids redundant startup overhead while keeping package mutation under
-Windows servicing control.
-
-The longer-term design is to run the Gateway payload in a dedicated isolated
-agent session rather than the interactive session where the human user is
-logged in. This will provide a boundary similar in purpose to running the
-Gateway in WSL, using the forthcoming isolated-session capabilities. That
-isolation is not provided by the current MSIX implementation; the package
-currently carries only the pinned MXC runtime and the readiness check described
-in [docs/mxc-runtime.md](docs/mxc-runtime.md).
+trust boundary for application content. `openclaw` checks the packaged entry
+point and the setup marker; neither it nor `clawctl setup` performs file
+hashing or an inventory walk. Setup state is kept under the package-scoped
+LocalState root, while the gateway runs under the package-owned isolated
+session.
 
 ## Contributors
 

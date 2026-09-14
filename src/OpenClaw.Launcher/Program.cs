@@ -1,7 +1,6 @@
 using System.CommandLine;
 using System.Diagnostics.CodeAnalysis;
 using OpenClaw.Launcher.Gateway;
-using OpenClaw.Launcher.Mxc;
 using OpenClaw.Launcher.Session;
 
 namespace OpenClaw.Launcher;
@@ -111,7 +110,9 @@ internal static class Program
                     WriteDiagnostic,
                     startup.Output,
                     startup.Error,
-                    startup.ResolveNode).ConfigureAwait(false)
+                    startup.ResolveNode,
+                    createGatewayRuntime: startup.CreateGatewayRuntime)
+                    .ConfigureAwait(false)
                 : await RunAgentAsync(
                     options,
                     WriteDiagnostic,
@@ -164,6 +165,9 @@ internal static class Program
         Func<CancellationToken, Task<SessionRoutingDecision>> decideRouting,
         RunInSessionAsync runInSession)
     {
+        SessionRoutingDecision decision =
+            await decideRouting(CancellationToken.None).ConfigureAwait(false);
+
         NodeRuntime nodeRuntime = await resolveNode(CancellationToken.None)
             .ConfigureAwait(false);
         log(
@@ -171,8 +175,6 @@ internal static class Program
             $"{nodeRuntime.ExecutablePath}.");
         string applicationDirectory = GetPackagedApplicationDirectory(options);
 
-        SessionRoutingDecision decision =
-            await decideRouting(CancellationToken.None).ConfigureAwait(false);
         if (decision.Routing == SessionRouting.Session)
         {
             log($"Using an isolated session: {decision.Reason}");
@@ -198,22 +200,16 @@ internal static class Program
             log).ConfigureAwait(false);
     }
 
-    private static async Task<SessionRoutingDecision> DecideSessionRoutingAsync(
+    private static Task<SessionRoutingDecision> DecideSessionRoutingAsync(
         CancellationToken cancellationToken)
     {
-        SessionMode mode = SessionRoutingPolicy.ReadMode(
-            Environment.GetEnvironmentVariable);
-
-        // The readiness probe is skipped when sessions are switched off, so a
-        // disabled installation never pays for it or fails because of it.
-        MxcReadinessReport readiness = mode == SessionMode.Disabled
-            ? MxcReadiness.Unavailable("Isolated sessions are disabled.")
-            : await MxcReadiness.ProbeAsync(cancellationToken).ConfigureAwait(false);
-
-        return SessionRoutingPolicy.Decide(
-            mode,
-            PackageIdentity.TryGetPackageFamilyName(),
-            readiness);
+        _ = cancellationToken;
+        SessionRuntime runtime = SessionRuntime.Create(_ => { });
+        runtime.RequireSetup();
+        return Task.FromResult(
+            new SessionRoutingDecision(
+                SessionRouting.Session,
+                "Explicit setup completed for this installation."));
     }
 
     private static async Task<int> ExecuteInSessionAsync(
@@ -224,14 +220,16 @@ internal static class Program
         CancellationToken cancellationToken)
     {
         SessionRuntime host = SessionRuntime.Create(log);
+        host.RequireSetup();
         SessionRecord record = await host.Coordinator
-            .EnsureStartedAsync(cancellationToken)
+            .StartRecordedAsync(cancellationToken)
             .ConfigureAwait(false);
+        string helperPath = host.RequireStagedHelper(record);
 
         return await host.Executor.ExecuteAsync(
             record,
             new SessionExecutionRequest(
-                host.HelperPath,
+                helperPath,
                 nodeRuntime.ExecutablePath,
                 applicationDirectory,
                 openClawArguments,
@@ -249,7 +247,6 @@ internal static class Program
         TextWriter output,
         TextWriter error,
         Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null,
-        Func<CancellationToken, Task<MxcReadinessReport>>? probeMxcReadiness = null,
         Func<Action<string>, SessionCoordinator>? createSessionCoordinator = null,
         Func<HostOptions, Action<string>, GatewayRuntime>? createGatewayRuntime = null)
     {
@@ -260,7 +257,7 @@ internal static class Program
                 log,
                 output,
                 resolveNode,
-                probeMxcReadiness,
+                createGatewayRuntime,
                 token),
             SessionStatus = token => RunSessionStatusAsync(
                 createSessionCoordinator,
@@ -514,7 +511,7 @@ internal static class Program
         Action<string> log,
         TextWriter output,
         Func<CancellationToken, Task<NodeRuntime>>? resolveNode,
-        Func<CancellationToken, Task<MxcReadinessReport>>? probeMxcReadiness,
+        Func<HostOptions, Action<string>, GatewayRuntime>? createGatewayRuntime,
         CancellationToken cancellationToken)
     {
         NodeRuntime nodeRuntime = await (
@@ -523,18 +520,44 @@ internal static class Program
         ClawCtlConsole.WriteNodeRuntimeSummary(output, nodeRuntime);
         string applicationDirectory = GetPackagedApplicationDirectory(options);
         log("Confirmed the packaged OpenClaw application is present.");
-        ClawCtlConsole.WriteReadinessSummary(output, applicationDirectory);
+        ClawCtlConsole.WritePackageSummary(output, applicationDirectory);
 
-        MxcReadinessReport readiness = await (
-            probeMxcReadiness ?? MxcReadiness.ProbeAsync)(
-                cancellationToken).ConfigureAwait(false);
-        ClawCtlConsole.WriteMxcReadinessSummary(output, readiness);
-        log(
-            "MXC runtime available: " +
-            $"{readiness.RuntimeAvailable}; host support: " +
-            $"{readiness.HostSupport} " +
-            $"(evidence: {readiness.SupportEvidence}).");
-        return 0;
+        GatewayRuntime gateway = CreateGateway(
+            createGatewayRuntime,
+            options,
+            log);
+        SessionRecord session = await gateway.Session.Coordinator
+            .EnsureStartedAsync(cancellationToken)
+            .ConfigureAwait(false);
+        string stagedHelper = gateway.Session.StageHelper(session);
+        log($"Staged the isolated-session helper at {stagedHelper}.");
+
+        GatewayLaunchConfiguration launch = gateway.Configuration.Resolve(
+            gateway.Paths.StateRoot,
+            _ => null);
+        gateway.Configuration.Write(launch);
+
+        GatewayPersistenceInstallResult persistence = await gateway.Persistence
+            .InstallAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        if (persistence.State is GatewayPersistenceState.Ready)
+        {
+            gateway.Session.SetupState.Write(new SetupRecord
+            {
+                ApplicationId = gateway.Session.ApplicationId,
+                CompletedUtc = DateTimeOffset.UtcNow
+            });
+        }
+
+        ClawCtlConsole.WriteSetupSummary(
+            output,
+            session,
+            launch,
+            persistence);
+        await output.WriteLineAsync("  Gateway: not started.")
+            .ConfigureAwait(false);
+        return persistence.State is GatewayPersistenceState.Ready ? 0 : 1;
     }
 
     internal delegate Task<int> LaunchOpenClawAsync(

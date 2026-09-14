@@ -167,9 +167,11 @@ bypassable, and required CI checks remain authoritative.
   consume `--`, rewrite arguments, or block upstream commands. The
   System.CommandLine tree covers `clawctl` only; the `openclaw` entrypoint must
   keep forwarding its argument vector without parsing it.
-- Preserve direct execution from the read-only MSIX package. `clawctl setup`
-  is a readiness check; do not add runtime extraction, copying, repair, or
-  launcher-managed package state under the user profile.
+- Preserve direct application execution from the read-only MSIX package.
+  `clawctl setup` may write package-scoped LocalState and stage only the
+  NativeAOT session helper into the shared workspace, because the agent cannot
+  execute it from another package's WindowsApps directory. Do not extract,
+  copy, or repair the application tree.
 - Keep x64 and ARM64 behavior synchronized across the workflow matrix, scripts,
   project runtime identifiers, manifest content, and signing validation.
 - Metadata files are part of the release trust chain. Coordinate changes across

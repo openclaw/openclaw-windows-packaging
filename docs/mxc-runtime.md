@@ -6,9 +6,10 @@ by MXC. This document describes how the MXC runtime enters the build, why it is
 pinned, and how the dependency changes once the official MXC .NET SDK is
 published.
 
-Session provisioning and execution are not implemented yet. The current
-launcher only *detects* whether the prerequisites for isolated sessions are
-present; see [Readiness reporting](#readiness-reporting).
+The launcher provisions and executes through a project-owned contract over the
+pinned command-line transport. `clawctl setup` is the explicit provisioning
+entry point; `openclaw` uses the recorded session afterward. The transport
+remains temporary until the official MXC .NET SDK is published.
 
 ## Why a pinned native runtime
 
@@ -92,30 +93,19 @@ metadata drift.
 Ordinary `dotnet build` and `dotnet test` do **not** require the runtime. It is
 packaging content, gated behind `IncludePackagingContent`.
 
-## Readiness reporting
+## Explicit setup
 
-`clawctl setup` remains read-only. It now also reports whether isolated
-sessions are usable, without provisioning anything:
+`clawctl setup` is the mutating lifecycle entry point. It verifies the
+device-installed Node.js runtime and packaged entry point, provisions or
+reuses the owned session, starts that session, persists the gateway launch
+configuration, and enables sign-in recovery. It deliberately does **not**
+start the gateway. A versioned setup marker is written only after every step
+succeeds:
 
-- whether a pinned runtime is present next to the launcher for the current
-  process architecture, and which package version it came from;
-- whether the OS IsolationSession backend is actually usable here.
-
-Backend support is **measured**, not inferred. When the runtime is present,
-`setup` runs the executor's own non-mutating host capability detector
-(`wxc-exec --probe`), which creates no sandbox, and reports its verdict plus the
-backend tier and any warnings it raises. A build number only predicts support;
-the detector is the one signal that notices a host where the feature is present
-but unusable.
-
-If the runtime is missing, or the detector cannot run, `setup` falls back to
-comparing the current Windows build against `minimumWindowsBuild`, says so in
-the output, and reports the probe failure reason when there is one.
-
-An unavailable runtime or an unsupported host is reported plainly and does not
-fail `setup`, because Node.js and the packaged entry point can still be correct
-for today's non-isolated execution. An undeterminable Windows build is reported
-as unknown rather than unsupported.
+The runtime's non-mutating `--probe` remains useful for diagnostics and
+compatibility evidence, but it is not a license for `openclaw` to fall back to
+the host. An unsupported or unavailable backend makes setup fail; after setup,
+session start failures are surfaced rather than silently relocating work.
 
 Set `OPENCLAW_MXC_RUNTIME_DIR` to point the locator at a runtime directory
 outside the package. This exists for development and diagnosis; the locator

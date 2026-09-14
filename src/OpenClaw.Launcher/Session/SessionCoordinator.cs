@@ -172,7 +172,7 @@ internal sealed class SessionCoordinator
         if (state.Record is not null)
         {
             _log("Reusing the recorded OpenClaw session.");
-            await EnsureStartedAsync(state.Record, cancellationToken)
+            await StartAsync(state.Record, cancellationToken)
                 .ConfigureAwait(false);
             return state.Record;
         }
@@ -203,7 +203,28 @@ internal sealed class SessionCoordinator
         };
         _store.Write(record);
 
-        await EnsureStartedAsync(record, cancellationToken).ConfigureAwait(false);
+        await StartAsync(record, cancellationToken).ConfigureAwait(false);
+        return record;
+    }
+
+    /// <summary>
+    /// Starts the recorded session without provisioning a replacement.
+    /// </summary>
+    /// <remarks>
+    /// OpenClaw execution and gateway recovery use this path after explicit
+    /// setup. A missing record is a setup error, never permission to create a
+    /// new session implicitly.
+    /// </remarks>
+    public async Task<SessionRecord> StartRecordedAsync(
+        CancellationToken cancellationToken)
+    {
+        using ISessionLockHandle handle = AcquireLock();
+
+        SessionRecord record = RequireUsableRecordOrNull()
+            ?? throw new SessionException(
+                "No isolated session is recorded. Run `clawctl setup` first.");
+
+        await StartAsync(record, cancellationToken).ConfigureAwait(false);
         return record;
     }
 
@@ -287,7 +308,7 @@ internal sealed class SessionCoordinator
         _log("Discarded the local session record without contacting the backend.");
     }
 
-    private async Task EnsureStartedAsync(
+    private async Task StartAsync(
         SessionRecord record,
         CancellationToken cancellationToken)
     {

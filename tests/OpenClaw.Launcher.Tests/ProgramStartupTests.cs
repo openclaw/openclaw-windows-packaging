@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using OpenClaw.Launcher.Session;
 
 namespace OpenClaw.Launcher.Tests;
 
@@ -43,7 +44,7 @@ public sealed class ProgramStartupTests : IDisposable
 
         Assert.Equal(1, exitCode);
         Assert.Contains(logPath, error.ToString(), StringComparison.Ordinal);
-        Assert.DoesNotContain("package is ready", output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("package is present", output.ToString(), StringComparison.Ordinal);
         Assert.Contains(
             "Unhandled failure",
             await File.ReadAllTextAsync(logPath),
@@ -110,7 +111,11 @@ public sealed class ProgramStartupTests : IDisposable
             {
                 forwarded = [.. launchArguments];
                 return Task.FromResult(23);
-            }
+            },
+            DecideRouting = _ => Task.FromResult(
+                new SessionRoutingDecision(
+                    SessionRouting.Direct,
+                    "test direct execution"))
         };
 
         int exitCode = await Program.RunAsync(arguments, startup);

@@ -41,8 +41,8 @@ dotnet test .\tests\OpenClaw.Launcher.Tests\OpenClaw.Launcher.Tests.csproj `
 .\scripts\Test-SigningInputs.Tests.ps1
 ```
 
-To compose an unsigned local MSIX from the latest successful `main` workflow
-payload, use:
+To compose and test-sign a local MSIX from the latest successful `main`
+workflow payload, use:
 
 ```powershell
 .\scripts\Build-LocalMSIX.ps1 -Architecture x64
@@ -52,6 +52,12 @@ Pass `-PayloadDirectory <path>` to use an already-built payload instead of
 downloading one with `gh`. MSIX composition requires Visual Studio Build Tools
 with the Desktop development with C++ workload and the Windows SDK. Build x64
 and ARM64 separately.
+
+Install the newest test-signed local package with:
+
+```powershell
+.\scripts\Install-LocalMSIX.ps1 -Architecture x64
+```
 
 ## Architecture
 
@@ -71,9 +77,10 @@ and ARM64 separately.
   see `openclaw` arguments. Operations reach the tree through `ClawCtlHandlers`
   so parsing stays in the tree and the operations stay substitutable; a bare
   noun prints its own help rather than defaulting to a sub-command.
-- `clawctl setup` is a read-only readiness check for compatible Node.js, the
-  packaged entry point, and isolated-session prerequisites. Runtime launches do
-  not hash or walk package files.
+- `clawctl setup` is the explicit lifecycle entry point. It may write
+  package-scoped LocalState for the owned session, gateway configuration,
+  sign-in recovery, and its setup marker, but runtime launches and setup do not
+  hash or walk package files.
 - `src\OpenClaw.Launcher\Mxc` holds project-owned MXC lifecycle contracts
   (`IMxcSessionClient`) and a temporary command-line transport over the pinned
   `@microsoft/mxc-sdk` binaries. Preview wire details stay inside
@@ -150,9 +157,11 @@ and ARM64 separately.
 - Treat launcher arguments as OpenClaw-owned. Do not add host-only switches,
   consume `--`, rewrite arguments, or block upstream commands; tests explicitly
   protect transparent forwarding.
-- Preserve direct execution from the immutable package and the caller's
-  working directory. Do not add runtime extraction, copying, hashing, or
-  inventory walks.
+- Preserve direct application execution from the immutable package and the
+  caller's working directory. The one required copy is the NativeAOT session
+  helper: `clawctl setup` stages it into the shared workspace because the agent
+  identity cannot execute another package's WindowsApps binary. Do not extract
+  or copy the application tree, hash it, or walk its inventory at runtime.
 - The build-time inventory is a release trust boundary. Keep safe unique paths,
   lengths, and SHA-256 values synchronized across composition and signing
   validation.

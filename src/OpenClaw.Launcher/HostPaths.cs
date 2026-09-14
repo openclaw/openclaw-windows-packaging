@@ -98,6 +98,12 @@ internal sealed class HostPaths
     public string SessionStatePath => Path.Combine(StateRoot, "session.json");
 
     /// <summary>
+    /// The marker written only after explicit setup completes all of its
+    /// session, launch-configuration, and sign-in-recovery steps.
+    /// </summary>
+    public string SetupStatePath => Path.Combine(StateRoot, "setup.json");
+
+    /// <summary>
     /// The script the logon task runs.
     /// </summary>
     /// <remarks>

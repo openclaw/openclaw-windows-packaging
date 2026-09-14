@@ -6,6 +6,13 @@ param(
     [Parameter(Mandatory)]
     [string]$OutputDirectory,
 
+    [string]$CertificateThumbprint,
+
+    [switch]$KeepGeneratedCertificate,
+
+    [ValidateRange(1, 3650)]
+    [int]$CertificateValidityDays = 30,
+
     [string]$PolicyPath = (
         Join-Path (Split-Path $PSScriptRoot -Parent) 'release-policy.json'
     )
@@ -73,18 +80,50 @@ $temporaryPfx = Join-Path $temporaryDirectory (
 )
 $passwordText = [guid]::NewGuid().ToString('N')
 $password = ConvertTo-SecureString $passwordText -AsPlainText -Force
-$certificate = New-SelfSignedCertificate `
-    -Type Custom `
-    -Subject $publisher `
-    -KeyAlgorithm RSA `
-    -KeyLength 3072 `
-    -HashAlgorithm SHA256 `
-    -KeyExportPolicy Exportable `
-    -KeyUsage DigitalSignature `
-    -CertStoreLocation 'Cert:\CurrentUser\My' `
-    -FriendlyName 'OpenClaw Gateway temporary MSIX test signing' `
-    -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3') `
-    -NotAfter (Get-Date).AddDays(30)
+$generatedCertificate = $false
+if ($CertificateThumbprint) {
+    $certificatePath = "Cert:\CurrentUser\My\$CertificateThumbprint"
+    $certificate = Get-Item -LiteralPath $certificatePath -ErrorAction SilentlyContinue
+    if ($null -eq $certificate) {
+        throw (
+            "The requested test-signing certificate was not found in " +
+            "CurrentUser\My: $CertificateThumbprint"
+        )
+    }
+    if (-not $certificate.HasPrivateKey) {
+        throw "The requested test-signing certificate has no private key."
+    }
+    if ($certificate.Subject -ne $publisher) {
+        throw (
+            "The requested test-signing certificate publisher " +
+            "'$($certificate.Subject)' does not match '$publisher'."
+        )
+    }
+    if ($certificate.NotAfter -le (Get-Date)) {
+        throw 'The requested test-signing certificate has expired.'
+    }
+}
+else {
+    $friendlyName = if ($KeepGeneratedCertificate) {
+        'OpenClaw Gateway reusable local MSIX test signing'
+    }
+    else {
+        'OpenClaw Gateway temporary MSIX test signing'
+    }
+    $certificate = New-SelfSignedCertificate `
+        -Type Custom `
+        -Subject $publisher `
+        -KeyAlgorithm RSA `
+        -KeyLength 3072 `
+        -HashAlgorithm SHA256 `
+        -KeyExportPolicy Exportable `
+        -KeyUsage DigitalSignature `
+        -CertStoreLocation 'Cert:\CurrentUser\My' `
+        -FriendlyName $friendlyName `
+        -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3') `
+        -NotAfter (Get-Date).AddDays($CertificateValidityDays)
+    $generatedCertificate = $true
+}
 
 try {
     Export-PfxCertificate `
@@ -179,10 +218,12 @@ try {
 }
 finally {
     Remove-Item -LiteralPath $temporaryPfx -Force -ErrorAction SilentlyContinue
-    Remove-Item `
-        -LiteralPath "Cert:\CurrentUser\My\$($certificate.Thumbprint)" `
-        -Force `
-        -ErrorAction SilentlyContinue
+    if ($generatedCertificate -and -not $KeepGeneratedCertificate) {
+        Remove-Item `
+            -LiteralPath "Cert:\CurrentUser\My\$($certificate.Thumbprint)" `
+            -Force `
+            -ErrorAction SilentlyContinue
+    }
 }
 
 Write-Host "Created test-signed MSIX artifacts under: $OutputDirectory"

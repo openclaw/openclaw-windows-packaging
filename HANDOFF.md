@@ -3,8 +3,8 @@
 Working notes for resuming this branch on another machine. **Transient** — delete
 before the branch is opened for review.
 
-Branch `feat/mxc-runtime-backfill` @ `cfac73f`, based on `origin/main` @ `6f89905`.
-Pushed; nothing else is. No PR exists yet.
+Branch `feat/mxc-runtime-backfill`, based on `origin/main` @ `6f89905`.
+No PR exists yet.
 
 ```powershell
 git clone https://github.com/openclaw/openclaw-windows-packaging.git
@@ -25,7 +25,7 @@ host, and manages a background gateway in that session.
 | `src\OpenClaw.SessionHost` | NativeAOT guest helper (launch / supervise / inspect / stop) |
 | `src\OpenClaw.SessionProtocol` | Launch + inspect contracts shared by both executables |
 
-Commands: `clawctl session <status\|stop\|remove>` and
+Commands: `clawctl setup`, `clawctl session <status\|stop\|remove>`, and
 `clawctl gateway-service <install\|status\|start\|stop\|uninstall\|diagnose>`.
 
 Design docs live in `docs\`: `mxc-runtime.md`, `session-host.md`,
@@ -41,11 +41,12 @@ NativeAOT and MSIX paths.
 
 ## Validation
 
-All four pass at `cfac73f`. Run them from the repository root.
+All four pass after the explicit-setup and staged-helper work. Run them from
+the repository root.
 
 ```powershell
 .\scripts\Test-DotNetQuality.ps1                                    # analysis + format + style
-dotnet test .\OpenClaw.Gateway.MSIX.slnx --configuration Release    # 475 tests
+dotnet test .\OpenClaw.Gateway.MSIX.slnx --configuration Release    # 487 tests
 .\scripts\Test-NativeAotCli.Tests.ps1                               # 12 published-binary scenarios
 .\scripts\Test-SigningInputs.Tests.ps1
 ```
@@ -62,12 +63,11 @@ needs the NativeAOT publish as well. A clean `dotnet build` is not evidence.
 
 ## Where the work stopped
 
-Four slices are complete and committed: MXC readiness, session execution,
-gateway management, and the rebase onto upstream's System.CommandLine parser.
+Five slices are complete: MXC readiness, session execution, gateway management,
+the rebase onto upstream's System.CommandLine parser, and
+`mxc-explicit-setup`.
 
-**In progress: `mxc-explicit-setup`** — nothing written yet, so there is no
-half-finished code to reconcile. The approved redesign changes the lifecycle
-from implicit to explicit:
+The explicit lifecycle now behaves as follows:
 
 | Command | Behavior |
 |---|---|
@@ -77,12 +77,13 @@ from implicit to explicit:
 | `clawctl status` | Aggregate: session, startup registration, gateway — each reported independently. |
 | `clawctl teardown [--force]` | Stops the gateway, removes owned startup, then MXC `Stop` → `Deprovision`. Prompts unless `--force`; `--force` skips confirmation only, never ownership checks. |
 
-Then: `mxc-lifecycle-status`, `mxc-explicit-teardown`, `mxc-lifecycle-validation`,
-`mxc-real-machine-evidence`, `mxc-draft-publication`. `mxc-public-sdk-gate` stays
-blocked until the MXC .NET SDK ships.
+Next: `mxc-lifecycle-status`, `mxc-explicit-teardown`,
+`mxc-lifecycle-validation`, `mxc-real-machine-evidence`, and
+`mxc-draft-publication`. `mxc-public-sdk-gate` stays blocked until the MXC .NET
+SDK ships.
 
-This supersedes the current `session` command group and read-only `setup`; both
-still exist on the branch and are removed by the lifecycle slices.
+The old `session` command group still exists and is removed by the remaining
+lifecycle slices.
 
 ## Constraints that produced the current design
 
@@ -120,12 +121,20 @@ touching the relevant area.
    kill-on-job-close job.
 4. **`diagnose` refused to run when broken** — the one command you need when the
    stack cannot be assembled. It now reports the broken first link.
+5. **The agent cannot execute another package's WindowsApps binary.** The guest
+   helper was already passed as a fully qualified path, but MXC returned
+   `Access is denied` when that path named the immutable package. `clawctl
+   setup` now stages the helper into a package-versioned shared-workspace path,
+   and every foreground and gateway helper invocation uses that staged absolute
+   path.
 
 ## Unverified
 
-- **Nothing has run inside a real MXC session.** Every live probe drove the
-  guest helper directly on the host. This is `mxc-real-machine-evidence` (gate
-  G4), and it needs a machine whose state you are willing to mutate.
+- The fixed staged-helper package has not yet completed the installed
+  `clawctl setup` -> `openclaw status` flow. A fixed x64 package was built and
+  test-signed, but the one-time UAC prompt to trust its retained local signing
+  certificate was canceled. Subsequent packages reuse that certificate and do
+  not need another elevation after it is trusted.
 - Terminal Ctrl+C and resize behavior through attached execution.
 - PFN-specific activation resolving away from a similarly named package.
 - ARM64 publishes cleanly but has not been executed.

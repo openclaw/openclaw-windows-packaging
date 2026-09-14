@@ -4,6 +4,7 @@
 installation's isolated session, and brings it back when you sign in.
 
 ```text
+clawctl setup                      Enable sign-in recovery without starting it.
 clawctl gateway-service install    Start the gateway and restart it at sign-in.
 clawctl gateway-service status     Show the gateway and its sign-in recovery.
 clawctl gateway-service start      Start the gateway if it is not running.
@@ -14,6 +15,11 @@ clawctl gateway-service diagnose   Explain why the gateway is or is not running.
 
 `status` and `diagnose` are read-only. They never start a gateway, provision a
 session, or register anything.
+
+`clawctl setup` is the normal first-run path. It provisions or reuses the
+session, persists the launch configuration, and enables sign-in recovery, but
+leaves the gateway stopped. The separate `gateway-service install` command
+retains its explicit "start now and recover later" behavior.
 
 ## Why `gateway-service` and not `gateway`
 

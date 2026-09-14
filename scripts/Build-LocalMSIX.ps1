@@ -121,6 +121,16 @@ try {
                 -p:IncludePackagingContent=true `
                 "-p:Platform=$Architecture"
         }
+    Invoke-CheckedCommand `
+        -FailureMessage 'Locked guest-helper restore failed.' `
+        -Command {
+            & dotnet restore `
+                .\src\OpenClaw.SessionHost\OpenClaw.SessionHost.csproj `
+                --runtime "win-$Architecture" `
+                -p:PublishAot=true `
+                "-p:Platform=$Architecture" `
+                "-p:RuntimeIdentifiers=win-$Architecture"
+        }
 
     $sourceCommit = (& git rev-parse HEAD) -join ''
     if ($LASTEXITCODE -ne 0 -or
@@ -132,7 +142,7 @@ try {
         throw 'Unable to inspect the current source tree.'
     }
 
-    Write-Host "Building unsigned MSIX version $PackageVersion."
+    Write-Host "Building MSIX version $PackageVersion."
     & .\scripts\Build-MSIX.ps1 `
         -PayloadDirectory $resolvedPayloadDirectory `
         -Architecture $Architecture `
@@ -142,11 +152,80 @@ try {
         -OutputDirectory $OutputDirectory
 
     $msixPath = Join-Path $OutputDirectory "OpenClawGateway-$Architecture.msix"
+    $metadataPath = Join-Path $OutputDirectory 'msix-metadata.json'
+    $signingInputRoot = Join-Path $workDirectory 'signing-input'
+    $signingInputArchitecture = Join-Path $signingInputRoot $Architecture
+    $signingOutputRoot = Join-Path $workDirectory 'signed'
+    New-Item `
+        -Path $signingInputArchitecture `
+        -ItemType Directory `
+        -Force |
+        Out-Null
+    Copy-Item `
+        -LiteralPath $msixPath `
+        -Destination $signingInputArchitecture `
+        -Force
+    Copy-Item `
+        -LiteralPath $metadataPath `
+        -Destination $signingInputArchitecture `
+        -Force
+
+    Write-Host 'Applying a local test signature.'
+    $publisher = [string](
+        (
+            Get-Content `
+                -LiteralPath (Join-Path $repositoryRoot 'release-policy.json') `
+                -Raw |
+                ConvertFrom-Json
+        ).publisher
+    )
+    $localSigningCertificate = Get-ChildItem `
+        -Path 'Cert:\CurrentUser\My' `
+        -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Subject -eq $publisher -and
+            $_.HasPrivateKey -and
+            $_.NotAfter -gt (Get-Date) -and
+            $_.FriendlyName -eq
+                'OpenClaw Gateway reusable local MSIX test signing'
+        } |
+        Sort-Object NotAfter -Descending |
+        Select-Object -First 1
+
+    $signingParameters = @{}
+    if ($null -ne $localSigningCertificate) {
+        Write-Host (
+            "Reusing local test-signing certificate " +
+            "$($localSigningCertificate.Thumbprint)."
+        )
+        $signingParameters.CertificateThumbprint =
+            $localSigningCertificate.Thumbprint
+    }
+    else {
+        Write-Host 'Creating a reusable local test-signing certificate.'
+        $signingParameters.KeepGeneratedCertificate = $true
+        $signingParameters.CertificateValidityDays = 365
+    }
+
+    Invoke-CheckedCommand `
+        -FailureMessage 'Test signing the local MSIX failed.' `
+        -Command {
+            & .\scripts\Sign-TestMSIX.ps1 `
+                -ArtifactsDirectory $signingInputRoot `
+                -OutputDirectory $signingOutputRoot `
+                @signingParameters
+        }
+
+    $signedArchitectureDirectory = Join-Path $signingOutputRoot $Architecture
+    Get-ChildItem -LiteralPath $signedArchitectureDirectory -File |
+        Copy-Item -Destination $OutputDirectory -Force
+
     Remove-Item -LiteralPath $workDirectory -Recurse -Force
     Write-Host ''
-    Write-Host "Local MSIX is ready: $msixPath"
+    Write-Host "Local test-signed MSIX is ready: $msixPath"
     Write-Host (
-        'Sign the package before installing it with Add-AppxPackage.'
+        'Install it with .\scripts\Install-LocalMSIX.ps1 -PackageDirectory ' +
+        "`"$OutputDirectory`"."
     )
 }
 finally {

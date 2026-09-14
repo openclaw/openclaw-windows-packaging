@@ -23,12 +23,11 @@ inferred from source reading.
   "probes": { "isolationSessionAvailable": true, "baseContainerApiPresent": true } }
 ```
 
-`--probe` is non-mutating and is the correct readiness signal for a host check.
-`clawctl setup` now uses it as the primary support verdict and falls back to the
-Windows build comparison only when the runtime is missing or the detector itself
-cannot run, reporting which evidence it used. Verified end to end against a
-NativeAOT `clawctl setup`, which reported `Backend tier: base-container` from
-this live output.
+`--probe` is non-mutating and remains the correct readiness signal for a
+diagnostic host check. Explicit `clawctl setup` now goes beyond readiness: it
+provisions or reuses the owned session and fails if the backend cannot be used.
+The setup command does not start the gateway; it only enables its sign-in
+recovery after the session and launch configuration are ready.
 
 ## G1: published runtime contract
 

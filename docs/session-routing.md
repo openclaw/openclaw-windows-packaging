@@ -1,65 +1,41 @@
 # Session routing
 
-`openclaw` forwards its arguments unchanged. What this document describes is
-*where* those arguments run: inside the isolated session this installation
-owns, or directly on the host.
+`openclaw` forwards its arguments unchanged, but it does not choose between
+host and isolated execution at launch time. Explicit setup establishes the
+execution boundary first; every later `openclaw` invocation uses the owned
+session.
 
-## The decision
+## Setup is the boundary
 
-Routing is decided once per invocation, before Node.js is launched, from three
-inputs:
+Before setup, `openclaw` fails before resolving Node.js or contacting MXC:
 
-| Input | Source |
-|---|---|
-| Mode | `OPENCLAW_SESSION` |
-| Package identity | The running MSIX package family name |
-| Backend readiness | The pinned MXC runtime's own `--probe` |
+```text
+OpenClaw has not been set up. Run `clawctl setup` first.
+```
 
-| `OPENCLAW_SESSION` | Meaning |
-|---|---|
-| unset | Automatic. Use a session wherever the backend reports support. |
-| `0`, `false`, `off`, `no` | Disabled. Always run on the host. |
-| `1`, `true`, `on`, `yes` | Required. Fail when a session is unavailable. |
+`clawctl setup` provisions or reuses the package-owned session, starts it so
+the setup is usable immediately, persists the gateway launch configuration,
+and enables sign-in recovery. It does not start the gateway. A versioned setup
+marker is written only after all of those steps succeed.
 
-An unrecognized value is an error rather than a silent "off". A typo in a
-variable that selects an isolation boundary must not quietly disable it.
+The marker is separate from `session.json`. Older management commands can
+create a session without completing the new setup workflow, so a recorded
+session alone never authorizes `openclaw`.
 
-## Why the default is on
+## No host fallback
 
-Isolation is the point of this package. Making it opt-in would mean the
-protection only reaches users who already know it exists, which is exactly the
-population that needs it least. So a machine whose backend reports support gets
-a session without being asked.
+After setup, the launcher starts the recorded session and sends the OpenClaw
+arguments through the guest helper. If the record is missing, damaged, or the
+session cannot be started, the invocation fails. It never provisions a
+replacement and never retries directly on the host.
 
-Support is *measured*, not predicted. The runtime's own non-mutating probe
-answers the question; the Windows build number is only a fallback when the probe
-cannot be reached, because a build number predicts support rather than
-establishing it.
+Running outside the boundary would use the caller's profile and identity while
+appearing to honor the same command. A loud failure is recoverable; a silent
+downgrade of an isolation boundary is not.
 
-## Why an unsupported machine runs directly
+## What remains transparent
 
-A machine without the isolation backend is not failing — it simply cannot offer
-the capability. Refusing to run OpenClaw there would break every user on an
-older Windows build to protect a feature they cannot have. The decision and its
-reason are logged, so the difference is visible rather than invisible.
-
-This is the one place the distinction matters most: *unavailable* is reported as
-a routing outcome, while *broken* is reported as an error.
-
-## Why a required session never falls back
-
-When `OPENCLAW_SESSION=1` is set, or when a session was selected and the backend
-then fails, execution stops. It does not retry on the host.
-
-Falling back would be the worst possible outcome: the user asked for their work
-to run under a separate identity, with a separate profile, and would instead
-get it silently running as themselves, against their own profile, with no
-indication that the boundary they asked for was never there. A loud failure is
-recoverable. A silent downgrade of an isolation boundary is not.
-
-## What is decided elsewhere
-
-Routing chooses the execution target. It does not decide whether a session
-exists — that is the coordinator's job, described in
-[session-state.md](session-state.md) — and it does not interpret OpenClaw's
-arguments, which stay upstream-owned in every path.
+The host does not interpret OpenClaw's arguments. The complete argument vector,
+including `--`, response-file-looking tokens, and empty arguments, stays
+upstream-owned. Session selection happens before Node.js launch and does not
+rewrite the forwarded command.

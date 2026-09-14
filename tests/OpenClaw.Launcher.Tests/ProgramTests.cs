@@ -1,10 +1,16 @@
+using OpenClaw.Launcher.Gateway;
+using OpenClaw.Launcher.Mxc;
 using OpenClaw.Launcher.Session;
+using OpenClaw.Launcher.Tests.Gateway;
+using OpenClaw.Launcher.Tests.Session;
 
 namespace OpenClaw.Launcher.Tests;
 
 public sealed class ProgramTests : IDisposable
 {
     private readonly string _testDirectory = TestDirectory.Create();
+    private readonly FakeMxcSessionClient _backend = new();
+    private readonly FakeGatewayTaskScheduler _scheduler = new();
 
     [Fact]
     public async Task AgentLaunchResolvesNodeAndRunsPackagedApplication()
@@ -53,7 +59,7 @@ public sealed class ProgramTests : IDisposable
     }
 
     [Fact]
-    public async Task SetupChecksNodeAndPackagedApplicationWithoutMutation()
+    public async Task SetupProvisionsSessionPersistsConfigurationAndEnablesSignInRecovery()
     {
         string applicationDirectory = Path.Combine(_testDirectory, "app");
         Directory.CreateDirectory(applicationDirectory);
@@ -73,7 +79,8 @@ public sealed class ProgramTests : IDisposable
             _ => { },
             output,
             TextWriter.Null,
-            _ => Task.FromResult(nodeRuntime));
+            _ => Task.FromResult(nodeRuntime),
+            createGatewayRuntime: CreateGatewayRuntime);
 
         Assert.Equal(0, exitCode);
         Assert.True(File.Exists(entryPoint));
@@ -86,6 +93,64 @@ public sealed class ProgramTests : IDisposable
             applicationDirectory,
             output.ToString(),
             StringComparison.Ordinal);
+        Assert.Contains("setup is complete", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Gateway: not started.", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(["provision", "start:iso:sandbox1"], _backend.Calls);
+        Assert.Contains(
+            _scheduler.Calls,
+            call => call.StartsWith("register:", StringComparison.Ordinal));
+
+        HostPaths paths = HostPaths.ForRoot(
+            _testDirectory,
+            "OpenClaw.Gateway_test");
+        Assert.Equal(
+            GatewayConfigurationStore.CurrentSchemaVersion,
+            new GatewayConfigurationStore(paths.GatewayConfigurationPath)
+                .Read()
+                .Configuration!
+                .SchemaVersion);
+        Assert.Equal(
+            GatewayStateFault.Missing,
+            new GatewayStateStore(paths.GatewayStatePath).Read().Fault);
+        Assert.NotNull(
+            new SetupStateStore(paths.SetupStatePath)
+                .Read("PFN:OpenClaw.Gateway_test")
+                .Record);
+    }
+
+    [Fact]
+    public async Task SetupDoesNotMarkTheInstallationWhenSignInRecoveryFails()
+    {
+        string applicationDirectory = Path.Combine(_testDirectory, "app");
+        Directory.CreateDirectory(applicationDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(applicationDirectory, "openclaw.mjs"),
+            "console.log('fixture');");
+        _scheduler.Probe = GatewayTaskProbe.Unreadable("Access is denied.");
+
+        int exitCode = await Program.RunControlAsync(
+            new HostOptions(applicationDirectory, []),
+            ["setup"],
+            _ => { },
+            TextWriter.Null,
+            TextWriter.Null,
+            _ => Task.FromResult(
+                new NodeRuntime(
+                    "node.exe",
+                    new Version(24, 15, 0),
+                    System.Runtime.InteropServices.RuntimeInformation
+                        .ProcessArchitecture)),
+            createGatewayRuntime: CreateGatewayRuntime);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(
+            SetupStateFault.Missing,
+            new SetupStateStore(
+                HostPaths.ForRoot(
+                    _testDirectory,
+                    "OpenClaw.Gateway_test").SetupStatePath)
+                .Read("PFN:OpenClaw.Gateway_test")
+                .Fault);
     }
 
     [Fact]
@@ -132,9 +197,51 @@ public sealed class ProgramTests : IDisposable
                         new Version(24, 15, 0),
                         System.Runtime.InteropServices.RuntimeInformation
                             .ProcessArchitecture));
-            }));
+            },
+            (_, _, _, _, _) => Task.FromResult(23),
+            _ => Task.FromResult(
+                new SessionRoutingDecision(
+                    SessionRouting.Direct,
+                    "test direct execution")),
+            (_, _, _, _, _) => throw new InvalidOperationException(
+                "Direct routing must not enter a session.")));
 
         Assert.True(nodeResolutionAttempted);
+    }
+
+    private GatewayRuntime CreateGatewayRuntime(
+        HostOptions options,
+        Action<string> log)
+    {
+        string helperPath = SessionRuntime.ResolveHelperPath(_testDirectory);
+        Directory.CreateDirectory(Path.GetDirectoryName(helperPath)!);
+        File.WriteAllText(helperPath, "test helper");
+        string workspace = Path.Combine(_testDirectory, "workspace");
+        Directory.CreateDirectory(workspace);
+        _backend.Metadata = new MxcProvisionMetadata(
+            "agent_1",
+            "S-1-5-21-0-0-0-1001",
+            workspace);
+
+        HostPaths paths = HostPaths.ForRoot(
+            _testDirectory,
+            "OpenClaw.Gateway_test");
+        SessionRuntime session = SessionRuntime.Create(
+            paths,
+            () => throw new InvalidOperationException(
+                "The setup test must not locate a real MXC runtime."),
+            _testDirectory,
+            log,
+            _backend);
+
+        return GatewayRuntime.Create(
+            options,
+            paths,
+            session,
+            _testDirectory,
+            log,
+            userSid: "S-1-5-21-1",
+            scheduler: _scheduler);
     }
 
     public void Dispose()
