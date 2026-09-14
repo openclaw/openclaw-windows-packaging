@@ -31,27 +31,32 @@ else {
     0
 }
 
-if ($year -lt 1 -or $year -gt 65534) {
-    throw 'The Gateway release year must be between 1 and 65534.'
+if ($year -lt 1 -or $year -gt 65535) {
+    throw 'The Gateway release year must be between 1 and 65535.'
 }
 if ($month -lt 1 -or $month -gt 12) {
     throw 'The Gateway release month must be between 1 and 12.'
 }
-if ($patch -lt 0 -or $patch -gt 64) {
-    throw 'The Gateway patch must be between 0 and 64.'
+if ($patch -lt 0 -or $patch -gt 65535) {
+    throw 'The Gateway patch must be between 0 and 65535.'
 }
-if ($correction -lt 0 -or $correction -gt 9) {
-    throw 'The Gateway correction must be between 0 and 9.'
+if ($correction -lt 0 -or $correction -gt 65535) {
+    throw 'The Gateway correction must be between 0 and 65535.'
 }
-if ($MSIXRevision -lt 0 -or $MSIXRevision -gt 99) {
-    throw 'MSIXRevision must be between 0 and 99.'
+if ($MSIXRevision -lt 0 -or $MSIXRevision -gt 65535) {
+    throw 'MSIXRevision must be between 0 and 65535.'
+}
+if ($MSIXRevision -lt $correction) {
+    throw (
+        "MSIXRevision $MSIXRevision must be at least the Gateway correction " +
+        "$correction so package versions remain monotonic."
+    )
 }
 
-# Keep the fourth component at zero for Microsoft Store compatibility. Pack
-# the Gateway patch, optional correction, and independent packaging revision
-# into the build component while preserving their upgrade ordering.
-[int]$build = ($patch * 1000) + ($correction * 100) + $MSIXRevision
-$packageVersion = "$year.$month.$build.0"
+# Use the fourth component as the explicit, monotonically increasing package
+# sequence for a Gateway year/month/patch line. This keeps the version legible;
+# exact Gateway provenance remains in the release tag and package metadata.
+$packageVersion = "$year.$month.$patch.$MSIXRevision"
 $releaseTag = "$($GatewayTag.Trim())-msix.$MSIXRevision"
 
 [pscustomobject]@{
