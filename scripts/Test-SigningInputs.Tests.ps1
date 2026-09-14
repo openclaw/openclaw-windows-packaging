@@ -8,12 +8,12 @@ $repositoryRoot = Split-Path $PSScriptRoot -Parent
 $policyPath = Join-Path $repositoryRoot 'release-policy.json'
 $policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
 $approvedCommit = [string]$policy.approvedCommit
-$approvedPackageVersion = & (
-    Join-Path $PSScriptRoot 'Get-WorkflowPackageVersion.ps1'
+$releaseIdentity = & (
+    Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1'
 ) `
-    -RunNumber 1 `
-    -RunAttempt 1 `
-    -ReleaseVersion ([string]$policy.packageVersion)
+    -GatewayTag ([string]$policy.gatewayTag) `
+    -MSIXRevision ([int]$policy.msixRevision)
+$approvedPackageVersion = $releaseIdentity.PackageVersion
 $approvedPayloadVersion = [string]$policy.payloadPackageVersion
 $packagingCommit = '1111111111111111111111111111111111111111'
 $testRoot = Join-Path $env:TEMP (
@@ -197,7 +197,7 @@ function New-TestBundle {
             $Root `
             'x64\OpenClawGateway-x64.msix'),
 
-        [string]$BundleVersion = '2026.912.815.0'
+        [string]$BundleVersion = $approvedPackageVersion
     )
 
     $bundleDirectory = Join-Path $Root 'bundle'
@@ -335,6 +335,15 @@ try {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     Reset-TestArtifacts
     Invoke-PolicyValidation -Root $testRoot
+
+    New-TestBundle -Root $testRoot -BundleVersion '2026.8.2001.0'
+    Assert-Fails `
+        -MessagePattern 'bundle manifest identity is unexpected' `
+        -Action {
+            Invoke-PolicyValidation -Root $testRoot -PreserveBundle
+        }
+
+    Reset-TestArtifacts
 
     Assert-Fails `
         -MessagePattern 'approved immutable OpenClaw commit' `

@@ -129,9 +129,9 @@ The payload artifact records the requested ref and resolved upstream commit in
 OpenClaw commit, while embedded `payload-files.json` records every packaged
 application file's path, length, and SHA-256.
 
-`release-policy.json` records the immutable OpenClaw commit and payload version
-approved for official signing, plus the independent MSIX package version and
-release tag. Updating that
+`release-policy.json` records the immutable OpenClaw commit and Gateway tag
+approved for official signing, plus an independent MSIX packaging revision.
+Updating that
 policy requires a reviewed repository change. Official signing runs only from
 `main` and verifies the workflow input, policy-approved package version, both
 architecture metadata files, both MSIX hashes, the embedded manifests, and
@@ -174,23 +174,39 @@ Test-signing private keys are generated only on the temporary GitHub runner
 and are deleted before artifacts are uploaded. No signing secret or private
 key is stored in the repository.
 
-Official releases use the independent four-part numeric `packageVersion` and
-`releaseTag` from `release-policy.json`. The initial signing proof uses package
-version `0.0.0.0` and tag `v0.0.0.0`; a later policy change can establish the
-long-term Gateway-to-MSIX version mapping. The workflow creates the tag in this
-repository and a GitHub Release with generated release notes. Each release
-contains a signed, multi-architecture
+Official releases derive their GitHub tag and four-part numeric MSIX identity
+from `gatewayTag` and `msixRevision` in `release-policy.json`. The GitHub tag is
+`<gateway-tag>-msix.<revision>`. The MSIX identity is
+`year.month.patch.(gateway-correction * 10 + msix-revision)`. Each Gateway
+correction gets ten deterministic MSIX-only rebuild slots, so rebuilding one
+Gateway release cannot shift the version assigned to a later correction. For
+example:
+
+- Gateway `v2026.9.4`, MSIX revision `0` becomes release tag
+  `v2026.9.4-msix.0` and MSIX version `2026.9.4.0`;
+- Gateway `v2026.7.1`, MSIX revision `1` becomes release tag
+  `v2026.7.1-msix.1` and MSIX version `2026.7.1.1`;
+- Gateway correction `v2026.7.1-2`, MSIX revision `0` becomes release tag
+  `v2026.7.1-2-msix.0` and MSIX version `2026.7.1.20`;
+- rebuilding that correction at MSIX revision `1` becomes release tag
+  `v2026.7.1-2-msix.1` and MSIX version `2026.7.1.21`.
+
+Set `msixRevision` from `0` through `9`, incrementing it only when the same
+Gateway tag is repackaged. The Gateway correction suffix is encoded separately,
+so later Gateway corrections keep their deterministic version. Microsoft Store
+submissions reserve the fourth component as zero, so Store publication will
+need its own version policy when it is introduced. The workflow creates the
+derived tag in this repository and a GitHub Release with generated release
+notes. Each release contains a signed, multi-architecture
 `OpenClawGateway-<version>.msixbundle` as the recommended download, plus signed
 `OpenClawGateway-<version>-x64.msix` and
 `OpenClawGateway-<version>-arm64.msix` packages for architecture-specific
 deployment. The duplicate GitHub Actions artifacts remain short-lived transport
 and diagnostic copies.
 
-For the all-zero proof only, MakeAppx assigns the outer bundle identity its
-date/time-based version because it does not preserve `0.0.0.0` as a bundle
-version. The two embedded architecture packages retain identity version
-`0.0.0.0`; signing authorization verifies those versions and byte-compares both
-embedded packages with the approved standalone inputs.
+The one-time `v0.0.0.0` signing proof predates this version policy and is not an
+upgrade-compatible production baseline. Devices used to install that proof
+should uninstall it before testing a normally versioned release.
 
 An `.msixbundle` is a single installable container for the x64 and ARM64 MSIX
 packages; Windows selects the package appropriate for the device. An
