@@ -12,7 +12,7 @@ $ErrorActionPreference = 'Stop'
 
 $match = [regex]::Match(
     $GatewayTag.Trim(),
-    '^v(?<year>\d{4})\.(?<month>\d{1,2})\.(?<patch>\d{1,2})(?:-(?<correction>\d+))?$'
+    '^v(?<year>\d{4})\.(?<month>\d{1,2})\.(?<patch>\d{1,5})(?:-(?<correction>\d+))?$'
 )
 if (-not $match.Success) {
     throw (
@@ -31,8 +31,8 @@ else {
     0
 }
 
-if ($year -lt 1 -or $year -gt 65535) {
-    throw 'The Gateway release year must be between 1 and 65535.'
+if ($year -lt 1 -or $year -gt 9999) {
+    throw 'The Gateway release year must be between 1 and 9999.'
 }
 if ($month -lt 1 -or $month -gt 12) {
     throw 'The Gateway release month must be between 1 and 12.'
