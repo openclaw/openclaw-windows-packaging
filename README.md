@@ -295,19 +295,23 @@ key is stored in the repository.
 Official releases derive their GitHub tag and four-part numeric MSIX identity
 from `gatewayTag` and `msixRevision` in `release-policy.json`. The GitHub tag is
 `<gateway-tag>-msix.<revision>`. The MSIX identity is
-`year.month.patch.revision`, where `revision` is an explicit monotonically
-increasing package sequence for that Gateway year/month/patch line. For example:
+`year.month.patch.(gateway-correction * 10 + msix-revision)`. Each Gateway
+correction gets ten deterministic MSIX-only rebuild slots, so rebuilding one
+Gateway release cannot shift the version assigned to a later correction. For
+example:
 
 - Gateway `v2026.9.4`, MSIX revision `0` becomes release tag
   `v2026.9.4-msix.0` and MSIX version `2026.9.4.0`;
-- Gateway `v2026.7.1-2`, MSIX revision `2` becomes release tag
-  `v2026.7.1-2-msix.2` and MSIX version `2026.7.1.2`;
-- rebuilding that same Gateway at MSIX revision `3` becomes release tag
-  `v2026.7.1-2-msix.3` and MSIX version `2026.7.1.3`.
+- Gateway `v2026.7.1`, MSIX revision `1` becomes release tag
+  `v2026.7.1-msix.1` and MSIX version `2026.7.1.1`;
+- Gateway correction `v2026.7.1-2`, MSIX revision `0` becomes release tag
+  `v2026.7.1-2-msix.0` and MSIX version `2026.7.1.20`;
+- rebuilding that correction at MSIX revision `1` becomes release tag
+  `v2026.7.1-2-msix.1` and MSIX version `2026.7.1.21`.
 
-Set `msixRevision` at least as high as the Gateway correction suffix and higher
-than every package already published for the same year/month/patch line. This
-preserves upgrade order while keeping versions readable. Microsoft Store
+Set `msixRevision` from `0` through `9`, incrementing it only when the same
+Gateway tag is repackaged. The Gateway correction suffix is encoded separately,
+so later Gateway corrections keep their deterministic version. Microsoft Store
 submissions reserve the fourth component as zero, so Store publication will
 need its own version policy when it is introduced. The workflow creates the
 derived tag in this repository and a GitHub Release with generated release

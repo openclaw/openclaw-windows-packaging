@@ -5,6 +5,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $scriptPath = Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1'
+$workflowVersionScriptPath = Join-Path $PSScriptRoot 'Get-WorkflowPackageVersion.ps1'
 
 function Assert-Identity {
     param(
@@ -78,29 +79,34 @@ Assert-Identity `
     -ReleaseTag 'v2026.7.12-msix.0'
 Assert-Identity `
     -GatewayTag 'v2026.7.1-2' `
-    -MSIXRevision 2 `
-    -PackageVersion '2026.7.1.2' `
-    -ReleaseTag 'v2026.7.1-2-msix.2'
+    -MSIXRevision 0 `
+    -PackageVersion '2026.7.1.20' `
+    -ReleaseTag 'v2026.7.1-2-msix.0'
 Assert-Identity `
     -GatewayTag 'v2026.7.1-2' `
-    -MSIXRevision 3 `
-    -PackageVersion '2026.7.1.3' `
-    -ReleaseTag 'v2026.7.1-2-msix.3'
+    -MSIXRevision 1 `
+    -PackageVersion '2026.7.1.21' `
+    -ReleaseTag 'v2026.7.1-2-msix.1'
 
 $gatewayCorrection = & $scriptPath `
     -GatewayTag 'v2026.7.1-2' `
-    -MSIXRevision 2
+    -MSIXRevision 0
 $packagingCorrection = & $scriptPath `
     -GatewayTag 'v2026.7.1-2' `
-    -MSIXRevision 3
+    -MSIXRevision 1
+$nextGatewayCorrection = & $scriptPath `
+    -GatewayTag 'v2026.7.1-3' `
+    -MSIXRevision 0
 $nextGatewayPatch = & $scriptPath `
     -GatewayTag 'v2026.7.2' `
     -MSIXRevision 0
 if (
     [version]$packagingCorrection.PackageVersion -le
         [version]$gatewayCorrection.PackageVersion -or
+    [version]$nextGatewayCorrection.PackageVersion -le
+        [version]$packagingCorrection.PackageVersion -or
     [version]$nextGatewayPatch.PackageVersion -le
-        [version]$packagingCorrection.PackageVersion
+        [version]$nextGatewayCorrection.PackageVersion
 ) {
     throw 'Derived MSIX versions do not preserve release ordering.'
 }
@@ -111,17 +117,33 @@ Assert-Fails -MessagePattern 'stable OpenClaw release tag' -Action {
 Assert-Fails -MessagePattern 'month must be between 1 and 12' -Action {
     & $scriptPath -GatewayTag 'v2026.13.1' -MSIXRevision 0
 }
-Assert-Fails -MessagePattern 'patch must be between 0 and 65535' -Action {
-    & $scriptPath -GatewayTag 'v2026.9.65536' -MSIXRevision 0
+Assert-Fails -MessagePattern 'patch must be between 0 and 65534' -Action {
+    & $scriptPath -GatewayTag 'v2026.9.65535' -MSIXRevision 0
 }
-Assert-Fails -MessagePattern 'correction must be between 0 and 65535' -Action {
-    & $scriptPath -GatewayTag 'v2026.9.4-65536' -MSIXRevision 65535
+Assert-Fails -MessagePattern 'correction must be between 0 and 6553' -Action {
+    & $scriptPath -GatewayTag 'v2026.9.4-6554' -MSIXRevision 0
 }
-Assert-Fails -MessagePattern 'MSIXRevision must be between 0 and 65535' -Action {
-    & $scriptPath -GatewayTag 'v2026.9.4' -MSIXRevision 65536
+Assert-Fails -MessagePattern 'MSIXRevision must be between 0 and 9' -Action {
+    & $scriptPath -GatewayTag 'v2026.9.4' -MSIXRevision 10
 }
-Assert-Fails -MessagePattern 'must be at least the Gateway correction 2' -Action {
-    & $scriptPath -GatewayTag 'v2026.7.1-2' -MSIXRevision 1
+Assert-Fails -MessagePattern 'combined Gateway correction and MSIXRevision' -Action {
+    & $scriptPath -GatewayTag 'v2026.9.4-6553' -MSIXRevision 5
+}
+Assert-Identity `
+    -GatewayTag 'v2026.9.4-6553' `
+    -MSIXRevision 4 `
+    -PackageVersion '2026.9.4.65534' `
+    -ReleaseTag 'v2026.9.4-6553-msix.4'
+
+$maximumIdentity = & $scriptPath `
+    -GatewayTag 'v2026.9.4-6553' `
+    -MSIXRevision 4
+$validatedMaximumVersion = & $workflowVersionScriptPath `
+    -RunNumber 1 `
+    -RunAttempt 1 `
+    -ReleaseVersion $maximumIdentity.PackageVersion
+if ($validatedMaximumVersion -ne '2026.9.4.65534') {
+    throw 'The maximum derived identity did not pass workflow validation.'
 }
 
 Write-Host 'MSIX release-identity tests passed.'

@@ -37,26 +37,24 @@ if ($year -lt 1 -or $year -gt 9999) {
 if ($month -lt 1 -or $month -gt 12) {
     throw 'The Gateway release month must be between 1 and 12.'
 }
-if ($patch -lt 0 -or $patch -gt 65535) {
-    throw 'The Gateway patch must be between 0 and 65535.'
+if ($patch -lt 0 -or $patch -gt 65534) {
+    throw 'The Gateway patch must be between 0 and 65534.'
 }
-if ($correction -lt 0 -or $correction -gt 65535) {
-    throw 'The Gateway correction must be between 0 and 65535.'
+if ($correction -lt 0 -or $correction -gt 6553) {
+    throw 'The Gateway correction must be between 0 and 6553.'
 }
-if ($MSIXRevision -lt 0 -or $MSIXRevision -gt 65535) {
-    throw 'MSIXRevision must be between 0 and 65535.'
-}
-if ($MSIXRevision -lt $correction) {
-    throw (
-        "MSIXRevision $MSIXRevision must be at least the Gateway correction " +
-        "$correction so package versions remain monotonic."
-    )
+if ($MSIXRevision -lt 0 -or $MSIXRevision -gt 9) {
+    throw 'MSIXRevision must be between 0 and 9.'
 }
 
-# Use the fourth component as the explicit, monotonically increasing package
-# sequence for a Gateway year/month/patch line. This keeps the version legible;
-# exact Gateway provenance remains in the release tag and package metadata.
-$packageVersion = "$year.$month.$patch.$MSIXRevision"
+# Give every Gateway correction ten deterministic MSIX revision slots. This
+# prevents an MSIX-only rebuild from consuming the number assigned to a later
+# Gateway correction while keeping the fourth component short and readable.
+$packageRevision = ($correction * 10) + $MSIXRevision
+if ($packageRevision -gt 65534) {
+    throw 'The combined Gateway correction and MSIXRevision must not exceed 65534.'
+}
+$packageVersion = "$year.$month.$patch.$packageRevision"
 $releaseTag = "$($GatewayTag.Trim())-msix.$MSIXRevision"
 
 [pscustomobject]@{
