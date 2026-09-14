@@ -295,22 +295,23 @@ key is stored in the repository.
 Official releases derive their GitHub tag and four-part numeric MSIX identity
 from `gatewayTag` and `msixRevision` in `release-policy.json`. The GitHub tag is
 `<gateway-tag>-msix.<revision>`. The MSIX identity is
-`year.month.(patch * 1000 + correction * 100 + revision).0`; an absent Gateway
-correction is zero. For example:
+`year.month.patch.revision`, where `revision` is an explicit monotonically
+increasing package sequence for that Gateway year/month/patch line. For example:
 
 - Gateway `v2026.9.4`, MSIX revision `0` becomes release tag
-  `v2026.9.4-msix.0` and MSIX version `2026.9.4000.0`;
-- Gateway `v2026.7.1-2`, MSIX revision `0` becomes release tag
-  `v2026.7.1-2-msix.0` and MSIX version `2026.7.1200.0`;
-- rebuilding that same Gateway at MSIX revision `1` becomes release tag
-  `v2026.7.1-2-msix.1` and MSIX version `2026.7.1201.0`.
+  `v2026.9.4-msix.0` and MSIX version `2026.9.4.0`;
+- Gateway `v2026.7.1-2`, MSIX revision `2` becomes release tag
+  `v2026.7.1-2-msix.2` and MSIX version `2026.7.1.2`;
+- rebuilding that same Gateway at MSIX revision `3` becomes release tag
+  `v2026.7.1-2-msix.3` and MSIX version `2026.7.1.3`.
 
-This preserves Gateway and packaging-release order while leaving the fourth
-component at zero for future Microsoft Store compatibility. The encoding
-supports Gateway patch values through 64, correction values through 9, and up
-to 100 MSIX revisions per Gateway release. The workflow creates the derived
-tag in this repository and a GitHub Release with generated release notes. Each
-release contains a signed, multi-architecture
+Set `msixRevision` at least as high as the Gateway correction suffix and higher
+than every package already published for the same year/month/patch line. This
+preserves upgrade order while keeping versions readable. Microsoft Store
+submissions reserve the fourth component as zero, so Store publication will
+need its own version policy when it is introduced. The workflow creates the
+derived tag in this repository and a GitHub Release with generated release
+notes. Each release contains a signed, multi-architecture
 `OpenClawGateway-<version>.msixbundle` as the recommended download, plus signed
 `OpenClawGateway-<version>-x64.msix` and
 `OpenClawGateway-<version>-arm64.msix` packages for architecture-specific
