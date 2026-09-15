@@ -20,6 +20,8 @@ $requiredFragments = @(
     "if: `${{ always() }}"
     "contains(needs.*.result, 'failure')"
     "contains(needs.*.result, 'cancelled')"
+    'name: Upload payload'
+    "retention-days: `${{ github.event_name == 'pull_request' && 1 || 7 }}"
     'environment: release-signing'
     'id-token: write'
     'uses: azure/login@v3'
