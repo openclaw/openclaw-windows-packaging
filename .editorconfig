@@ -266,3 +266,20 @@ dotnet_diagnostic.CA1859.severity = error
 # xUnit theory and member data intentionally expose public members, and test
 # names describe scenarios rather than following production naming.
 dotnet_diagnostic.CA1515.severity = none
+
+# A test writes and reads its own fixture files. Synchronous file access keeps
+# arrange and assert readable, and the thread-pool starvation this rule guards
+# against does not apply to a test that owns its whole process.
+dotnet_diagnostic.CA1849.severity = none
+
+# xUnit owns the lifetime of the fixture objects a test constructs, and test
+# doubles that implement IDisposable are disposed by the class fixture.
+dotnet_diagnostic.CA2000.severity = none
+
+# Arguments reaching a test helper come from the test itself, so a null guard
+# would assert against a value the test just wrote.
+dotnet_diagnostic.CA1062.severity = none
+
+# A helper that does not yet touch instance state is still part of the
+# fixture's shape; forcing it static churns tests for no behavioral gain.
+dotnet_diagnostic.CA1822.severity = none
