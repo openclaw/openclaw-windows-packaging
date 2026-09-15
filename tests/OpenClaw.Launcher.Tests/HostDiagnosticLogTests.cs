@@ -47,6 +47,20 @@ public sealed class HostDiagnosticLogTests : IDisposable
         Assert.All(lines, line => Assert.Contains(" invocation ", line, StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void WriteRecreatesItsDirectoryAfterInstallationCleanup()
+    {
+        string directory = Path.Combine(_testDirectory, "logs");
+        string path = Path.Combine(directory, "host.log");
+        using HostDiagnosticLog log = HostDiagnosticLog.Create(path);
+        log.Write("Before cleanup.");
+        Directory.Delete(directory, recursive: true);
+
+        log.Write("After cleanup.");
+
+        Assert.Contains("After cleanup.", File.ReadAllText(path), StringComparison.Ordinal);
+    }
+
     public void Dispose()
     {
         Directory.Delete(_testDirectory, recursive: true);
