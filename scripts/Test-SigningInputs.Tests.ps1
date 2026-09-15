@@ -7,15 +7,32 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path $PSScriptRoot -Parent
 $policyPath = Join-Path $repositoryRoot 'release-policy.json'
 $policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
-$approvedCommit = [string]$policy.approvedCommit
+$approvedCommit = '2' * 40
+$approvedPayloadVersion = '2026.9.4'
 $approvedPackageVersion = & (
     Join-Path $PSScriptRoot 'Get-WorkflowPackageVersion.ps1'
 ) `
     -RunNumber 1 `
     -RunAttempt 1 `
-    -ReleaseVersion ([string]$policy.packageVersion)
-$approvedPayloadVersion = [string]$policy.payloadPackageVersion
+    -ReleaseVersion "$approvedPayloadVersion.$($policy.packageRevision)"
 $packagingCommit = '1111111111111111111111111111111111111111'
+$sourceResolution = [ordered]@{
+    repository = $policy.repository
+    requestedRef = $policy.channel
+    resolvedCommit = $approvedCommit
+    packageVersion = $approvedPayloadVersion
+    channel = $policy.channel
+    releaseTag = "v$approvedPayloadVersion"
+    tagObject = '4' * 40
+    resolvedAt = '2026-09-15T00:00:00.0000000Z'
+    registryIntegrity = 'sha512-' + [Convert]::ToBase64String([byte[]]::new(64))
+    packagingCommit = $packagingCommit
+    workflowRunId = '12345'
+    workflowRunNumber = 1
+    signingMode = 'official'
+    msixPackageVersion = $approvedPackageVersion
+    msixReleaseTag = "v$approvedPackageVersion"
+}
 $testRoot = Join-Path $env:TEMP (
     "openclaw-signing-policy-$([guid]::NewGuid().ToString('N'))"
 )
@@ -59,6 +76,9 @@ function New-TestArtifact {
     Set-Content `
         -LiteralPath (Join-Path $applicationDirectory 'openclaw.mjs') `
         -Value "payload-$Architecture"
+    @{ name = 'openclaw'; version = $PayloadPackageVersion } |
+        ConvertTo-Json |
+        Set-Content -LiteralPath (Join-Path $applicationDirectory 'package.json')
     if ($IncludeApplicationBundledNode) {
         Set-Content `
             -LiteralPath (Join-Path $applicationDirectory 'node.exe') `
@@ -181,9 +201,14 @@ function New-TestArtifact {
         packagingCommit = $packagingCommit
         sourceTreeDirty = $SourceTreeDirty
         payloadRepository = $policy.repository
-        payloadRequestedRef = $PayloadCommit
+        payloadRequestedRef = $sourceResolution.requestedRef
         payloadResolvedCommit = $PayloadCommit
         payloadPackageVersion = $PayloadPackageVersion
+        payloadChannel = $sourceResolution.channel
+        payloadReleaseTag = $sourceResolution.releaseTag
+        payloadTagObject = $sourceResolution.tagObject
+        payloadResolvedAt = $sourceResolution.resolvedAt
+        payloadRegistryIntegrity = $sourceResolution.registryIntegrity
         payloadLayout = 'immutable-package'
         payloadFileCount = $payloadFiles.Count
         nodeRuntimeVersion = $nodeRuntimeVersion
@@ -207,7 +232,7 @@ function Invoke-PolicyValidation {
         [Parameter(Mandatory)]
         [string]$Root,
 
-        [string]$RequestedRef = $approvedCommit,
+        [string]$SnapshotHash = '',
 
         [switch]$PreserveBundle
     )
@@ -216,11 +241,22 @@ function Invoke-PolicyValidation {
         New-TestBundle -Root $Root
     }
 
+    $snapshotPath = Join-Path $Root 'source-resolution.json'
+    if (-not (Test-Path -LiteralPath $snapshotPath)) {
+        $sourceResolution | ConvertTo-Json |
+            Set-Content -LiteralPath $snapshotPath -Encoding utf8
+    }
+    if ($SnapshotHash -eq '') {
+        $SnapshotHash = (Get-FileHash -LiteralPath $snapshotPath -Algorithm SHA256).Hash
+    }
+
     & (Join-Path $PSScriptRoot 'Test-SigningInputs.ps1') `
         -ArtifactsDirectory $Root `
         -PolicyPath $policyPath `
         -BundlePath (Join-Path $Root 'bundle\OpenClawGateway.msixbundle') `
-        -RequestedRef $RequestedRef `
+        -SourceResolutionPath $snapshotPath `
+        -SourceResolutionSha256 $SnapshotHash `
+        -WorkflowRunId '12345' `
         -PackagingCommit $packagingCommit
 }
 
@@ -233,7 +269,7 @@ function New-TestBundle {
             $Root `
             'x64\OpenClawGateway-x64.msix'),
 
-        [string]$BundleVersion = '2026.912.815.0'
+        [string]$BundleVersion = $approvedPackageVersion
     )
 
     $bundleDirectory = Join-Path $Root 'bundle'
@@ -388,11 +424,11 @@ try {
 
     Reset-TestArtifacts
     Assert-Fails `
-        -MessagePattern 'approved immutable OpenClaw commit' `
+        -MessagePattern 'trusted resolver output' `
         -Action {
             Invoke-PolicyValidation `
                 -Root $testRoot `
-                -RequestedRef 'v2026.8.2'
+                -SnapshotHash ('0' * 64)
         }
 
     $x64MetadataPath = Join-Path $testRoot 'x64\msix-metadata.json'
@@ -413,7 +449,7 @@ try {
     New-TestArtifact `
         -Root $testRoot `
         -Architecture x64 `
-        -PayloadPackageVersion '2026.9.4'
+        -PayloadPackageVersion '2026.9.3'
     New-TestArtifact -Root $testRoot -Architecture arm64
     Assert-Fails `
         -MessagePattern 'metadata is not eligible' `
@@ -560,7 +596,7 @@ try {
     $x64MetadataPath = Join-Path $testRoot 'x64\msix-metadata.json'
     $x64Metadata = Get-Content -LiteralPath $x64MetadataPath -Raw |
         ConvertFrom-Json
-    $x64Metadata.payloadFileCount = 2
+    $x64Metadata.payloadFileCount = 4
     $x64Metadata |
         ConvertTo-Json |
         Set-Content -LiteralPath $x64MetadataPath -Encoding utf8
@@ -612,6 +648,58 @@ try {
         -Action {
             Invoke-PolicyValidation -Root $testRoot -PreserveBundle
         }
+
+    foreach ($field in @(
+        'payloadChannel', 'payloadReleaseTag', 'payloadTagObject',
+        'payloadRegistryIntegrity', 'payloadResolvedAt'
+    )) {
+        Reset-TestArtifacts
+        $metadataPath = Join-Path $testRoot 'x64\msix-metadata.json'
+        $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
+        $metadata.$field = 'unexpected'
+        $metadata | ConvertTo-Json | Set-Content -LiteralPath $metadataPath
+        Assert-Fails -MessagePattern 'metadata is not eligible' -Action {
+            Invoke-PolicyValidation -Root $testRoot
+        }
+    }
+
+    Reset-TestArtifacts
+    $override = $sourceResolution | ConvertTo-Json | ConvertFrom-Json
+    $override.requestedRef = $approvedCommit
+    $override.channel = ''
+    $override.releaseTag = ''
+    $override.tagObject = ''
+    $override.registryIntegrity = ''
+    $override | ConvertTo-Json |
+        Set-Content -LiteralPath (Join-Path $testRoot 'source-resolution.json')
+    Assert-Fails -MessagePattern 'channel' -Action {
+        Invoke-PolicyValidation -Root $testRoot
+    }
+
+    Reset-TestArtifacts
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        '{"name":"openclaw","version":"2026.9.3"}' |
+            Set-Content -LiteralPath (Join-Path $Expanded 'app\package.json')
+    }
+    Assert-Fails -MessagePattern 'OpenClaw package version is unexpected' -Action {
+        Invoke-PolicyValidation -Root $testRoot
+    }
+
+    Reset-TestArtifacts
+    New-TestBundle -Root $testRoot -BundleVersion '2026.9.3.0'
+    Assert-Fails -MessagePattern 'bundle manifest identity is unexpected' -Action {
+        Invoke-PolicyValidation -Root $testRoot -PreserveBundle
+    }
+
+    $approvedPayloadVersion = '2026.9.4-1'
+    $approvedPackageVersion = "2026.9.4.$(1 + $policy.packageRevision)"
+    $sourceResolution.packageVersion = $approvedPayloadVersion
+    $sourceResolution.releaseTag = "v$approvedPayloadVersion"
+    $sourceResolution.msixPackageVersion = $approvedPackageVersion
+    $sourceResolution.msixReleaseTag = "v$approvedPackageVersion"
+    Reset-TestArtifacts
+    Invoke-PolicyValidation -Root $testRoot
 
     Write-Host 'Gateway MSIX signing policy tests passed.'
 }
