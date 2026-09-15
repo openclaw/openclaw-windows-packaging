@@ -167,6 +167,63 @@ an unsigned NativeAOT MSIX.
 local payload directory. `-NodeArchivePath` can supply an already-downloaded
 archive, but its version and architecture must match the payload metadata.
 
+### Running a local development build
+
+To go from a clean checkout to a registered, runnable package:
+
+```powershell
+.\scripts\Deploy-LocalPackage.ps1
+```
+
+This is the development inner loop. It does not build, sign, or install an
+MSIX. It acquires the payload and the bundled Node.js runtime, publishes the
+NativeAOT launcher, assembles a Developer Mode layout under
+`artifacts\local-package`, registers it with `Add-AppxPackage -Register`, and
+runs `clawctl setup` so `openclaw` is immediately usable.
+
+The command is idempotent: re-running with nothing changed reports that the
+package is already up to date and does nothing, and re-running after a source
+or payload change rebuilds only what changed. The expanded application is
+linked into the layout rather than copied, so repeat runs neither re-download
+nor duplicate hundreds of megabytes.
+
+| Option | Behavior |
+| --- | --- |
+| `-RefreshPayload` | Download the payload again; the previous one is kept until the new one registers successfully |
+| `-PayloadRunId <id>` | Use a specific successful workflow run, reusing a matching cached payload |
+| `-PayloadDirectory <path>` | Read a prepared payload directly, with no GitHub access and no modification; pass it on every run |
+| `-Architecture x64` / `arm64` | Select the architecture; it must be runnable on this device |
+| `-ReplaceExistingInstall` | Remove a conflicting MSIX-installed package first (see below) |
+| `-SkipSetup` | Register without extracting the Node.js runtime |
+| `-Force` | Re-register even when nothing changed |
+| `-Unregister` | Remove the local registration, preserving app data and caches |
+
+**Requires Developer Mode**, which the script checks before doing any work.
+
+**It cannot coexist with an MSIX-installed `OpenClaw.Gateway`.** Windows
+refuses to replace a packaged install with a local layout, and it cannot
+preserve that package's app data across the switch, so the script stops and
+explains rather than removing anything implicitly. Pass
+`-ReplaceExistingInstall` to accept that trade.
+
+**Run `-Unregister` before installing a released package.** Windows will not
+replace a loose registration with a packaged install: `Add-AppxPackage` fails
+with `0x80073CFB`, reporting that an unpackaged version is already installed
+and a packaged version cannot replace it. This is the same mutual exclusion as
+above, in the other direction, and it applies regardless of version. Unregister
+first, then install the release:
+
+```powershell
+.\scripts\Deploy-LocalPackage.ps1 -Unregister
+Add-AppxPackage -Path .\OpenClawGateway-0.0.0.0-x64.msix
+```
+
+**The registered package reads its files from the repository.** Deleting
+`artifacts\local-package`, moving the checkout, or deleting the worktree breaks
+the registration until the command runs again; `-Unregister` first if you plan
+to remove the checkout. Local builds are unsigned development artifacts and are
+never official-signing inputs.
+
 Normal pull-request and push workflows publish unsigned packages for
 validation. Manual runs support three signing modes:
 

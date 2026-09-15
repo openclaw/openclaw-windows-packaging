@@ -50,6 +50,30 @@ downloading one with `gh`. MSIX composition requires Visual Studio Build Tools
 with the Desktop development with C++ workload and the Windows SDK. Build x64
 and ARM64 separately.
 
+For the development inner loop, register a Developer Mode layout instead of
+building an MSIX:
+
+```powershell
+.\scripts\Deploy-LocalPackage.ps1
+```
+
+`Deploy-LocalPackage.ps1` publishes the NativeAOT launcher, assembles a layout
+under `artifacts\local-package`, registers it with `Add-AppxPackage -Register`,
+and runs `clawctl setup`. It never builds, signs, or installs an MSIX, and it
+requires no changes to the packaging scripts or project files. It is idempotent
+and skips work when nothing changed, so keep its up-to-date check honest: the
+fingerprint hashes the launcher rather than trusting timestamps, because
+publish can refresh timestamps with no source change.
+
+Loose registration and MSIX installation are mutually exclusive for one package
+identity, and Windows cannot preserve packaged app data across that switch, so
+the script refuses by default and requires `-ReplaceExistingInstall`. The
+registered package reads its files from the repository, so treat
+`artifacts\local-package` and the checkout as live inputs, not scratch output.
+Its scenario tests inject every GitHub, publish, certificate-free registration,
+and deployment operation; no test may register, remove, or modify a real
+package.
+
 ## Architecture
 
 - `OpenClaw.Gateway.Launcher` is a .NET 10 NativeAOT executable packaged as

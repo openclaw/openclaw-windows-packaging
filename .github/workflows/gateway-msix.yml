@@ -101,6 +101,11 @@ jobs:
         run: >
           .\scripts\Test-WorkflowPackageVersion.Tests.ps1
 
+      - name: Test local package deployment
+        shell: pwsh
+        run: >
+          .\scripts\Test-Deploy-LocalPackage.Tests.ps1
+
       - name: Test MSIX bundle build
         shell: pwsh
         run: >
