@@ -194,6 +194,37 @@ internal sealed class SessionRuntime
         });
     }
 
+    /// <summary>
+    /// Returns the Node.js runtime installed in the agent's profile by setup.
+    /// </summary>
+    public string RequireAgentNodePath(Version packagedVersion)
+    {
+        ArgumentNullException.ThrowIfNull(packagedVersion);
+
+        SetupRecord record = SetupState.Read(ApplicationId).Record
+            ?? throw new SessionException(
+                "OpenClaw has not been set up. Run `clawctl setup` first.");
+
+        if (string.IsNullOrWhiteSpace(record.AgentNodePath))
+        {
+            throw new SessionException(
+                "Setup did not install a Node.js runtime for the agent. " +
+                "Run `clawctl setup` again.");
+        }
+
+        if (!string.Equals(
+            record.AgentNodeVersion,
+            packagedVersion.ToString(),
+            StringComparison.Ordinal))
+        {
+            throw new SessionException(
+                $"This package ships Node.js {packagedVersion}, but the agent " +
+                $"session was set up with {record.AgentNodeVersion ?? "an unknown version"}. " +
+                "Run `clawctl setup` again.");
+        }
+        return record.AgentNodePath;
+    }
+
     internal static string ResolveHelperPath(string baseDirectory) =>
         Path.GetFullPath(
             Path.Combine(
