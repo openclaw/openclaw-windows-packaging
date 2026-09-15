@@ -13,7 +13,6 @@ internal sealed record GatewayStartRequest(
     string HelperPath,
     string NodePath,
     string ApplicationDirectory,
-    string WorkingDirectory,
     int? Port);
 
 /// <summary>The identity of a gateway that was started.</summary>
@@ -114,7 +113,7 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
             Mode = SessionLaunchMode.Detached,
             Executable = request.NodePath,
             Arguments = arguments,
-            WorkingDirectory = request.WorkingDirectory,
+            WorkingDirectory = workspace,
             Environment = _buildEnvironment(),
             PathPrefix = Path.GetDirectoryName(request.NodePath)
                 ?? throw new SessionException(

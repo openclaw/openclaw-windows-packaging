@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using OpenClaw.Launcher.Session;
 
 namespace OpenClaw.Launcher.Gateway;
 
@@ -227,5 +228,35 @@ internal sealed class GatewayStateStore
         catch (DirectoryNotFoundException)
         {
         }
+    }
+
+    /// <summary>
+    /// Removes a record only when it names a session MXC explicitly reported
+    /// stale and setup has replaced.
+    /// </summary>
+    /// <returns>True when the matching stale record was removed.</returns>
+    public bool ClearForSupersededSession(string sandboxId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sandboxId);
+
+        GatewayStateResult state = Read();
+        if (state.Fault == GatewayStateFault.Missing)
+        {
+            return false;
+        }
+
+        if (state.Record is null)
+        {
+            throw new SessionException(
+                $"The gateway record could not be reconciled: {state.Detail}");
+        }
+
+        if (!string.Equals(state.Record.SandboxId, sandboxId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        Clear();
+        return true;
     }
 }

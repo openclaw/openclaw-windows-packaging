@@ -238,8 +238,16 @@ internal static class Program
                             ApplicationId = runtime.ApplicationId,
                             Phase = Session.SetupPhase.Preparing
                         });
-                        Session.SessionRecord record = await runtime.Coordinator
-                            .EnsureStartedAsync(cancellationToken).ConfigureAwait(false);
+                        Session.SessionStartResult session = await runtime.Coordinator
+                            .EnsureStartedWithResultAsync(cancellationToken).ConfigureAwait(false);
+                        if (session.SupersededRecord is not null &&
+                            runtime.GatewayState.ClearForSupersededSession(
+                                session.SupersededRecord.SandboxId))
+                        {
+                            log("Removed the gateway record for the superseded session.");
+                        }
+
+                        Session.SessionRecord record = session.Record;
                         string helperPath = runtime.StageHelper(record);
                         SessionRuntimeInstallResult agentRuntime = await runtime.Executor
                             .InstallRuntimeAsync(

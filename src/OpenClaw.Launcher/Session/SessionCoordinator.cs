@@ -100,6 +100,18 @@ internal sealed record SessionStatus(
 internal sealed record SessionRemovalResult(bool Removed, string? StopFailure);
 
 /// <summary>
+/// The result of ensuring that an owned session is started.
+/// </summary>
+/// <param name="Record">The started session record.</param>
+/// <param name="SupersededRecord">
+/// The previously owned record MXC explicitly reported as stale, when setup
+/// had to replace it.
+/// </param>
+internal sealed record SessionStartResult(
+    SessionRecord Record,
+    SessionRecord? SupersededRecord);
+
+/// <summary>
 /// Owns this installation's isolated session across processes.
 /// </summary>
 internal sealed class SessionCoordinator
@@ -164,6 +176,14 @@ internal sealed class SessionCoordinator
     /// Returns the owned, started session, creating it only on first use.
     /// </summary>
     public async Task<SessionRecord> EnsureStartedAsync(
+        CancellationToken cancellationToken) =>
+        (await EnsureStartedWithResultAsync(cancellationToken).ConfigureAwait(false)).Record;
+
+    /// <summary>
+    /// Returns the owned, started session and identifies an explicitly stale
+    /// record when setup replaced it.
+    /// </summary>
+    internal async Task<SessionStartResult> EnsureStartedWithResultAsync(
         CancellationToken cancellationToken)
     {
         using ISessionLockHandle handle = AcquireLock();
@@ -176,14 +196,16 @@ internal sealed class SessionCoordinator
             {
                 await StartAsync(state.Record, cancellationToken)
                     .ConfigureAwait(false);
-                return state.Record;
+                return new SessionStartResult(state.Record, null);
             }
             catch (MxcException exception) when (exception.Code == MxcErrorCode.StaleId)
             {
                 _log(
                     "The recorded OpenClaw provision no longer exists. " +
                     "Provisioning a replacement for this installation.");
-                return await ProvisionAndStartAsync(cancellationToken).ConfigureAwait(false);
+                SessionRecord replacement = await ProvisionAndStartAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                return new SessionStartResult(replacement, state.Record);
             }
         }
 
@@ -195,7 +217,9 @@ internal sealed class SessionCoordinator
         }
 
         _log("Creating the first OpenClaw session for this installation.");
-        return await ProvisionAndStartAsync(cancellationToken).ConfigureAwait(false);
+        SessionRecord provisioned = await ProvisionAndStartAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return new SessionStartResult(provisioned, null);
     }
 
     private async Task<SessionRecord> ProvisionAndStartAsync(

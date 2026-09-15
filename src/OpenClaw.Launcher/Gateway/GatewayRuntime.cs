@@ -99,14 +99,12 @@ internal sealed partial class GatewayRuntime
                 ?? throw new SessionException(
                     "The packaged OpenClaw application was not found, so the gateway cannot be started.");
             GatewayLaunchConfiguration launch = configuration.Resolve(
-                paths.StateRoot,
                 Environment.GetEnvironmentVariable);
             NodeRuntime packaged = await resolve(cancellationToken).ConfigureAwait(false);
             return new GatewayStartRequest(
                 session.HelperPath,
                 session.RequireAgentNodePath(packaged.Version),
                 applicationDirectory,
-                launch.WorkingDirectory!,
                 launch.Port);
         }
 

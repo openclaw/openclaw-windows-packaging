@@ -127,6 +127,21 @@ public sealed class SessionCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task StaleRecordedProvisionReplacementIdentifiesTheSupersededSession()
+    {
+        await Create().EnsureStartedAsync(CancellationToken.None);
+        _backend.StartFailureForSandbox = sandboxId => sandboxId.Value == "iso:sandbox1"
+            ? new MxcException(MxcErrorCode.StaleId, "provision was not found")
+            : null;
+
+        SessionStartResult result = await Create()
+            .EnsureStartedWithResultAsync(CancellationToken.None);
+
+        Assert.Equal("iso:sandbox2", result.Record.SandboxId);
+        Assert.Equal("iso:sandbox1", result.SupersededRecord!.SandboxId);
+    }
+
+    [Fact]
     public async Task FailedStaleProvisionRecoveryRetainsTheRecordedOwnership()
     {
         await Create().EnsureStartedAsync(CancellationToken.None);
