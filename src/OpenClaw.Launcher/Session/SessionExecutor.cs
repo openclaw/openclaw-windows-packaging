@@ -162,6 +162,81 @@ internal sealed class SessionExecutor
         }
     }
 
+    /// <summary>Asks the guest to stage diagnostics into the shared workspace.</summary>
+    public async Task<SessionCollectResult> CollectAsync(
+        SessionRecord record,
+        string helperPath,
+        string destinationDirectory,
+        IReadOnlyList<SessionCollectSource> sources,
+        IReadOnlyList<string> deniedNames,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+
+        string requestId = _createRequestId();
+        using var operation = new SessionWorkspaceOperation(record, _isCurrentRecord);
+        string requestPath = operation.FilePath("collect", requestId);
+        string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
+
+        try
+        {
+            await operation.WriteTextNewAsync(
+                requestPath,
+                SessionCollectProtocol.SerializeRequest(new SessionCollectRequest
+                {
+                    RequestId = requestId,
+                    DestinationDirectory = destinationDirectory,
+                    Sources = sources,
+                    DeniedNames = deniedNames
+                }),
+                cancellationToken).ConfigureAwait(false);
+
+            _log("Collecting agent-side diagnostics from the isolated session.");
+
+            int executorExitCode = await _backend.ExecuteAttachedAsync(
+                record.ToSandboxIdOrThrow(),
+                new MxcExecutionRequest(
+                    BuildGuestCommandLine(helperPath, requestPath, "--collect")),
+                null,
+                cancellationToken).ConfigureAwait(false);
+
+            string resultText;
+            try
+            {
+                resultText = await operation.ReadTextAsync(resultPath, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (
+                exception is FileNotFoundException or DirectoryNotFoundException or IOException)
+            {
+                throw new SessionException(
+                    "The isolated session did not report a collection result " +
+                    $"(executor exit code {executorExitCode}).");
+            }
+
+            SessionCollectResult result = SessionCollectProtocol.ReadResult(resultText);
+            if (result.Error is { Length: > 0 } error)
+            {
+                throw new SessionException(
+                    $"The isolated session could not collect diagnostics: {error}");
+            }
+
+            if (!string.Equals(result.RequestId, requestId, StringComparison.Ordinal))
+            {
+                throw new SessionException(
+                    "The isolated session reported a collection result for a " +
+                    "different request.");
+            }
+
+            return result;
+        }
+        finally
+        {
+            operation.Delete(requestPath);
+            operation.Delete(resultPath);
+        }
+    }
+
     /// <summary>Installs the package's Node.js runtime in the agent profile.</summary>
     public async Task<SessionRuntimeInstallResult> InstallRuntimeAsync(
         SessionRecord record,
