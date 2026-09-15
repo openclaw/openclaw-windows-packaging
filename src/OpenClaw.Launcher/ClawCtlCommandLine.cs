@@ -16,7 +16,14 @@ internal sealed record ClawCtlHandlers
     public required Func<CancellationToken, Task<int>> GatewayStop { get; init; }
 }
 
-internal sealed record SetupOptions(bool Fresh, bool NoIsolation = false);
+<<<<<<< HEAD
+internal sealed record SetupOptions(
+    bool Fresh,
+    bool Force = false,
+    bool NoIsolation = false);
+=======
+internal sealed record SetupOptions(bool Fresh, bool Force, bool NoIsolation);
+>>>>>>> b881f6d (Add forced fresh setup recovery)
 
 // The clawctl command tree. Only the package-readiness surface belongs here:
 // doctor, gateway, uninstall, and every other OpenClaw command is owned by the
@@ -67,10 +74,25 @@ internal static class ClawCtlCommandLine
             Description = "Remove this installation's owned session and local state before setting it up again."
         };
         setup.Options.Add(noIsolation);
+        Option<bool> force = new("--force")
+        {
+            Description = "Continue with package-local cleanup when owned external cleanup cannot be confirmed. Requires --fresh."
+        };
         setup.Options.Add(fresh);
+        setup.Options.Add(force);
+        setup.Validators.Add(result =>
+        {
+            if (result.GetValue(force) && !result.GetValue(fresh))
+            {
+                result.AddError("Option '--force' requires option '--fresh'.");
+            }
+        });
         setup.SetAction((parsed, cancellationToken) =>
             handlers.Setup(
-                new SetupOptions(parsed.GetValue(fresh), parsed.GetValue(noIsolation)),
+                new SetupOptions(
+                    parsed.GetValue(fresh),
+                    parsed.GetValue(force),
+                    parsed.GetValue(noIsolation)),
                 cancellationToken));
         Command status = new(
             StatusCommandName,
@@ -86,11 +108,11 @@ internal static class ClawCtlCommandLine
         collectLogs.Options.Add(outputPath);
         collectLogs.SetAction((parsed, cancellationToken) =>
             handlers.CollectLogs(parsed.GetValue(outputPath), cancellationToken));
-        Option<bool> force = new("--force") { Description = "Skip confirmation and remove the owned session." };
+        Option<bool> teardownForce = new("--force") { Description = "Skip confirmation and remove the owned session." };
         Command teardown = new("teardown", "Stop and remove the owned isolated session.");
-        teardown.Options.Add(force);
+        teardown.Options.Add(teardownForce);
         teardown.SetAction((parsed, cancellationToken) =>
-            handlers.Teardown(parsed.GetValue(force), cancellationToken));
+            handlers.Teardown(parsed.GetValue(teardownForce), cancellationToken));
         Command powerShell = new(
             "pwsh",
             "Open an interactive PowerShell session inside the isolated agent.");

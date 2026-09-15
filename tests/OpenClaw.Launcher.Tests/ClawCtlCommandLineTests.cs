@@ -132,6 +132,8 @@ public sealed class ClawCtlCommandLineTests
             Normalize(ClawCtlCommandLine.SetupDescription),
             help,
             StringComparison.Ordinal);
+        Assert.Contains("--fresh", help, StringComparison.Ordinal);
+        Assert.Contains("Requires --fresh", help, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -157,7 +159,33 @@ public sealed class ClawCtlCommandLineTests
         int exitCode = await root.Parse("setup --fresh").InvokeAsync();
 
         Assert.Equal(0, exitCode);
-        Assert.Equal(new SetupOptions(Fresh: true), received);
+        Assert.Equal(new SetupOptions(Fresh: true, Force: false), received);
+    }
+
+    [Fact]
+    public async Task SetupFreshForcePassesTheExplicitRecoveryOverride()
+    {
+        SetupOptions? received = null;
+        RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
+        {
+            Setup = (options, _) =>
+            {
+                received = options;
+                return Task.FromResult(0);
+            },
+            Status = _ => Task.FromResult(0),
+            CollectLogs = (_, _) => Task.FromResult(0),
+            Teardown = (_, _) => Task.FromResult(0),
+            PowerShell = _ => Task.FromResult(0),
+            GatewayStart = _ => Task.FromResult(0),
+            GatewayStatus = _ => Task.FromResult(0),
+            GatewayStop = _ => Task.FromResult(0)
+        });
+
+        int exitCode = await root.Parse("setup --fresh --force").InvokeAsync();
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(new SetupOptions(Fresh: true, Force: true), received);
     }
 
     [Fact]
@@ -217,6 +245,7 @@ public sealed class ClawCtlCommandLineTests
     [InlineData("gateway-service")]
     [InlineData("setup", "extra")]
     [InlineData("setup", "--bogus")]
+    [InlineData("setup", "--force")]
     public async Task RejectedInputFailsWithoutStartingSetup(params string[] args)
     {
         (int exitCode, string output, string error) = await RunAsync(args).ConfigureAwait(true);

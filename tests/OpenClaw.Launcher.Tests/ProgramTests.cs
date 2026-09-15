@@ -453,6 +453,9 @@ public sealed class ProgramTests : IDisposable
         Assert.NotNull(runtime.Coordinator.GetRecordedStatus().Record);
         Assert.Contains(
             ((FakeMxcSessionClient)runtime.Backend).Calls,
+            call => call.StartsWith("execute:", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            ((FakeMxcSessionClient)runtime.Backend).Calls,
             call => call.StartsWith("execute-attached:", StringComparison.Ordinal));
         Assert.Contains("OpenClaw isolated session is ready.", output.ToString(), StringComparison.Ordinal);
     }
@@ -481,11 +484,219 @@ public sealed class ProgramTests : IDisposable
     }
 
     [Fact]
+    public async Task ForcedFreshSetupContinuesAfterUnresolvedOwnedCleanupAndKeepsTheWarning()
+    {
+        string applicationDirectory = await CreateApplicationAsync().ConfigureAwait(true);
+        SessionRuntime runtime = CreateSessionRuntime();
+        var lifecycle = new FailingFreshLifecycle(runtime)
+        {
+            TeardownResult = new TeardownResult(
+                Succeeded: false,
+                Message: "MXC backend is unavailable.",
+                Detail: "The owned sandbox record could not be verified.")
+        };
+        List<string> diagnostics = [];
+        using var output = new StringWriter();
+
+        int exitCode = await Program.RunControlAsync(
+            CreateSetupOptions(applicationDirectory),
+            ["setup", "--fresh", "--force"],
+            diagnostics.Add,
+            output,
+            TextWriter.Null,
+            installationLifecycle: lifecycle);
+
+        Assert.True(exitCode == 0, output.ToString());
+        Assert.Equal(["validate", "lock", "recovery", "gateway", "session", "clean"], lifecycle.Calls);
+        Assert.True(lifecycle.Cleaner.Cleared);
+        Assert.Equal(SetupPhase.Ready, runtime.SetupState.Read(runtime.ApplicationId).Record!.Phase);
+        Assert.Contains(
+            "did not prove a pristine machine",
+            output.ToString(),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            diagnostics,
+            text => text.Contains("did not prove a pristine machine", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ForcedFreshSetupContinuesWhenTeardownThrowsARecoverableFailure()
+    {
+        string applicationDirectory = await CreateApplicationAsync().ConfigureAwait(true);
+        SessionRuntime runtime = CreateSessionRuntime();
+        var lifecycle = new FailingFreshLifecycle(runtime)
+        {
+            TeardownException = new SessionStateException(
+                SessionStateFault.Unreadable,
+                "session.json cannot be read")
+        };
+        using var output = new StringWriter();
+
+        int exitCode = await Program.RunControlAsync(
+            CreateSetupOptions(applicationDirectory),
+            ["setup", "--fresh", "--force"],
+            _ => { },
+            output,
+            TextWriter.Null,
+            installationLifecycle: lifecycle);
+
+        Assert.True(exitCode == 0, output.ToString());
+        Assert.True(lifecycle.Cleaner.Cleared);
+        Assert.Contains(
+            "session.json cannot be read",
+            output.ToString(),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "cannot remove resources whose ownership record was cleared",
+            output.ToString(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FreshResetReportPreservesReadableResidualIdentityOutsideClearedState()
+    {
+        string applicationDirectory = await CreateApplicationAsync().ConfigureAwait(true);
+        SessionRuntime runtime = CreateSessionRuntime();
+        const string oldSandboxId = "iso:residual-session";
+        new SessionStateStore(runtime.Paths.SessionStatePath).Write(new SessionRecord
+        {
+            SchemaVersion = SessionStateStore.CurrentSchemaVersion,
+            SandboxId = oldSandboxId,
+            ApplicationId = runtime.ApplicationId,
+            AgentUserName = "agent_old",
+            AgentUserSid = "S-1-5-21-0-0-0-1010",
+            WorkspacePath = Path.Combine(_testDirectory, "old-workspace"),
+            Generation = "test-generation",
+            CreatedUtc = DateTimeOffset.UtcNow
+        });
+        var lifecycle = new FailingFreshLifecycle(runtime)
+        {
+            TeardownResult = new TeardownResult(false, "Backend unavailable.")
+        };
+        lifecycle.Cleaner.Cleanup = () => File.Delete(runtime.Paths.SessionStatePath);
+        using var output = new StringWriter();
+
+        int exitCode = await Program.RunControlAsync(
+            CreateSetupOptions(applicationDirectory),
+            ["setup", "--fresh", "--force"],
+            _ => { },
+            output,
+            TextWriter.Null,
+            installationLifecycle: lifecycle);
+
+        Assert.True(exitCode == 0, output.ToString());
+        string reportLine = output.ToString()
+            .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
+            .Single(line => line.StartsWith("Pre-reset diagnostic report:", StringComparison.Ordinal));
+        string reportPath = reportLine["Pre-reset diagnostic report:".Length..].Trim();
+        try
+        {
+            string report = await File.ReadAllTextAsync(reportPath);
+            Assert.Contains($"sessionSandboxId={oldSandboxId}", report, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(reportPath);
+        }
+    }
+
+    [Fact]
+    public async Task ForcedFreshSetupRecreatesDiagnosticsWithTheResidualWarning()
+    {
+        SessionRuntime runtime = CreateSessionRuntime();
+        string baseDirectory = Path.Combine(_testDirectory, "base");
+        string applicationDirectory = Path.Combine(baseDirectory, "app");
+        string runtimeDirectory = Path.Combine(baseDirectory, "runtime");
+        Directory.CreateDirectory(applicationDirectory);
+        Directory.CreateDirectory(runtimeDirectory);
+        await File.WriteAllTextAsync(Path.Combine(applicationDirectory, "openclaw.mjs"), "fixture");
+        await File.WriteAllTextAsync(
+            Path.Combine(runtimeDirectory, "node-v24.20.0-win-x64.zip"),
+            "fixture");
+        var lifecycle = new FailingFreshLifecycle(runtime)
+        {
+            TeardownResult = new TeardownResult(false, "Owned backend cleanup remains unresolved.")
+        };
+        lifecycle.Cleaner.Cleanup = () => Directory.Delete(runtime.Paths.StateRoot, recursive: true);
+        string logPath = Path.Combine(runtime.Paths.StateRoot, "Logs", "openclaw.log");
+        using var diagnostics = HostDiagnosticLog.Create(logPath);
+        diagnostics.Write("Host started through the clawctl entrypoint.");
+        using var output = new StringWriter();
+        HostStartup startup = new()
+        {
+            Entrypoint = HostEntrypoint.Control,
+            CreateDiagnostics = () => diagnostics,
+            BaseDirectory = baseDirectory,
+            Output = output,
+            Error = TextWriter.Null,
+            InstallationLifecycle = lifecycle
+        };
+
+        int exitCode = await Program.RunAsync(["setup", "--fresh", "--force"], startup);
+
+        Assert.True(exitCode == 0, output.ToString());
+        string diagnosticsText = await File.ReadAllTextAsync(logPath);
+        Assert.Contains("did not prove a pristine machine", diagnosticsText, StringComparison.Ordinal);
+        Assert.DoesNotContain("Host started through", diagnosticsText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ForcedFreshSetupStillStopsWhenLocalCleanupFails()
+    {
+        string applicationDirectory = await CreateApplicationAsync().ConfigureAwait(true);
+        SessionRuntime runtime = CreateSessionRuntime();
+        var lifecycle = new FailingFreshLifecycle(runtime)
+        {
+            TeardownResult = new TeardownResult(false, "Owned backend cleanup could not be confirmed."),
+            CleanerException = new UnauthorizedAccessException("state root is denied")
+        };
+        using var output = new StringWriter();
+
+        int exitCode = await Program.RunControlAsync(
+            CreateSetupOptions(applicationDirectory),
+            ["setup", "--fresh", "--force"],
+            _ => { },
+            output,
+            TextWriter.Null,
+            installationLifecycle: lifecycle);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(["validate", "lock", "recovery", "gateway", "session", "clean"], lifecycle.Calls);
+        Assert.Null(runtime.SetupState.Read(runtime.ApplicationId).Record);
+        Assert.DoesNotContain("isolated session is ready", output.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ForcedFreshSetupCancellationDoesNotClearOrProvision()
+    {
+        string applicationDirectory = await CreateApplicationAsync().ConfigureAwait(true);
+        SessionRuntime runtime = CreateSessionRuntime();
+        var lifecycle = new FailingFreshLifecycle(runtime)
+        {
+            TeardownException = new OperationCanceledException()
+        };
+        using var output = new StringWriter();
+
+        int exitCode = await Program.RunControlAsync(
+            CreateSetupOptions(applicationDirectory),
+            ["setup", "--fresh", "--force"],
+            _ => { },
+            output,
+            TextWriter.Null,
+            installationLifecycle: lifecycle);
+
+        Assert.Equal(1, exitCode);
+        Assert.False(lifecycle.Cleaner.Cleared);
+        Assert.Null(runtime.SetupState.Read(runtime.ApplicationId).Record);
+        Assert.Contains("cancelled", output.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task FreshSetupProvisionFailureDoesNotClaimReady()
     {
         string applicationDirectory = await CreateApplicationAsync().ConfigureAwait(true);
         SessionRuntime runtime = CreateSessionRuntime();
-        ((FakeMxcSessionClient)runtime.Backend).AttachedBehavior = _ =>
+        ((FakeMxcSessionClient)runtime.Backend).ExecuteBehavior = _ =>
         {
             string requestPath = Directory.GetFiles(
                 ((FakeMxcSessionClient)runtime.Backend).Metadata!.EphemeralWorkspacePath,
@@ -499,7 +710,7 @@ public sealed class ProgramTests : IDisposable
                     RequestId = request.RequestId,
                     Error = "installer failed"
                 }));
-            return Task.FromResult(1);
+            return Task.FromResult(new MxcExecutionResult(1, string.Empty, string.Empty));
         };
         var lifecycle = new FailingFreshLifecycle(runtime)
         {
@@ -528,14 +739,12 @@ public sealed class ProgramTests : IDisposable
         {
             TeardownSucceeds = true,
         };
-        backend.AttachedBehavior = async cancellationToken =>
+        backend.ExecuteBehavior = async _ =>
         {
             lifecycle.ProvisionStarted.TrySetResult();
-            await lifecycle.AllowProvision.Task
-                .WaitAsync(cancellationToken)
-                .ConfigureAwait(false);
+            await lifecycle.AllowProvision.Task.ConfigureAwait(false);
             WriteRuntimeInstallResult(backend, 0);
-            return 0;
+            return new MxcExecutionResult(0, string.Empty, string.Empty);
         };
         var firstOutput = new StringWriter();
         Task<int> first = Program.RunControlAsync(
@@ -803,10 +1012,10 @@ public sealed class ProgramTests : IDisposable
                 "S-1-5-21-0-0-0-1001",
                 workspace)
         };
-        backend.AttachedBehavior = _ =>
+        backend.ExecuteBehavior = _ =>
         {
             WriteRuntimeInstallResult(backend, 0);
-            return Task.FromResult(0);
+            return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
         };
         _lastSessionBackend = backend;
         return SessionRuntime.Create(
@@ -983,6 +1192,10 @@ public sealed class ProgramTests : IDisposable
 
         public Exception? CleanerException { get; init; }
 
+        public Exception? TeardownException { get; init; }
+
+        public TeardownResult? TeardownResult { get; init; }
+
         public bool TeardownSucceeds { get; init; }
 
         public TaskCompletionSource ProvisionStarted { get; } =
@@ -1021,6 +1234,16 @@ public sealed class ProgramTests : IDisposable
             Calls.Add("session");
             TeardownCount++;
             Assert.True(lockAlreadyHeld);
+            if (TeardownException is not null)
+            {
+                throw TeardownException;
+            }
+
+            if (TeardownResult is not null)
+            {
+                return Task.FromResult(TeardownResult);
+            }
+
             return Task.FromResult(TeardownSucceeds
                 ? new TeardownResult(Succeeded: true, Message: "Removed prior session.")
                 : new TeardownResult(Succeeded: false, Message: "Recovery removal failed."));
@@ -1060,6 +1283,8 @@ public sealed class ProgramTests : IDisposable
 
         public Exception? Exception { get; set; }
 
+        public Action? Cleanup { get; set; }
+
         public void Clear()
         {
             if (Exception is not null)
@@ -1068,6 +1293,7 @@ public sealed class ProgramTests : IDisposable
             }
 
             Cleared = true;
+            Cleanup?.Invoke();
         }
     }
 
