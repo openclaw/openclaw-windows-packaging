@@ -1,0 +1,65 @@
+{
+  "$comment": [
+    "Pinned MXC native runtime. This is a release trust-chain input: the",
+    "archive integrity, the per-file SHA-256 values, and the PE machine type",
+    "are all verified before any file is staged into the package.",
+    "",
+    "This pin is temporary. It is replaced by the official Microsoft.Mxc.Sdk",
+    ".NET package when that package is published; see docs/mxc-runtime.md.",
+    "",
+    "'wireSchemaVersion' is the state-aware envelope schema, which is",
+    "versioned independently of the npm package version. Both are pinned."
+  ],
+  "package": "@microsoft/mxc-sdk",
+  "version": "0.8.0",
+  "wireSchemaVersion": "0.6.0-alpha",
+  "minimumWindowsBuild": "26340.9212",
+  "tarballUrl": "https://registry.npmjs.org/@microsoft/mxc-sdk/-/mxc-sdk-0.8.0.tgz",
+  "tarballIntegrity": "sha512-pnf5QsASwp+qtRi5uth2GDjwuyG0rHWRpxCf3RbAjQ4wDTNfBX/9l0A+RVZspU2agpF3/11uWB1JisIS7WrNYg==",
+  "architectures": {
+    "x64": {
+      "files": [
+        {
+          "archivePath": "package/bin/x64/wxc-exec.exe",
+          "stagedPath": "wxc-exec.exe",
+          "length": 9478968,
+          "sha256": "6049c64723af1173c3739dc6cd6b2f33f6c021bb2832c4216233cba7f71aee9a",
+          "peMachine": "0x8664"
+        },
+        {
+          "archivePath": "package/bin/x64/plm.exe",
+          "stagedPath": "plm.exe",
+          "length": 2106688,
+          "sha256": "f0ddecb7a1097e5108a14fcfc609dea692733d77f9f8e2435b05085b0b7b25f0",
+          "peMachine": "0x8664"
+        }
+      ]
+    },
+    "arm64": {
+      "files": [
+        {
+          "archivePath": "package/bin/arm64/wxc-exec.exe",
+          "stagedPath": "wxc-exec.exe",
+          "length": 4836152,
+          "sha256": "dde1c592270e9a659b01dccad70362da7b99fec114885fa4d625507aa775a503",
+          "peMachine": "0xaa64"
+        },
+        {
+          "archivePath": "package/bin/arm64/plm.exe",
+          "stagedPath": "plm.exe",
+          "length": 1857848,
+          "sha256": "f8060c7d463479f6e64da7f1e082553113ca0a9c1c39347ae513eca4a0439dfd",
+          "peMachine": "0xaa64"
+        }
+      ]
+    }
+  },
+  "licenseFiles": [
+    {
+      "archivePath": "package/LICENSE.md",
+      "stagedPath": "LICENSE.md",
+      "length": 1140,
+      "sha256": "d9a1b1e30d633d5732ea18e3cba9538d293ebc53e1a9e4e96ab739e0c5c4f1cb"
+    }
+  ]
+}

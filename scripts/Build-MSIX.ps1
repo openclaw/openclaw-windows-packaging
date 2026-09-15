@@ -312,6 +312,9 @@ $payloadInventoryPath = Join-Path $openClawContent 'payload-files.json'
     ConvertTo-Json -Depth 4 |
     Set-Content -LiteralPath $payloadInventoryPath -Encoding utf8
 
+& (Join-Path $PSScriptRoot 'Get-MxcRuntime.ps1') `
+    -Architecture $Architecture
+
 $temporaryRoot = if ($env:RUNNER_TEMP) {
     $env:RUNNER_TEMP
 }
