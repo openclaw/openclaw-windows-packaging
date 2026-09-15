@@ -1,3 +1,4 @@
+using System.Security.Principal;
 using OpenClaw.Launcher.Session;
 
 namespace OpenClaw.Launcher.Gateway;
@@ -14,6 +15,31 @@ internal sealed class GatewayRuntime
     public GatewayController Controller { get; }
 
     public string HelperPath { get; }
+
+    public static GatewayPersistenceManager CreateRecoveryManager(Action<string> log)
+    {
+        ArgumentNullException.ThrowIfNull(log);
+
+        HostPaths paths = HostPaths.Create();
+        string packageFamilyName = paths.PackageFamilyName
+            ?? throw new SessionException(
+                "OpenClaw is not running from its installed package, so it cannot configure gateway recovery.");
+        string userSid = WindowsIdentity.GetCurrent().User?.Value
+            ?? throw new SessionException(
+                "The signed-in user's security identifier is unavailable, so gateway recovery cannot be configured.");
+
+        return new GatewayPersistenceManager(
+            new SchTasksGatewayScheduler(),
+            new GatewayPersistenceOptions(
+                userSid,
+                packageFamilyName,
+                paths.GatewayLauncherPath,
+                Environment.GetFolderPath(Environment.SpecialFolder.Startup),
+                paths.StateRoot,
+                "clawctl.exe",
+                Path.Combine(Environment.SystemDirectory, "cmd.exe")),
+            log);
+    }
 
     public static GatewayRuntime Create(
         HostOptions options,
