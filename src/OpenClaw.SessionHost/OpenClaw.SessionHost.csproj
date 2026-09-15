@@ -27,6 +27,7 @@
   <ItemGroup>
     <ProjectReference Include="..\OpenClaw.SessionProtocol\OpenClaw.SessionProtocol.csproj" />
     <InternalsVisibleTo Include="OpenClaw.Launcher.Tests" />
+    <Compile Include="..\OpenClaw.Launcher\WindowsKillOnCloseJob.cs" Link="WindowsKillOnCloseJob.cs" />
   </ItemGroup>
 
 </Project>

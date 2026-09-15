@@ -23,25 +23,23 @@ internal static class Program
         Func<string, string> readFile,
         Action<string, SessionLaunchResult> writeResult)
     {
-        if (args.Count == 2 && args[0] == "--install-runtime")
-        {
-            return SessionRuntimeInstaller.Run(
-                args[1],
-                readFile,
-                File.WriteAllText);
-        }
-
-        if (args.Count != 2 || args[0] != "--request")
+        if (!TryGetMode(args, out string? mode, out string? requestPath))
         {
             // No request path means no control file to report through, so this
             // is the one failure that can only surface on stderr.
             errorOutput.WriteLine(
                 "openclaw-session-host: usage: openclaw-session-host " +
-                "--request <path>");
+                "--request|--supervise|--install-runtime <path>");
             return SessionLaunchProtocol.HelperFailureExitCode;
         }
 
-        string requestPath = args[1];
+        switch (mode)
+        {
+            case "--supervise":
+                return SessionSupervisor.Run(requestPath, readFile, File.WriteAllText);
+            case "--install-runtime":
+                return SessionRuntimeInstaller.Run(requestPath, readFile, File.WriteAllText);
+        }
 
         string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
         string? requestId = null;
@@ -51,10 +49,32 @@ internal static class Program
             SessionLaunchRequest request =
                 SessionLaunchProtocol.ReadRequest(readFile(requestPath));
             requestId = request.RequestId;
-            if (request.Mode != SessionLaunchMode.Attached)
+            if (request.Mode is not SessionLaunchMode.Attached and
+                not SessionLaunchMode.Detached)
             {
                 throw new SessionLaunchException(
                     $"Launch mode '{request.Mode}' is not supported by this helper.");
+            }
+
+            if (request.Mode == SessionLaunchMode.Detached)
+            {
+                SessionDetachedProcess detached = launcher.Start(
+                    request,
+                    System.Environment.ProcessPath
+                        ?? throw new SessionLaunchException(
+                            "The session helper cannot determine its own path, " +
+                            "so it cannot start a supervised process."));
+
+                writeResult(
+                    resultPath,
+                    new SessionLaunchResult
+                    {
+                        RequestId = requestId,
+                        Launched = true,
+                        ProcessId = detached.ProcessId,
+                        ProcessStartTimeUtc = detached.StartTimeUtc
+                    });
+                return 0;
             }
 
             int exitCode = launcher.Run(request);
@@ -76,6 +96,32 @@ internal static class Program
             TryWriteFailure(writeResult, resultPath, requestId, exception.Message, errorOutput);
             return SessionLaunchProtocol.HelperFailureExitCode;
         }
+    }
+
+    private static bool TryGetMode(
+        IReadOnlyList<string> args,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out string? mode,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out string? requestPath)
+    {
+        mode = null;
+        requestPath = null;
+
+        // Exactly one option and one path. The helper must never grow into a
+        // general-purpose runner reachable from inside the session.
+        if (args.Count != 2 || string.IsNullOrWhiteSpace(args[1]))
+        {
+            return false;
+        }
+
+        if (args[0] is not ("--request" or "--supervise" or "--inspect" or "--stop" or
+            "--collect" or "--install-runtime"))
+        {
+            return false;
+        }
+
+        mode = args[0];
+        requestPath = args[1];
+        return true;
     }
 
     private static void TryWriteFailure(
