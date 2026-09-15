@@ -74,7 +74,7 @@ public sealed class ProgramTests : IDisposable
             output,
             TextWriter.Null,
             _ => Task.FromResult(nodeRuntime),
-            () => runtime,
+            _ => runtime,
             _ => Task.FromResult(new GatewayPersistenceInstallResult(
                 GatewayPersistenceState.Ready,
                 GatewayPersistenceLane.TaskScheduler,

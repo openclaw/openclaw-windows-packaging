@@ -172,9 +172,19 @@ internal sealed class SessionCoordinator
         if (state.Record is not null)
         {
             _log("Reusing the recorded OpenClaw session.");
-            await StartAsync(state.Record, cancellationToken)
-                .ConfigureAwait(false);
-            return state.Record;
+            try
+            {
+                await StartAsync(state.Record, cancellationToken)
+                    .ConfigureAwait(false);
+                return state.Record;
+            }
+            catch (MxcException exception) when (exception.Code == MxcErrorCode.StaleId)
+            {
+                _log(
+                    "The recorded OpenClaw provision no longer exists. " +
+                    "Provisioning a replacement for this installation.");
+                return await ProvisionAndStartAsync(cancellationToken).ConfigureAwait(false);
+            }
         }
 
         if (state.Fault != SessionStateFault.Missing)
@@ -185,6 +195,12 @@ internal sealed class SessionCoordinator
         }
 
         _log("Creating the first OpenClaw session for this installation.");
+        return await ProvisionAndStartAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<SessionRecord> ProvisionAndStartAsync(
+        CancellationToken cancellationToken)
+    {
         MxcProvisionResult provisioned = await _backend
             .ProvisionAsync(new MxcProvisionRequest(_applicationId), cancellationToken)
             .ConfigureAwait(false);

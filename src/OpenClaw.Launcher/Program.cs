@@ -212,44 +212,37 @@ internal static class Program
         TextWriter output,
         TextWriter error,
         Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null,
-        Func<Session.SessionRuntime>? createSessionRuntime = null,
+        Func<Action<string>, Session.SessionRuntime>? createSessionRuntime = null,
         Func<CancellationToken, Task<Gateway.GatewayPersistenceInstallResult>>?
             installRecovery = null)
     {
         Session.SessionRuntime? sessionRuntime = null;
         Session.SessionRuntime GetSessionRuntime() =>
-            sessionRuntime ??= createSessionRuntime?.Invoke() ??
-                Session.SessionRuntime.Create(log);
+            sessionRuntime ??= (createSessionRuntime ?? Session.SessionRuntime.Create)(log);
 
         RootCommand command = ClawCtlCommandLine.Create(
             new ClawCtlHandlers
             {
                 Setup = async cancellationToken =>
                 {
-                    int result = await RunSetupAsync(
+                    NodeRuntime packagedNode = await RunSetupAsync(
                         options, log, output, resolveNode, cancellationToken)
                         .ConfigureAwait(false);
-                    if (result != 0)
-                    {
-                        return result;
-                    }
 
                     try
                     {
                         Session.SessionRuntime runtime = GetSessionRuntime();
-                        using Session.ISessionLockHandle handle =
-                            runtime.AcquireLifecycleLock();
+                        using Session.ISessionLockHandle handle = runtime.AcquireLifecycleLock();
                         runtime.SetupState.Write(new Session.SetupRecord
                         {
                             ApplicationId = runtime.ApplicationId,
                             Phase = Session.SetupPhase.Preparing
                         });
-                        Session.SessionRecord record =
-                            await runtime.Coordinator.EnsureStartedAsync(cancellationToken)
-                                .ConfigureAwait(false);
+                        Session.SessionRecord record = await runtime.Coordinator
+                            .EnsureStartedAsync(cancellationToken).ConfigureAwait(false);
                         string helperPath = runtime.StageHelper(record);
-                        SessionRuntimeInstallResult agentRuntime =
-                            await runtime.Executor.InstallRuntimeAsync(
+                        SessionRuntimeInstallResult agentRuntime = await runtime.Executor
+                            .InstallRuntimeAsync(
                                 record,
                                 helperPath,
                                 GetPackagedNodeArchivePath(options),
@@ -450,7 +443,7 @@ internal static class Program
             cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task<int> RunSetupAsync(
+    private static async Task<NodeRuntime> RunSetupAsync(
         HostOptions options,
         Action<string> log,
         TextWriter output,
@@ -472,7 +465,7 @@ internal static class Program
         string applicationDirectory = GetPackagedApplicationDirectory(options);
         log("Confirmed the packaged OpenClaw application is present.");
         ClawCtlConsole.WriteReadinessSummary(output, applicationDirectory);
-        return 0;
+        return nodeRuntime;
     }
 
     internal delegate Task<int> LaunchOpenClawAsync(
