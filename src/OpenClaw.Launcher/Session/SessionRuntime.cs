@@ -1,3 +1,4 @@
+using OpenClaw.Launcher.Gateway;
 using OpenClaw.Launcher.Mxc;
 using OpenClaw.SessionProtocol;
 
@@ -28,6 +29,7 @@ internal sealed class SessionRuntime
         string helperPath,
         string applicationId,
         SetupStateStore setupState,
+        GatewayStateStore gatewayState,
         string lifecycleLockScope)
     {
         Coordinator = coordinator;
@@ -36,6 +38,7 @@ internal sealed class SessionRuntime
         HelperPath = helperPath;
         ApplicationId = applicationId;
         SetupState = setupState;
+        GatewayState = gatewayState;
         LifecycleLock = new NamedSessionLock(lifecycleLockScope);
     }
 
@@ -54,6 +57,8 @@ internal sealed class SessionRuntime
     public string ApplicationId { get; }
 
     public SetupStateStore SetupState { get; }
+
+    public GatewayStateStore GatewayState { get; }
 
     public ISessionLock LifecycleLock { get; }
 
@@ -134,6 +139,7 @@ internal sealed class SessionRuntime
             ResolveHelperPath(baseDirectory),
             applicationId,
             new SetupStateStore(paths.SetupStatePath),
+            new GatewayStateStore(paths.GatewayStatePath),
             paths.SessionStatePath + "_Installation");
 
         bool IsCurrentSessionRecord(SessionRecord record)
