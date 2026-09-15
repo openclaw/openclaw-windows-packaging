@@ -28,12 +28,64 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: read
 
 env:
   OPENCLAW_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.openclaw_ref || '0965053fe6b9341776df147a6934b7485c60b5ca' }}
   PACKAGING_ROOT: .
 
 jobs:
+  changes:
+    name: Classify pull request changes
+    runs-on: ubuntu-latest
+    outputs:
+      packaging: ${{ steps.filter.outputs.packaging }}
+    steps:
+      - name: Detect packaging changes
+        id: filter
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" != "pull_request" ]]; then
+            echo "packaging=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          packaging=false
+          files_json="${RUNNER_TEMP}/pull-request-files.json"
+          files_list="${RUNNER_TEMP}/pull-request-files.txt"
+          if ! gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/pulls/${{ github.event.pull_request.number }}/files" \
+            > "${files_json}"; then
+            echo "Unable to enumerate pull request files." >&2
+            exit 1
+          fi
+          if ! jq -r \
+            '.[][] | .filename, (.previous_filename // empty)' \
+            "${files_json}" \
+            > "${files_list}"; then
+            echo "Unable to parse pull request files." >&2
+            exit 1
+          fi
+          if [[ ! -s "${files_list}" ]]; then
+            echo "The pull request file list was empty." >&2
+            exit 1
+          fi
+
+          while IFS= read -r file; do
+            case "${file}" in
+              *.md|docs/*|LICENSE)
+                ;;
+              *)
+                packaging=true
+                break
+                ;;
+            esac
+          done < "${files_list}"
+          echo "packaging=${packaging}" >> "${GITHUB_OUTPUT}"
+
   test-host:
     name: Test Gateway MSIX host
     runs-on: windows-latest
@@ -122,6 +174,8 @@ jobs:
 
   build-package:
     name: Build OpenClaw npm package
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.packaging == 'true' }}
+    needs: changes
     runs-on: ubuntu-latest
     outputs:
       source_sha: ${{ steps.source.outputs.sha }}
@@ -715,3 +769,31 @@ jobs:
             - **ARM64:** `OpenClawGateway-${{ needs.authorize-signing.outputs.release_version }}-arm64.msix`
 
             The packages are signed by OpenClaw Foundation through Azure Artifact Signing.
+
+  ci-gate:
+    name: Gateway MSIX CI
+    if: ${{ always() }}
+    needs:
+      - changes
+      - test-host
+      - build-package
+      - build-payload
+      - build-msix
+      - test-sign-msix
+      - build-msix-bundle
+      - reject-untrusted-official-signing
+      - authorize-signing
+      - sign-msix
+      - publish-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check workflow results
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        shell: bash
+        run: |
+          echo "One or more required workflow jobs failed or were cancelled." >&2
+          exit 1
+
+      - name: Confirm workflow success
+        shell: bash
+        run: echo "All required workflow jobs succeeded or were intentionally skipped."
