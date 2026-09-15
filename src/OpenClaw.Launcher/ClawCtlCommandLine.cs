@@ -9,6 +9,7 @@ internal sealed record ClawCtlHandlers
     public required Func<CancellationToken, Task<int>> Setup { get; init; }
     public required Func<CancellationToken, Task<int>> Status { get; init; }
     public required Func<bool, CancellationToken, Task<int>> Teardown { get; init; }
+    public required Func<CancellationToken, Task<int>> PowerShell { get; init; }
 }
 
 // The clawctl command tree. Only the package-readiness surface belongs here:
@@ -58,12 +59,17 @@ internal static class ClawCtlCommandLine
         teardown.Options.Add(force);
         teardown.SetAction((parsed, cancellationToken) =>
             handlers.Teardown(parsed.GetValue(force), cancellationToken));
+        Command powerShell = new(
+            "pwsh",
+            "Open an interactive PowerShell session inside the isolated agent.");
+        powerShell.SetAction((_, cancellationToken) => handlers.PowerShell(cancellationToken));
 
         RootCommand root = new(RootDescription)
         {
             setup,
             status,
-            teardown
+            teardown,
+            powerShell
         };
 
         // Bare `clawctl` is a discovery request, not a usage error, so the root

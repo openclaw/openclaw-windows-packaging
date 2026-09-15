@@ -73,11 +73,12 @@ public sealed class ClawCtlCommandLineTests
         {
             Setup = _ => Task.FromResult(0),
             Status = _ => Task.FromResult(0),
-            Teardown = (_, _) => Task.FromResult(0)
+            Teardown = (_, _) => Task.FromResult(0),
+            PowerShell = _ => Task.FromResult(0)
         });
 
         Assert.Equal(
-            [ClawCtlCommandLine.SetupCommandName, ClawCtlCommandLine.StatusCommandName, "teardown"],
+            [ClawCtlCommandLine.SetupCommandName, ClawCtlCommandLine.StatusCommandName, "teardown", "pwsh"],
             root.Subcommands.Select(command => command.Name));
     }
 
@@ -95,6 +96,17 @@ public sealed class ClawCtlCommandLineTests
             Normalize(ClawCtlCommandLine.SetupDescription),
             help,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PowerShellHelpDescribesTheIsolatedAgentShell()
+    {
+        (int exitCode, string output, string error) =
+            await RunAsync("pwsh", "--help").ConfigureAwait(true);
+
+        Assert.Equal(0, exitCode);
+        Assert.Empty(error);
+        Assert.Contains("isolated agent", Normalize(output), StringComparison.Ordinal);
     }
 
     // The built-in version action reports the entry assembly, which under a test
