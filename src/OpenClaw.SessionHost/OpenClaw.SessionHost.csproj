@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <AssemblyName>openclaw-session-host</AssemblyName>
+    <RootNamespace>OpenClaw.SessionHost</RootNamespace>
+    <Platforms>x64;arm64</Platforms>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <TargetLatestRuntimePatch>false</TargetLatestRuntimePatch>
+    <PublishAot Condition="'$(RuntimeIdentifier)' != ''">true</PublishAot>
+    <UseAppHost Condition="'$(RuntimeIdentifier)' != ''">true</UseAppHost>
+
+    <!--
+      This helper runs inside the isolated session, never as a packaged app,
+      so it takes no part in MSIX tooling.
+    -->
+    <WindowsPackageType>None</WindowsPackageType>
+    <EnableMSIXTooling>false</EnableMSIXTooling>
+    <DefineConstants>$(DefineConstants);OPENCLAW_SESSION_HOST</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpenClaw.SessionProtocol\OpenClaw.SessionProtocol.csproj" />
+    <InternalsVisibleTo Include="OpenClaw.Launcher.Tests" />
+  </ItemGroup>
+
+</Project>

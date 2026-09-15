@@ -203,6 +203,31 @@ function New-TestArtifact {
             Sort-Object path
     )
 
+    $sessionHostDirectory = Join-Path $staging "session-host\$Architecture"
+    New-Item -Path $sessionHostDirectory -ItemType Directory -Force | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $sessionHostDirectory 'openclaw-session-host.exe'),
+        "session-host-$Architecture")
+    $sessionHostFiles = @(
+        Get-ChildItem -LiteralPath $sessionHostDirectory -File -Recurse |
+            ForEach-Object {
+                [ordered]@{
+                    path = (
+                        [IO.Path]::GetRelativePath(
+                            $sessionHostDirectory,
+                            $_.FullName
+                        )
+                    ).Replace('\', '/')
+                    length = $_.Length
+                    sha256 = (
+                        Get-FileHash `
+                            -LiteralPath $_.FullName `
+                            -Algorithm SHA256
+                    ).Hash.ToLowerInvariant()
+                }
+            }
+    )
+
     $msixName = "OpenClawGateway-$Architecture.msix"
     $msixPath = Join-Path $directory $msixName
     [IO.Compression.ZipFile]::CreateFromDirectory($staging, $msixPath)
@@ -227,6 +252,7 @@ function New-TestArtifact {
         nodeRuntimeSha256 = $nodeRuntimeHash
         mxcRuntimeVersion = $mxcRuntimeVersion
         mxcRuntimeFiles = $mxcRuntimeFiles
+        sessionHostFiles = $sessionHostFiles
         architecture = $Architecture
         archive = $msixName
         sha256 = $msixHash
@@ -463,6 +489,20 @@ try {
                 -Root $testRoot `
                 -RequestedRef 'v2026.8.2'
         }
+
+    Reset-TestArtifacts
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        Set-Content `
+            -LiteralPath (
+                Join-Path $Expanded 'session-host\x64\openclaw-session-host.exe'
+            ) `
+            -Value 'tampered' `
+            -Encoding utf8
+    }
+    Assert-Fails `
+        -MessagePattern 'session host file is invalid' `
+        -Action { Invoke-PolicyValidation -Root $testRoot }
 
     $x64MetadataPath = Join-Path $testRoot 'x64\msix-metadata.json'
     $x64Metadata = Get-Content -LiteralPath $x64MetadataPath -Raw |

@@ -364,6 +364,51 @@ New-Item `
 
 try {
     Add-VswhereToPath
+    $sessionHostProject = Join-Path `
+        $repositoryRoot `
+        'src\OpenClaw.SessionHost\OpenClaw.SessionHost.csproj'
+    $sessionHostOutput = Join-Path `
+        $repositoryRoot `
+        "content\session-host\$Architecture"
+    Remove-DirectoryIfPresent -Path $sessionHostOutput
+    New-Item -Path $sessionHostOutput -ItemType Directory -Force | Out-Null
+    Write-Host "Publishing the NativeAOT win-$Architecture session host."
+    Invoke-CheckedCommand `
+        -FailureMessage 'NativeAOT session host publish failed.' `
+        -Command {
+            & dotnet publish $sessionHostProject `
+                --configuration Release `
+                --runtime "win-$Architecture" `
+                --self-contained `
+                --no-restore `
+                "-p:Platform=$Architecture" `
+                -p:PublishAot=true `
+                --output $sessionHostOutput `
+                --nologo
+        }
+    $sessionHostFiles = @(
+        Get-ChildItem -LiteralPath $sessionHostOutput -File -Force -Recurse |
+            Where-Object Extension -notin '.pdb', '.xml' |
+            ForEach-Object {
+                [ordered]@{
+                    path = (
+                        [IO.Path]::GetRelativePath(
+                            $sessionHostOutput,
+                            $_.FullName
+                        )
+                    ).Replace('\', '/')
+                    length = $_.Length
+                    sha256 = (
+                        Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256
+                    ).Hash.ToLowerInvariant()
+                }
+            } |
+            Sort-Object path
+    )
+    if (-not ($sessionHostFiles.path -contains 'openclaw-session-host.exe')) {
+        throw "The published $Architecture session host is incomplete."
+    }
+
     $appxOutput = $msixBuildDirectory.TrimEnd('\') + '\'
     Write-Host "Building unsigned NativeAOT win-$Architecture MSIX with MSBuild."
     Invoke-CheckedCommand `
@@ -441,6 +486,14 @@ try {
             "mxc/$Architecture/$($mxcFile.path)",
             [pscustomobject]@{
                 Hash = $mxcFile.sha256
+            }
+        )
+    }
+    foreach ($sessionHostFile in $sessionHostFiles) {
+        $expectedPackageFiles.Add(
+            "session-host/$Architecture/$($sessionHostFile.path)",
+            [pscustomobject]@{
+                Hash = $sessionHostFile.sha256
             }
         )
     }
@@ -588,6 +641,7 @@ try {
         nodeRuntimeSha256 = $nodeArchiveHash
         mxcRuntimeVersion = [string]$mxcProvenance.version
         mxcRuntimeFiles = $mxcRuntimeFiles
+        sessionHostFiles = $sessionHostFiles
         architecture = $Architecture
         archive = $msixName
         sha256 = $msixHash

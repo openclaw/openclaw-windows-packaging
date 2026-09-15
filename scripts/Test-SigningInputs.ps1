@@ -223,6 +223,7 @@ foreach ($architecture in @('x64', 'arm64')) {
         $metadata.nodeRuntimeSha256 -notmatch '^[0-9a-fA-F]{64}$' -or
         [string]::IsNullOrWhiteSpace([string]$metadata.mxcRuntimeVersion) -or
         @($metadata.mxcRuntimeFiles).Count -eq 0 -or
+        @($metadata.sessionHostFiles).Count -eq 0 -or
         $metadata.architecture -ne $architecture -or
         $metadata.archive -ne $msix.Name -or
         $metadata.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
@@ -376,6 +377,78 @@ foreach ($architecture in @('x64', 'arm64')) {
             }).Count -ne 0
         ) {
             throw "The embedded $architecture MXC runtime file set is invalid."
+        }
+
+        $expectedSessionHostPaths =
+            [System.Collections.Generic.HashSet[string]]::new(
+                [System.StringComparer]::OrdinalIgnoreCase
+            )
+        $hasSessionHost = $false
+        foreach ($file in @($metadata.sessionHostFiles)) {
+            $relativePath = [string]$file.path
+            $segments = @($relativePath.Split('/'))
+            if (
+                [string]::IsNullOrWhiteSpace($relativePath) -or
+                $relativePath.StartsWith('/') -or
+                [IO.Path]::IsPathRooted($relativePath) -or
+                $relativePath.Contains('\') -or
+                $relativePath.Contains(':') -or
+                $segments -contains '' -or
+                $segments -contains '.' -or
+                $segments -contains '..' -or
+                $file.length -isnot [int64] -or
+                $file.length -lt 0 -or
+                $file.sha256 -notmatch '^[0-9a-fA-F]{64}$'
+            ) {
+                throw "The embedded $architecture session host inventory is invalid."
+            }
+
+            $packagePath = "session-host/$architecture/$relativePath"
+            if (-not $expectedSessionHostPaths.Add($packagePath)) {
+                throw (
+                    "The embedded $architecture session host inventory has " +
+                    'duplicate paths.'
+                )
+            }
+
+            $entry = Get-PackageEntry `
+                -EntriesByPath $entriesByPath `
+                -Path $packagePath
+            if (
+                $entry.Length -ne $file.length -or
+                (Get-PackageEntrySha256 -Entry $entry) -ine $file.sha256
+            ) {
+                throw (
+                    "The embedded $architecture session host file is invalid: " +
+                    $relativePath
+                )
+            }
+
+            if ($relativePath -ieq 'openclaw-session-host.exe') {
+                $hasSessionHost = $true
+            }
+        }
+
+        if (-not $hasSessionHost) {
+            throw "The embedded $architecture session host is incomplete."
+        }
+
+        $actualSessionHostPaths = @(
+            $entriesByPath.Keys |
+                Where-Object {
+                    $_.StartsWith(
+                        "session-host/$architecture/",
+                        [StringComparison]::OrdinalIgnoreCase
+                    )
+                }
+        )
+        if (
+            $actualSessionHostPaths.Count -ne $expectedSessionHostPaths.Count -or
+            @($actualSessionHostPaths | Where-Object {
+                -not $expectedSessionHostPaths.Contains($_)
+            }).Count -ne 0
+        ) {
+            throw "The embedded $architecture session host file set is invalid."
         }
 
         [xml]$manifest = Read-ZipEntryText `

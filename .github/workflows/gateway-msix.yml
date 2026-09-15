@@ -449,6 +449,11 @@ jobs:
             -p:PublishAot=true `
             -p:IncludePackagingContent=true `
             -p:Platform='${{ matrix.architecture }}'
+          dotnet restore `
+            .\src\OpenClaw.SessionHost\OpenClaw.SessionHost.csproj `
+            --runtime 'win-${{ matrix.architecture }}' `
+            -p:PublishAot=true `
+            -p:Platform='${{ matrix.architecture }}'
 
       - name: Compose unsigned MSIX
         shell: pwsh

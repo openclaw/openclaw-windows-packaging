@@ -127,6 +127,15 @@ try {
                 -p:IncludePackagingContent=true `
                 "-p:Platform=$Architecture"
         }
+    Invoke-CheckedCommand `
+        -FailureMessage 'Session host dependency restore failed.' `
+        -Command {
+            & dotnet restore `
+                .\src\OpenClaw.SessionHost\OpenClaw.SessionHost.csproj `
+                --runtime "win-$Architecture" `
+                -p:PublishAot=true `
+                "-p:Platform=$Architecture"
+        }
 
     $sourceCommit = (& git rev-parse HEAD) -join ''
     if ($LASTEXITCODE -ne 0 -or
