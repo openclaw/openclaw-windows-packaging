@@ -30,6 +30,10 @@ permissions:
   contents: read
   pull-requests: read
 
+concurrency:
+  group: gateway-msix-${{ inputs.signing_mode == 'official' && 'official' || github.run_id }}
+  cancel-in-progress: false
+
 env:
   OPENCLAW_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.openclaw_ref || '3a9d69db306cd7f081e06254cb89c4bcc14a7107' }}
   PACKAGING_ROOT: .
@@ -286,6 +290,12 @@ jobs:
             ./scripts/Test-OpenClawPackage.ps1 `
             $env:RUNNER_TEMP/Test-OpenClawPackage.ps1
 
+      - name: Download immutable source snapshot
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-source-resolution
+          path: ${{ runner.temp }}/openclaw-source
+
       - name: Check out OpenClaw source
         if: ${{ steps.package-cache.outputs.cache-hit != 'true' }}
         uses: actions/checkout@v7
@@ -339,7 +349,15 @@ jobs:
             "nodeVersion": "${node_version}",
             "packageSha256": "${package_sha256}"
           }
-          EOF
+          $source = Get-Content -LiteralPath $snapshotPath -Raw | ConvertFrom-Json
+          if ($source.resolvedCommit -cne $env:BUILT_SHA -or
+              $source.packageVersion -cne $env:BUILT_VERSION -or
+              $env:NODE_VERSION -notmatch '^\d+\.\d+\.\d+$') {
+            throw 'The source build does not match the resolved OpenClaw identity.'
+          }
+          $source | Add-Member -NotePropertyName nodeVersion -NotePropertyValue $env:NODE_VERSION
+          $source | ConvertTo-Json -Depth 4 |
+            Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'openclaw-package/source.json') -Encoding utf8
 
       - name: Verify OpenClaw package
         id: package
@@ -369,6 +387,7 @@ jobs:
         with:
           name: openclaw-gateway-npm-package
           path: ${{ runner.temp }}/openclaw-package/
+          overwrite: true
           if-no-files-found: error
           retention-days: 7
 
@@ -447,6 +466,7 @@ jobs:
         with:
           name: openclaw-gateway-payload-${{ matrix.architecture }}
           path: ${{ runner.temp }}\openclaw-payload\
+          overwrite: true
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 1 || 7 }}
 
@@ -499,7 +519,7 @@ jobs:
           .\scripts\Build-MSIX.ps1 `
             -PayloadDirectory '${{ runner.temp }}\openclaw-payload' `
             -Architecture '${{ matrix.architecture }}' `
-            -PackageVersion $packageVersion `
+            -PackageVersion $env:PACKAGE_VERSION `
             -SourceCommit '${{ github.sha }}' `
             -OutputDirectory '${{ runner.temp }}\openclaw-msix'
 
@@ -507,6 +527,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: openclaw-gateway-msix-unsigned-${{ matrix.architecture }}
+          overwrite: true
           path: |
             ${{ runner.temp }}\openclaw-msix\OpenClawGateway-${{ matrix.architecture }}.msix
             ${{ runner.temp }}\openclaw-msix\msix-metadata.json
@@ -551,6 +572,7 @@ jobs:
         with:
           name: openclaw-gateway-msix-test-signed-x64
           path: test-signed\x64\
+          overwrite: true
           if-no-files-found: error
           retention-days: 7
 
@@ -559,6 +581,7 @@ jobs:
         with:
           name: openclaw-gateway-msix-test-signed-arm64
           path: test-signed\arm64\
+          overwrite: true
           if-no-files-found: error
           retention-days: 7
 
@@ -613,7 +636,7 @@ jobs:
           .\scripts\Build-MSIXBundle.ps1 `
             -X64Package artifacts\x64\OpenClawGateway-x64.msix `
             -Arm64Package artifacts\arm64\OpenClawGateway-arm64.msix `
-            -PackageVersion $packageVersion `
+            -PackageVersion $env:PACKAGE_VERSION `
             -OutputPath artifacts\bundle\OpenClawGateway.msixbundle
 
       - name: Upload unsigned multi-architecture MSIX bundle
@@ -621,6 +644,7 @@ jobs:
         with:
           name: openclaw-gateway-msix-unsigned-bundle
           path: artifacts\bundle\OpenClawGateway.msixbundle
+          overwrite: true
           if-no-files-found: error
           retention-days: 7
 
@@ -721,6 +745,7 @@ jobs:
     name: Authorize official Gateway MSIX signing
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode == 'official' && github.ref == 'refs/heads/main' }}
     needs:
+      - resolve-source
       - build-msix
       - build-msix-bundle
     runs-on: windows-latest
@@ -755,9 +780,18 @@ jobs:
           name: openclaw-gateway-msix-unsigned-bundle
           path: artifacts\bundle
 
+      - name: Download immutable source snapshot
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-source-resolution
+          path: artifacts\source
+
       - name: Resolve official release metadata
         id: release
         shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ needs.resolve-source.outputs.package_version }}
+          RELEASE_TAG: ${{ needs.resolve-source.outputs.release_tag }}
         run: |
           $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
             ConvertFrom-Json
@@ -776,15 +810,26 @@ jobs:
       - name: Enforce official signing policy
         shell: pwsh
         env:
-          OPENCLAW_REF: ${{ inputs.openclaw_ref }}
           PACKAGING_COMMIT: ${{ github.sha }}
+          SNAPSHOT_SHA256: ${{ needs.resolve-source.outputs.snapshot_sha256 }}
         run: |
           .\scripts\Test-SigningInputs.ps1 `
             -ArtifactsDirectory artifacts `
             -PolicyPath .\release-policy.json `
             -BundlePath artifacts\bundle\OpenClawGateway.msixbundle `
-            -RequestedRef $env:OPENCLAW_REF `
+            -SourceResolutionPath artifacts\source\source-resolution.json `
+            -SourceResolutionSha256 $env:SNAPSHOT_SHA256 `
+            -WorkflowRunId $env:GITHUB_RUN_ID `
             -PackagingCommit $env:PACKAGING_COMMIT
+
+      - name: Reject duplicate or older official releases
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_VERSION: ${{ needs.resolve-source.outputs.package_version }}
+        run: |
+          .\scripts\Test-OfficialReleaseVersion.ps1 `
+            -PackageVersion $env:PACKAGE_VERSION
 
   sign-msix:
     name: Officially sign Gateway MSIX packages
@@ -800,6 +845,11 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
       - name: Download unsigned x64 package
         uses: actions/download-artifact@v8
         with:
@@ -817,6 +867,15 @@ jobs:
         with:
           name: openclaw-gateway-msix-unsigned-bundle
           path: artifacts\bundle
+
+      - name: Recheck official release version before signing
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_VERSION: ${{ needs.authorize-signing.outputs.package_version }}
+        run: |
+          .\scripts\Test-OfficialReleaseVersion.ps1 `
+            -PackageVersion $env:PACKAGE_VERSION
 
       - name: Azure login
         uses: azure/login@v3
@@ -906,6 +965,7 @@ jobs:
         with:
           name: openclaw-gateway-msix-x64
           path: artifacts\x64\
+          overwrite: true
           if-no-files-found: error
           retention-days: 7
 
@@ -914,6 +974,7 @@ jobs:
         with:
           name: openclaw-gateway-msix-arm64
           path: artifacts\arm64\
+          overwrite: true
           if-no-files-found: error
           retention-days: 7
 
@@ -922,6 +983,7 @@ jobs:
         with:
           name: openclaw-gateway-msix-bundle
           path: artifacts\bundle\OpenClawGateway.msixbundle
+          overwrite: true
           if-no-files-found: error
           retention-days: 7
 
@@ -929,12 +991,18 @@ jobs:
     name: Publish signed Gateway MSIX release
     if: ${{ needs.sign-msix.result == 'success' }}
     needs:
+      - resolve-source
       - authorize-signing
       - sign-msix
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
       - name: Download signed x64 package
         uses: actions/download-artifact@v8
         with:
@@ -953,6 +1021,12 @@ jobs:
           name: openclaw-gateway-msix-bundle
           path: signed/bundle
 
+      - name: Download immutable source snapshot
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-source-resolution
+          path: signed/source
+
       - name: Stage versioned release assets
         shell: bash
         env:
@@ -966,6 +1040,18 @@ jobs:
             "release-assets/OpenClawGateway-${RELEASE_VERSION}-arm64.msix"
           cp signed/bundle/OpenClawGateway.msixbundle \
             "release-assets/OpenClawGateway-${RELEASE_VERSION}.msixbundle"
+          cp signed/source/source-resolution.json release-assets/source-resolution.json
+          cp signed/x64/msix-metadata.json release-assets/msix-metadata-x64.json
+          cp signed/arm64/msix-metadata.json release-assets/msix-metadata-arm64.json
+
+      - name: Recheck official release version before publication
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_VERSION: ${{ needs.authorize-signing.outputs.package_version }}
+        run: |
+          ./scripts/Test-OfficialReleaseVersion.ps1 `
+            -PackageVersion $env:PACKAGE_VERSION
 
       - name: Create permanent GitHub release
         uses: softprops/action-gh-release@v3
@@ -981,9 +1067,12 @@ jobs:
           files: |
             release-assets/*.msix
             release-assets/*.msixbundle
+            release-assets/*.json
           body: |
-            Packages OpenClaw Gateway `${{ needs.authorize-signing.outputs.release_tag }}`
-            from [`openclaw/openclaw@${{ inputs.openclaw_ref }}`](https://github.com/openclaw/openclaw/commit/${{ inputs.openclaw_ref }}).
+            Packages OpenClaw `${{ needs.resolve-source.outputs.source_version }}` selected
+            from the upstream `extended-stable` channel for this workflow run,
+            from [`openclaw/openclaw@${{ needs.resolve-source.outputs.source_sha }}`](https://github.com/openclaw/openclaw/commit/${{ needs.resolve-source.outputs.source_sha }}).
+            The source snapshot and architecture metadata are included as release assets.
 
             ### Downloads
             - **Recommended:** `OpenClawGateway-${{ needs.authorize-signing.outputs.release_version }}.msixbundle`

@@ -193,6 +193,8 @@ if (-not (Test-Path -LiteralPath $payloadMetadata -PathType Leaf)) {
 }
 
 $payloadInfo = Get-Content -LiteralPath $payloadMetadata -Raw | ConvertFrom-Json
+$payloadSelection = $payloadInfo |
+    Select-Object channel, releaseTag, tagObject, resolvedAt, registryIntegrity
 if (
     $payloadInfo.repository -ne 'https://github.com/openclaw/openclaw' -or
     $payloadInfo.architecture -ne $Architecture -or
@@ -205,6 +207,13 @@ if (
     $payloadInfo.resolvedCommit -notmatch '^[0-9a-fA-F]{40}$'
 ) {
     throw 'Payload metadata is not valid for this MSIX package.'
+}
+
+if ($null -ne $payloadSelection.channel) {
+    . (Join-Path $PSScriptRoot 'OpenClawSource.ps1')
+    $policy = Read-OpenClawReleasePolicy -Path (
+        Join-Path $repositoryRoot 'release-policy.json')
+    Assert-OpenClawSource -Source $payloadInfo -Policy $policy
 }
 
 $nodeVersion = $payloadInfo.nodeVersion.TrimStart('v')
@@ -639,6 +648,11 @@ try {
         payloadRequestedRef = $payloadInfo.requestedRef
         payloadResolvedCommit = $payloadInfo.resolvedCommit.ToLowerInvariant()
         payloadPackageVersion = [string]$payloadInfo.packageVersion
+        payloadChannel = $payloadSelection.channel
+        payloadReleaseTag = $payloadSelection.releaseTag
+        payloadTagObject = $payloadSelection.tagObject
+        payloadResolvedAt = $payloadSelection.resolvedAt
+        payloadRegistryIntegrity = $payloadSelection.registryIntegrity
         payloadLayout = 'immutable-package'
         payloadFileCount = $payloadFiles.Count
         nodeRuntimeVersion = $nodeVersion

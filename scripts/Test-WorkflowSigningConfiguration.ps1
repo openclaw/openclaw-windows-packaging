@@ -69,6 +69,21 @@ $requiredFragments = @(
     'overwrite_files: false'
     'fail_on_unmatched_files: true'
     'release-assets/*.msixbundle'
+    'release-assets/*.json'
+    'name: Resolve immutable OpenClaw source'
+    'name: Restore source snapshot for a retry'
+    'name: Save source snapshot'
+    'retention-days: 90'
+    'ref: ${{ needs.resolve-source.outputs.source_sha }}'
+    'EXPECTED_SNAPSHOT_HASH: ${{ needs.resolve-source.outputs.snapshot_sha256 }}'
+    'PACKAGE_VERSION: ${{ needs.resolve-source.outputs.package_version }}'
+    '-SourceResolutionPath artifacts\source\source-resolution.json'
+    '-SourceResolutionSha256 $env:SNAPSHOT_SHA256'
+    '-WorkflowRunId $env:GITHUB_RUN_ID'
+    'name: Reject duplicate or older official releases'
+    'name: Recheck official release version before signing'
+    'name: Recheck official release version before publication'
+    "group: gateway-msix-`${{ inputs.signing_mode == 'official' && 'official' || github.run_id }}"
 )
 
 foreach ($fragment in $requiredFragments) {
@@ -123,6 +138,22 @@ if ($pinnedRevisions.Count -ne 1) {
 
 if ($workflow.Contains('AZURE_CLIENT_SECRET', [StringComparison]::Ordinal)) {
     throw 'Signing workflow must use OIDC, not an Azure client secret.'
+}
+
+if ($workflow.Contains('OPENCLAW_REF:', [StringComparison]::Ordinal) -or
+    $workflow -match 'default:\s+[0-9a-f]{40}' -or
+    $workflow.Contains('-RequestedRef ', [StringComparison]::Ordinal)) {
+    throw 'The workflow must resolve the policy channel, not retain a second default pin or signing ref.'
+}
+if ($workflow.IndexOf('name: Enforce official signing policy', [StringComparison]::Ordinal) -gt
+    $workflow.IndexOf('name: Azure login', [StringComparison]::Ordinal)) {
+    throw 'Source and package authorization must precede Azure credentials.'
+}
+if ($workflow.IndexOf('name: Recheck official release version before signing', [StringComparison]::Ordinal) -gt
+    $workflow.IndexOf('name: Azure login', [StringComparison]::Ordinal) -or
+    $workflow.IndexOf('name: Recheck official release version before publication', [StringComparison]::Ordinal) -gt
+    $workflow.IndexOf('name: Create permanent GitHub release', [StringComparison]::Ordinal)) {
+    throw 'Signing and publication retries must recheck duplicate/downgrade protection.'
 }
 
 Write-Host 'Gateway MSIX signing workflow configuration passed.'
