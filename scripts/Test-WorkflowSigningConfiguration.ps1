@@ -81,6 +81,10 @@ if ($workflow.Contains('OPENCLAW_REF:', [StringComparison]::Ordinal) -or
     $workflow.Contains('-RequestedRef ', [StringComparison]::Ordinal)) {
     throw 'The workflow must resolve the policy channel, not retain a second default pin or signing ref.'
 }
+if ($workflow.Contains('--allow-unreleased-changelog', [StringComparison]::Ordinal) -or
+    $workflow.Contains('--pnpm-pack', [StringComparison]::Ordinal)) {
+    throw 'Use the shared upstream packer options and its defaults, not switches absent from extended stable.'
+}
 if ($workflow.IndexOf('name: Enforce official signing policy', [StringComparison]::Ordinal) -gt
     $workflow.IndexOf('name: Azure login', [StringComparison]::Ordinal)) {
     throw 'Source and package authorization must precede Azure credentials.'

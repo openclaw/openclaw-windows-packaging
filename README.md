@@ -146,6 +146,12 @@ the launcher derives its runtime version and LocalState path from the bundled
 archive name. There is no separate packaging-side Node.js version pin or
 runtime-support policy.
 
+Packing uses the selected revision's `package-openclaw-for-docker.mjs` with
+the shared `--skip-build` and output options. That upstream helper owns the
+packing-tool choice, changelog preparation, inventory, and tarball checks.
+The workflow does not pass newer-only packing switches or bypass upstream
+release-note requirements; a manual ref must satisfy its own packing checks.
+
 Build validation also checks the root package and generated Gateway provenance
 against the resolved version and full source commit. Newer upstream builds
 must share their explicit `buildId` with the Control UI service worker and

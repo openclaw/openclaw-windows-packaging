@@ -269,9 +269,7 @@ jobs:
           artifact_dir="${RUNNER_TEMP}/openclaw-package"
           mkdir -p "${artifact_dir}"
           node scripts/package-openclaw-for-docker.mjs \
-            --allow-unreleased-changelog \
             --skip-build \
-            --pnpm-pack \
             --output-dir "${artifact_dir}" \
             --output-name openclaw.tgz
 
