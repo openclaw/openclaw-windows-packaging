@@ -295,6 +295,35 @@ internal static class Program
                         .ConfigureAwait(false);
                     return 0;
                 },
+                CollectLogs = async (requestedPath, cancellationToken) =>
+                {
+                    HostPaths paths = HostPaths.Create();
+                    Gateway.DiagnosticsBundleResult result =
+                        await Gateway.GatewayRuntime.Create(
+                            options,
+                            paths,
+                            GetSessionRuntime(),
+                            log)
+                        .CollectLogsAsync(requestedPath, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (result.BundlePath is not null)
+                    {
+                        await output.WriteLineAsync(
+                            $"Diagnostics bundle created: {result.BundlePath}").ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await output.WriteLineAsync(
+                            "No diagnostic files were available to bundle.").ConfigureAwait(false);
+                    }
+
+                    foreach (string warning in result.Notes)
+                    {
+                        await output.WriteLineAsync($"Warning: {warning}").ConfigureAwait(false);
+                    }
+
+                    return 0;
+                },
                 Teardown = async (_, cancellationToken) =>
                 {
                     Session.SessionRuntime runtime = GetSessionRuntime();

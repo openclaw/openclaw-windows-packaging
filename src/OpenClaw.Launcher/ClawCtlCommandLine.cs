@@ -8,6 +8,7 @@ internal sealed record ClawCtlHandlers
 {
     public required Func<CancellationToken, Task<int>> Setup { get; init; }
     public required Func<CancellationToken, Task<int>> Status { get; init; }
+    public required Func<string?, CancellationToken, Task<int>> CollectLogs { get; init; }
     public required Func<bool, CancellationToken, Task<int>> Teardown { get; init; }
     public required Func<CancellationToken, Task<int>> PowerShell { get; init; }
     public required Func<CancellationToken, Task<int>> GatewayStart { get; init; }
@@ -23,6 +24,7 @@ internal static class ClawCtlCommandLine
 {
     public const string SetupCommandName = "setup";
     public const string StatusCommandName = "status";
+    public const string CollectLogsCommandName = "collect-logs";
 
     // Response-file expansion is off. A leading `@` means nothing to clawctl,
     // so it is reported as an unrecognized argument instead of silently reading
@@ -57,6 +59,16 @@ internal static class ClawCtlCommandLine
         setup.SetAction((_, cancellationToken) => handlers.Setup(cancellationToken));
         Command status = new(StatusCommandName, "Show the recorded isolated session without changing it.");
         status.SetAction((_, cancellationToken) => handlers.Status(cancellationToken));
+        Option<string?> outputPath = new("--output")
+        {
+            Description = "Path for the diagnostics ZIP file."
+        };
+        Command collectLogs = new(
+            CollectLogsCommandName,
+            "Create a redacted diagnostics bundle, including session files when reachable.");
+        collectLogs.Options.Add(outputPath);
+        collectLogs.SetAction((parsed, cancellationToken) =>
+            handlers.CollectLogs(parsed.GetValue(outputPath), cancellationToken));
         Option<bool> force = new("--force") { Description = "Skip confirmation and remove the owned session." };
         Command teardown = new("teardown", "Stop and remove the owned isolated session.");
         teardown.Options.Add(force);
@@ -83,6 +95,7 @@ internal static class ClawCtlCommandLine
         {
             setup,
             status,
+            collectLogs,
             teardown,
             powerShell,
             gateway
