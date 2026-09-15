@@ -132,6 +132,11 @@ the launcher derives its runtime version and LocalState path from the bundled
 archive name. There is no separate packaging-side Node.js version pin or
 runtime-support policy.
 
+Non-official workflows cache the packed OpenClaw tarball by its resolved
+upstream commit. A cache hit still verifies the tarball's recorded commit and
+SHA-256 before it can feed a payload build. Official-signing workflows bypass
+the cache and always rebuild upstream source.
+
 The payload artifact records the requested ref and resolved upstream commit in
 `payload-metadata.json`. That build-only file is not embedded in the MSIX.
 `msix-metadata.json` records both the packaging repository commit and bundled

@@ -101,12 +101,14 @@ package.
   `%LOCALAPPDATA%\OpenClawGatewayMSIX` outside an MSIX context) with a named
   mutex so concurrent processes append complete records.
 - The GitHub workflow first builds and packs a pinned `openclaw/openclaw`
-  revision on Linux using that revision's `setup-node-env` action. The resolved
-  Node.js version flows through `source.json` and `payload-metadata.json`;
+  revision on Linux using that revision's `setup-node-env` action. Non-official
+  runs cache that tarball by resolved upstream commit and verify its recorded
+  commit and SHA-256 on every use; official signing always rebuilds it. The
+  resolved Node.js version flows through `source.json` and `payload-metadata.json`;
   each architecture-specific Windows job uses that same version to build the
   expanded payload and immediately compose its MSIX. `Build-MSIX.ps1` downloads
   the matching official archive, rejects Node.js from the application payload,
-  builds the application inventory, and publishes the NativeAOT host, validates
+  builds the application inventory, publishes the NativeAOT host, validates
   package contents, and emits MSIX metadata including the runtime hash.
 - Unsigned artifacts are the normal PR/push output. Test signing uses a
   temporary runner-local certificate. Official signing is gated to `main` and
