@@ -103,7 +103,9 @@ package.
 - The GitHub workflow first builds and packs a pinned `openclaw/openclaw`
   revision on Linux using that revision's `setup-node-env` action. Non-official
   runs cache that tarball by resolved upstream commit and verify its recorded
-  commit and SHA-256 on every use; official signing always rebuilds it. The
+  commit and SHA-256 on every use. They also cache each architecture's Windows
+  dependency tree by commit, Node.js version, and payload script hash while
+  rerunning all payload validation; official signing bypasses both caches. The
   resolved Node.js version flows through `source.json` and `payload-metadata.json`;
   each architecture-specific Windows job uses that same version to build the
   expanded payload, validates the installed Gateway and Control UI build identities,

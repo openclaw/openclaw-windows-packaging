@@ -355,13 +355,44 @@ jobs:
           name: openclaw-gateway-npm-package
           path: ${{ runner.temp }}\openclaw-package
 
+      - name: Resolve payload cache key
+        id: payload-key
+        shell: pwsh
+        run: |
+          $cacheKey = .\scripts\Get-OpenClawCacheKey.ps1 `
+            -Layer payload `
+            -Commit '${{ needs.build-package.outputs.source_sha }}' `
+            -Architecture '${{ matrix.architecture }}' `
+            -NodeVersion '${{ needs.build-package.outputs.node_version }}'
+          "key=$cacheKey" >> $env:GITHUB_OUTPUT
+
+      - name: Restore cached Windows dependency tree
+        id: payload-cache
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.signing_mode != 'official' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}\openclaw-stage-${{ matrix.architecture }}
+          key: ${{ steps.payload-key.outputs.key }}
+
       - name: Build expanded payload
         shell: pwsh
         run: |
-          .\scripts\Build-Payload.ps1 `
-            -PackageDirectory '${{ runner.temp }}\openclaw-package' `
-            -Architecture '${{ matrix.architecture }}' `
-            -OutputDirectory '${{ runner.temp }}\openclaw-payload'
+          $parameters = @{
+            PackageDirectory = '${{ runner.temp }}\openclaw-package'
+            Architecture = '${{ matrix.architecture }}'
+            OutputDirectory = '${{ runner.temp }}\openclaw-payload'
+          }
+          if ('${{ steps.payload-cache.outputs.cache-hit }}' -eq 'true') {
+            $parameters.ReuseStagedInstall = $true
+          }
+          .\scripts\Build-Payload.ps1 @parameters
+
+      - name: Save Windows dependency tree cache
+        if: ${{ steps.payload-cache.outputs.cache-hit != 'true' && (github.event_name != 'workflow_dispatch' || inputs.signing_mode != 'official') }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}\openclaw-stage-${{ matrix.architecture }}
+          key: ${{ steps.payload-key.outputs.key }}
 
       - name: Upload payload
         uses: actions/upload-artifact@v7
