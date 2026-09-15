@@ -80,8 +80,6 @@ $requiredFragments = @(
     'EXPECTED_PACKAGE_VERSION: ${{ needs.resolve-source.outputs.source_version }}'
     '-ExpectedSourceCommit $env:EXPECTED_SOURCE_COMMIT'
     '-ExpectedPackageVersion $env:EXPECTED_PACKAGE_VERSION'
-    'use-actions-cache: "false"'
-    'save-actions-cache: "false"'
     'PACKAGE_VERSION: ${{ needs.resolve-source.outputs.package_version }}'
     '-SourceResolutionPath artifacts\source\source-resolution.json'
     '-SourceResolutionSha256 $env:SNAPSHOT_SHA256'
@@ -151,6 +149,10 @@ if ($cacheModes.Count -ne 1 -or
     $workflow -notmatch '(?m)^cache-mode: none\s*$' -or
     $workflow -match '(?m)^\s*cache:\s*true\s*$') {
     throw 'Every job must inherit native cache-mode: none, without cache overrides or opt-ins.'
+}
+if ($workflow.Contains('use-actions-cache:', [StringComparison]::Ordinal) -or
+    $workflow.Contains('save-actions-cache:', [StringComparison]::Ordinal)) {
+    throw 'Use native cache-mode: none, not legacy cache inputs unsupported by newer upstream setup actions.'
 }
 
 if ($workflow.Contains('OPENCLAW_REF:', [StringComparison]::Ordinal) -or

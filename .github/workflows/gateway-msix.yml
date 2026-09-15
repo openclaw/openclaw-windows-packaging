@@ -313,8 +313,6 @@ jobs:
         with:
           install-bun: "false"
           install-deps: "false"
-          use-actions-cache: "false"
-          save-actions-cache: "false"
 
       - name: Install dependencies
         if: ${{ steps.package-cache.outputs.cache-hit != 'true' }}
