@@ -70,7 +70,7 @@ public sealed class ClawCtlCommandLineTests
     {
         RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
         {
-            Setup = _ => Task.FromResult(0),
+            Setup = (_, _) => Task.FromResult(0),
             Status = _ => Task.FromResult(0),
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
@@ -98,7 +98,7 @@ public sealed class ClawCtlCommandLineTests
         int starts = 0;
         RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
         {
-            Setup = _ => Task.FromResult(0),
+            Setup = (_, _) => Task.FromResult(0),
             Status = _ => Task.FromResult(0),
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
@@ -132,6 +132,32 @@ public sealed class ClawCtlCommandLineTests
             Normalize(ClawCtlCommandLine.SetupDescription),
             help,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SetupFreshPassesTheExplicitDestructiveAuthorization()
+    {
+        SetupOptions? received = null;
+        RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
+        {
+            Setup = (options, _) =>
+            {
+                received = options;
+                return Task.FromResult(0);
+            },
+            Status = _ => Task.FromResult(0),
+            CollectLogs = (_, _) => Task.FromResult(0),
+            Teardown = (_, _) => Task.FromResult(0),
+            PowerShell = _ => Task.FromResult(0),
+            GatewayStart = _ => Task.FromResult(0),
+            GatewayStatus = _ => Task.FromResult(0),
+            GatewayStop = _ => Task.FromResult(0)
+        });
+
+        int exitCode = await root.Parse("setup --fresh").InvokeAsync();
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(new SetupOptions(Fresh: true), received);
     }
 
     [Fact]

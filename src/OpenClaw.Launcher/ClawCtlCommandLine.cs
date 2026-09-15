@@ -6,7 +6,7 @@ namespace OpenClaw.Launcher;
 
 internal sealed record ClawCtlHandlers
 {
-    public required Func<CancellationToken, Task<int>> Setup { get; init; }
+    public required Func<SetupOptions, CancellationToken, Task<int>> Setup { get; init; }
     public required Func<CancellationToken, Task<int>> Status { get; init; }
     public required Func<string?, CancellationToken, Task<int>> CollectLogs { get; init; }
     public required Func<bool, CancellationToken, Task<int>> Teardown { get; init; }
@@ -15,6 +15,8 @@ internal sealed record ClawCtlHandlers
     public required Func<CancellationToken, Task<int>> GatewayStatus { get; init; }
     public required Func<CancellationToken, Task<int>> GatewayStop { get; init; }
 }
+
+internal sealed record SetupOptions(bool Fresh);
 
 // The clawctl command tree. Only the package-readiness surface belongs here:
 // doctor, gateway, uninstall, and every other OpenClaw command is owned by the
@@ -56,7 +58,13 @@ internal static class ClawCtlCommandLine
     {
         ArgumentNullException.ThrowIfNull(handlers);
         Command setup = new(SetupCommandName, SetupDescription);
-        setup.SetAction((_, cancellationToken) => handlers.Setup(cancellationToken));
+        Option<bool> fresh = new("--fresh")
+        {
+            Description = "Remove this installation's owned session and local state before setting it up again."
+        };
+        setup.Options.Add(fresh);
+        setup.SetAction((parsed, cancellationToken) =>
+            handlers.Setup(new SetupOptions(parsed.GetValue(fresh)), cancellationToken));
         Command status = new(
             StatusCommandName,
             "Show the isolated-session record and MXC-observed provision state without provisioning a replacement.");

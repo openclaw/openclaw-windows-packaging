@@ -71,7 +71,7 @@ public sealed class ClawCtlParserDefaultsTests : IDisposable
     {
         RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
         {
-            Setup = _ => throw new InvalidOperationException(
+            Setup = (_, _) => throw new InvalidOperationException(
                 "Completion started the readiness operation."),
             Status = _ => Task.FromResult(0),
             CollectLogs = (_, _) => Task.FromResult(0),

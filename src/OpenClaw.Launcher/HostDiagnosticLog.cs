@@ -80,6 +80,9 @@ internal sealed class HostDiagnosticLog : IDisposable
                         "Timed out waiting to append to the diagnostic log.");
                 }
 
+                // A fresh setup deliberately clears the installation state
+                // root. Recreate the log directory before reopening the file.
+                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
                 using var stream = new FileStream(
                     Path,
                     FileMode.Append,

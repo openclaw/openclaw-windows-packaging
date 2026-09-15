@@ -23,7 +23,7 @@ internal sealed class HostStartup
 
     public Program.LaunchOpenClawAsync? LaunchOpenClaw { get; init; }
 
-    public Func<Action<string>, Session.SessionRuntime>? CreateSessionRuntime { get; init; }
+    public Session.IInstallationLifecycle? InstallationLifecycle { get; init; }
 
     public static HostStartup CreateProduction() => new()
     {
