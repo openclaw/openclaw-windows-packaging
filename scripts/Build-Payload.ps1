@@ -8,7 +8,9 @@ param(
     [string]$Architecture,
 
     [Parameter(Mandatory)]
-    [string]$OutputDirectory
+    [string]$OutputDirectory,
+
+    [switch]$ReuseStagedInstall
 )
 
 $ErrorActionPreference = 'Stop'
@@ -40,34 +42,41 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $stagingDirectory = Join-Path $env:RUNNER_TEMP "openclaw-stage-$Architecture"
-Remove-Item $stagingDirectory -Recurse -Force -ErrorAction SilentlyContinue
-New-Item $stagingDirectory -ItemType Directory | Out-Null
-New-Item $OutputDirectory -ItemType Directory -Force | Out-Null
-
-$previousArch = $env:npm_config_arch
-$previousTargetArch = $env:npm_config_target_arch
-try {
-    $env:npm_config_arch = $Architecture
-    $env:npm_config_target_arch = $Architecture
-
-    & npm install `
-        --install-strategy=nested `
-        --omit=dev `
-        --no-audit `
-        --no-fund `
-        --os=win32 `
-        --cpu=$Architecture `
-        --prefix $stagingDirectory `
-        $package[0].FullName
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "npm install failed with exit code $LASTEXITCODE."
+if ($ReuseStagedInstall) {
+    if (-not (Test-Path -LiteralPath $stagingDirectory -PathType Container)) {
+        throw "The staged OpenClaw install does not exist: $stagingDirectory"
     }
 }
-finally {
-    $env:npm_config_arch = $previousArch
-    $env:npm_config_target_arch = $previousTargetArch
+else {
+    Remove-Item $stagingDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item $stagingDirectory -ItemType Directory | Out-Null
+
+    $previousArch = $env:npm_config_arch
+    $previousTargetArch = $env:npm_config_target_arch
+    try {
+        $env:npm_config_arch = $Architecture
+        $env:npm_config_target_arch = $Architecture
+
+        & npm install `
+            --install-strategy=nested `
+            --omit=dev `
+            --no-audit `
+            --no-fund `
+            --os=win32 `
+            --cpu=$Architecture `
+            --prefix $stagingDirectory `
+            $package[0].FullName
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "npm install failed with exit code $LASTEXITCODE."
+        }
+    }
+    finally {
+        $env:npm_config_arch = $previousArch
+        $env:npm_config_target_arch = $previousTargetArch
+    }
 }
+New-Item $OutputDirectory -ItemType Directory -Force | Out-Null
 
 $installedPackage = Join-Path $stagingDirectory 'node_modules\openclaw'
 foreach ($requiredPath in @('package.json', 'openclaw.mjs', 'dist')) {
@@ -76,6 +85,9 @@ foreach ($requiredPath in @('package.json', 'openclaw.mjs', 'dist')) {
         throw "Staged package is missing required path: $path"
     }
 }
+
+& (Join-Path $PSScriptRoot 'Test-OpenClawBuildIdentity.ps1') `
+    -OpenClawDirectory $installedPackage
 
 $bundledNodeFiles = @(
     Get-ChildItem -LiteralPath $installedPackage -File -Recurse |
