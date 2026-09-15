@@ -67,6 +67,74 @@ public sealed class SessionExecutorTests : IDisposable
             ExitCode = exitCode,
         });
 
+    private void RespondAsCollector(
+        Func<SessionCollectRequest, SessionCollectResult> respond)
+    {
+        _backend.AttachedBehavior = _ =>
+        {
+            string requestPath = Directory.GetFiles(Workspace, "collect-*.json")
+                .Single(path => !path.EndsWith(".result.json", StringComparison.Ordinal));
+            SessionCollectRequest request = SessionCollectProtocol.ReadRequest(
+                File.ReadAllText(requestPath));
+            File.WriteAllText(
+                SessionLaunchProtocol.ResultPathFor(requestPath),
+                SessionCollectProtocol.SerializeResult(respond(request)));
+            return Task.FromResult(0);
+        };
+    }
+
+    [Fact]
+    public async Task CollectionUsesTheGuestHelperAndReturnsItsResult()
+    {
+        SessionCollectRequest? delivered = null;
+        RespondAsCollector(request =>
+        {
+            delivered = request;
+            return new SessionCollectResult
+            {
+                RequestId = request.RequestId,
+                Entries = [new SessionCollectEntry { Name = "agent/openclaw.log", Copied = true }],
+            };
+        });
+
+        SessionCollectResult result = await Create().CollectAsync(
+            Record(),
+            @"C:\Package\session-host\x64\openclaw-session-host.exe",
+            Path.Combine(Workspace, "staged"),
+            [new SessionCollectSource { RelativePath = @"AppData\Roaming\openclaw\logs", Name = "agent" }],
+            ["openclaw-agent.sqlite*"],
+            CancellationToken.None);
+
+        Assert.Equal(["execute-attached:iso:sandbox1"], _backend.Calls);
+        Assert.Equal(
+            @"AppData\Roaming\openclaw\logs",
+            Assert.Single(delivered!.Sources!).RelativePath);
+        Assert.True(Assert.Single(result.Entries!).Copied);
+        Assert.Empty(Directory.GetFiles(Workspace));
+    }
+
+    [Fact]
+    public async Task CollectionFailureResultIsReported()
+    {
+        RespondAsCollector(request => new SessionCollectResult
+        {
+            RequestId = request.RequestId,
+            Error = "access denied",
+        });
+
+        SessionException exception = await Assert.ThrowsAsync<SessionException>(
+            () => Create().CollectAsync(
+                Record(),
+                @"C:\Package\session-host\x64\openclaw-session-host.exe",
+                Path.Combine(Workspace, "staged"),
+                [],
+                [],
+                CancellationToken.None));
+
+        Assert.Contains("access denied", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(Directory.GetFiles(Workspace));
+    }
+
     [Fact]
     public async Task ApplicationExitCodeIsReturned()
     {

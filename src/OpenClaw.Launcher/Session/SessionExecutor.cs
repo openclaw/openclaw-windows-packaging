@@ -154,6 +154,89 @@ internal sealed class SessionExecutor
         }
     }
 
+    /// <summary>Asks the guest to stage diagnostics into the shared workspace.</summary>
+    public async Task<SessionCollectResult> CollectAsync(
+        SessionRecord record,
+        string helperPath,
+        string destinationDirectory,
+        IReadOnlyList<SessionCollectSource> sources,
+        IReadOnlyList<string> deniedNames,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+
+        if (string.IsNullOrWhiteSpace(record.WorkspacePath))
+        {
+            throw new SessionException(
+                "The recorded session has no shared workspace, so a collect " +
+                "request cannot be delivered to it.");
+        }
+
+        string requestId = Guid.NewGuid().ToString("N");
+        string requestPath = Path.Combine(
+            record.WorkspacePath,
+            $"collect-{requestId}.json");
+        string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
+
+        try
+        {
+            await File.WriteAllTextAsync(
+                requestPath,
+                SessionCollectProtocol.SerializeRequest(new SessionCollectRequest
+                {
+                    RequestId = requestId,
+                    DestinationDirectory = destinationDirectory,
+                    Sources = sources,
+                    DeniedNames = deniedNames
+                }),
+                cancellationToken).ConfigureAwait(false);
+
+            _log("Collecting agent-side diagnostics from the isolated session.");
+
+            int executorExitCode = await _backend.ExecuteAttachedAsync(
+                record.ToSandboxIdOrThrow(),
+                new MxcExecutionRequest(
+                    BuildGuestCommandLine(helperPath, requestPath, "--collect")),
+                null,
+                cancellationToken).ConfigureAwait(false);
+
+            string resultText;
+            try
+            {
+                resultText = await File.ReadAllTextAsync(resultPath, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (
+                exception is FileNotFoundException or DirectoryNotFoundException)
+            {
+                throw new SessionException(
+                    "The isolated session did not report a collection result " +
+                    $"(executor exit code {executorExitCode}).");
+            }
+
+            SessionCollectResult result = SessionCollectProtocol.ReadResult(resultText);
+            if (result.Error is { Length: > 0 } error)
+            {
+                throw new SessionException(
+                    $"The isolated session could not collect diagnostics: {error}");
+            }
+
+            if (!string.Equals(result.RequestId, requestId, StringComparison.Ordinal))
+            {
+                throw new SessionException(
+                    "The isolated session reported a collection result for a " +
+                    "different request.");
+            }
+
+            return result;
+        }
+        finally
+        {
+            TryDelete(requestPath);
+            TryDelete(resultPath);
+        }
+    }
+
     /// <summary>Installs the package's Node.js runtime in the agent profile.</summary>
     public async Task<SessionRuntimeInstallResult> InstallRuntimeAsync(
         SessionRecord record,
