@@ -1,4 +1,5 @@
 using OpenClaw.Launcher.Mxc;
+using OpenClaw.SessionProtocol;
 
 namespace OpenClaw.Launcher.Session;
 
@@ -169,6 +170,28 @@ internal sealed class SessionRuntime
         }
 
         return session.Record;
+    }
+
+    /// <summary>Records a completed guest runtime installation.</summary>
+    public void CompleteSetup(
+        SessionRecord session,
+        SessionRuntimeInstallResult runtime,
+        bool startupEnabled)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(runtime);
+
+        SetupState.Write(new SetupRecord
+        {
+            ApplicationId = ApplicationId,
+            SandboxId = session.SandboxId,
+            Phase = SetupPhase.Ready,
+            StartupEnabled = startupEnabled,
+            CompletedUtc = DateTimeOffset.UtcNow,
+            AgentNodePath = runtime.ExecutablePath,
+            AgentNodeVersion = runtime.Version,
+            AgentNodeArchive = runtime.ArchiveName
+        });
     }
 
     internal static string ResolveHelperPath(string baseDirectory) =>

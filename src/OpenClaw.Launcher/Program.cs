@@ -1,5 +1,6 @@
 using System.CommandLine;
 using System.Diagnostics.CodeAnalysis;
+using OpenClaw.SessionProtocol;
 
 namespace OpenClaw.Launcher;
 
@@ -114,7 +115,8 @@ internal static class Program
                     WriteDiagnostic,
                     startup.ResolveNode ?? (_ => Task.FromResult(NodeRuntimeResolver.Resolve(
                         GetPackagedNodeArchivePath(options)))),
-                    startup.LaunchOpenClaw ?? GatewayLauncher.RunAsync)
+                    startup.LaunchOpenClaw ?? GatewayLauncher.RunAsync,
+                    startup.CreateSessionRuntime)
                     .ConfigureAwait(false);
         }
         catch (Exception exception)
@@ -153,7 +155,8 @@ internal static class Program
         HostOptions options,
         Action<string> log,
         Func<CancellationToken, Task<NodeRuntime>> resolveNode,
-        LaunchOpenClawAsync launchOpenClaw)
+        LaunchOpenClawAsync launchOpenClaw,
+        Func<Action<string>, Session.SessionRuntime>? createSessionRuntime = null)
     {
         NodeRuntime nodeRuntime = await resolveNode(CancellationToken.None)
             .ConfigureAwait(false);
@@ -162,6 +165,35 @@ internal static class Program
             $"{nodeRuntime.ExecutablePath}.");
         string applicationDirectory = GetPackagedApplicationDirectory(options);
         log("Using the OpenClaw application directly from the package.");
+
+        Session.SessionMode mode = Session.SessionRoutingPolicy.ReadMode(
+            Environment.GetEnvironmentVariable);
+        if (mode != Session.SessionMode.Disabled)
+        {
+            try
+            {
+                Session.SessionRuntime runtime = (createSessionRuntime ??
+                    Session.SessionRuntime.Create)(log);
+                Session.SessionRecord record =
+                    await runtime.StartForExecutionAsync(CancellationToken.None)
+                        .ConfigureAwait(false);
+                int exitCode = await runtime.Executor.ExecuteAsync(
+                    record,
+                    new Session.SessionExecutionRequest(
+                        runtime.RequireStagedHelper(record),
+                        nodeRuntime.ExecutablePath,
+                        applicationDirectory,
+                        options.OpenClawArguments,
+                        Environment.CurrentDirectory),
+                    CancellationToken.None).ConfigureAwait(false);
+                return exitCode;
+            }
+            catch (Session.SessionException) when (mode == Session.SessionMode.Automatic)
+            {
+                log("Isolated session unavailable; running OpenClaw directly.");
+            }
+        }
+
         return await launchOpenClaw(
             nodeRuntime.ExecutablePath,
             applicationDirectory,
@@ -179,15 +211,82 @@ internal static class Program
         Action<string> log,
         TextWriter output,
         TextWriter error,
-        Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null)
+        Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null,
+        Func<Session.SessionRuntime>? createSessionRuntime = null)
     {
+        Session.SessionRuntime? sessionRuntime = null;
+        Session.SessionRuntime GetSessionRuntime() =>
+            sessionRuntime ??= createSessionRuntime?.Invoke() ??
+                Session.SessionRuntime.Create(log);
+
         RootCommand command = ClawCtlCommandLine.Create(
-            cancellationToken => RunSetupAsync(
-                options,
-                log,
-                output,
-                resolveNode,
-                cancellationToken));
+            new ClawCtlHandlers
+            {
+                Setup = async cancellationToken =>
+                {
+                    int result = await RunSetupAsync(
+                        options, log, output, resolveNode, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (result != 0)
+                    {
+                        return result;
+                    }
+
+                    try
+                    {
+                        Session.SessionRuntime runtime = GetSessionRuntime();
+                        using Session.ISessionLockHandle handle =
+                            runtime.AcquireLifecycleLock();
+                        runtime.SetupState.Write(new Session.SetupRecord
+                        {
+                            ApplicationId = runtime.ApplicationId,
+                            Phase = Session.SetupPhase.Preparing
+                        });
+                        Session.SessionRecord record =
+                            await runtime.Coordinator.EnsureStartedAsync(cancellationToken)
+                                .ConfigureAwait(false);
+                        string helperPath = runtime.StageHelper(record);
+                        SessionRuntimeInstallResult agentRuntime =
+                            await runtime.Executor.InstallRuntimeAsync(
+                                record,
+                                helperPath,
+                                GetPackagedNodeArchivePath(options),
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                        runtime.CompleteSetup(
+                            record,
+                            agentRuntime,
+                            startupEnabled: false);
+                        await output.WriteLineAsync("OpenClaw isolated session is ready.")
+                            .ConfigureAwait(false);
+                        return 0;
+                    }
+                    catch (Session.SessionException exception)
+                    {
+                        log($"Isolated session setup is unavailable: {exception.Message}");
+                        await output.WriteLineAsync(
+                            $"OpenClaw setup could not complete: {exception.Message}")
+                            .ConfigureAwait(false);
+                        return 1;
+                    }
+                },
+                Status = async cancellationToken =>
+                {
+                    Session.SessionStatus status = GetSessionRuntime()
+                        .Coordinator.GetRecordedStatus();
+                    await output.WriteLineAsync(status.Availability.ToString())
+                        .ConfigureAwait(false);
+                    return 0;
+                },
+                Teardown = async (_, cancellationToken) =>
+                {
+                    await GetSessionRuntime().Coordinator.RemoveAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    await output.WriteLineAsync("OpenClaw isolated session was removed.")
+                        .ConfigureAwait(false);
+                    return 0;
+                }
+            });
 
         InvocationConfiguration configuration = new()
         {

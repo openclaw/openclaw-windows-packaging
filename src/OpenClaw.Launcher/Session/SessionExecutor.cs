@@ -154,6 +154,94 @@ internal sealed class SessionExecutor
         }
     }
 
+    /// <summary>Installs the package's Node.js runtime in the agent profile.</summary>
+    public async Task<SessionRuntimeInstallResult> InstallRuntimeAsync(
+        SessionRecord record,
+        string helperPath,
+        string archivePath,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        ArgumentException.ThrowIfNullOrWhiteSpace(helperPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(archivePath);
+
+        if (string.IsNullOrWhiteSpace(record.WorkspacePath))
+        {
+            throw new SessionException(
+                "The recorded session has no shared workspace, so a runtime " +
+                "install request cannot be delivered to it.");
+        }
+
+        string requestId = Guid.NewGuid().ToString("N");
+        string requestPath = Path.Combine(record.WorkspacePath, $"runtime-{requestId}.json");
+        string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
+
+        try
+        {
+            await File.WriteAllTextAsync(
+                requestPath,
+                SessionRuntimeProtocol.SerializeRequest(new SessionRuntimeInstallRequest
+                {
+                    RequestId = requestId,
+                    ArchivePath = archivePath
+                }),
+                cancellationToken).ConfigureAwait(false);
+
+            _log("Installing the packaged Node.js runtime in the isolated session.");
+
+            int executorExitCode = await _backend.ExecuteAttachedAsync(
+                record.ToSandboxIdOrThrow(),
+                new MxcExecutionRequest(
+                    BuildGuestCommandLine(helperPath, requestPath, "--install-runtime")),
+                null,
+                cancellationToken).ConfigureAwait(false);
+
+            string resultText;
+            try
+            {
+                resultText = await File.ReadAllTextAsync(resultPath, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (
+                exception is FileNotFoundException or DirectoryNotFoundException)
+            {
+                throw new SessionException(
+                    "The isolated session did not report a runtime install " +
+                    $"result (executor exit code {executorExitCode}).");
+            }
+
+            SessionRuntimeInstallResult result =
+                SessionRuntimeProtocol.ReadResult(resultText);
+            if (result.Error is { Length: > 0 } error)
+            {
+                throw new SessionException(
+                    $"The packaged Node.js runtime could not be installed in the session: {error}");
+            }
+
+            if (!string.Equals(result.RequestId, requestId, StringComparison.Ordinal))
+            {
+                throw new SessionException(
+                    "The isolated session reported a runtime install result " +
+                    "for a different request.");
+            }
+
+            if (string.IsNullOrWhiteSpace(result.ExecutablePath) ||
+                string.IsNullOrWhiteSpace(result.Version))
+            {
+                throw new SessionException(
+                    "The isolated session reported a runtime install without a " +
+                    "Node.js executable path and version.");
+            }
+
+            return result;
+        }
+        finally
+        {
+            TryDelete(requestPath);
+            TryDelete(resultPath);
+        }
+    }
+
     internal static IReadOnlyDictionary<string, string> MergeEnvironment(
         IReadOnlyDictionary<string, string> baseEnvironment,
         IReadOnlyDictionary<string, string>? additional)

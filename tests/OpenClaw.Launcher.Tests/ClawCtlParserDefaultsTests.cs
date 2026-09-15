@@ -69,9 +69,13 @@ public sealed class ClawCtlParserDefaultsTests : IDisposable
     [Fact]
     public void CompletionSuggestsCommandsWithoutResolvingNode()
     {
-        RootCommand root = ClawCtlCommandLine.Create(
-            _ => throw new InvalidOperationException(
-                "Completion started the readiness operation."));
+        RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
+        {
+            Setup = _ => throw new InvalidOperationException(
+                "Completion started the readiness operation."),
+            Status = _ => Task.FromResult(0),
+            Teardown = (_, _) => Task.FromResult(0)
+        });
 
         IEnumerable<string> completions = root
             .Parse("se", ClawCtlCommandLine.CreateParserConfiguration())
