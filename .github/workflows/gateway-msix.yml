@@ -46,6 +46,11 @@ jobs:
           cache: true
           cache-dependency-path: Directory.Packages.props
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
       - name: Restore
         run: dotnet restore .\OpenClaw.Gateway.MSIX.slnx
 
@@ -115,6 +120,11 @@ jobs:
         shell: pwsh
         run: >
           .\scripts\Test-GitHooks.Tests.ps1
+
+      - name: Test Gateway isolation plugin
+        shell: pwsh
+        run: >
+          .\scripts\Test-GatewayIsolationPlugin.Tests.ps1
 
   build-package:
     name: Build OpenClaw npm package

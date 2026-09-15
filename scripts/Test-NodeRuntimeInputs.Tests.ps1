@@ -30,11 +30,67 @@ try {
     $source = Join-Path $testRoot 'source'
     $package = Join-Path $testRoot 'package'
     $payload = Join-Path $testRoot 'payload'
-    New-Item -ItemType Directory -Path "$source\dist", $package -Force | Out-Null
+    New-Item `
+        -ItemType Directory `
+        -Path "$source\dist\extensions\fixture", $package `
+        -Force |
+        Out-Null
     '{"name":"openclaw","version":"0.0.0","type":"module"}' |
         Set-Content -LiteralPath "$source\package.json"
-    'console.log("fixture");' | Set-Content -LiteralPath "$source\openclaw.mjs"
+    @'
+const fs = await import("node:fs");
+const path = await import("node:path");
+const args = process.argv.slice(2);
+const configPath =
+  process.env.OPENCLAW_CONFIG_PATH ??
+  (process.env.OPENCLAW_STATE_DIR
+    ? path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json")
+    : undefined);
+if (args[0] === "plugins" && args[1] === "enable") {
+  if (!configPath) {
+    throw new Error("Missing isolated validation configuration path.");
+  }
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({
+      plugins: {
+        entries: {
+          "gateway-isolation": {
+            enabled: true
+          }
+        }
+      }
+    }),
+  );
+  process.exit(0);
+}
+
+const enabled = Boolean(configPath) && fs.existsSync(configPath) &&
+  JSON.parse(fs.readFileSync(configPath, "utf8"))
+    .plugins?.entries?.["gateway-isolation"]?.enabled === true;
+const runtime = args.includes("--runtime");
+console.log(JSON.stringify({
+  plugin: {
+    id: "gateway-isolation",
+    origin: "bundled",
+    enabled,
+    activated: enabled && runtime,
+    status: enabled && runtime ? "loaded" : "disabled",
+    imported: enabled && runtime,
+    httpRoutes: enabled && runtime ? 1 : 0
+  },
+  httpRouteCount: enabled && runtime ? 1 : 0,
+  gatewayMethods: [],
+  tools: [],
+  services: [],
+  diagnostics: []
+}));
+'@ | Set-Content -LiteralPath "$source\openclaw.mjs"
     'export {};' | Set-Content -LiteralPath "$source\dist\index.js"
+    '{"name":"@openclaw/fixture","version":"1.0.0"}' |
+        Set-Content `
+            -LiteralPath "$source\dist\extensions\fixture\package.json"
     & npm pack $source --ignore-scripts --offline --silent --pack-destination $package
     if ($LASTEXITCODE -ne 0) {
         throw 'Unable to pack the local Node.js input fixture.'

@@ -354,7 +354,7 @@ internal static class SmokeProgram
                             new Version(24, 15, 0),
                             RuntimeInformation.ProcessArchitecture));
                 },
-                LaunchOpenClaw = (_, _, forwarded, _, _) =>
+                LaunchOpenClaw = (_, _, forwarded, _, _, _) =>
                 {
                     ForwardedArguments = [.. forwarded];
                     return Task.FromResult(23);

@@ -29,12 +29,21 @@ public sealed class ProgramTests : IDisposable
                 nodeResolutionAttempted = true;
                 return Task.FromResult(nodeRuntime);
             },
-            (nodePath, appDirectory, forwardedArguments, _, _) =>
+            (
+                nodePath,
+                appDirectory,
+                forwardedArguments,
+                gatewayIsolationMode,
+                _,
+                _) =>
             {
                 launchAttempted = true;
                 Assert.Equal(nodeRuntime.ExecutablePath, nodePath);
                 Assert.Equal(applicationDirectory, appDirectory);
                 Assert.Equal(arguments, forwardedArguments);
+                Assert.Equal(
+                    GatewayIsolationMode.Disabled,
+                    gatewayIsolationMode);
                 return Task.FromResult(23);
             });
 

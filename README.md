@@ -43,13 +43,17 @@ copy, repair, or otherwise change package files at runtime.
 Every OpenClaw child process runs with
 `OPENCLAW_SUPERVISOR_MODE=external`,
 `OPENCLAW_SERVICE_REPAIR_POLICY=external`, and
-`OPENCLAW_NO_AUTO_UPDATE=1`. These declare external lifecycle ownership,
-prevent doctor-owned service repair, and disable configured background
-auto-updates. The pinned OpenClaw `v2026.8.2` release honors external supervisor
-mode by refusing native service mutation and OpenClaw self-update with guidance
-to use the external supervisor's workflow. This behavior belongs to upstream
-OpenClaw; the launcher does not reserve, reject, or rewrite upstream command
-arguments.
+`OPENCLAW_NO_AUTO_UPDATE=1`. It also reports the selected Windows Gateway
+session mode through the process-stable
+`CLAWCTL_GATEWAY_ISOLATION=enabled|disabled` environment variable. The current
+interactive-session launch path reports `disabled`; the future isolated-session
+launch path will select `enabled` when that session switch is implemented.
+These values declare external lifecycle ownership, prevent doctor-owned service
+repair, disable configured background auto-updates, and expose diagnostic
+isolation status without claiming independent attestation. The selected OpenClaw runtime honors external supervisor mode by refusing native service
+mutation and OpenClaw self-update with guidance to use the external supervisor's
+workflow. This behavior belongs to upstream OpenClaw; the launcher does not
+reserve, reject, or rewrite upstream command arguments.
 OpenClaw inherits the terminal's working directory; the launcher does not make
 the read-only application directory the workspace.
 
@@ -122,7 +126,13 @@ both:
 Changing only the workflow-dispatch default does not change automatic builds.
 For a one-time override, run **Build OpenClaw Gateway MSIX** manually and
 provide a tag, branch, or preferably a full 40-character commit SHA in
-`openclaw_ref`.
+`openclaw_ref`. Payload composition validates that the selected OpenClaw
+runtime discovers the packaging-owned Windows Launcher plugin in its
+default-disabled state, then explicitly enables only that plugin in an isolated
+temporary validation profile before using OpenClaw's runtime inspection pass to
+validate its required read-only route shape. The temporary profile is removed
+after inspection and does not modify user configuration. Incompatible older
+refs fail instead of producing a package with an unvalidated plugin.
 
 The source build uses that revision's `.github/actions/setup-node-env` action
 to select Node.js and pnpm. Its resolved Node.js version is recorded in
@@ -158,11 +168,41 @@ dotnet test .\OpenClaw.Gateway.MSIX.slnx `
 ```
 
 `scripts\Build-Payload.ps1` npm-installs an OpenClaw package into an expanded,
-architecture-specific application tree. `scripts\Build-MSIX.ps1` downloads
-the official Node.js archive matching the payload's recorded build version
-and architecture, copies both inputs into package content, rejects Node.js
-inside the application payload, creates a per-file inventory, and then creates
-an unsigned NativeAOT MSIX.
+architecture-specific application tree and provisions the packaging-owned
+Windows Launcher plugin into OpenClaw's bundled plugin directory. Its internal
+package, path, and plugin ID remain `gateway-isolation`. The plugin is disabled
+by default, so normal installs do not activate it, register its route, or show
+the **Windows Launcher** tab. When explicitly enabled for validation or by the
+future launcher command implementation, it adds the read-only tab to the
+Control group and serves it through an authenticated, sandboxed plugin route.
+It reads only the launch-time `CLAWCTL_GATEWAY_ISOLATION` value and registers no
+mutation RPC or process control.
+
+The page preserves the planned `clawctl gateway-isolation enable|disable`
+command and Copy control for the paired launcher command update. This package
+does not register those `clawctl` commands yet, so the page explicitly tells
+users to run the command only after that support is installed.
+
+The screenshots attached to the pull request are design and behavior proof
+captured with the plugin explicitly enabled in an isolated validation profile;
+they do not represent the default-disabled state of a normal install.
+
+Full selected-theme cohesion requires the generic plugin-frame theme forwarding
+merged by
+[`openclaw/openclaw#145409`](https://github.com/openclaw/openclaw/pull/145409).
+The current workflow remains on the release-approved OpenClaw baseline
+`0965053fe6b9341776df147a6934b7485c60b5ca` while this plugin is disabled by
+default. That baseline packages and inspects the plugin safely but does not
+forward selected Control UI themes into plugin frames. The future launcher
+enablement change must also advance and qualify the runtime to the merged theme
+forwarding commit `f65ecca89667b8a55d9f88d76c487f0a0ab11da8` or newer. Until
+then, the page uses the browser or operating system light/dark preference with
+a safe built-in palette.
+
+`scripts\Build-MSIX.ps1` downloads the official Node.js archive matching the
+payload's recorded build version and architecture, copies both inputs into
+package content, rejects Node.js inside the application payload, creates a
+per-file inventory, and then creates an unsigned NativeAOT MSIX.
 `scripts\Build-LocalMSIX.ps1` can reuse a successful workflow payload or a
 local payload directory. `-NodeArchivePath` can supply an already-downloaded
 archive, but its version and architecture must match the payload metadata.

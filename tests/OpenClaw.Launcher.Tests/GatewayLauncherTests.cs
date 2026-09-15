@@ -32,6 +32,9 @@ public sealed class GatewayLauncherTests : IDisposable
             startInfo.Environment["OPENCLAW_SERVICE_REPAIR_POLICY"]);
         Assert.Equal("1", startInfo.Environment["OPENCLAW_NO_AUTO_UPDATE"]);
         Assert.Equal(
+            "disabled",
+            startInfo.Environment["CLAWCTL_GATEWAY_ISOLATION"]);
+        Assert.Equal(
             [Path.Combine(_payloadDirectory, "openclaw.mjs")],
             startInfo.ArgumentList);
     }
@@ -86,8 +89,43 @@ public sealed class GatewayLauncherTests : IDisposable
             startInfo.Environment["OPENCLAW_SERVICE_REPAIR_POLICY"]);
         Assert.Equal("1", startInfo.Environment["OPENCLAW_NO_AUTO_UPDATE"]);
         Assert.Equal(
+            "disabled",
+            startInfo.Environment["CLAWCTL_GATEWAY_ISOLATION"]);
+        Assert.Equal(
             [Path.Combine(_payloadDirectory, "openclaw.mjs"), .. arguments],
             startInfo.ArgumentList);
+    }
+
+    [Theory]
+    [InlineData((int)GatewayIsolationMode.Disabled, "disabled")]
+    [InlineData((int)GatewayIsolationMode.Enabled, "enabled")]
+    public void CreateStartInfoReportsExactGatewayIsolationMode(
+        int mode,
+        string expected)
+    {
+        var startInfo = GatewayLauncher.CreateStartInfo(
+            "node",
+            _payloadDirectory,
+            [],
+            gatewayIsolationMode: (GatewayIsolationMode)mode);
+
+        Assert.Equal(
+            expected,
+            startInfo.Environment["CLAWCTL_GATEWAY_ISOLATION"]);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(2)]
+    [InlineData(int.MaxValue)]
+    public void CreateStartInfoRejectsInvalidGatewayIsolationMode(int mode)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            GatewayLauncher.CreateStartInfo(
+                "node",
+                _payloadDirectory,
+                [],
+                gatewayIsolationMode: (GatewayIsolationMode)mode));
     }
 
     [Theory]

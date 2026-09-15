@@ -1,0 +1,14 @@
+{
+  "id": "gateway-isolation",
+  "name": "Windows Launcher",
+  "description": "Reports the Windows launch mode selected for the running Gateway.",
+  "enabledByDefault": false,
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

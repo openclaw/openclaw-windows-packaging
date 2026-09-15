@@ -106,7 +106,7 @@ public sealed class ProgramStartupTests : IDisposable
                     Path.Combine(_testDirectory, "node.exe"),
                     new Version(24, 15, 0),
                     RuntimeInformation.ProcessArchitecture)),
-            LaunchOpenClaw = (_, _, launchArguments, _, _) =>
+            LaunchOpenClaw = (_, _, launchArguments, _, _, _) =>
             {
                 forwarded = [.. launchArguments];
                 return Task.FromResult(23);

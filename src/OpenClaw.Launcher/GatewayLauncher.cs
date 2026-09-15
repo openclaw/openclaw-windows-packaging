@@ -8,13 +8,15 @@ internal static class GatewayLauncher
         string nodePath,
         string payloadDirectory,
         IReadOnlyList<string> openClawArguments,
+        GatewayIsolationMode gatewayIsolationMode,
         CancellationToken cancellationToken,
         Action<string>? log = null)
     {
         ProcessStartInfo startInfo = CreateStartInfo(
             nodePath,
             payloadDirectory,
-            openClawArguments);
+            openClawArguments,
+            gatewayIsolationMode: gatewayIsolationMode);
         log?.Invoke("Launching OpenClaw with forwarded command arguments.");
         using WindowsKillOnCloseJob job = WindowsKillOnCloseJob.Create();
         using Process process = job.StartProcess(startInfo);
@@ -44,7 +46,9 @@ internal static class GatewayLauncher
         string nodePath,
         string applicationDirectory,
         IReadOnlyList<string> openClawArguments,
-        string? workingDirectory = null)
+        string? workingDirectory = null,
+        GatewayIsolationMode gatewayIsolationMode =
+            GatewayIsolationMode.Disabled)
     {
         string entryPoint = Path.Combine(applicationDirectory, "openclaw.mjs");
         if (!File.Exists(entryPoint))
@@ -77,6 +81,8 @@ internal static class GatewayLauncher
                 ? nodeDirectory
                 : $"{nodeDirectory}{Path.PathSeparator}{inheritedPath}";
         }
+        startInfo.Environment["CLAWCTL_GATEWAY_ISOLATION"] =
+            gatewayIsolationMode.ToEnvironmentValue();
         startInfo.ArgumentList.Add(entryPoint);
 
         foreach (string argument in openClawArguments)
