@@ -251,9 +251,11 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  build-payload:
-    name: Build ${{ matrix.architecture }} gateway payload
-    needs: build-package
+  build-msix:
+    name: Build unsigned ${{ matrix.architecture }} Gateway MSIX
+    needs:
+      - test-host
+      - build-package
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -292,25 +294,7 @@ jobs:
           name: openclaw-gateway-payload-${{ matrix.architecture }}
           path: ${{ runner.temp }}\openclaw-payload\
           if-no-files-found: error
-          retention-days: 7
-
-  build-msix:
-    name: Build unsigned ${{ matrix.architecture }} Gateway MSIX
-    needs:
-      - test-host
-      - build-payload
-    runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        architecture:
-          - x64
-          - arm64
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+          retention-days: ${{ github.event_name == 'pull_request' && 1 || 7 }}
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v6
@@ -318,12 +302,6 @@ jobs:
           global-json-file: global.json
           cache: true
           cache-dependency-path: Directory.Packages.props
-
-      - name: Download payload
-        uses: actions/download-artifact@v8
-        with:
-          name: openclaw-gateway-payload-${{ matrix.architecture }}
-          path: ${{ runner.temp }}\openclaw-payload
 
       - name: Restore NativeAOT and MSIX dependencies
         shell: pwsh
@@ -764,7 +742,6 @@ jobs:
       - changes
       - test-host
       - build-package
-      - build-payload
       - build-msix
       - test-sign-msix
       - build-msix-bundle

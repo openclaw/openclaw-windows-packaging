@@ -103,9 +103,10 @@ package.
 - The GitHub workflow first builds and packs a pinned `openclaw/openclaw`
   revision on Linux using that revision's `setup-node-env` action. The resolved
   Node.js version flows through `source.json` and `payload-metadata.json`;
-  Windows payload builds use the same version. `Build-MSIX.ps1` downloads its
-  matching official archive, rejects Node.js from the application payload,
-  builds the application inventory, publishes the NativeAOT host, validates
+  each architecture-specific Windows job uses that same version to build the
+  expanded payload and immediately compose its MSIX. `Build-MSIX.ps1` downloads
+  the matching official archive, rejects Node.js from the application payload,
+  builds the application inventory, and publishes the NativeAOT host, validates
   package contents, and emits MSIX metadata including the runtime hash.
 - Unsigned artifacts are the normal PR/push output. Test signing uses a
   temporary runner-local certificate. Official signing is gated to `main` and

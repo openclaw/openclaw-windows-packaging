@@ -21,6 +21,8 @@ $requiredFragments = @(
     "if: `${{ always() }}"
     "contains(needs.*.result, 'failure')"
     "contains(needs.*.result, 'cancelled')"
+    'name: Upload payload'
+    "retention-days: `${{ github.event_name == 'pull_request' && 1 || 7 }}"
     'environment: release-signing'
     'id-token: write'
     'uses: azure/login@v3'
@@ -52,6 +54,20 @@ foreach ($fragment in $requiredFragments) {
     if (-not $workflow.Contains($fragment, [StringComparison]::Ordinal)) {
         throw "Signing workflow is missing required configuration: $fragment"
     }
+}
+
+$buildMsixJobMatch = [regex]::Match(
+    $workflow,
+    '(?ms)^  build-msix:\s*(?<job>.*?)(?=^  [a-z][a-z0-9-]+:)'
+)
+if (-not $buildMsixJobMatch.Success) {
+    throw 'Unable to locate the build-msix workflow job.'
+}
+$buildMsixJob = $buildMsixJobMatch.Groups['job'].Value
+if ($buildMsixJob.Contains(
+        'name: Download payload',
+        [StringComparison]::Ordinal)) {
+    throw 'The build-msix job must compose the locally built payload directly.'
 }
 
 if ($workflow.Contains('AZURE_CLIENT_SECRET', [StringComparison]::Ordinal)) {
