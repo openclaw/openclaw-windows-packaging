@@ -29,7 +29,7 @@ internal static class Program
             // is the one failure that can only surface on stderr.
             errorOutput.WriteLine(
                 "openclaw-session-host: usage: openclaw-session-host " +
-                "--request|--supervise|--install-runtime|--install-tools <path>");
+                "--request|--supervise|--inspect|--stop|--install-runtime|--install-tools <path>");
             return SessionLaunchProtocol.HelperFailureExitCode;
         }
 
@@ -37,6 +37,10 @@ internal static class Program
         {
             case "--supervise":
                 return SessionSupervisor.Run(requestPath, readFile, File.WriteAllText);
+            case "--inspect":
+                return SessionInspector.Run(requestPath, readFile, File.WriteAllText);
+            case "--stop":
+                return SessionTerminator.Run(requestPath, readFile, File.WriteAllText);
             case "--install-runtime":
                 return SessionRuntimeInstaller.Run(requestPath, readFile, File.WriteAllText);
             case "--install-tools":
