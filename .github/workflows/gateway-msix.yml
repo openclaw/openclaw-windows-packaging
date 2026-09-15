@@ -149,6 +149,11 @@ jobs:
         run: >
           .\scripts\Test-OpenClawCacheKey.Tests.ps1
 
+      - name: Test OpenClaw package verification
+        shell: pwsh
+        run: >
+          .\scripts\Test-OpenClawPackage.Tests.ps1
+
       - name: Test local package deployment
         shell: pwsh
         run: >
@@ -172,8 +177,8 @@ jobs:
     outputs:
       source_sha: ${{ steps.resolve.outputs.sha }}
       package_cache_key: ${{ steps.resolve.outputs.package_cache_key }}
-      package_version: ${{ steps.source.outputs.version }}
-      node_version: ${{ steps.source.outputs.node_version }}
+      package_version: ${{ steps.package.outputs.version }}
+      node_version: ${{ steps.package.outputs.node_version }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -204,18 +209,30 @@ jobs:
           "sha=$sha" >> $env:GITHUB_OUTPUT
           "package_cache_key=$cacheKey" >> $env:GITHUB_OUTPUT
 
+      - name: Restore cached OpenClaw package
+        id: package-cache
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.signing_mode != 'official' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/openclaw-package
+          key: ${{ steps.resolve.outputs.package_cache_key }}
+
       # The OpenClaw checkout below must own GITHUB_WORKSPACE because its
       # composite setup action resolves workspace files from that root. Keep
       # the packaging-owned validator outside the workspace before replacing
       # this checkout with the OpenClaw source tree.
-      - name: Stage build identity validator
+      - name: Stage packaging validators
         shell: pwsh
-        run: >
-          Copy-Item
-          ./scripts/Test-OpenClawBuildIdentity.ps1
-          $env:RUNNER_TEMP/Test-OpenClawBuildIdentity.ps1
+        run: |
+          Copy-Item `
+            ./scripts/Test-OpenClawBuildIdentity.ps1 `
+            $env:RUNNER_TEMP/Test-OpenClawBuildIdentity.ps1
+          Copy-Item `
+            ./scripts/Test-OpenClawPackage.ps1 `
+            $env:RUNNER_TEMP/Test-OpenClawPackage.ps1
 
       - name: Check out OpenClaw source
+        if: ${{ steps.package-cache.outputs.cache-hit != 'true' }}
         uses: actions/checkout@v7
         with:
           repository: openclaw/openclaw
@@ -224,27 +241,31 @@ jobs:
           fetch-depth: 1
 
       - name: Set up upstream Node.js and pnpm
+        if: ${{ steps.package-cache.outputs.cache-hit != 'true' }}
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
           install-deps: "false"
 
       - name: Install dependencies
+        if: ${{ steps.package-cache.outputs.cache-hit != 'true' }}
         run: pnpm install --frozen-lockfile
 
       - name: Build OpenClaw
+        if: ${{ steps.package-cache.outputs.cache-hit != 'true' }}
         env:
           OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1"
         run: pnpm build
 
       - name: Validate OpenClaw build identities
+        if: ${{ steps.package-cache.outputs.cache-hit != 'true' }}
         shell: pwsh
         run: >
           & "$env:RUNNER_TEMP/Test-OpenClawBuildIdentity.ps1"
           -OpenClawDirectory $env:GITHUB_WORKSPACE
 
       - name: Pack npm package
-        id: source
+        if: ${{ steps.package-cache.outputs.cache-hit != 'true' }}
         run: |
           set -euo pipefail
           artifact_dir="${RUNNER_TEMP}/openclaw-package"
@@ -259,9 +280,7 @@ jobs:
           source_sha="$(git rev-parse HEAD)"
           package_version="$(node -p "require('./package.json').version")"
           node_version="$(node -p 'process.versions.node')"
-          echo "sha=${source_sha}" >> "${GITHUB_OUTPUT}"
-          echo "version=${package_version}" >> "${GITHUB_OUTPUT}"
-          echo "node_version=${node_version}" >> "${GITHUB_OUTPUT}"
+          package_sha256="$(sha256sum "${artifact_dir}/openclaw.tgz" | cut -d' ' -f1)"
 
           cat > "${artifact_dir}/source.json" <<EOF
           {
@@ -269,9 +288,32 @@ jobs:
             "requestedRef": "${OPENCLAW_REF}",
             "resolvedCommit": "${source_sha}",
             "packageVersion": "${package_version}",
-            "nodeVersion": "${node_version}"
+            "nodeVersion": "${node_version}",
+            "packageSha256": "${package_sha256}"
           }
           EOF
+
+      - name: Verify OpenClaw package
+        id: package
+        shell: pwsh
+        run: |
+          $packageDirectory = Join-Path $env:RUNNER_TEMP 'openclaw-package'
+          $metadataPath = Join-Path $packageDirectory 'source.json'
+          & "$env:RUNNER_TEMP/Test-OpenClawPackage.ps1" `
+            -PackageDirectory $packageDirectory `
+            -ExpectedCommit '${{ steps.resolve.outputs.sha }}' `
+            -RequestedRef $env:OPENCLAW_REF
+          $metadata = Get-Content -LiteralPath $metadataPath -Raw |
+            ConvertFrom-Json
+          "version=$([string]$metadata.packageVersion)" >> $env:GITHUB_OUTPUT
+          "node_version=$([string]$metadata.nodeVersion)" >> $env:GITHUB_OUTPUT
+
+      - name: Save OpenClaw package cache
+        if: ${{ steps.package-cache.outputs.cache-hit != 'true' && (github.event_name != 'workflow_dispatch' || inputs.signing_mode != 'official') }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/openclaw-package
+          key: ${{ steps.resolve.outputs.package_cache_key }}
 
       - name: Upload intermediate package
         uses: actions/upload-artifact@v7

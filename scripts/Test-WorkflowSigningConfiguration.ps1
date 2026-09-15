@@ -23,6 +23,12 @@ $requiredFragments = @(
     "contains(needs.*.result, 'cancelled')"
     'name: Upload payload'
     "retention-days: `${{ github.event_name == 'pull_request' && 1 || 7 }}"
+    'name: Restore cached OpenClaw package'
+    "if: `${{ github.event_name != 'workflow_dispatch' || inputs.signing_mode != 'official' }}"
+    'uses: actions/cache/restore@v4'
+    'name: Save OpenClaw package cache'
+    "steps.package-cache.outputs.cache-hit != 'true' && (github.event_name != 'workflow_dispatch' || inputs.signing_mode != 'official')"
+    'uses: actions/cache/save@v4'
     'environment: release-signing'
     'id-token: write'
     'uses: azure/login@v3'
