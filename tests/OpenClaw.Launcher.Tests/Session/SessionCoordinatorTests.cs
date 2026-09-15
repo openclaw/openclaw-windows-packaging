@@ -56,6 +56,64 @@ public sealed class SessionCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task StatusProbeReportsRunningOnlyAfterMxcAcceptsTheRecordedProvision()
+    {
+        await Create().EnsureStartedAsync(CancellationToken.None);
+        _backend.Calls.Clear();
+
+        SessionStatus status = await Create().ProbeRecordedStatusAsync(CancellationToken.None);
+
+        Assert.Equal(SessionAvailability.Running, status.Availability);
+        Assert.Equal("iso:sandbox1", status.Record!.SandboxId);
+        Assert.Equal(["start:iso:sandbox1"], _backend.Calls);
+    }
+
+    [Fact]
+    public async Task StatusProbeReportsAStaleProvisionWithoutReplacingIt()
+    {
+        await Create().EnsureStartedAsync(CancellationToken.None);
+        _backend.Calls.Clear();
+        _backend.StartFailure = new MxcException(MxcErrorCode.StaleId, "provision was not found");
+
+        SessionStatus status = await Create().ProbeRecordedStatusAsync(CancellationToken.None);
+
+        Assert.Equal(SessionAvailability.Stale, status.Availability);
+        Assert.Equal("iso:sandbox1", status.Record!.SandboxId);
+        Assert.Equal(["start:iso:sandbox1"], _backend.Calls);
+        Assert.Equal("iso:sandbox1", Store().Read(ApplicationId).Record!.SandboxId);
+    }
+
+    [Fact]
+    public async Task StatusProbeReportsAnUnavailableBackend()
+    {
+        await Create().EnsureStartedAsync(CancellationToken.None);
+        _backend.Calls.Clear();
+        _backend.StartFailure = new MxcException(
+            MxcErrorCode.RuntimeUnavailable,
+            "MXC is unavailable");
+
+        SessionStatus status = await Create().ProbeRecordedStatusAsync(CancellationToken.None);
+
+        Assert.Equal(SessionAvailability.BackendUnavailable, status.Availability);
+        Assert.Equal("MXC is unavailable", status.Detail);
+        Assert.Equal(["start:iso:sandbox1"], _backend.Calls);
+    }
+
+    [Fact]
+    public async Task StatusProbeReportsOtherBackendFailures()
+    {
+        await Create().EnsureStartedAsync(CancellationToken.None);
+        _backend.Calls.Clear();
+        _backend.StartFailure = new MxcException(MxcErrorCode.BackendError, "MXC is unavailable");
+
+        SessionStatus status = await Create().ProbeRecordedStatusAsync(CancellationToken.None);
+
+        Assert.Equal(SessionAvailability.BackendError, status.Availability);
+        Assert.Equal("MXC is unavailable", status.Detail);
+        Assert.Equal(["start:iso:sandbox1"], _backend.Calls);
+    }
+
+    [Fact]
     public async Task ProvisionMetadataIsPersisted()
     {
         await Create().EnsureStartedAsync(CancellationToken.None);
@@ -105,6 +163,58 @@ public sealed class SessionCoordinatorTests : IDisposable
 
         Assert.Equal(["start:iso:sandbox1"], _backend.Calls);
         Assert.Equal("iso:sandbox1", record.SandboxId);
+    }
+
+    [Fact]
+    public async Task StaleRecordedProvisionIsReplacedOnlyAfterTheBackendReportsItMissing()
+    {
+        await Create().EnsureStartedAsync(CancellationToken.None);
+        _backend.Calls.Clear();
+        _backend.StartFailureForSandbox = sandboxId => sandboxId.Value == "iso:sandbox1"
+            ? new MxcException(MxcErrorCode.StaleId, "provision was not found")
+            : null;
+
+        SessionRecord record = await Create().EnsureStartedAsync(CancellationToken.None);
+
+        Assert.Equal(
+            ["start:iso:sandbox1", "provision", "start:iso:sandbox2"],
+            _backend.Calls);
+        Assert.Equal("iso:sandbox2", record.SandboxId);
+        Assert.Equal("iso:sandbox2", Store().Read(ApplicationId).Record!.SandboxId);
+        Assert.Equal([ApplicationId, ApplicationId], _backend.ProvisionedAppIds);
+    }
+
+    [Fact]
+    public async Task StaleRecordedProvisionReplacementIdentifiesTheSupersededSession()
+    {
+        await Create().EnsureStartedAsync(CancellationToken.None);
+        _backend.StartFailureForSandbox = sandboxId => sandboxId.Value == "iso:sandbox1"
+            ? new MxcException(MxcErrorCode.StaleId, "provision was not found")
+            : null;
+
+        SessionStartResult result = await Create()
+            .EnsureStartedWithResultAsync(CancellationToken.None);
+
+        Assert.Equal("iso:sandbox2", result.Record.SandboxId);
+        Assert.Equal("iso:sandbox1", result.SupersededRecord!.SandboxId);
+    }
+
+    [Fact]
+    public async Task FailedStaleProvisionRecoveryRetainsTheRecordedOwnership()
+    {
+        await Create().EnsureStartedAsync(CancellationToken.None);
+        _backend.Calls.Clear();
+        _backend.StartFailureForSandbox = _ =>
+            new MxcException(MxcErrorCode.StaleId, "provision was not found");
+        _backend.ProvisionFailure = new MxcException(
+            MxcErrorCode.BackendError,
+            "replacement provision failed");
+
+        await Assert.ThrowsAsync<MxcException>(
+            () => Create().EnsureStartedAsync(CancellationToken.None));
+
+        Assert.Equal(["start:iso:sandbox1", "provision"], _backend.Calls);
+        Assert.Equal("iso:sandbox1", Store().Read(ApplicationId).Record!.SandboxId);
     }
 
     [Fact]

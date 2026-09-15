@@ -71,6 +71,34 @@ public sealed class SessionRuntimeTests : IDisposable
     }
 
     [Fact]
+    public async Task CompletedSetupAuthorizesTheRecordedSessionAndAgentRuntime()
+    {
+        var backend = new FakeMxcSessionClient();
+        SessionRuntime host = SessionRuntime.Create(
+            HostPaths.ForRoot(_root, "OpenClaw.Gateway_abc123"),
+            () => throw new InvalidOperationException("not reached"),
+            _root,
+            _ => { },
+            backend);
+        SessionRecord session = await host.Coordinator.EnsureStartedAsync(CancellationToken.None);
+
+        host.CompleteSetup(
+            session,
+            new OpenClaw.SessionProtocol.SessionRuntimeInstallResult
+            {
+                ExecutablePath = @"C:\Users\agent_1\AppData\Local\OpenClawGatewayMSIX\agent-node\node.exe",
+                Version = "24.20.0",
+                ArchiveName = "node-v24.20.0-win-x64.zip"
+            },
+            startupEnabled: true);
+
+        Assert.Equal(session.SandboxId, host.RequireSetup().SandboxId);
+        Assert.Equal(
+            @"C:\Users\agent_1\AppData\Local\OpenClawGatewayMSIX\agent-node\node.exe",
+            host.RequireAgentNodePath(new Version(24, 20, 0)));
+    }
+
+    [Fact]
     public void TheGuestHelperIsResolvedPerArchitectureBesideTheMxcRuntime()
     {
         string helperPath = SessionRuntime.ResolveHelperPath(@"C:\package");

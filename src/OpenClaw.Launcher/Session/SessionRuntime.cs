@@ -1,5 +1,5 @@
-using OpenClaw.Launcher.Gateway;
 using OpenClaw.Launcher.Mxc;
+using OpenClaw.Launcher.Gateway;
 using OpenClaw.SessionProtocol;
 
 namespace OpenClaw.Launcher.Session;
@@ -228,6 +228,7 @@ internal sealed class SessionRuntime
                 $"session was set up with {record.AgentNodeVersion ?? "an unknown version"}. " +
                 "Run `clawctl setup` again.");
         }
+
         return record.AgentNodePath;
     }
 
