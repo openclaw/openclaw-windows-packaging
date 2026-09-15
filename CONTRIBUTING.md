@@ -69,13 +69,18 @@ local fixture; it does not download or build OpenClaw.
 
 The channel resolver tests use offline registry and GitHub fixtures. Keep
 source selection separate from the source build: new workflow runs resolve
-`release-policy.json`'s `extended-stable` channel once, and retries reuse the
+`release-policy.json`'s `stable` channel (`openclaw@latest`) once, and retries reuse the
 saved snapshot. Never replace the published channel selection with a
 maintenance branch head or re-resolve it independently for each architecture.
+There is no automatic fallback. An incompatible latest release may be replaced
+only by an explicitly reviewed, known-good stable `stableVersion` policy pin.
+Never fall back to extended stable. Explicit refs and legacy payload inputs
+must also have regular stable versions; numeric stable corrections are
+supported, but their published and source package versions must match.
 Changes to source metadata must stay synchronized across resolution, payload
 creation, MSIX composition, signing authorization, and release assets.
 Keep build-identity coverage for both modern explicit Gateway/UI `buildId`
-values and older extended-stable version/commit-derived UI identities. Both
+values and older stable version/commit-derived UI identities. Both
 must verify the generated Gateway provenance against the resolved source;
 never skip identity validation merely because an older build lacks `buildId`.
 The workflow denies cache access with native `cache-mode: none`; do not add
@@ -88,6 +93,8 @@ Official signing trusts the verified channel snapshot rather than a reviewed
 per-release commit allowlist. It still requires `main`, the protected signing
 environment, and all artifact checks. For packaging-only official corrections,
 increase the policy's `packageRevision`; do not overwrite an existing release.
+For numeric upstream corrections, add that correction number to the packaging
+revision for the fourth MSIX component, and reject overflow or version reuse.
 
 Run the NativeAOT publish when you change host JSON, reflection, interop, or
 anything else that is trimming-sensitive. A JIT `dotnet build` does not

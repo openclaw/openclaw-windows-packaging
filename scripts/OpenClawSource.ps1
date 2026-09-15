@@ -52,6 +52,26 @@ function Assert-OpenClawSourceText {
     }
 }
 
+function Get-OpenClawStableVersionMatch {
+    param(
+        [AllowNull()]
+        [object]$Version,
+        [string]$Name = 'packageVersion'
+    )
+
+    Assert-OpenClawSourceText $Version $Name
+    # Upstream reserves patch 33+ for extended stable; numeric suffixes are stable corrections.
+    $match = [regex]::Match(
+        $Version,
+        '\A(?<year>[1-9][0-9]{3})\.(?<month>[1-9]|1[0-2])\.' +
+        '(?<patch>[1-9]|[12][0-9]|3[0-2])(?:-(?<correction>[1-9][0-9]*))?\z'
+    )
+    if (-not $match.Success) {
+        throw "'$Name' must be a regular stable version (YYYY.M.P or YYYY.M.P-C)."
+    }
+    return $match
+}
+
 function Assert-OpenClawSourceVersion {
     param(
         [AllowNull()]
@@ -59,17 +79,65 @@ function Assert-OpenClawSourceVersion {
         [switch]$Final
     )
 
-    $number = '(?:0|[1-9][0-9]*)'
-    if ($Final) {
-        $pattern = "\A[1-9][0-9]{3}\.$number\.$number\z"
+    # Retain -Final for packaging callers; both modes now require regular stable.
+    $null = Get-OpenClawStableVersionMatch -Version $Version
+}
+
+function Assert-OpenClawSourceRef {
+    param(
+        [AllowNull()]
+        [object]$Ref,
+        [string]$Name = 'Ref'
+    )
+
+    Assert-OpenClawSourceText $Ref $Name -Pattern '\A\S+\z'
+    if ($Ref -match '\A(?:refs/(?:heads|tags)/)?extended-stable(?:/|\z)') {
+        throw "'$Name' cannot select extended-stable."
     }
-    else {
-        $identifier = "(?:$number|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
-        $pattern = "\A$number\.$number\.$number" +
-            "(?:-$identifier(?:\.$identifier)*)?" +
-            '(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\z'
+}
+
+function Assert-OpenClawPackageRevision {
+    param(
+        [AllowNull()]
+        [object]$PackageRevision
+    )
+
+    if (($PackageRevision -isnot [long] -and $PackageRevision -isnot [int]) -or
+        $PackageRevision -lt 0 -or $PackageRevision -gt 65534) {
+        throw 'packageRevision must be a JSON integer between 0 and 65534.'
     }
-    Assert-OpenClawSourceText -Value $Version -Name 'packageVersion' -Pattern $pattern
+}
+
+function Get-OpenClawMsixReleaseVersion {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [AllowNull()]
+        [object]$Version,
+        [Parameter(Mandatory)]
+        [AllowNull()]
+        [object]$PackageRevision
+    )
+
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = 'Stop'
+
+    $match = Get-OpenClawStableVersionMatch -Version $Version
+    Assert-OpenClawPackageRevision -PackageRevision $PackageRevision
+    $correction = 0
+    if ($match.Groups['correction'].Success -and (
+            -not [int]::TryParse(
+                $match.Groups['correction'].Value,
+                [Globalization.NumberStyles]::None,
+                [Globalization.CultureInfo]::InvariantCulture,
+                [ref]$correction
+            ) -or $correction -gt (65534 - $PackageRevision)
+        )) {
+        throw 'The stable correction plus packageRevision exceeds 65534.'
+    }
+    $revision = $correction + $PackageRevision
+    return '{0}.{1}.{2}.{3}' -f $match.Groups['year'].Value,
+        $match.Groups['month'].Value, $match.Groups['patch'].Value, $revision
 }
 
 function Assert-OpenClawRegistryIntegrity {
@@ -106,13 +174,32 @@ function Assert-OpenClawReleasePolicy {
     if ($repository -cne 'https://github.com/openclaw/openclaw') {
         throw 'The release policy repository must be https://github.com/openclaw/openclaw.'
     }
-    if ($channel -cne 'extended-stable') {
-        throw 'The release policy channel must be extended-stable.'
+    if ($channel -cne 'stable') {
+        throw 'The release policy channel must be stable.'
     }
-    if (($revision -isnot [long] -and $revision -isnot [int]) -or
-        $revision -lt 0 -or $revision -gt 65534) {
-        throw 'packageRevision must be a JSON integer between 0 and 65534.'
+    Assert-OpenClawPackageRevision -PackageRevision $revision
+    $pin = Get-OpenClawSourceField $Policy 'stableVersion' -Optional
+    if ($null -ne $pin) {
+        $null = Get-OpenClawStableVersionMatch -Version $pin -Name 'stableVersion'
     }
+}
+
+function Get-OpenClawPolicyRef {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [object]$Policy
+    )
+
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = 'Stop'
+
+    Assert-OpenClawReleasePolicy -Policy $Policy
+    $pin = Get-OpenClawSourceField $Policy 'stableVersion' -Optional
+    if ($null -ne $pin) {
+        return $pin
+    }
+    return 'stable'
 }
 
 function Read-OpenClawReleasePolicy {
@@ -155,9 +242,15 @@ function Invoke-OpenClawGitHubRequest {
 
     $segment = '(?:[A-Za-z0-9._~-]|%[0-9A-Fa-f]{2})+'
     $allowedPath = '\A(?:commits/' + $segment +
-        '|git/ref/tags/v[1-9][0-9]{3}\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)' +
         '|git/tags/[0-9a-f]{40}|contents/package\.json\?ref=[0-9a-f]{40})\z'
-    Assert-OpenClawSourceText $Path 'GitHub API path' -Pattern $allowedPath
+    Assert-OpenClawSourceText $Path 'GitHub API path'
+    $tagPrefix = 'git/ref/tags/v'
+    if ($Path.StartsWith($tagPrefix, [StringComparison]::Ordinal)) {
+        Assert-OpenClawSourceVersion -Version $Path.Substring($tagPrefix.Length)
+    }
+    else {
+        Assert-OpenClawSourceText $Path 'GitHub API path' -Pattern $allowedPath
+    }
     $headers = @{
         Accept = 'application/vnd.github+json'
         'User-Agent' = 'OpenClaw-Gateway-MSIX'
@@ -186,8 +279,8 @@ function Invoke-OpenClawRegistryRequest {
     Set-StrictMode -Version Latest
     $ErrorActionPreference = 'Stop'
 
-    if ($Selector -cne 'extended-stable') {
-        Assert-OpenClawSourceVersion -Version $Selector -Final
+    if ($Selector -cne 'latest') {
+        Assert-OpenClawSourceVersion -Version $Selector
     }
     $encodedSelector = [Uri]::EscapeDataString($Selector)
     $requestOptions = Get-OpenClawRequestOptions
@@ -240,7 +333,7 @@ function Resolve-OpenClawSource {
     Set-StrictMode -Version Latest
     $ErrorActionPreference = 'Stop'
 
-    Assert-OpenClawReleasePolicy -Policy $Policy
+    $policyRef = Get-OpenClawPolicyRef -Policy $Policy
     Assert-OpenClawSourceText $Ref 'Ref' -AllowEmpty
     $channel = ''
     $releaseTag = ''
@@ -248,7 +341,7 @@ function Resolve-OpenClawSource {
     $integrity = ''
 
     if ($Ref.Length -gt 0) {
-        Assert-OpenClawSourceText $Ref 'Ref' -Pattern '\A\S+\z'
+        Assert-OpenClawSourceRef -Ref $Ref
         $requestedRef = $Ref
         $escapedRef = [Uri]::EscapeDataString($Ref)
         $commitResponse = Invoke-OpenClawGitHubRequest -Path "commits/$escapedRef"
@@ -259,15 +352,19 @@ function Resolve-OpenClawSource {
     }
     else {
         $channel = Get-OpenClawSourceField $Policy 'channel'
-        $requestedRef = $channel
-        $selection = Invoke-OpenClawRegistryRequest -Selector $channel
+        $requestedRef = $policyRef
+        $selector = if ($policyRef -ceq 'stable') { 'latest' } else { $policyRef }
+        $selection = Invoke-OpenClawRegistryRequest -Selector $selector
         $name = Get-OpenClawSourceField $selection 'name'
         Assert-OpenClawSourceText $name 'registry package name'
         if ($name -cne 'openclaw') {
             throw 'The registry channel must resolve to the openclaw package.'
         }
         $version = Get-OpenClawSourceField $selection 'version'
-        Assert-OpenClawSourceVersion -Version $version -Final
+        Assert-OpenClawSourceVersion -Version $version
+        if ($policyRef -cne 'stable' -and $version -cne $policyRef) {
+            throw 'The registry package version does not match the stableVersion pin.'
+        }
         $releaseTag = "v$version"
         $tagRef = Invoke-OpenClawGitHubRequest -Path "git/ref/tags/$releaseTag"
         $refLabel = Get-OpenClawSourceField $tagRef 'ref'
@@ -308,12 +405,15 @@ function Resolve-OpenClawSource {
             throw 'The immutable source package version does not match the selected release.'
         }
 
-        # Re-read the exact version, not the mutable selector, for the release evidence.
-        $manifest = Invoke-OpenClawRegistryRequest -Selector $version
+        # A pin already fetched the exact manifest; latest needs an immutable version lookup.
+        $manifest = $selection
+        if ($policyRef -ceq 'stable') {
+            $manifest = Invoke-OpenClawRegistryRequest -Selector $version
+        }
         $manifestName = Get-OpenClawSourceField $manifest 'name'
         $manifestVersion = Get-OpenClawSourceField $manifest 'version'
         Assert-OpenClawSourceText $manifestName 'registry package name'
-        Assert-OpenClawSourceVersion -Version $manifestVersion -Final
+        Assert-OpenClawSourceVersion -Version $manifestVersion
         if ($manifestName -cne 'openclaw' -or $manifestVersion -cne $version) {
             throw 'The exact registry manifest does not match the selected package version.'
         }
@@ -368,7 +468,7 @@ function Assert-OpenClawSource {
     Set-StrictMode -Version Latest
     $ErrorActionPreference = 'Stop'
 
-    Assert-OpenClawReleasePolicy -Policy $Policy
+    $policyRef = Get-OpenClawPolicyRef -Policy $Policy
     $values = @{}
     foreach ($field in @(
             'repository', 'requestedRef', 'resolvedCommit', 'packageVersion',
@@ -388,8 +488,9 @@ function Assert-OpenClawSource {
     if ($values.repository -cne (Get-OpenClawSourceField $Policy 'repository')) {
         throw 'The source repository does not match the release policy.'
     }
-    Assert-OpenClawSourceText $values.requestedRef 'requestedRef' -Pattern '\A\S+\z'
+    Assert-OpenClawSourceRef $values.requestedRef 'requestedRef'
     Assert-OpenClawSourceText $values.resolvedCommit 'resolvedCommit' -Pattern '\A[0-9a-f]{40}\z'
+    Assert-OpenClawSourceVersion $values.packageVersion
     Assert-OpenClawSourceText `
         $values.resolvedAt 'resolvedAt' `
         -Pattern '\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,7})?(?:Z|\+00:00)\z'
@@ -405,10 +506,12 @@ function Assert-OpenClawSource {
 
     if ($values.channel.Length -gt 0) {
         $policyChannel = Get-OpenClawSourceField $Policy 'channel'
-        if ($values.channel -cne $policyChannel -or $values.requestedRef -cne $policyChannel) {
-            throw 'The source channel and requestedRef must match the release policy channel.'
+        if ($values.channel -cne $policyChannel -or $values.requestedRef -cne $policyRef) {
+            throw 'The source channel and requestedRef must match the release policy.'
         }
-        Assert-OpenClawSourceVersion $values.packageVersion -Final
+        if ($policyRef -cne 'stable' -and $values.packageVersion -cne $policyRef) {
+            throw 'The source packageVersion must match the stableVersion pin.'
+        }
         if ($values.releaseTag -cne "v$($values.packageVersion)") {
             throw 'The releaseTag must match the source package version.'
         }
@@ -419,7 +522,6 @@ function Assert-OpenClawSource {
         if ($RequireChannel) {
             throw 'Official signing requires a channel-resolved source, not a ref override.'
         }
-        Assert-OpenClawSourceVersion $values.packageVersion
         if ($values.releaseTag.Length -ne 0 -or
             $values.tagObject.Length -ne 0 -or $values.registryIntegrity.Length -ne 0) {
             throw 'A ref override must have empty releaseTag, tagObject, and registryIntegrity fields.'

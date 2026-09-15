@@ -29,8 +29,9 @@ if (-not (Test-Path $sourceMetadataPath -PathType Leaf)) {
 $sourceMetadata = Get-Content $sourceMetadataPath -Raw | ConvertFrom-Json
 $sourceSelection = $sourceMetadata |
     Select-Object channel, releaseTag, tagObject, resolvedAt, registryIntegrity
+. (Join-Path $PSScriptRoot 'OpenClawSource.ps1')
+Assert-OpenClawSourceVersion -Version $sourceMetadata.packageVersion -Final
 if ($null -ne $sourceMetadata.PSObject.Properties['channel']) {
-    . (Join-Path $PSScriptRoot 'OpenClawSource.ps1')
     $policy = Read-OpenClawReleasePolicy -Path (
         Join-Path (Split-Path $PSScriptRoot -Parent) 'release-policy.json')
     Assert-OpenClawSource -Source $sourceMetadata -Policy $policy

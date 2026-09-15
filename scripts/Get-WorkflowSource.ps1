@@ -49,7 +49,7 @@ else {
 
 Assert-OpenClawSource -Source $source -Policy $policy `
     -RequireChannel:($SigningMode -eq 'official')
-$expectedRef = if ($Ref -eq '') { $policy.channel } else { $Ref }
+$expectedRef = if ($Ref -eq '') { Get-OpenClawPolicyRef -Policy $policy } else { $Ref }
 if ($source.requestedRef -cne $expectedRef) {
     throw 'The source snapshot does not match the requested selector.'
 }
@@ -59,8 +59,8 @@ $versionParameters = @{
     RunAttempt = 1
 }
 if ($SigningMode -eq 'official') {
-    $versionParameters.ReleaseVersion =
-        "$($source.packageVersion).$($policy.packageRevision)"
+    $versionParameters.ReleaseVersion = Get-OpenClawMsixReleaseVersion `
+        -Version $source.packageVersion -PackageRevision $policy.packageRevision
 }
 $packageVersion = & (Join-Path $PSScriptRoot 'Get-WorkflowPackageVersion.ps1') `
     @versionParameters
