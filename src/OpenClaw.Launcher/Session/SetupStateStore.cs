@@ -38,6 +38,15 @@ internal sealed record SetupRecord
 
     [JsonPropertyName("startupEnabled")]
     public bool StartupEnabled { get; init; } = true;
+
+    [JsonPropertyName("agentNodePath")]
+    public string? AgentNodePath { get; init; }
+
+    [JsonPropertyName("agentNodeVersion")]
+    public string? AgentNodeVersion { get; init; }
+
+    [JsonPropertyName("agentNodeArchive")]
+    public string? AgentNodeArchive { get; init; }
 }
 
 /// <summary>Why the explicit setup marker could not be used.</summary>

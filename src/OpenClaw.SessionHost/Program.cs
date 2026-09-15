@@ -23,6 +23,14 @@ internal static class Program
         Func<string, string> readFile,
         Action<string, SessionLaunchResult> writeResult)
     {
+        if (args.Count == 2 && args[0] == "--install-runtime")
+        {
+            return SessionRuntimeInstaller.Run(
+                args[1],
+                readFile,
+                File.WriteAllText);
+        }
+
         if (args.Count != 2 || args[0] != "--request")
         {
             // No request path means no control file to report through, so this

@@ -28,6 +28,19 @@ internal interface ISessionProcessLauncher
 /// </summary>
 internal sealed class SessionProcessLauncher : ISessionProcessLauncher
 {
+    internal static void PrependPath(ProcessStartInfo startInfo, string? runtimeDirectory)
+    {
+        if (string.IsNullOrEmpty(runtimeDirectory))
+        {
+            return;
+        }
+
+        string inheritedPath = startInfo.Environment["PATH"] ?? string.Empty;
+        startInfo.Environment["PATH"] = string.IsNullOrEmpty(inheritedPath)
+            ? runtimeDirectory
+            : $"{runtimeDirectory};{inheritedPath}";
+    }
+
     public int Run(SessionLaunchRequest request)
     {
         string workingDirectory = request.WorkingDirectory!;
