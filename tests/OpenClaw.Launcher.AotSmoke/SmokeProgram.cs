@@ -38,6 +38,7 @@ internal static class SmokeProgram
             ("--version reports the launcher", VersionReportsLauncherAssemblyAsync),
             ("--version wins over trailing arguments", VersionWinsOverTrailingAsync),
             ("unknown command fails", UnknownCommandFailsAsync),
+            ("setup --force requires --fresh", SetupForceRequiresFreshAsync),
             ("response-file token is not expanded", ResponseFileTokenIsNotExpandedAsync),
             ("completion directive suggests commands", CompletionDirectiveSuggestsAsync),
             ("unpackaged setup reports identity failure", SetupReportsReadinessAsync),
@@ -174,6 +175,17 @@ internal static class SmokeProgram
 
         AssertExitCode(1, exitCode, fixture);
         AssertContains(fixture.Error.ToString(), "bogus", fixture);
+        fixture.AssertNodeWasNotResolved();
+    }
+
+    private static async Task SetupForceRequiresFreshAsync()
+    {
+        using Fixture fixture = Fixture.CreateWithoutApplication();
+
+        int exitCode = await fixture.RunAsync(["setup", "--force"]).ConfigureAwait(false);
+
+        AssertExitCode(1, exitCode, fixture);
+        AssertContains(fixture.Error.ToString(), "requires option '--fresh'", fixture);
         fixture.AssertNodeWasNotResolved();
     }
 

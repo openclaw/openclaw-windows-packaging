@@ -394,25 +394,60 @@ internal static class Program
                 string reportPath = WriteFreshDiagnosticReport(runtime, log);
                 await output.WriteLineAsync($"Pre-reset diagnostic report: {reportPath}")
                     .ConfigureAwait(false);
-                Session.TeardownResult teardownResult = await lifecycle.TeardownAsync(
-                    options, runtime, log, lockAlreadyHeld: true, cancellationToken)
-                    .ConfigureAwait(false);
+                Session.TeardownResult teardownResult;
+                try
+                {
+                    teardownResult = await lifecycle.TeardownAsync(
+                        options, runtime, log, lockAlreadyHeld: true, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception exception) when (
+                    setupOptions.Force &&
+                    exception is Session.SessionException or Mxc.MxcException)
+                {
+                    teardownResult = new Session.TeardownResult(
+                        false,
+                        "Teardown failed before external cleanup could be confirmed.",
+                        exception.Message);
+                }
                 if (!teardownResult.Succeeded)
                 {
+                    if (!setupOptions.Force)
+                    {
+                        await output.WriteLineAsync(
+                            $"Warning: Fresh setup stopped because teardown is incomplete: {teardownResult.Message}")
+                            .ConfigureAwait(false);
+                        if (!string.IsNullOrWhiteSpace(teardownResult.Detail))
+                        {
+                            await output.WriteLineAsync(teardownResult.Detail).ConfigureAwait(false);
+                        }
+
+                        return 1;
+                    }
+
                     await output.WriteLineAsync(
-                        $"Warning: Fresh setup stopped because teardown is incomplete: {teardownResult.Message}")
+                        $"WARNING: Forced fresh setup will continue without confirming external cleanup: {teardownResult.Message}")
                         .ConfigureAwait(false);
                     if (!string.IsNullOrWhiteSpace(teardownResult.Detail))
                     {
                         await output.WriteLineAsync(teardownResult.Detail).ConfigureAwait(false);
                     }
-
-                    return 1;
                 }
 
                 Session.IInstallationStateCleaner cleaner = lifecycle.CreateStateCleaner(runtime);
                 cleaner.Clear();
                 log("Fresh setup cleared package-owned local state.");
+                if (!teardownResult.Succeeded)
+                {
+                    const string residualWarning =
+                        "WARNING: Forced fresh setup did not prove a pristine machine because owned external cleanup remains unresolved. " +
+                        "Review the pre-reset report for residual sandbox or gateway identifiers. " +
+                        "A later setup reset cannot remove resources whose ownership record was cleared; " +
+                        "remove them through the backend's administrative cleanup path before treating this machine as pristine.";
+                    log(residualWarning);
+                    await output.WriteLineAsync(residualWarning).ConfigureAwait(false);
+                }
+
                 return await RunSetupCoreAsync(
                     runtime, options, lifecycle, output, log, lockAlreadyHeld: true, cancellationToken)
                     .ConfigureAwait(false);
@@ -440,6 +475,14 @@ internal static class Program
         {
             log($"Fresh setup local cleanup was denied: {exception.Message}");
             await output.WriteLineAsync($"OpenClaw setup could not complete: {exception.Message}")
+                .ConfigureAwait(false);
+            return 1;
+        }
+        catch (OperationCanceledException)
+        {
+            log("Fresh setup was cancelled before it completed.");
+            await output.WriteLineAsync(
+                "OpenClaw setup was cancelled; cleanup or setup may be incomplete. Rerun `clawctl setup --fresh` to retry.")
                 .ConfigureAwait(false);
             return 1;
         }
@@ -498,15 +541,40 @@ internal static class Program
         Session.SessionRuntime runtime,
         Action<string> log)
     {
+        Session.SessionStatus session = runtime.Coordinator.GetRecordedStatus();
+        Gateway.GatewayStateResult gateway = runtime.GatewayState.Read();
         string directory = Path.Combine(Path.GetTempPath(), "OpenClawGatewayMSIX", "fresh-reset");
         Directory.CreateDirectory(directory);
         string path = Path.Combine(directory, $"pre-reset-{Guid.NewGuid():N}.log");
-        File.WriteAllLines(path,
+        List<string> lines =
         [
             $"timestampUtc={DateTimeOffset.UtcNow:O}",
             $"applicationId={runtime.ApplicationId}",
             "report=pre-reset diagnostic metadata; credentials and local file contents are excluded"
-        ]);
+        ];
+        if (session.Record is not null)
+        {
+            lines.Add($"sessionSandboxId={session.Record.SandboxId}");
+            lines.Add($"sessionAgentUserName={session.Record.AgentUserName ?? string.Empty}");
+            lines.Add($"sessionAgentUserSid={session.Record.AgentUserSid ?? string.Empty}");
+        }
+        else
+        {
+            lines.Add($"sessionRecordFault={session.Fault?.ToString() ?? "none"}");
+        }
+
+        if (gateway.Record is not null)
+        {
+            lines.Add($"gatewaySandboxId={gateway.Record.SandboxId}");
+            lines.Add($"gatewayProcessId={gateway.Record.ProcessId}");
+            lines.Add($"gatewayLaunchPending={gateway.Record.LaunchPending}");
+        }
+        else
+        {
+            lines.Add($"gatewayRecordFault={gateway.Fault?.ToString() ?? "none"}");
+        }
+
+        File.WriteAllLines(path, lines);
         log($"Captured redacted pre-reset diagnostic report at {path}.");
         return path;
     }
