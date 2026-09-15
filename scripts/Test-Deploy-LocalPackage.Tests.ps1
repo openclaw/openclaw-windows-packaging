@@ -20,9 +20,51 @@ function Assert-Fails {
         if ($_.Exception.Message -notmatch $Pattern) {
             throw "Expected '$Pattern'; received '$($_.Exception.Message)'."
         }
+
         return
     }
     throw "Expected failure matching '$Pattern'."
+}
+
+function Test-ProductionMxcStageAdapterIgnoresStaleNativeExitState {
+    $fixture = Join-Path $testRoot "mxc adapter $([guid]::NewGuid().ToString('N'))"
+    $scripts = Join-Path $fixture 'scripts'
+    $output = Join-Path $fixture 'staged'
+    New-Item -Path $scripts -ItemType Directory -Force | Out-Null
+    New-Item -Path $output -ItemType Directory -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Get-MxcRuntime.ps1') `
+        -Destination (Join-Path $scripts 'Get-MxcRuntime.ps1')
+
+    $runtimeFile = Join-Path $output 'fixture.bin'
+    [IO.File]::WriteAllText($runtimeFile, 'cached runtime')
+    [IO.File]::WriteAllText((Join-Path $output 'mxc-runtime.json'), '{}')
+    $sha = (Get-FileHash -LiteralPath $runtimeFile -Algorithm SHA256).Hash.ToLowerInvariant()
+    $length = (Get-Item -LiteralPath $runtimeFile).Length
+    $lock = @{
+        version = 'test'
+        architectures = @{
+            x64 = @{
+                files = @(@{
+                    stagedPath = 'fixture.bin'
+                    archivePath = 'package/fixture.bin'
+                    length = $length
+                    sha256 = $sha
+                })
+            }
+        }
+        licenseFiles = @()
+    } | ConvertTo-Json -Depth 8
+    [IO.File]::WriteAllText((Join-Path $fixture 'mxc-runtime.lock.json'), $lock)
+
+    $module = Get-Module LocalPackage
+    $adapter = & $module { (Get-LocalPackageOperations).StageMxcRuntime }
+    & $env:ComSpec /d /c 'exit 23'
+    Assert-True ($LASTEXITCODE -eq 23) 'The test must establish stale native failure state.'
+
+    & $adapter $fixture 'x64' $output
+    Assert-True ((Test-Path -LiteralPath $runtimeFile -PathType Leaf)) `
+        'Cached MXC staging should succeed regardless of prior native exit state.'
+    $global:LASTEXITCODE = 0
 }
 
 function New-Fixture {
@@ -54,6 +96,7 @@ function New-Fixture {
         Queries = 0
         Downloads = 0
         RuntimeDownloads = 0
+        MxcStages = 0
         Publishes = 0
         Registrations = 0
         Setups = 0
@@ -93,12 +136,27 @@ function New-Fixture {
             return $null
         }.GetNewClosure()
         TestArchive = { param($path, $expectedRoot) return $null }
+        StageMxcRuntime = {
+            param($repositoryRoot, $architecture, $output)
+            $state.MxcStages++
+            New-Item -Path $output -ItemType Directory -Force | Out-Null
+            [IO.File]::WriteAllText((Join-Path $output 'wxc-exec.exe'), 'fixture executor')
+            [IO.File]::WriteAllText((Join-Path $output 'plm.exe'), 'fixture lifecycle')
+            [IO.File]::WriteAllText((Join-Path $output 'mxc-runtime.json'), '{}')
+            return $null
+        }.GetNewClosure()
         Publish = {
             param($project, $architecture, $output)
             $state.Publishes++
             if ($state.PublishFailure) { throw 'NativeAOT publish failed.' }
             New-Item -Path $output -ItemType Directory -Force | Out-Null
-            if (-not $state.SkipHost) {
+            $isSessionHost = $project -like '*OpenClaw.SessionHost*'
+            if ($isSessionHost) {
+                [IO.File]::WriteAllText(
+                    (Join-Path $output 'openclaw-session-host.exe'),
+                    "session host $($state.HostVersion)")
+            }
+            elseif (-not $state.SkipHost) {
                 # Unchanged source must produce identical bytes, as a real
                 # incremental publish does; HostVersion models a source edit.
                 [IO.File]::WriteAllText((Join-Path $output 'openclaw.exe'), "host $($state.HostVersion)")
@@ -147,13 +205,26 @@ try {
     $f = New-Fixture
     $first = Invoke-Fixture $f
     Assert-True ($first.Changed -and $f.Downloads -eq 1 -and $f.RuntimeDownloads -eq 1 -and
-        $f.Publishes -eq 1 -and $f.Registrations -eq 1) 'First deployment did not acquire and register exactly once.'
+        $f.MxcStages -eq 1 -and $f.Publishes -eq 2 -and
+        $f.Registrations -eq 1) 'First deployment did not acquire, build, and register exactly once.'
     Assert-True ($f.Setups -eq 1) 'Deployment did not leave the package runnable by preparing the runtime.'
     Assert-True (@($first).Count -eq 1 -and $first.PackageFullName) 'Deployment did not return a single registration record.'
     $layout = $first.LayoutDirectory
     Assert-True ((Get-Content (Join-Path $layout 'app\openclaw.mjs') -Raw) -eq 'first payload') 'Layout does not expose the payload application.'
     Assert-True ((Get-Item (Join-Path $layout 'app')).Attributes -band [IO.FileAttributes]::ReparsePoint) 'The layout copied the application instead of linking it.'
     Assert-True (Test-Path (Join-Path $layout 'openclaw.exe')) 'Layout is missing the launcher.'
+    Assert-True (
+        Test-Path (Join-Path $layout 'session-host\x64\openclaw-session-host.exe')
+    ) 'Layout is missing the session host.'
+    Assert-True (
+        Test-Path (Join-Path $layout 'mxc\x64\wxc-exec.exe')
+    ) 'Layout is missing the MXC executor.'
+    Assert-True (
+        Test-Path (Join-Path $layout 'mxc\x64\plm.exe')
+    ) 'Layout is missing the MXC lifecycle tool.'
+    Assert-True (
+        Test-Path (Join-Path $layout 'mxc\x64\mxc-runtime.json')
+    ) 'Layout is missing MXC provenance.'
     Assert-True (Test-Path (Join-Path $layout 'Images\StoreLogo.png')) 'Layout is missing package images.'
     Assert-True (@(Get-ChildItem (Join-Path $layout 'runtime') -File).Name -eq 'node-v24.20.0-win-x64.zip') 'Layout is missing the bundled Node.js runtime.'
     [xml]$m = Get-Content (Join-Path $layout 'AppxManifest.xml') -Raw
@@ -352,6 +423,8 @@ try {
         [IO.Path]::GetFullPath($fo.Installed.InstallLocation).TrimEnd('\') -ieq
         [IO.Path]::GetFullPath($mine.LayoutDirectory).TrimEnd('\')
     ) 'The aliases still resolve to the other checkout after take-over.'
+
+    Test-ProductionMxcStageAdapterIgnoresStaleNativeExitState
 
     Write-Host 'Local package deployment scenarios passed.'
 }
