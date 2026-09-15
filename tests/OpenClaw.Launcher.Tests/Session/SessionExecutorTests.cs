@@ -39,6 +39,40 @@ public sealed class SessionExecutorTests : IDisposable
 
     private SessionExecutor Create() => new(_backend, _log.Add);
 
+    [Fact]
+    public async Task IsolatedLaunchRetainsTheHostInteractiveEnvironment()
+    {
+        SessionLaunchRequest? delivered = null;
+        RespondAsHelper(request =>
+        {
+            delivered = request;
+            return new SessionLaunchResult
+            {
+                RequestId = request.RequestId,
+                Launched = true,
+                ExitCode = 0,
+            };
+        });
+
+        await Create().ExecuteAsync(
+            Record(),
+            new SessionExecutionRequest(
+                @"C:\Package\session-host\x64\openclaw-session-host.exe",
+                @"C:\Program Files\nodejs\node.exe",
+                @"C:\Package\app",
+                [],
+                Workspace)
+            {
+                AdditionalEnvironment = OpenClawRuntimeEnvironment.Build(
+                    isInteractive: true,
+                    _ => null)
+            },
+            CancellationToken.None);
+
+        Assert.Equal("3", delivered!.Environment!["FORCE_COLOR"]);
+        Assert.Equal("1", delivered.Environment["WT_SESSION"]);
+    }
+
     /// <summary>
     /// Stands in for the guest helper: reads the delivered request and writes
     /// the control result the real helper would.

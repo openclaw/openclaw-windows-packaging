@@ -4,6 +4,13 @@ using System.CommandLine.Invocation;
 
 namespace OpenClaw.Launcher;
 
+internal sealed record ClawCtlHandlers
+{
+    public required Func<CancellationToken, Task<int>> Setup { get; init; }
+    public required Func<CancellationToken, Task<int>> Status { get; init; }
+    public required Func<bool, CancellationToken, Task<int>> Teardown { get; init; }
+}
+
 // The clawctl command tree. Only the package-readiness surface belongs here:
 // doctor, gateway, uninstall, and every other OpenClaw command is owned by the
 // bundled CLI and reached through `openclaw`, which forwards its arguments
@@ -11,6 +18,7 @@ namespace OpenClaw.Launcher;
 internal static class ClawCtlCommandLine
 {
     public const string SetupCommandName = "setup";
+    public const string StatusCommandName = "status";
 
     // Response-file expansion is off. A leading `@` means nothing to clawctl,
     // so it is reported as an unrecognized argument instead of silently reading
@@ -24,10 +32,10 @@ internal static class ClawCtlCommandLine
 
     // Setup guidance is available without preparing the runtime.
     public static string RootDescription =>
-        "Prepare the bundled Node.js runtime and verify the packaged OpenClaw application." +
+        "Set up and manage the packaged OpenClaw application." +
         Environment.NewLine +
         Environment.NewLine +
-        "Run `clawctl setup` to extract or repair the bundled runtime." +
+        "Run `clawctl setup` to prepare the bundled runtime and isolated session." +
         Environment.NewLine +
         Environment.NewLine +
         "Run `openclaw <arguments>` to invoke the OpenClaw CLI.";
@@ -38,14 +46,24 @@ internal static class ClawCtlCommandLine
 
     // runSetup stays a delegate so the command tree owns parsing and help while
     // Program keeps the readiness operation and its test seams.
-    public static RootCommand Create(Func<CancellationToken, Task<int>> runSetup)
+    public static RootCommand Create(ClawCtlHandlers handlers)
     {
+        ArgumentNullException.ThrowIfNull(handlers);
         Command setup = new(SetupCommandName, SetupDescription);
-        setup.SetAction((_, cancellationToken) => runSetup(cancellationToken));
+        setup.SetAction((_, cancellationToken) => handlers.Setup(cancellationToken));
+        Command status = new(StatusCommandName, "Show the recorded isolated session without changing it.");
+        status.SetAction((_, cancellationToken) => handlers.Status(cancellationToken));
+        Option<bool> force = new("--force") { Description = "Skip confirmation and remove the owned session." };
+        Command teardown = new("teardown", "Stop and remove the owned isolated session.");
+        teardown.Options.Add(force);
+        teardown.SetAction((parsed, cancellationToken) =>
+            handlers.Teardown(parsed.GetValue(force), cancellationToken));
 
         RootCommand root = new(RootDescription)
         {
-            setup
+            setup,
+            status,
+            teardown
         };
 
         // Bare `clawctl` is a discovery request, not a usage error, so the root
