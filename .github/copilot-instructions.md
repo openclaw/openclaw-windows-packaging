@@ -106,10 +106,11 @@ package.
   commit and SHA-256 on every use; official signing always rebuilds it. The
   resolved Node.js version flows through `source.json` and `payload-metadata.json`;
   each architecture-specific Windows job uses that same version to build the
-  expanded payload and immediately compose its MSIX. `Build-MSIX.ps1` downloads
-  the matching official archive, rejects Node.js from the application payload,
-  builds the application inventory, publishes the NativeAOT host, validates
-  package contents, and emits MSIX metadata including the runtime hash.
+  expanded payload, validates the installed Gateway and Control UI build identities,
+  and immediately composes its MSIX. `Build-MSIX.ps1` downloads the matching
+  official archive, rejects Node.js from the application payload, builds the
+  application inventory, publishes the NativeAOT host, validates package contents,
+  and emits MSIX metadata including the runtime hash.
 - Unsigned artifacts are the normal PR/push output. Test signing uses a
   temporary runner-local certificate. Official signing is gated to `main` and
   the immutable upstream commit in `release-policy.json`; signing inputs are

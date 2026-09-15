@@ -219,14 +219,11 @@ jobs:
 
       # The OpenClaw checkout below must own GITHUB_WORKSPACE because its
       # composite setup action resolves workspace files from that root. Keep
-      # the packaging-owned validator outside the workspace before replacing
-      # this checkout with the OpenClaw source tree.
-      - name: Stage packaging validators
+      # the package verifier outside the workspace before replacing this
+      # checkout with the OpenClaw source tree.
+      - name: Stage package verifier
         shell: pwsh
         run: |
-          Copy-Item `
-            ./scripts/Test-OpenClawBuildIdentity.ps1 `
-            $env:RUNNER_TEMP/Test-OpenClawBuildIdentity.ps1
           Copy-Item `
             ./scripts/Test-OpenClawPackage.ps1 `
             $env:RUNNER_TEMP/Test-OpenClawPackage.ps1
@@ -256,13 +253,6 @@ jobs:
         env:
           OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1"
         run: pnpm build
-
-      - name: Validate OpenClaw build identities
-        if: ${{ steps.package-cache.outputs.cache-hit != 'true' }}
-        shell: pwsh
-        run: >
-          & "$env:RUNNER_TEMP/Test-OpenClawBuildIdentity.ps1"
-          -OpenClawDirectory $env:GITHUB_WORKSPACE
 
       - name: Pack npm package
         if: ${{ steps.package-cache.outputs.cache-hit != 'true' }}

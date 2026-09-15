@@ -163,7 +163,9 @@ dotnet test .\OpenClaw.Gateway.MSIX.slnx `
 ```
 
 `scripts\Build-Payload.ps1` npm-installs an OpenClaw package into an expanded,
-architecture-specific application tree. `scripts\Build-MSIX.ps1` downloads
+architecture-specific application tree. It validates the Gateway and Control UI
+build identities on the installed tree, including reused staged installs.
+`scripts\Build-MSIX.ps1` downloads
 the official Node.js archive matching the payload's recorded build version
 and architecture, copies both inputs into package content, rejects Node.js
 inside the application payload, creates a per-file inventory, and then creates
