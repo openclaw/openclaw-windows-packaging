@@ -70,6 +70,36 @@ if ($buildMsixJob.Contains(
     throw 'The build-msix job must compose the locally built payload directly.'
 }
 
+$dispatchDefaultMatch = [regex]::Match(
+    $workflow,
+    '(?ms)openclaw_ref:\s+description:.*?default:\s*(?<sha>[0-9a-f]{40})'
+)
+$automaticFallbackMatch = [regex]::Match(
+    $workflow,
+    "OPENCLAW_REF:.*?\|\|\s*'(?<sha>[0-9a-f]{40})'"
+)
+if (-not $dispatchDefaultMatch.Success -or -not $automaticFallbackMatch.Success) {
+    throw 'Unable to locate both pinned OpenClaw workflow revisions.'
+}
+
+$releasePolicy = Get-Content `
+    -LiteralPath (Join-Path $repositoryRoot 'release-policy.json') `
+    -Raw |
+    ConvertFrom-Json
+$pinnedRevisions = @(
+    @(
+        $dispatchDefaultMatch.Groups['sha'].Value
+        $automaticFallbackMatch.Groups['sha'].Value
+        [string]$releasePolicy.approvedCommit
+    ) | Select-Object -Unique
+)
+if ($pinnedRevisions.Count -ne 1) {
+    throw (
+        'The workflow defaults and official release policy must pin the same ' +
+        "OpenClaw commit; found: $($pinnedRevisions -join ', ')."
+    )
+}
+
 if ($workflow.Contains('AZURE_CLIENT_SECRET', [StringComparison]::Ordinal)) {
     throw 'Signing workflow must use OIDC, not an Azure client secret.'
 }

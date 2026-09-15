@@ -144,6 +144,11 @@ jobs:
         run: >
           .\scripts\Test-PackagingRelevance.Tests.ps1
 
+      - name: Test OpenClaw cache keys
+        shell: pwsh
+        run: >
+          .\scripts\Test-OpenClawCacheKey.Tests.ps1
+
       - name: Test local package deployment
         shell: pwsh
         run: >
@@ -165,7 +170,8 @@ jobs:
     needs: changes
     runs-on: ubuntu-latest
     outputs:
-      source_sha: ${{ steps.source.outputs.sha }}
+      source_sha: ${{ steps.resolve.outputs.sha }}
+      package_cache_key: ${{ steps.resolve.outputs.package_cache_key }}
       package_version: ${{ steps.source.outputs.version }}
       node_version: ${{ steps.source.outputs.node_version }}
     steps:
@@ -173,6 +179,30 @@ jobs:
         uses: actions/checkout@v7
         with:
           persist-credentials: false
+
+      - name: Resolve immutable OpenClaw source
+        id: resolve
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $shaLines = @(
+            gh api `
+              "repos/openclaw/openclaw/commits/$env:OPENCLAW_REF" `
+              --jq .sha
+          )
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to resolve OpenClaw ref '$env:OPENCLAW_REF'."
+          }
+          $sha = [string]::Join('', [string[]]$shaLines).Trim().ToLowerInvariant()
+          if ($sha -notmatch '^[0-9a-f]{40}$') {
+            throw "OpenClaw ref resolved to an invalid commit SHA: '$sha'."
+          }
+          $cacheKey = .\scripts\Get-OpenClawCacheKey.ps1 `
+            -Layer package `
+            -Commit $sha
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+          "package_cache_key=$cacheKey" >> $env:GITHUB_OUTPUT
 
       # The OpenClaw checkout below must own GITHUB_WORKSPACE because its
       # composite setup action resolves workspace files from that root. Keep
@@ -189,7 +219,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: openclaw/openclaw
-          ref: ${{ env.OPENCLAW_REF }}
+          ref: ${{ steps.resolve.outputs.sha }}
           persist-credentials: false
           fetch-depth: 1
 
