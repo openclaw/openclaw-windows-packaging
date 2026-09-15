@@ -74,7 +74,12 @@ public sealed class ProgramTests : IDisposable
             output,
             TextWriter.Null,
             _ => Task.FromResult(nodeRuntime),
-            () => runtime);
+            () => runtime,
+            _ => Task.FromResult(new GatewayPersistenceInstallResult(
+                GatewayPersistenceState.Ready,
+                GatewayPersistenceLane.TaskScheduler,
+                "Logon recovery is configured.",
+                Changed: true)));
 
         Assert.Equal(0, exitCode);
         Assert.True(File.Exists(entryPoint));
@@ -89,7 +94,7 @@ public sealed class ProgramTests : IDisposable
             StringComparison.Ordinal);
         SetupRecord setup = runtime.SetupState.Read(runtime.ApplicationId).Record!;
         Assert.Equal(SetupPhase.Ready, setup.Phase);
-        Assert.False(setup.StartupEnabled);
+        Assert.True(setup.StartupEnabled);
         Assert.Equal("24.15.0", setup.AgentNodeVersion);
     }
 
