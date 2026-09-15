@@ -10,6 +10,9 @@ internal sealed record ClawCtlHandlers
     public required Func<CancellationToken, Task<int>> Status { get; init; }
     public required Func<bool, CancellationToken, Task<int>> Teardown { get; init; }
     public required Func<CancellationToken, Task<int>> PowerShell { get; init; }
+    public required Func<CancellationToken, Task<int>> GatewayStart { get; init; }
+    public required Func<CancellationToken, Task<int>> GatewayStatus { get; init; }
+    public required Func<CancellationToken, Task<int>> GatewayStop { get; init; }
 }
 
 // The clawctl command tree. Only the package-readiness surface belongs here:
@@ -63,13 +66,26 @@ internal static class ClawCtlCommandLine
             "pwsh",
             "Open an interactive PowerShell session inside the isolated agent.");
         powerShell.SetAction((_, cancellationToken) => handlers.PowerShell(cancellationToken));
+        Command gateway = new(
+            "gateway-service",
+            "Manage the background OpenClaw gateway inside the isolated session.");
+        Command gatewayStart = new("start", "Start the gateway if it is not running.");
+        gatewayStart.SetAction((_, token) => handlers.GatewayStart(token));
+        Command gatewayStatus = new("status", "Show the gateway state without changing it.");
+        gatewayStatus.SetAction((_, token) => handlers.GatewayStatus(token));
+        Command gatewayStop = new("stop", "Stop the gateway, keeping the session and its data.");
+        gatewayStop.SetAction((_, token) => handlers.GatewayStop(token));
+        gateway.Subcommands.Add(gatewayStart);
+        gateway.Subcommands.Add(gatewayStatus);
+        gateway.Subcommands.Add(gatewayStop);
 
         RootCommand root = new(RootDescription)
         {
             setup,
             status,
             teardown,
-            powerShell
+            powerShell,
+            gateway
         };
 
         // Bare `clawctl` is a discovery request, not a usage error, so the root

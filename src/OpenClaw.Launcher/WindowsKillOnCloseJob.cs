@@ -1,10 +1,15 @@
+using System.Buffers;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
 
+#if OPENCLAW_SESSION_HOST
+namespace OpenClaw.SessionHost;
+#else
 namespace OpenClaw.Launcher;
+#endif
 
 internal sealed class WindowsKillOnCloseJob : IDisposable
 {
@@ -17,6 +22,7 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
     private const int StandardOutputHandle = -11;
     private const int StandardErrorHandle = -12;
     private readonly SafeJobHandle _handle;
+    private static readonly SearchValues<char> QuoteCharacters = SearchValues.Create(" \t\r\n\v\"");
 
     private WindowsKillOnCloseJob(SafeJobHandle handle)
     {
@@ -72,7 +78,10 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
         }
     }
 
-    public Process StartProcess(ProcessStartInfo startInfo)
+    public Process StartProcess(ProcessStartInfo startInfo) => StartProcess(startInfo, null, null, null);
+
+    public Process StartProcess(
+        ProcessStartInfo startInfo, SafeHandle? input, SafeHandle? output, SafeHandle? standardError)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
         if (startInfo.UseShellExecute)
@@ -99,14 +108,23 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
         char[] commandLineBuffer = new char[commandLine.Length + 1];
         commandLine.CopyTo(0, commandLineBuffer, 0, commandLine.Length);
 
+        using SafeFileHandle? inputCopy = DuplicateForChild(input, StandardInputHandle);
+        using SafeFileHandle? outputCopy = DuplicateForChild(output, StandardOutputHandle);
+        using SafeFileHandle? errorCopy = DuplicateForChild(standardError, StandardErrorHandle);
+        using var handles = new InheritedHandles(
+            [inputCopy?.DangerousGetHandle() ?? 0, outputCopy?.DangerousGetHandle() ?? 0, errorCopy?.DangerousGetHandle() ?? 0]);
         IntPtr environment = BuildEnvironmentBlock(startInfo);
-        var startupInfo = new StartupInfo
+        var startupInfo = new ExtendedStartupInfo
         {
-            Size = Marshal.SizeOf<StartupInfo>(),
-            Flags = StartfUseStdHandles,
-            StandardInput = GetStdHandle(StandardInputHandle),
-            StandardOutput = GetStdHandle(StandardOutputHandle),
-            StandardError = GetStdHandle(StandardErrorHandle)
+            Startup = new StartupInfo
+            {
+                Size = handles.Attributes != 0 ? Marshal.SizeOf<ExtendedStartupInfo>() : Marshal.SizeOf<StartupInfo>(),
+                Flags = StartfUseStdHandles,
+                StandardInput = inputCopy?.DangerousGetHandle() ?? 0,
+                StandardOutput = outputCopy?.DangerousGetHandle() ?? 0,
+                StandardError = errorCopy?.DangerousGetHandle() ?? 0
+            },
+            Attributes = handles.Attributes
         };
 
         try
@@ -116,8 +134,10 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
                     commandLineBuffer,
                     IntPtr.Zero,
                     IntPtr.Zero,
-                    inheritHandles: true,
-                    CreateSuspended | CreateUnicodeEnvironment,
+                    inheritHandles: handles.Attributes != 0,
+                    CreateSuspended | CreateUnicodeEnvironment |
+                    (handles.Attributes != 0 ? 0x00080000u : 0u) |
+                    (startInfo.CreateNoWindow ? 0x08000000u : 0u),
                     environment,
                     string.IsNullOrWhiteSpace(startInfo.WorkingDirectory)
                         ? null
@@ -171,6 +191,104 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
 
     public void Dispose() => _handle.Dispose();
 
+    private static SafeFileHandle? DuplicateForChild(SafeHandle? handle, int standardHandle)
+    {
+        using var borrowed = new SafeFileHandle(GetStdHandle(standardHandle), ownsHandle: false);
+        SafeHandle source = handle ?? borrowed;
+        if (source.IsInvalid)
+        {
+            return null;
+        }
+        if (!DuplicateHandle(new IntPtr(-1), source, new IntPtr(-1), out SafeFileHandle copy, 0, true, 2))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Unable to duplicate the child's stream handle.");
+        }
+        return copy;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DuplicateHandle(
+        IntPtr sourceProcess, SafeHandle source, IntPtr targetProcess,
+        out SafeFileHandle target, uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint options);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ExtendedStartupInfo
+    {
+        public StartupInfo Startup;
+        public IntPtr Attributes;
+    }
+
+    private sealed class InheritedHandles : IDisposable
+    {
+        private IntPtr _values;
+        public IntPtr Attributes { get; private set; }
+
+        public InheritedHandles(IntPtr[] handles)
+        {
+            IntPtr[] valid = [.. handles.Where(handle => handle != 0 && handle != new IntPtr(-1)).Distinct()];
+            if (valid.Length == 0)
+            {
+                return;
+            }
+            nuint size = 0;
+            InitializeProcThreadAttributeList(0, 1, 0, ref size);
+            if (size == 0)
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+            IntPtr attributes = Marshal.AllocHGlobal(checked((nint)size));
+            if (!InitializeProcThreadAttributeList(attributes, 1, 0, ref size))
+            {
+                int error = Marshal.GetLastWin32Error();
+                Marshal.FreeHGlobal(attributes);
+                throw new Win32Exception(error);
+            }
+            Attributes = attributes;
+            try
+            {
+                _values = Marshal.AllocHGlobal(valid.Length * IntPtr.Size);
+                Marshal.Copy(valid, 0, _values, valid.Length);
+                // Restrict inheritance to this launch's stdio. Otherwise a
+                // concurrent child can inherit another gateway's log/pipe.
+                if (!UpdateProcThreadAttribute(Attributes, 0, 0x00020002, _values,
+                    (nuint)(valid.Length * IntPtr.Size), 0, 0))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+            }
+            catch
+            {
+                Dispose();
+                throw;
+            }
+        }
+
+        public void Dispose()
+        {
+            if (Attributes != 0)
+            {
+                DeleteProcThreadAttributeList(Attributes);
+                Marshal.FreeHGlobal(Attributes);
+                Attributes = 0;
+            }
+            Marshal.FreeHGlobal(_values);
+            _values = 0;
+        }
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool InitializeProcThreadAttributeList(IntPtr list, int count, uint flags, ref nuint size);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool UpdateProcThreadAttribute(
+        IntPtr list, uint flags, nuint attribute, IntPtr value, nuint size, IntPtr previous, IntPtr returnedSize);
+
+    [DllImport("kernel32.dll")]
+    private static extern void DeleteProcThreadAttributeList(IntPtr list);
+
     private static string BuildCommandLine(ProcessStartInfo startInfo)
     {
         var commandLine = new StringBuilder();
@@ -186,6 +304,13 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
 
     private static void AppendArgument(StringBuilder commandLine, string argument)
     {
+        // Match ProcessStartInfo.ArgumentList: quoting tokens that do not need
+        // it can change the behavior of executables with non-CRT parsers.
+        if (argument.Length > 0 && argument.AsSpan().IndexOfAny(QuoteCharacters) < 0)
+        {
+            commandLine.Append(argument);
+            return;
+        }
         commandLine.Append('"');
         int backslashes = 0;
         foreach (char character in argument)
@@ -271,7 +396,7 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
         uint creationFlags,
         IntPtr environment,
         string? currentDirectory,
-        ref StartupInfo startupInfo,
+        ref ExtendedStartupInfo startupInfo,
         out ProcessInformation processInformation);
 
     [DllImport("kernel32.dll", SetLastError = true)]

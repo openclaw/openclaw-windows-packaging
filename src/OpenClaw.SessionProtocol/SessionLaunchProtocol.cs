@@ -51,6 +51,19 @@ public sealed record SessionLaunchRequest
     public IReadOnlyDictionary<string, string>? Environment { get; init; }
 
     /// <summary>
+    /// A directory to put at the front of the launched process's <c>PATH</c>.
+    /// </summary>
+    /// <remarks>
+    /// Named rather than resolved by the host: <see cref="Environment"/> is
+    /// merged onto the guest account's own environment, and the host cannot
+    /// know what that account's <c>PATH</c> already contains. This is how the
+    /// packaged Node.js runtime wins over a machine-wide installation for tools
+    /// that resolve <c>node</c> by name.
+    /// </remarks>
+    [JsonPropertyName("pathPrefix")]
+    public string? PathPrefix { get; init; }
+
+    /// <summary>
     /// Detached only. Where the application's output is written, because a
     /// detached process has no console to inherit and the pipe it was started
     /// through closes as soon as the launching execution returns.
@@ -167,10 +180,10 @@ internal sealed partial class SessionJsonContext : JsonSerializerContext;
 public static class SessionLaunchProtocol
 {
     /// <summary>
-    /// Incremented whenever the request or result shape changes. The helper and
-    /// the launcher ship in the same package, so a mismatch means a stale file
-    /// or a mixed installation and is always an error rather than something to
-    /// interpret leniently.
+    /// Version of the public launcher-to-guest helper launch contract. This is
+    /// independent of the MXC wire schema version; a mismatch means a stale
+    /// file or a mixed installation and is always an error rather than
+    /// something to interpret leniently.
     /// </summary>
     public const int CurrentSchemaVersion = 1;
 

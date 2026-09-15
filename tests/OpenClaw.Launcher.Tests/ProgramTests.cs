@@ -1,3 +1,4 @@
+using OpenClaw.Launcher.Gateway;
 using OpenClaw.Launcher.Mxc;
 using OpenClaw.Launcher.Session;
 using OpenClaw.Launcher.Tests.Session;
@@ -116,6 +117,31 @@ public sealed class ProgramTests : IDisposable
             }));
 
         Assert.True(nodeResolutionAttempted);
+    }
+
+    [Fact]
+    public async Task TeardownClearsPendingGatewayStateAfterSessionRemoval()
+    {
+        SessionRuntime runtime = CreateSessionRuntime();
+        runtime.GatewayState.Write(new GatewayRecord
+        {
+            SchemaVersion = GatewayStateStore.CurrentSchemaVersion,
+            SandboxId = "iso:pending",
+            LaunchPending = true,
+            ProcessStartTimeUtc = DateTimeOffset.UtcNow
+        });
+
+        int exitCode = await Program.RunControlAsync(
+            new HostOptions(null, null, []),
+            ["teardown"],
+            _ => { },
+            TextWriter.Null,
+            TextWriter.Null,
+            createSessionRuntime: () => runtime);
+
+        Assert.Equal(0, exitCode);
+        GatewayStateResult state = runtime.GatewayState.Read();
+        Assert.Equal(GatewayStateFault.Missing, state.Fault);
     }
 
     [Fact]
