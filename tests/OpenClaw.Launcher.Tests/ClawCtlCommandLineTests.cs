@@ -63,23 +63,50 @@ public sealed class ClawCtlCommandLineTests
         Assert.Contains("openclaw <arguments>", help, StringComparison.Ordinal);
     }
 
-    // clawctl owns package readiness only. If an upstream command name ever
-    // becomes a clawctl subcommand, the host has started shadowing the bundled
-    // CLI instead of forwarding through `openclaw`.
+    // clawctl owns package readiness and the managed gateway only. Upstream
+    // command names must continue flowing through `openclaw` unchanged.
     [Fact]
-    public void OnlyTheReadinessCommandIsExposed()
+    public void OnlyTheOwnedCommandsAreExposed()
     {
         RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
         {
             Setup = _ => Task.FromResult(0),
             Status = _ => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
-            PowerShell = _ => Task.FromResult(0)
+            PowerShell = _ => Task.FromResult(0),
+            GatewayStart = _ => Task.FromResult(0),
+            GatewayStatus = _ => Task.FromResult(0),
+            GatewayStop = _ => Task.FromResult(0)
         });
 
         Assert.Equal(
-            [ClawCtlCommandLine.SetupCommandName, ClawCtlCommandLine.StatusCommandName, "teardown", "pwsh"],
+            [ClawCtlCommandLine.SetupCommandName, ClawCtlCommandLine.StatusCommandName, "teardown", "pwsh", "gateway-service"],
             root.Subcommands.Select(command => command.Name));
+    }
+
+    [Fact]
+    public async Task GatewayServiceStartInvokesOnlyTheStartHandler()
+    {
+        int starts = 0;
+        RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
+        {
+            Setup = _ => Task.FromResult(0),
+            Status = _ => Task.FromResult(0),
+            Teardown = (_, _) => Task.FromResult(0),
+            PowerShell = _ => Task.FromResult(0),
+            GatewayStart = _ =>
+            {
+                starts++;
+                return Task.FromResult(0);
+            },
+            GatewayStatus = _ => Task.FromResult(0),
+            GatewayStop = _ => Task.FromResult(0)
+        });
+
+        int exitCode = await root.Parse("gateway-service start").InvokeAsync();
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(1, starts);
     }
 
     [Fact]

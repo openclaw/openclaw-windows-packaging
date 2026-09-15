@@ -1,3 +1,4 @@
+using OpenClaw.Launcher.Gateway;
 using OpenClaw.Launcher.Mxc;
 using OpenClaw.SessionProtocol;
 
@@ -27,7 +28,8 @@ internal sealed class SessionRuntime
         IMxcSessionClient backend,
         string helperPath,
         string applicationId,
-        SetupStateStore setupState)
+        SetupStateStore setupState,
+        GatewayStateStore gatewayState)
     {
         Coordinator = coordinator;
         Executor = executor;
@@ -35,6 +37,7 @@ internal sealed class SessionRuntime
         HelperPath = helperPath;
         ApplicationId = applicationId;
         SetupState = setupState;
+        GatewayState = gatewayState;
         LifecycleLock = new NamedSessionLock(applicationId + "_Installation");
     }
 
@@ -53,6 +56,8 @@ internal sealed class SessionRuntime
     public string ApplicationId { get; }
 
     public SetupStateStore SetupState { get; }
+
+    public GatewayStateStore GatewayState { get; }
 
     public ISessionLock LifecycleLock { get; }
 
@@ -125,7 +130,8 @@ internal sealed class SessionRuntime
             client,
             ResolveHelperPath(baseDirectory),
             applicationId,
-            new SetupStateStore(paths.SetupStatePath));
+            new SetupStateStore(paths.SetupStatePath),
+            new GatewayStateStore(paths.GatewayStatePath));
     }
 
     /// <summary>
