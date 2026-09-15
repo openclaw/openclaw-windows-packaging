@@ -10,7 +10,15 @@ param(
     [string]$BundlePath,
 
     [Parameter(Mandatory)]
-    [string]$RequestedRef,
+    [string]$SourceResolutionPath,
+
+    [Parameter(Mandatory)]
+    [ValidatePattern('^[0-9a-fA-F]{64}$')]
+    [string]$SourceResolutionSha256,
+
+    [Parameter(Mandatory)]
+    [ValidatePattern('^[1-9][0-9]*$')]
+    [string]$WorkflowRunId,
 
     [Parameter(Mandatory)]
     [ValidatePattern('^[0-9a-fA-F]{40}$')]
@@ -20,6 +28,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
+. (Join-Path $PSScriptRoot 'OpenClawSource.ps1')
 
 function New-PackageEntryIndex {
     param(
@@ -148,39 +157,25 @@ $resolvedArtifactsDirectory = (
     Resolve-Path -LiteralPath $ArtifactsDirectory
 ).Path
 $resolvedPolicyPath = (Resolve-Path -LiteralPath $PolicyPath).Path
-$policy = Get-Content -LiteralPath $resolvedPolicyPath -Raw |
+$policy = Read-OpenClawReleasePolicy -Path $resolvedPolicyPath
+$snapshotHash = (Get-FileHash `
+    -LiteralPath $SourceResolutionPath -Algorithm SHA256).Hash
+if ($snapshotHash -ine $SourceResolutionSha256) {
+    throw 'The source snapshot does not match the trusted resolver output.'
+}
+$snapshot = Get-Content -LiteralPath $SourceResolutionPath -Raw |
     ConvertFrom-Json
-
-if (
-    $policy.repository -ne 'https://github.com/openclaw/openclaw' -or
-    [string]::IsNullOrWhiteSpace([string]$policy.releaseTag) -or
-    $policy.packageVersion -notmatch '^\d+\.\d+\.\d+\.\d+$' -or
-    $policy.releaseTag -ne "v$($policy.packageVersion)" -or
-    [string]::IsNullOrWhiteSpace([string]$policy.payloadPackageVersion) -or
-    $policy.approvedCommit -notmatch '^[0-9a-fA-F]{40}$' -or
-    [string]::IsNullOrWhiteSpace([string]$policy.publisher)
-) {
-    throw 'The Gateway MSIX release policy is invalid.'
-}
-
-$approvedPackageVersion = & (
-    Join-Path $PSScriptRoot 'Get-WorkflowPackageVersion.ps1'
-) `
-    -RunNumber 1 `
-    -RunAttempt 1 `
-    -ReleaseVersion ([string]$policy.packageVersion)
-$approvedPayloadVersion = [string]$policy.payloadPackageVersion
-$approvedCommit = ([string]$policy.approvedCommit).ToLowerInvariant()
-$normalizedRequestedRef = $RequestedRef.Trim().ToLowerInvariant()
-if (
-    $normalizedRequestedRef -notmatch '^[0-9a-f]{40}$' -or
-    $normalizedRequestedRef -ne $approvedCommit
-) {
-    throw (
-        'Official signing requires the approved immutable OpenClaw commit: ' +
-        $approvedCommit
-    )
-}
+$source = & (Join-Path $PSScriptRoot 'Get-WorkflowSource.ps1') `
+    -PolicyPath $resolvedPolicyPath `
+    -OutputPath $SourceResolutionPath `
+    -SigningMode official `
+    -RunNumber $snapshot.workflowRunNumber `
+    -WorkflowRunId $WorkflowRunId `
+    -PackagingCommit $PackagingCommit `
+    -ReuseSnapshot
+$approvedPackageVersion = $source.msixPackageVersion
+$approvedPayloadVersion = $source.packageVersion
+$approvedCommit = $source.resolvedCommit
 
 $expectedPackagingCommit = $PackagingCommit.ToLowerInvariant()
 $expectedPackageVersion = $null
@@ -210,9 +205,14 @@ foreach ($architecture in @('x64', 'arm64')) {
         $metadata.packagingCommit -ine $expectedPackagingCommit -or
         $metadata.sourceTreeDirty -ne $false -or
         $metadata.payloadRepository -ne $policy.repository -or
-        $metadata.payloadRequestedRef -ine $approvedCommit -or
+        $metadata.payloadRequestedRef -cne $source.requestedRef -or
         $metadata.payloadResolvedCommit -ine $approvedCommit -or
         $metadata.payloadPackageVersion -ne $approvedPayloadVersion -or
+        $metadata.payloadChannel -cne $source.channel -or
+        $metadata.payloadReleaseTag -cne $source.releaseTag -or
+        $metadata.payloadTagObject -cne $source.tagObject -or
+        $metadata.payloadResolvedAt -ne $source.resolvedAt -or
+        $metadata.payloadRegistryIntegrity -cne $source.registryIntegrity -or
         $metadata.payloadLayout -ne 'immutable-package' -or
         $metadata.payloadFileCount -isnot [int64] -or
         $metadata.payloadFileCount -le 0 -or
@@ -300,11 +300,21 @@ foreach ($architecture in @('x64', 'arm64')) {
         )
         if (
             $null -eq $identity -or
+            $identity.Name -ne 'OpenClaw.Gateway' -or
             $identity.Publisher -ne $policy.publisher -or
             $identity.ProcessorArchitecture -ne $architecture -or
             $identity.Version -ne $metadata.packageVersion
         ) {
             throw "The $architecture MSIX manifest identity is unexpected."
+        }
+
+        $applicationManifest = Read-ZipEntryText `
+            -EntriesByPath $entriesByPath `
+            -Path 'app/package.json' |
+            ConvertFrom-Json
+        if ($applicationManifest.name -cne 'openclaw' -or
+            $applicationManifest.version -cne $approvedPayloadVersion) {
+            throw "The embedded $architecture OpenClaw package version is unexpected."
         }
 
         $payloadFiles = Read-ZipEntryText `
@@ -446,6 +456,7 @@ try {
         $null -eq $bundleIdentity -or
         $bundleIdentity.Name -ne 'OpenClaw.Gateway' -or
         $bundleIdentity.Publisher -ne $policy.publisher -or
+        $bundleVersion -ne $approvedPackageVersion -or
         -not $bundleVersionIsValid
     ) {
         throw 'The MSIX bundle manifest identity is unexpected.'

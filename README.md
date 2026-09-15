@@ -4,8 +4,9 @@ This repository builds a Windows MSIX package containing:
 
 - one .NET 10 NativeAOT launcher exposed through the `openclaw` and `clawctl`
   app execution aliases;
-- a pinned, verified build of
-  [`openclaw/openclaw`](https://github.com/openclaw/openclaw);
+- a build of [`openclaw/openclaw`](https://github.com/openclaw/openclaw)
+  selected from upstream extended stable and pinned to one verified source
+  commit for the workflow run;
 - the official Node.js archive matching the upstream build's runtime version
   and the package architecture.
 
@@ -45,11 +46,11 @@ Every OpenClaw child process runs with
 `OPENCLAW_SERVICE_REPAIR_POLICY=external`, and
 `OPENCLAW_NO_AUTO_UPDATE=1`. These declare external lifecycle ownership,
 prevent doctor-owned service repair, and disable configured background
-auto-updates. The pinned OpenClaw `v2026.8.2` release honors external supervisor
-mode by refusing native service mutation and OpenClaw self-update with guidance
-to use the external supervisor's workflow. This behavior belongs to upstream
-OpenClaw; the launcher does not reserve, reject, or rewrite upstream command
-arguments.
+auto-updates. Handling of external supervisor mode, including refusal of native
+service mutation and self-update, belongs to the selected upstream OpenClaw
+version; the launcher does not reserve, reject, or rewrite upstream command
+arguments. Following a channel does not enable OpenClaw's own updater inside
+the read-only MSIX.
 OpenClaw inherits the terminal's working directory; the launcher does not make
 the read-only application directory the workspace.
 
@@ -112,17 +113,30 @@ place so an update does not remove a running process's runtime.
 
 ## Selecting the OpenClaw revision
 
-`.github\workflows\gateway-msix.yml` resolves an explicit OpenClaw ref before
-building. Pull-request and `main` push runs use the pinned commit configured in
-both:
+Each new `.github\workflows\gateway-msix.yml` run resolves the channel named in
+`release-policy.json`, currently `extended-stable`. This applies to
+pull-request, `main` push, and manual runs, including official signing.
+The channel is the public npm `openclaw@extended-stable` dist-tag, not a Git
+branch or GitHub's latest release. The resolver selects its exact published
+package version, resolves the matching signed `v<version>` upstream tag to an
+immutable commit, and verifies the registry and source package identities
+agree. Missing channels, unverified tags, and inconsistent metadata fail the
+build; there is no fallback to `latest`, `beta`, or `main`.
 
-- `workflow_dispatch.inputs.openclaw_ref.default`;
-- the non-manual fallback in `env.OPENCLAW_REF`.
+The dedicated resolver job saves `source-resolution.json` before building.
+All source, x64, ARM64, and bundle jobs use that snapshot, even if upstream
+advances the channel while the run is in progress. Retries restore the original
+snapshot and MSIX version rather than querying the channel again. The snapshot
+artifact is retained for 90 days. If it was never uploaded or is no longer
+available, start a new workflow run instead of retrying. Other build artifacts
+remain short-lived.
 
-Changing only the workflow-dispatch default does not change automatic builds.
-For a one-time override, run **Build OpenClaw Gateway MSIX** manually and
-provide a tag, branch, or preferably a full 40-character commit SHA in
-`openclaw_ref`.
+For a one-time unsigned or test-signed override, run **Build OpenClaw Gateway
+MSIX** manually and provide a tag, branch, or preferably a full 40-character
+commit SHA in `openclaw_ref`. Leave this input empty to follow the policy.
+Official signing rejects all explicit overrides, even a SHA that currently
+matches the channel. No scheduled polling or upstream-triggered builds are
+added: the channel is queried when a new CI run resolves its source.
 
 The source build uses that revision's `.github/actions/setup-node-env` action
 to select Node.js and pnpm. Its resolved Node.js version is recorded in
@@ -132,21 +146,29 @@ the launcher derives its runtime version and LocalState path from the bundled
 archive name. There is no separate packaging-side Node.js version pin or
 runtime-support policy.
 
-The payload artifact records the requested ref and resolved upstream commit in
-`payload-metadata.json`. That build-only file is not embedded in the MSIX.
-`msix-metadata.json` records both the packaging repository commit and bundled
-OpenClaw commit, while embedded `payload-files.json` records every packaged
-application file's path, length, and SHA-256.
+The snapshot records the selector, exact upstream version, source commit,
+release tag and tag-object identity, resolution time, and npm package integrity,
+plus the packaging commit and workflow identity. Its SHA-256 is passed directly
+from the resolver job to source-build and signing authorization jobs.
+`source.json`, `payload-metadata.json`, and `msix-metadata.json` preserve the
+source selection fields; MSIX metadata also records the packaging commit.
+These build metadata files are not embedded in the MSIX. Embedded
+`payload-files.json` records every packaged application file's path, length,
+and SHA-256. The npm integrity identifies the published selection: the workflow
+still rebuilds source, rather than claiming its new tarball is byte-identical
+to npm's tarball.
 
-`release-policy.json` records the immutable OpenClaw commit and payload version
-approved for official signing, plus the independent MSIX package version and
-release tag. Updating that
-policy requires a reviewed repository change. Official signing runs only from
-`main` and verifies the workflow input, policy-approved package version, both
-architecture metadata files, both MSIX hashes, the embedded manifests, and
-every file against the embedded application inventory. It also byte-compares
-the bundle's embedded packages with those authorized standalone packages before
-requesting Azure credentials.
+`release-policy.json` approves the upstream repository and channel, the
+publisher, and a packaging-only revision number. It no longer approves one
+fixed OpenClaw commit: advancing the trusted upstream channel automatically
+selects the next source for official releases without a packaging-repository
+pin update. Changing this trust policy requires a reviewed repository change.
+Official signing remains manual, runs only from `main`, and uses the protected
+`release-signing` environment. Before requesting Azure credentials,
+authorization checks the resolver's snapshot hash and workflow identity, both
+architecture metadata files and MSIX hashes, the embedded manifests and
+OpenClaw version, and every inventoried application file. It also byte-compares
+the bundle's embedded packages with the authorized standalone packages.
 
 ## Build and test
 
@@ -227,14 +249,14 @@ never official-signing inputs.
 Normal pull-request and push workflows publish unsigned packages for
 validation. Manual runs support three signing modes:
 
-- `unsigned` accepts any OpenClaw branch, tag, or commit and publishes unsigned
-  MSIX packages;
-- `test` accepts any OpenClaw ref and publishes MSIX packages signed with a
+- `unsigned` follows the policy channel unless an OpenClaw branch, tag, or commit
+  override is supplied, and publishes unsigned MSIX packages;
+- `test` follows the same source-selection rules and publishes MSIX packages signed with a
   temporary self-signed certificate plus the public `.cer` needed for local
   installation;
-- `official` requires the approved immutable commit from
-  `release-policy.json`, may run only from `main`, and publishes the signed
-  packages as permanent assets on a GitHub Release named by the policy.
+- `official` automatically authorizes the verified channel snapshot, rejects
+  source overrides, may run only from `main`, and publishes signed packages
+  as permanent GitHub Release assets.
 
 Official signing uses the protected `release-signing` environment, Azure OIDC,
 and the existing OpenClaw Artifact Signing account and certificate profile.
@@ -242,23 +264,33 @@ Test-signing private keys are generated only on the temporary GitHub runner
 and are deleted before artifacts are uploaded. No signing secret or private
 key is stored in the repository.
 
-Official releases use the independent four-part numeric `packageVersion` and
-`releaseTag` from `release-policy.json`. The initial signing proof uses package
-version `0.0.0.0` and tag `v0.0.0.0`; a later policy change can establish the
-long-term Gateway-to-MSIX version mapping. The workflow creates the tag in this
-repository and a GitHub Release with generated release notes. Each release
+Official releases map upstream `YYYY.M.P` to MSIX
+`YYYY.M.P.<packageRevision>` and repository release tag
+`vYYYY.M.P.<packageRevision>`. For example, upstream `2026.6.35` with policy
+`packageRevision: 0` produces MSIX `2026.6.35.0` and tag `v2026.6.35.0`.
+Increase `packageRevision` through review for a packaging-only correction of
+the same upstream source. A new upstream version naturally orders above the
+previous version; the revision need not be reset. All components must fit the
+existing package-version limits. Unsigned and test-signed CI builds retain
+their run-based `0.*` versions, with retries reusing the initial version.
+
+Official runs are serialized and reject an existing or older four-part release
+tag before requesting signing credentials and again before publication,
+including when either job is retried independently. A channel rollback therefore does
+not silently publish a downgrade, and rebuilding the same version cannot
+overwrite a release. A partial publication that already created its tag
+requires deliberate recovery or a reviewed packaging revision, not automatic
+republishing. The workflow creates the tag in this repository and a GitHub
+Release with generated release notes and the exact upstream version/commit.
+Each release
 contains a signed, multi-architecture
 `OpenClawGateway-<version>.msixbundle` as the recommended download, plus signed
 `OpenClawGateway-<version>-x64.msix` and
 `OpenClawGateway-<version>-arm64.msix` packages for architecture-specific
-deployment. The duplicate GitHub Actions artifacts remain short-lived transport
-and diagnostic copies.
-
-For the all-zero proof only, MakeAppx assigns the outer bundle identity its
-date/time-based version because it does not preserve `0.0.0.0` as a bundle
-version. The two embedded architecture packages retain identity version
-`0.0.0.0`; signing authorization verifies those versions and byte-compares both
-embedded packages with the approved standalone inputs.
+deployment, plus the source snapshot and both architecture metadata files for
+permanent provenance. The bundle and standalone packages have the same
+four-part identity version. The historical `0.0.0.0` signing proof is not used
+for channel-based releases.
 
 An `.msixbundle` is a single installable container for the x64 and ARM64 MSIX
 packages; Windows selects the package appropriate for the device. An

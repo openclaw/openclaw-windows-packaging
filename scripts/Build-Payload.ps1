@@ -24,6 +24,14 @@ if (-not (Test-Path $sourceMetadataPath -PathType Leaf)) {
 }
 
 $sourceMetadata = Get-Content $sourceMetadataPath -Raw | ConvertFrom-Json
+$sourceSelection = $sourceMetadata |
+    Select-Object channel, releaseTag, tagObject, resolvedAt, registryIntegrity
+if ($null -ne $sourceMetadata.PSObject.Properties['channel']) {
+    . (Join-Path $PSScriptRoot 'OpenClawSource.ps1')
+    $policy = Read-OpenClawReleasePolicy -Path (
+        Join-Path (Split-Path $PSScriptRoot -Parent) 'release-policy.json')
+    Assert-OpenClawSource -Source $sourceMetadata -Policy $policy
+}
 $nodeVersion = & node -p 'process.versions.node'
 if ($LASTEXITCODE -ne 0 -or $nodeVersion -notmatch '^\d+\.\d+\.\d+$') {
     throw 'Unable to determine the payload build Node.js version.'
@@ -77,6 +85,14 @@ foreach ($requiredPath in @('package.json', 'openclaw.mjs', 'dist')) {
     }
 }
 
+$installedManifest = Get-Content `
+    -LiteralPath (Join-Path $installedPackage 'package.json') -Raw |
+    ConvertFrom-Json
+if ($installedManifest.name -cne 'openclaw' -or
+    $installedManifest.version -cne $sourceMetadata.packageVersion) {
+    throw 'The installed OpenClaw package does not match the source identity.'
+}
+
 $bundledNodeFiles = @(
     Get-ChildItem -LiteralPath $installedPackage -File -Recurse |
         Where-Object {
@@ -126,6 +142,11 @@ Copy-Item `
     requestedRef     = $sourceMetadata.requestedRef
     resolvedCommit   = $sourceMetadata.resolvedCommit
     packageVersion   = $sourceMetadata.packageVersion
+    channel          = $sourceSelection.channel
+    releaseTag       = $sourceSelection.releaseTag
+    tagObject        = $sourceSelection.tagObject
+    resolvedAt       = $sourceSelection.resolvedAt
+    registryIntegrity = $sourceSelection.registryIntegrity
     architecture     = $Architecture
     layout           = 'expanded-directory'
     nodeVersion      = $nodeVersion
