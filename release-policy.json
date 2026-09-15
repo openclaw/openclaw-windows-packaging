@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/openclaw/openclaw",
-  "releaseTag": "v0.0.0.0",
-  "packageVersion": "0.0.0.0",
+  "releaseTag": "v0.0.0.1",
+  "packageVersion": "0.0.0.1",
   "payloadPackageVersion": "2026.8.2",
   "approvedCommit": "0965053fe6b9341776df147a6934b7485c60b5ca",
   "publisher": "CN=OpenClaw Foundation, O=OpenClaw Foundation, L=Mill Valley, S=California, C=US"
