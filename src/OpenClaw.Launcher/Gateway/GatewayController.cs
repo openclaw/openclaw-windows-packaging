@@ -158,11 +158,6 @@ internal sealed class GatewayController
         using ISessionLockHandle handle = AcquireLock();
         SessionRecord configured = _requireSetup();
         GatewayStateResult existing = _store.Read();
-        if (existing.Record?.LaunchPending == true)
-        {
-            throw new SessionException(
-                "A previous gateway launch was not confirmed. Inspect diagnostics before using `clawctl teardown` to remove the owned session.");
-        }
         if (existing.Record is null && existing.Fault != GatewayStateFault.Missing)
         {
             throw new SessionException($"The gateway record could not be used: {existing.Detail}");
@@ -187,10 +182,20 @@ internal sealed class GatewayController
 
             if (inspection.IsOwnedAndHealthy)
             {
+                GatewayRecord confirmedRecord = existing.Record;
+                if (confirmedRecord.LaunchPending)
+                {
+                    confirmedRecord = confirmedRecord with
+                    {
+                        LaunchPending = false,
+                        ObservedPorts = inspection.ListeningPorts
+                    };
+                    _store.Write(confirmedRecord);
+                }
                 _log("The gateway is already running.");
                 return new GatewayStartResult(
                     GatewayState.Running,
-                    existing.Record,
+                    confirmedRecord,
                     AlreadyRunning: true,
                     "The gateway is already running.");
             }
@@ -211,6 +216,13 @@ internal sealed class GatewayController
                     "`clawctl gateway-service stop` before starting another.");
             }
 
+            if (existing.Record.LaunchPending)
+            {
+                // The guest established that the pending process either exited
+                // or its identifier was reused, so removing this intent cannot
+                // affect an unrelated process.
+                _store.Clear();
+            }
             _log("The recorded gateway is no longer running; starting a new one.");
         }
         else if (existing.Fault != GatewayStateFault.Missing)

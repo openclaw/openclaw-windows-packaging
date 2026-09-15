@@ -158,7 +158,7 @@ internal sealed partial class GatewayRuntime
                 launch.WorkingDirectory ?? sessionRecord.WorkspacePath
                     ?? throw new SessionException(
                         "The isolated session has no shared workspace for the gateway."),
-                launch.Port));
+                launch.Port);
         }
 
         return new GatewayRuntime(

@@ -43,19 +43,7 @@ public sealed class GatewayConfigurationStoreTests : IDisposable
         // chosen interactively has to still be in effect then.
         Store.Write(new GatewayLaunchConfiguration { Port = 9100 });
 
-        Assert.Equal(9100, Store.Resolve(_root, NoEnvironment).Port);
-    }
-
-    [Fact]
-    public void AConfiguredWorkingDirectoryWinsOverTheDefault()
-    {
-        Store.Write(new GatewayLaunchConfiguration
-        {
-            Port = 9100,
-            WorkingDirectory = @"C:\chosen"
-        });
-
-        Assert.Equal(@"C:\chosen", Store.Resolve(_root, NoEnvironment).WorkingDirectory);
+        Assert.Equal(9100, Store.Resolve(NoEnvironment).Port);
     }
 
     [Fact]
@@ -64,7 +52,6 @@ public sealed class GatewayConfigurationStoreTests : IDisposable
         Store.Write(new GatewayLaunchConfiguration { Port = 9100 });
 
         GatewayLaunchConfiguration resolved = Store.Resolve(
-            _root,
             name => name == GatewayConfigurationStore.PortVariable ? "9200" : null);
 
         Assert.Equal(9200, resolved.Port);
@@ -86,7 +73,6 @@ public sealed class GatewayConfigurationStoreTests : IDisposable
         // override.
         Assert.Throws<GatewayConfigurationException>(
             () => Store.Resolve(
-                _root,
                 name => name == GatewayConfigurationStore.PortVariable ? value : null));
     }
 
@@ -96,7 +82,7 @@ public sealed class GatewayConfigurationStoreTests : IDisposable
         File.WriteAllText(Path_, "{ not json");
 
         Assert.Throws<GatewayConfigurationException>(
-            () => Store.Resolve(_root, NoEnvironment));
+            () => Store.Resolve(NoEnvironment));
     }
 
     [Fact]
@@ -138,15 +124,13 @@ public sealed class GatewayConfigurationStoreTests : IDisposable
     {
         Store.Write(new GatewayLaunchConfiguration
         {
-            Port = 9100,
-            WorkingDirectory = @"C:\chosen"
+            Port = 9100
         });
 
         GatewayLaunchConfiguration? read = Store.Read().Configuration;
 
         Assert.NotNull(read);
         Assert.Equal(9100, read.Port);
-        Assert.Equal(@"C:\chosen", read.WorkingDirectory);
         Assert.Equal(GatewayConfigurationStore.CurrentSchemaVersion, read.SchemaVersion);
     }
 }
