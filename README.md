@@ -55,11 +55,19 @@ the read-only application directory the workspace.
 
 ### `clawctl`
 
-`clawctl` exposes package readiness and launcher version information:
+`clawctl` owns setup and the isolated-session operations:
 
 | Command | Behavior |
 |---|---|
-| `clawctl setup` | Extract the bundled Node.js runtime when needed and confirm packaged `app\openclaw.mjs` exists. |
+| `clawctl setup` | Prepare the bundled Node.js runtime, confirm packaged `app\openclaw.mjs` exists, and provision or reuse the owned isolated session. It also configures gateway sign-in recovery without starting a gateway. |
+| `clawctl setup --fresh [--force]` | Remove this installation's owned session and package-local state, then run setup again. Without `--force`, incomplete external cleanup stops before local state is erased. `--force` is valid only with `--fresh`; it preserves an explicit warning when cleanup of owned external resources cannot be confirmed, but still stops if bounded local deletion fails. |
+| `clawctl status` | Report the recorded isolated-session state without changing it. Use `clawctl gateway-service status` to inspect the gateway. |
+| `clawctl teardown [--force]` | Stop and deprovision the owned session and remove its setup state. The MSIX remains installed. |
+| `clawctl pwsh` | Open an interactive PowerShell session inside the agent session. |
+| `clawctl collect-logs [--output <path>]` | Create a redacted host-and-agent diagnostics ZIP. |
+| `clawctl gateway-service start` | Start the OpenClaw gateway in the isolated session. Requires setup. |
+| `clawctl gateway-service status` | Inspect the gateway without starting it. |
+| `clawctl gateway-service stop` | Stop the gateway while retaining the session and its data. |
 | `clawctl --version` | Print the packaged launcher version. |
 
 Bare `clawctl`, `clawctl -h`, and `clawctl --help` print help without changing
@@ -87,12 +95,19 @@ Commands such as `doctor`, `gateway`, and `uninstall` belong to the OpenClaw
 CLI and must be invoked through `openclaw`.
 
 `setup` extracts the architecture-specific runtime archive from the immutable
-MSIX into the package's writable LocalState:
+MSIX into the invoking user's writable LocalState:
 `%LOCALAPPDATA%\Packages\<package-family>\LocalState\OpenClaw\NodeJS\node-v<version>-win-<architecture>`.
 Extraction is idempotent, versioned, and serialized across concurrent setup
 processes, including different Windows sessions. Setup validates existing
 runtimes before reuse, replaces invalid runtimes, and validates extraction
 before publishing it.
+
+On a session-capable machine, setup also provisions an explicitly owned agent
+session. The agent has a separate profile, so setup prepares that profile's
+bundled Node.js runtime and command environment as well. Run setup before
+using `openclaw`, `clawctl pwsh`, or gateway-service start. See
+[MXC compatibility evidence](docs/mxc-compatibility-evidence.md) for the
+session model, routing, gateway health criteria, and diagnostics limits.
 
 The launcher places Node.js in a Windows job configured with
 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. The launcher remains alive while Node.js
