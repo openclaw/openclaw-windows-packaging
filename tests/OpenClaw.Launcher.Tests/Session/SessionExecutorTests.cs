@@ -105,7 +105,7 @@ public sealed class SessionExecutorTests : IDisposable
     private void RespondAsCollector(
         Func<SessionCollectRequest, SessionCollectResult> respond)
     {
-        _backend.AttachedBehavior = _ =>
+        _backend.ExecuteBehavior = _ =>
         {
             string requestPath = Directory.GetFiles(Workspace, "collect-*.json")
                 .Single(path => !path.EndsWith(".result.json", StringComparison.Ordinal));
@@ -114,7 +114,7 @@ public sealed class SessionExecutorTests : IDisposable
             File.WriteAllText(
                 SessionLaunchProtocol.ResultPathFor(requestPath),
                 SessionCollectProtocol.SerializeResult(respond(request)));
-            return Task.FromResult(0);
+            return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
         };
     }
 
@@ -140,7 +140,7 @@ public sealed class SessionExecutorTests : IDisposable
             ["openclaw-agent.sqlite*"],
             CancellationToken.None);
 
-        Assert.Equal(["execute-attached:iso:sandbox1"], _backend.Calls);
+        Assert.Equal(["execute:iso:sandbox1"], _backend.Calls);
         Assert.Equal(
             @"AppData\Roaming\openclaw\logs",
             Assert.Single(delivered!.Sources!).RelativePath);

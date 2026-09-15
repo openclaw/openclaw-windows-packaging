@@ -5,20 +5,33 @@ using OpenClaw.Launcher.Session;
 namespace OpenClaw.Launcher.Gateway;
 
 /// <summary>Assembles gateway management from the running installation.</summary>
-internal sealed class GatewayRuntime
+internal sealed partial class GatewayRuntime
 {
     private static readonly Guid StartupFolderId =
         new("B97D20BB-F46A-4C97-BA10-5E3608430854");
 
-    private GatewayRuntime(GatewayController controller, string helperPath)
+    private readonly HostPaths _paths;
+    private readonly SessionRuntime _session;
+
+    private GatewayRuntime(
+        GatewayController controller,
+        string helperPath,
+        HostPaths paths,
+        SessionRuntime session)
     {
         Controller = controller;
         HelperPath = helperPath;
+        _paths = paths;
+        _session = session;
     }
 
     public GatewayController Controller { get; }
 
     public string HelperPath { get; }
+
+    private SessionRuntime Session => _session;
+
+    private static bool FileExists(string path) => File.Exists(path);
 
     public static GatewayPersistenceManager CreateRecoveryManager(Action<string> log)
     {
@@ -109,6 +122,21 @@ internal sealed class GatewayRuntime
         }
 
         SessionRuntime session = SessionRuntime.Create(log);
+        return Create(options, paths, session, log, resolveNode);
+    }
+
+    internal static GatewayRuntime Create(
+        HostOptions options,
+        HostPaths paths,
+        SessionRuntime session,
+        Action<string> log,
+        Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(paths);
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(log);
+
         var configuration = new GatewayConfigurationStore(paths.GatewayConfigurationPath);
         Task<GatewayStartRequest> CreateRequestAsync(CancellationToken cancellationToken)
         {
@@ -145,7 +173,9 @@ internal sealed class GatewayRuntime
                 log,
                 session.RequireSetup,
                 session.LifecycleLock),
-            session.HelperPath);
+            session.HelperPath,
+            paths,
+            session);
 
         bool IsCurrentSessionRecord(SessionRecord record)
         {
