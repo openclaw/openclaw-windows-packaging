@@ -11,6 +11,8 @@ $workflowPath = Join-Path `
 $workflow = Get-Content -LiteralPath $workflowPath -Raw
 
 $requiredFragments = @(
+    'group: gateway-msix-${{ github.event.pull_request.number || github.run_id }}'
+    "cancel-in-progress: `${{ github.event_name == 'pull_request' }}"
     'environment: release-signing'
     'id-token: write'
     'uses: azure/login@v3'
