@@ -100,8 +100,13 @@ package.
 - Diagnostics are written to packaged LocalState (or
   `%LOCALAPPDATA%\OpenClawGatewayMSIX` outside an MSIX context) with a named
   mutex so concurrent processes append complete records.
-- The GitHub workflow resolves the policy's public npm `extended-stable`
-  channel to an exact published version and verified signed upstream tag/commit.
+- The GitHub workflow resolves the `stable` policy through public npm `latest`
+  to an exact published version and verified signed upstream tag/commit.
+  There is no automatic fallback or cross-channel selection. If compatibility
+  requires an older known-good stable release, use a reviewed exact
+  `stableVersion` policy pin, not extended stable. All source and payload
+  inputs, including explicit refs and legacy metadata, must remain regular
+  stable versions; patches 33 and above and named prereleases are rejected.
   One immutable source-resolution artifact is reused by every job and retry;
   missing snapshots require a new run. It builds and packs that pinned
   `openclaw/openclaw` revision on Linux using its `setup-node-env` action. The resolved
@@ -113,7 +118,7 @@ package.
 - Unsigned artifacts are the normal PR/push output. Test signing uses a
   temporary runner-local certificate. Official signing is gated to `main` and
   the policy-approved channel snapshot, not a per-release commit allowlist.
-  Overrides are allowed only for unsigned/test builds. Snapshot hashes,
+  Stable-source overrides are allowed only for unsigned/test builds. Snapshot hashes,
   workflow identity and signing inputs are validated before Azure credentials
   are requested. Preserve the protected signing environment and all artifact
   inventory/hash checks.
@@ -173,9 +178,14 @@ package.
   MSIX creation, signing validation, workflow artifacts, and tests.
 - The empty manual `openclaw_ref` default follows the same channel policy as
   automatic builds; never add a second default pin. `release-policy.json`
-  selects the repository/channel and packaging revision. Official upstream
+  selects the repository/channel, optional reviewed stable-version pin, and
+  packaging revision. Official upstream
   `YYYY.M.P` maps to MSIX `YYYY.M.P.<packageRevision>` and release tag
-  `vYYYY.M.P.<packageRevision>`. Packaging-only corrections require a reviewed
+  `vYYYY.M.P.<packageRevision>`. For upstream `YYYY.M.P-C` corrections, add `C`
+  to the packaging revision for the fourth component and reject overflow.
+  Published and source package versions must match; do not relabel rebuilt
+  source to bypass a same-source correction mismatch. Packaging-only corrections
+  require a reviewed
   revision increase. Keep duplicate/downgrade rejection, exact bundle/package
   version equality, and immutable source snapshots across workflow retries.
 - The launcher is NativeAOT. `dotnet build` and the xUnit suite exercise a JIT

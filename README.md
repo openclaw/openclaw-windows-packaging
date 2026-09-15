@@ -5,7 +5,7 @@ This repository builds a Windows MSIX package containing:
 - one .NET 10 NativeAOT launcher exposed through the `openclaw` and `clawctl`
   app execution aliases;
 - a build of [`openclaw/openclaw`](https://github.com/openclaw/openclaw)
-  selected from upstream extended stable and pinned to one verified source
+  selected from upstream stable and pinned to one verified source
   commit for the workflow run;
 - the official Node.js archive matching the upstream build's runtime version
   and the package architecture.
@@ -114,14 +114,28 @@ place so an update does not remove a running process's runtime.
 ## Selecting the OpenClaw revision
 
 Each new `.github\workflows\gateway-msix.yml` run resolves the channel named in
-`release-policy.json`, currently `extended-stable`. This applies to
+`release-policy.json`, which must be `stable`. This applies to
 pull-request, `main` push, and manual runs, including official signing.
-The channel is the public npm `openclaw@extended-stable` dist-tag, not a Git
+The channel maps to the public npm `openclaw@latest` dist-tag, not a Git
 branch or GitHub's latest release. The resolver selects its exact published
 package version, resolves the matching signed `v<version>` upstream tag to an
 immutable commit, and verifies the registry and source package identities
 agree. Missing channels, unverified tags, and inconsistent metadata fail the
-build; there is no fallback to `latest`, `beta`, or `main`.
+build; there is no automatic fallback to another version or channel.
+Extended-stable and prerelease versions are rejected, including through
+explicit ref overrides and older payload metadata. Upstream reserves patch
+numbers 33 and above for extended stable; they are not regular stable targets.
+
+If the newest stable release is incompatible, a reviewed policy change may
+add an exact `stableVersion`, such as `"stableVersion": "2026.8.2"`, for an older
+known-good **stable** release. Include its compatibility evidence in that
+change, including preservation of external service-management ownership;
+a successful build alone is not sufficient. The resolver then selects that
+exact published version, records it as
+the requested ref, and applies the same signature and identity checks. It does
+not try `latest` first or silently switch versions after an error. Remove the
+pin through review to resume following `latest`. This option cannot select
+extended stable and does not bypass official release ordering checks.
 
 The dedicated resolver job saves `source-resolution.json` before building.
 All source, x64, ARM64, and bundle jobs use that snapshot, even if upstream
@@ -133,7 +147,8 @@ remain short-lived.
 
 For a one-time unsigned or test-signed override, run **Build OpenClaw Gateway
 MSIX** manually and provide a tag, branch, or preferably a full 40-character
-commit SHA in `openclaw_ref`. Leave this input empty to follow the policy.
+commit SHA in `openclaw_ref`; the source must still have a regular stable
+version. Leave this input empty to follow the policy.
 Official signing rejects all explicit overrides, even a SHA that currently
 matches the channel. No scheduled polling or upstream-triggered builds are
 added: the channel is queried when a new CI run resolves its source.
@@ -155,7 +170,7 @@ release-note requirements; a manual ref must satisfy its own packing checks.
 Build validation also checks the root package and generated Gateway provenance
 against the resolved version and full source commit. Newer upstream builds
 must share their explicit `buildId` with the Control UI service worker and
-client assets. Older extended-stable builds that do not emit that field use
+client assets. Older stable builds that do not emit that field use
 upstream's legacy UI identity (version plus the 12-character source commit).
 Both formats are checked; missing provenance, invalid explicit IDs, and stale
 or mismatched UI assets fail rather than bypassing validation.
@@ -187,7 +202,8 @@ to npm's tarball.
 
 `release-policy.json` approves the upstream repository and channel, the
 publisher, and a packaging-only revision number. It no longer approves one
-fixed OpenClaw commit: advancing the trusted upstream channel automatically
+fixed OpenClaw commit: unless `stableVersion` is explicitly pinned, advancing
+the trusted upstream stable channel automatically
 selects the next source for official releases without a packaging-repository
 pin update. Changing this trust policy requires a reviewed repository change.
 Official signing remains manual, runs only from `main`, and uses the protected
@@ -276,8 +292,8 @@ never official-signing inputs.
 Normal pull-request and push workflows publish unsigned packages for
 validation. Manual runs support three signing modes:
 
-- `unsigned` follows the policy channel unless an OpenClaw branch, tag, or commit
-  override is supplied, and publishes unsigned MSIX packages;
+- `unsigned` follows the stable policy unless a stable-source branch, tag, or
+  commit override is supplied, and publishes unsigned MSIX packages;
 - `test` follows the same source-selection rules and publishes MSIX packages signed with a
   temporary self-signed certificate plus the public `.cer` needed for local
   installation;
@@ -293,11 +309,18 @@ key is stored in the repository.
 
 Official releases map upstream `YYYY.M.P` to MSIX
 `YYYY.M.P.<packageRevision>` and repository release tag
-`vYYYY.M.P.<packageRevision>`. For example, upstream `2026.6.35` with policy
-`packageRevision: 0` produces MSIX `2026.6.35.0` and tag `v2026.6.35.0`.
+`vYYYY.M.P.<packageRevision>`. For example, upstream `2026.9.4` with policy
+`packageRevision: 0` produces MSIX `2026.9.4.0` and tag `v2026.9.4.0`.
+For a stable numeric correction `YYYY.M.P-C`, the fourth MSIX component is
+the correction number plus `packageRevision`: `2026.9.4-1` with revision `0`
+maps to `2026.9.4.1`; with revision `1` it maps to `2026.9.4.2`.
+The published version must match the frozen source's package version. A
+same-source correction with a different package version is rejected rather
+than relabeling rebuilt bytes; use a reviewed known-good stable pin if needed.
 Increase `packageRevision` through review for a packaging-only correction of
 the same upstream source. A new upstream version naturally orders above the
-previous version; the revision need not be reset. All components must fit the
+previous version; do not decrease the packaging revision. All components must
+fit the
 existing package-version limits. Unsigned and test-signed CI builds retain
 their run-based `0.*` versions, with retries reusing the initial version.
 

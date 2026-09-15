@@ -8,7 +8,7 @@ $repositoryRoot = Split-Path $PSScriptRoot -Parent
 $policyPath = Join-Path $repositoryRoot 'release-policy.json'
 $policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
 $approvedCommit = '2' * 40
-$approvedPayloadVersion = '2026.6.35'
+$approvedPayloadVersion = '2026.9.4'
 $approvedPackageVersion = & (
     Join-Path $PSScriptRoot 'Get-WorkflowPackageVersion.ps1'
 ) `
@@ -201,7 +201,7 @@ function New-TestArtifact {
         packagingCommit = $packagingCommit
         sourceTreeDirty = $SourceTreeDirty
         payloadRepository = $policy.repository
-        payloadRequestedRef = $policy.channel
+        payloadRequestedRef = $sourceResolution.requestedRef
         payloadResolvedCommit = $PayloadCommit
         payloadPackageVersion = $PayloadPackageVersion
         payloadChannel = $sourceResolution.channel
@@ -449,7 +449,7 @@ try {
     New-TestArtifact `
         -Root $testRoot `
         -Architecture x64 `
-        -PayloadPackageVersion '2026.9.4'
+        -PayloadPackageVersion '2026.9.3'
     New-TestArtifact -Root $testRoot -Architecture arm64
     Assert-Fails `
         -MessagePattern 'metadata is not eligible' `
@@ -679,7 +679,7 @@ try {
     Reset-TestArtifacts
     Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
         param($Expanded)
-        '{"name":"openclaw","version":"2026.6.34"}' |
+        '{"name":"openclaw","version":"2026.9.3"}' |
             Set-Content -LiteralPath (Join-Path $Expanded 'app\package.json')
     }
     Assert-Fails -MessagePattern 'OpenClaw package version is unexpected' -Action {
@@ -687,10 +687,19 @@ try {
     }
 
     Reset-TestArtifacts
-    New-TestBundle -Root $testRoot -BundleVersion '2026.6.34.0'
+    New-TestBundle -Root $testRoot -BundleVersion '2026.9.3.0'
     Assert-Fails -MessagePattern 'bundle manifest identity is unexpected' -Action {
         Invoke-PolicyValidation -Root $testRoot -PreserveBundle
     }
+
+    $approvedPayloadVersion = '2026.9.4-1'
+    $approvedPackageVersion = "2026.9.4.$(1 + $policy.packageRevision)"
+    $sourceResolution.packageVersion = $approvedPayloadVersion
+    $sourceResolution.releaseTag = "v$approvedPayloadVersion"
+    $sourceResolution.msixPackageVersion = $approvedPackageVersion
+    $sourceResolution.msixReleaseTag = "v$approvedPackageVersion"
+    Reset-TestArtifacts
+    Invoke-PolicyValidation -Root $testRoot
 
     Write-Host 'Gateway MSIX signing policy tests passed.'
 }

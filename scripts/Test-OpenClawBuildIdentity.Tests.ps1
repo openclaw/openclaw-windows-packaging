@@ -8,8 +8,8 @@ $scriptPath = Join-Path $PSScriptRoot 'Test-OpenClawBuildIdentity.ps1'
 $testRoot = Join-Path `
     ([IO.Path]::GetTempPath()) `
     "openclaw-build-identity-$([guid]::NewGuid().ToString('N'))"
-$expectedVersion = '2026.6.35'
-$expectedCommit = 'c283867d7cdd1a93cfc58f829c849834c4426d3b'
+$expectedVersion = '2026.6.5'
+$expectedCommit = 'a' * 40
 $validationParameters = @{
     ExpectedPackageVersion = $expectedVersion
     ExpectedSourceCommit = $expectedCommit
@@ -132,7 +132,7 @@ try {
         -GatewayBuildId 'unused' -ControlUiBuildId $legacyId -Legacy
     & $scriptPath -OpenClawDirectory $legacy @validationParameters
     $legacyMismatch = New-BuildFixture -Name 'legacy-mismatch' `
-        -GatewayBuildId 'unused' -ControlUiBuildId "$expectedVersion-aaaaaaaaaaaa" -Legacy
+        -GatewayBuildId 'unused' -ControlUiBuildId "$expectedVersion-bbbbbbbbbbbb" -Legacy
     Assert-Fails -MessagePattern 'OpenClaw build identity mismatch' -Action {
         & $scriptPath -OpenClawDirectory $legacyMismatch @validationParameters
     }
@@ -161,7 +161,7 @@ try {
 
     $manifestMismatch = New-BuildFixture -Name 'manifest-mismatch' `
         -GatewayBuildId 'unused' -ControlUiBuildId $legacyId -Legacy
-    '{"name":"openclaw","version":"2026.6.34"}' |
+    '{"name":"openclaw","version":"2026.6.6"}' |
         Set-Content -LiteralPath (Join-Path $manifestMismatch 'package.json')
     Assert-Fails -MessagePattern 'does not match the resolved OpenClaw source' -Action {
         & $scriptPath -OpenClawDirectory $manifestMismatch @validationParameters
