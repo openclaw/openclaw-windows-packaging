@@ -22,6 +22,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\OpenClaw.Launcher\OpenClaw.Launcher.csproj" />
+    <ProjectReference Include="..\..\src\OpenClaw.SessionHost\OpenClaw.SessionHost.csproj" />
+    <ProjectReference Include="..\..\src\OpenClaw.SessionProtocol\OpenClaw.SessionProtocol.csproj" />
   </ItemGroup>
 
   <ItemGroup>
