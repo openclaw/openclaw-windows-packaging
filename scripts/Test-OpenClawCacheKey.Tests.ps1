@@ -7,6 +7,8 @@ $ErrorActionPreference = 'Stop'
 $scriptPath = Join-Path $PSScriptRoot 'Get-OpenClawCacheKey.ps1'
 $commitA = '1111111111111111111111111111111111111111'
 $commitB = '2222222222222222222222222222222222222222'
+$packageHashA = 'a' * 64
+$packageHashB = 'b' * 64
 $testRoot = Join-Path $env:TEMP (
     "openclaw-cache-key-$([guid]::NewGuid().ToString('N'))"
 )
@@ -53,14 +55,28 @@ try {
         -Commit $commitA `
         -Architecture x64 `
         -NodeVersion 24.20.0 `
+        -PackageSha256 $packageHashA `
         -PayloadScriptPath $payloadScript
     $payloadArm64 = & $scriptPath `
         -Layer payload `
         -Commit $commitA `
         -Architecture arm64 `
         -NodeVersion 24.20.0 `
+        -PackageSha256 $packageHashA `
         -PayloadScriptPath $payloadScript
     Assert-NotEqual $payloadX64 $payloadArm64 'distinct architectures'
+
+    $payloadAfterPackageRebuild = & $scriptPath `
+        -Layer payload `
+        -Commit $commitA `
+        -Architecture x64 `
+        -NodeVersion 24.20.0 `
+        -PackageSha256 $packageHashB `
+        -PayloadScriptPath $payloadScript
+    Assert-NotEqual `
+        $payloadX64 `
+        $payloadAfterPackageRebuild `
+        'distinct package hashes'
 
     Set-Content -LiteralPath $payloadScript -Value 'Write-Output second'
     $payloadAfterEdit = & $scriptPath `
@@ -68,6 +84,7 @@ try {
         -Commit $commitA `
         -Architecture x64 `
         -NodeVersion 24.20.0 `
+        -PackageSha256 $packageHashA `
         -PayloadScriptPath $payloadScript
     Assert-NotEqual $payloadX64 $payloadAfterEdit 'payload script edit'
 
@@ -76,6 +93,7 @@ try {
         -Commit $commitA `
         -Architecture x64 `
         -NodeVersion 24.20.0 `
+        -PackageSha256 $packageHashA `
         -PayloadScriptPath $payloadScript `
         -FormatVersion 2
     Assert-NotEqual $payloadAfterEdit $payloadV2 'payload cache format version'

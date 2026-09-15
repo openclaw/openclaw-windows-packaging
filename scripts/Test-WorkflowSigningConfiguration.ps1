@@ -29,6 +29,11 @@ $requiredFragments = @(
     'name: Save OpenClaw package cache'
     "steps.package-cache.outputs.cache-hit != 'true' && (github.event_name != 'workflow_dispatch' || inputs.signing_mode != 'official')"
     'uses: actions/cache/save@v4'
+    'name: Restore cached Windows dependency tree'
+    'path: ${{ runner.temp }}\openclaw-stage-${{ matrix.architecture }}'
+    'key: ${{ steps.payload-key.outputs.key }}'
+    'name: Save Windows dependency tree cache'
+    "steps.payload-cache.outputs.cache-hit != 'true' && (github.event_name != 'workflow_dispatch' || inputs.signing_mode != 'official')"
     'environment: release-signing'
     'id-token: write'
     'uses: azure/login@v3'

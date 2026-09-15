@@ -12,6 +12,8 @@ param(
 
     [string]$NodeVersion,
 
+    [string]$PackageSha256,
+
     [string]$PayloadScriptPath = (
         Join-Path $PSScriptRoot 'Build-Payload.ps1'
     ),
@@ -38,6 +40,10 @@ if ([string]::IsNullOrWhiteSpace($Architecture)) {
 if ($NodeVersion -notmatch '^\d+\.\d+\.\d+$') {
     throw "NodeVersion '$NodeVersion' must contain three numeric components."
 }
+$normalizedPackageSha256 = $PackageSha256.Trim().ToLowerInvariant()
+if ($normalizedPackageSha256 -notmatch '^[0-9a-f]{64}$') {
+    throw 'PackageSha256 must be a 64-character hexadecimal SHA-256.'
+}
 if (-not (Test-Path -LiteralPath $PayloadScriptPath -PathType Leaf)) {
     throw "Payload script does not exist: $PayloadScriptPath"
 }
@@ -51,5 +57,6 @@ $scriptHash = (
     $Architecture
     $normalizedCommit
     "node-$NodeVersion"
+    $normalizedPackageSha256
     $scriptHash
 ) -join '-'

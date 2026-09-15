@@ -133,9 +133,12 @@ archive name. There is no separate packaging-side Node.js version pin or
 runtime-support policy.
 
 Non-official workflows cache the packed OpenClaw tarball by its resolved
-upstream commit. A cache hit still verifies the tarball's recorded commit and
-SHA-256 before it can feed a payload build. Official-signing workflows bypass
-the cache and always rebuild upstream source.
+upstream commit. They also cache each architecture's Windows dependency tree by
+the resolved commit, tarball SHA-256, Node.js version, and payload-build script.
+A tarball cache hit still verifies the recorded commit and SHA-256; a
+dependency-tree hit still runs every payload validation and smoke test.
+Official-signing workflows bypass
+both caches and always rebuild upstream source and Windows dependencies.
 
 The payload artifact records the requested ref and resolved upstream commit in
 `payload-metadata.json`. That build-only file is not embedded in the MSIX.

@@ -179,6 +179,7 @@ jobs:
       package_cache_key: ${{ steps.resolve.outputs.package_cache_key }}
       package_version: ${{ steps.package.outputs.version }}
       node_version: ${{ steps.package.outputs.node_version }}
+      package_sha256: ${{ steps.package.outputs.package_sha256 }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -297,6 +298,7 @@ jobs:
             ConvertFrom-Json
           "version=$([string]$metadata.packageVersion)" >> $env:GITHUB_OUTPUT
           "node_version=$([string]$metadata.nodeVersion)" >> $env:GITHUB_OUTPUT
+          "package_sha256=$([string]$metadata.packageSha256)" >> $env:GITHUB_OUTPUT
 
       - name: Save OpenClaw package cache
         if: ${{ steps.package-cache.outputs.cache-hit != 'true' && (github.event_name != 'workflow_dispatch' || inputs.signing_mode != 'official') }}
@@ -342,13 +344,45 @@ jobs:
           name: openclaw-gateway-npm-package
           path: ${{ runner.temp }}\openclaw-package
 
+      - name: Resolve payload cache key
+        id: payload-key
+        shell: pwsh
+        run: |
+          $cacheKey = .\scripts\Get-OpenClawCacheKey.ps1 `
+            -Layer payload `
+            -Commit '${{ needs.build-package.outputs.source_sha }}' `
+            -Architecture '${{ matrix.architecture }}' `
+            -NodeVersion '${{ needs.build-package.outputs.node_version }}' `
+            -PackageSha256 '${{ needs.build-package.outputs.package_sha256 }}'
+          "key=$cacheKey" >> $env:GITHUB_OUTPUT
+
+      - name: Restore cached Windows dependency tree
+        id: payload-cache
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.signing_mode != 'official' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}\openclaw-stage-${{ matrix.architecture }}
+          key: ${{ steps.payload-key.outputs.key }}
+
       - name: Build expanded payload
         shell: pwsh
         run: |
-          .\scripts\Build-Payload.ps1 `
-            -PackageDirectory '${{ runner.temp }}\openclaw-package' `
-            -Architecture '${{ matrix.architecture }}' `
-            -OutputDirectory '${{ runner.temp }}\openclaw-payload'
+          $parameters = @{
+            PackageDirectory = '${{ runner.temp }}\openclaw-package'
+            Architecture = '${{ matrix.architecture }}'
+            OutputDirectory = '${{ runner.temp }}\openclaw-payload'
+          }
+          if ('${{ steps.payload-cache.outputs.cache-hit }}' -eq 'true') {
+            $parameters.ReuseStagedInstall = $true
+          }
+          .\scripts\Build-Payload.ps1 @parameters
+
+      - name: Save Windows dependency tree cache
+        if: ${{ steps.payload-cache.outputs.cache-hit != 'true' && (github.event_name != 'workflow_dispatch' || inputs.signing_mode != 'official') }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}\openclaw-stage-${{ matrix.architecture }}
+          key: ${{ steps.payload-key.outputs.key }}
 
       - name: Upload payload
         uses: actions/upload-artifact@v7
