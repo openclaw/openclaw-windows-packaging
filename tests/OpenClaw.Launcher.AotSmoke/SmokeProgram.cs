@@ -40,7 +40,7 @@ internal static class SmokeProgram
             ("unknown command fails", UnknownCommandFailsAsync),
             ("response-file token is not expanded", ResponseFileTokenIsNotExpandedAsync),
             ("completion directive suggests commands", CompletionDirectiveSuggestsAsync),
-            ("setup reports readiness and logs", SetupReportsReadinessAsync),
+            ("unpackaged setup reports identity failure", SetupReportsReadinessAsync),
             ("missing application reports diagnostics", MissingApplicationReportsAsync),
             ("openclaw forwards arguments verbatim", AgentForwardsArgumentsAsync)
         ];
@@ -208,9 +208,12 @@ internal static class SmokeProgram
 
         int exitCode = await fixture.RunAsync(["setup"]).ConfigureAwait(false);
 
-        AssertExitCode(0, exitCode, fixture);
+        AssertExitCode(1, exitCode, fixture);
         AssertContains(fixture.Output.ToString(), fixture.ApplicationDirectory, fixture);
-        AssertContains(fixture.Output.ToString(), Fixture.NodePath, fixture);
+        AssertContains(
+            fixture.Output.ToString(),
+            "not running from its installed package",
+            fixture);
         fixture.AssertLogRecordsStartupAndExit();
         Assert(
             File.Exists(fixture.EntryPoint),

@@ -69,10 +69,15 @@ public sealed class ClawCtlCommandLineTests
     [Fact]
     public void OnlyTheReadinessCommandIsExposed()
     {
-        RootCommand root = ClawCtlCommandLine.Create(_ => Task.FromResult(0));
+        RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
+        {
+            Setup = _ => Task.FromResult(0),
+            Status = _ => Task.FromResult(0),
+            Teardown = (_, _) => Task.FromResult(0)
+        });
 
         Assert.Equal(
-            [ClawCtlCommandLine.SetupCommandName],
+            [ClawCtlCommandLine.SetupCommandName, ClawCtlCommandLine.StatusCommandName, "teardown"],
             root.Subcommands.Select(command => command.Name));
     }
 

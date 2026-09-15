@@ -1,0 +1,65 @@
+using OpenClaw.Launcher.Session;
+
+namespace OpenClaw.Launcher.Tests.Session;
+
+public sealed class SessionHelperStagerTests : IDisposable
+{
+    private readonly string _root = TestDirectory.Create();
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_root))
+        {
+            Directory.Delete(_root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void StageCopiesThePackagedHelperToAFullVersionedWorkspacePath()
+    {
+        string source = Path.Combine(_root, "package", "openclaw-session-host.exe");
+        string workspace = Path.Combine(_root, "workspace");
+        Directory.CreateDirectory(Path.GetDirectoryName(source)!);
+        File.WriteAllText(source, "helper bytes");
+
+        string staged = SessionHelperStager.Stage(source, workspace);
+
+        Assert.True(Path.IsPathFullyQualified(staged));
+        Assert.StartsWith(
+            Path.GetFullPath(workspace),
+            staged,
+            StringComparison.Ordinal);
+        Assert.Equal("helper bytes", File.ReadAllText(staged));
+        Assert.Equal(
+            staged,
+            SessionHelperStager.RequireStaged(source, workspace));
+    }
+
+    [Fact]
+    public void RequireStagedDirectsTheUserBackToSetup()
+    {
+        string source = Path.Combine(_root, "openclaw-session-host.exe");
+        File.WriteAllText(source, "helper bytes");
+
+        SessionException failure = Assert.Throws<SessionException>(
+            () => SessionHelperStager.RequireStaged(
+                source,
+                Path.Combine(_root, "workspace")));
+
+        Assert.Contains("clawctl setup", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MissingPackagedHelperIsReportedBeforeStaging()
+    {
+        SessionException failure = Assert.Throws<SessionException>(
+            () => SessionHelperStager.Stage(
+                Path.Combine(_root, "missing.exe"),
+                Path.Combine(_root, "workspace")));
+
+        Assert.Contains(
+            "packaged session helper is missing",
+            failure.Message,
+            StringComparison.Ordinal);
+    }
+}
