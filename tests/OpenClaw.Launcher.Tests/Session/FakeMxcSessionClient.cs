@@ -24,6 +24,8 @@ internal sealed class FakeMxcSessionClient : IMxcSessionClient
 
     public Exception? StartFailure { get; set; }
 
+    public Func<MxcSandboxId, Exception?>? StartFailureForSandbox { get; set; }
+
     public Exception? StopFailure { get; set; }
 
     public Exception? DeprovisionFailure { get; set; }
@@ -61,8 +63,9 @@ internal sealed class FakeMxcSessionClient : IMxcSessionClient
         CancellationToken cancellationToken)
     {
         Calls.Add($"start:{sandboxId.Value}");
-        return StartFailure is not null
-            ? Task.FromException(StartFailure)
+        Exception? failure = StartFailureForSandbox?.Invoke(sandboxId) ?? StartFailure;
+        return failure is not null
+            ? Task.FromException(failure)
             : Task.CompletedTask;
     }
 

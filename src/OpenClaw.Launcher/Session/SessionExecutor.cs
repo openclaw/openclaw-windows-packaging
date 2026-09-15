@@ -237,7 +237,13 @@ internal sealed class SessionExecutor
         }
     }
 
-    /// <summary>Installs the package's Node.js runtime in the agent profile.</summary>
+    /// <summary>
+    /// Installs the packaged Node.js runtime into the agent's profile.
+    /// </summary>
+    /// <remarks>
+    /// Setup invokes this explicitly rather than leaving the first gateway
+    /// launch to discover a missing agent runtime.
+    /// </remarks>
     public async Task<SessionRuntimeInstallResult> InstallRuntimeAsync(
         SessionRecord record,
         string helperPath,
