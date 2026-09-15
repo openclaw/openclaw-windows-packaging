@@ -73,13 +73,28 @@ internal sealed class SessionExecutor
         ArgumentNullException.ThrowIfNull(record);
         ArgumentNullException.ThrowIfNull(request);
 
+        string nodeDirectory = Path.GetDirectoryName(request.NodePath)
+            ?? throw new SessionException(
+                "The agent Node.js executable has no parent directory.");
+        IReadOnlyDictionary<string, string> environment = _buildEnvironment();
+        environment.TryGetValue("PATH", out string? path);
+
         return await ExecuteCommandAsync(
             record,
             new SessionCommandRequest(
                 request.HelperPath,
                 request.NodePath,
                 BuildNodeArguments(request),
-                request.WorkingDirectory),
+                request.WorkingDirectory)
+            {
+                AdditionalEnvironment = new Dictionary<string, string>(
+                    StringComparer.OrdinalIgnoreCase)
+                {
+                    ["PATH"] = string.IsNullOrEmpty(path)
+                        ? nodeDirectory
+                        : nodeDirectory + Path.PathSeparator + path
+                }
+            },
             "Running OpenClaw in the isolated session.",
             "OpenClaw",
             cancellationToken).ConfigureAwait(false);
@@ -154,7 +169,14 @@ internal sealed class SessionExecutor
         }
     }
 
-    /// <summary>Asks the guest to stage diagnostics into the shared workspace.</summary>
+    /// <summary>
+    /// Asks the guest to stage diagnostic files into the shared workspace.
+    /// </summary>
+    /// <remarks>
+    /// Uses the helper's collect mode rather than the launch mode, because
+    /// nothing is being run inside the session: the guest only copies files the
+    /// host's own account cannot open.
+    /// </remarks>
     public async Task<SessionCollectResult> CollectAsync(
         SessionRecord record,
         string helperPath,

@@ -323,7 +323,8 @@ internal sealed class GatewayController
 
     internal async Task<GatewayStopResult> StopUnderLockAsync(
         string helperPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool clearRecord = true)
     {
         GatewayStateResult state = _store.Read();
         if (state.Record?.LaunchPending == true)
@@ -375,7 +376,10 @@ internal sealed class GatewayController
 
         if (!inspection.ProcessFound || !inspection.StartTimeMatches)
         {
-            _store.Clear();
+            if (clearRecord)
+            {
+                _store.Clear();
+            }
             return new GatewayStopResult(
                 Stopped: false,
                 "The recorded gateway was no longer running, so its record was " +
@@ -392,7 +396,10 @@ internal sealed class GatewayController
                 "The gateway stop could not be verified; its record was retained.",
                 stopped.Error, Succeeded: false);
         }
-        _store.Clear();
+        if (clearRecord)
+        {
+            _store.Clear();
+        }
         return new GatewayStopResult(Stopped: true, "The gateway is stopped.");
     }
 

@@ -64,18 +64,30 @@ internal sealed class SessionBusyException : SessionException
 }
 
 /// <summary>
-/// Whether a usable session is recorded, without consulting the backend.
+/// What status established about the owned session.
 /// </summary>
 internal enum SessionAvailability
 {
     /// <summary>No session has been recorded; a first one may be created.</summary>
     None,
 
-    /// <summary>A usable record exists. It says nothing about liveness.</summary>
+    /// <summary>A usable record exists but its backend state is not known.</summary>
     Recorded,
 
     /// <summary>A record exists but cannot be used. Recovery is required.</summary>
     Unusable,
+
+    /// <summary>The backend accepted the recorded provision and started it.</summary>
+    Running,
+
+    /// <summary>The backend explicitly reported that the recorded provision is missing.</summary>
+    Stale,
+
+    /// <summary>The MXC runtime or backend could not be reached.</summary>
+    BackendUnavailable,
+
+    /// <summary>The MXC backend returned an error other than a missing provision.</summary>
+    BackendError,
 }
 
 /// <summary>
@@ -170,6 +182,61 @@ internal sealed class SessionCoordinator
             : SessionAvailability.Unusable;
 
         return new SessionStatus(availability, null, result.Fault, result.Detail);
+    }
+
+    /// <summary>
+    /// Establishes whether the recorded provision can be started by MXC without
+    /// creating or replacing a session.
+    /// </summary>
+    /// <remarks>
+    /// IsolationSession has no separate per-provision read API. Starting a
+    /// recorded provision is its state-aware probe: it succeeds only when that
+    /// exact backend provision exists and leaves no host record changes.
+    /// </remarks>
+    public async Task<SessionStatus> ProbeRecordedStatusAsync(
+        CancellationToken cancellationToken)
+    {
+        using ISessionLockHandle handle = AcquireLock();
+
+        SessionStatus status = GetRecordedStatus();
+        if (status.Record is null)
+        {
+            return status;
+        }
+
+        try
+        {
+            await StartAsync(status.Record, cancellationToken).ConfigureAwait(false);
+            return new SessionStatus(
+                SessionAvailability.Running,
+                status.Record,
+                null,
+                "MXC started the recorded provision.");
+        }
+        catch (MxcException exception) when (exception.Code == MxcErrorCode.StaleId)
+        {
+            return new SessionStatus(
+                SessionAvailability.Stale,
+                status.Record,
+                null,
+                "MXC reported that the recorded provision is missing. Run `clawctl setup` to replace it.");
+        }
+        catch (MxcException exception) when (exception.Code == MxcErrorCode.RuntimeUnavailable)
+        {
+            return new SessionStatus(
+                SessionAvailability.BackendUnavailable,
+                status.Record,
+                null,
+                exception.Message);
+        }
+        catch (MxcException exception)
+        {
+            return new SessionStatus(
+                SessionAvailability.BackendError,
+                status.Record,
+                null,
+                exception.Message);
+        }
     }
 
     /// <summary>
@@ -321,7 +388,12 @@ internal sealed class SessionCoordinator
         CancellationToken cancellationToken)
     {
         using ISessionLockHandle handle = AcquireLock();
+        return await RemoveUnderLockAsync(cancellationToken).ConfigureAwait(false);
+    }
 
+    internal async Task<SessionRemovalResult> RemoveUnderLockAsync(
+        CancellationToken cancellationToken)
+    {
         SessionRecord? record = RequireUsableRecordOrNull();
         if (record is null)
         {

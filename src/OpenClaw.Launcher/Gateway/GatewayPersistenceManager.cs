@@ -161,7 +161,7 @@ internal sealed class GatewayPersistenceManager
 
         if (alreadyCorrect)
         {
-            RemoveFallback();
+            _ = RemoveGeneratedFile(FallbackPath);
             return new GatewayPersistenceInstallResult(
                 GatewayPersistenceState.Ready,
                 GatewayPersistenceLane.TaskScheduler,
@@ -177,7 +177,7 @@ internal sealed class GatewayPersistenceManager
         if (registration.Succeeded)
         {
             _log($"Registered the logon task '{_identity.Name}'.");
-            RemoveFallback();
+            _ = RemoveGeneratedFile(FallbackPath);
             return new GatewayPersistenceInstallResult(
                 GatewayPersistenceState.Ready,
                 GatewayPersistenceLane.TaskScheduler,
@@ -195,21 +195,22 @@ internal sealed class GatewayPersistenceManager
             _identity.Name,
             cancellationToken).ConfigureAwait(false);
 
-        bool changed = RemoveFallback();
-        changed |= RemoveLauncher();
+        GatewayGeneratedFileRemoval fallback = RemoveGeneratedFile(FallbackPath);
+        GatewayGeneratedFileRemoval launcher = RemoveGeneratedFile(_options.LauncherPath);
+        string? detail = Combine(deletion.Detail, Combine(fallback.Detail, launcher.Detail));
 
-        if (!deletion.Succeeded)
+        if (!deletion.Succeeded || detail is not null)
         {
             return new GatewayPersistenceRemovalResult(
                 Succeeded: false,
-                changed,
+                fallback.Changed || launcher.Changed,
                 "Logon recovery could not be fully removed.",
-                deletion.Detail);
+                detail);
         }
 
         return new GatewayPersistenceRemovalResult(
             Succeeded: true,
-            changed,
+            fallback.Changed || launcher.Changed,
             "Logon recovery is removed.");
     }
 
@@ -380,48 +381,32 @@ internal sealed class GatewayPersistenceManager
         }
     }
 
-    private bool RemoveFallback()
+    private GatewayGeneratedFileRemoval RemoveGeneratedFile(string path)
     {
         // Only a file this installation generated is deleted. A same-named file
         // someone else placed there is left alone.
         try
         {
-            if (!File.Exists(FallbackPath) ||
-                !GatewayLauncherScript.LooksGenerated(File.ReadAllText(FallbackPath)))
-            {
-                return false;
-            }
-
-            File.Delete(FallbackPath);
-            return true;
-        }
-        catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException)
-        {
-            return false;
-        }
-    }
-
-    private bool RemoveLauncher()
-    {
-        try
-        {
-            if (!File.Exists(_options.LauncherPath) ||
+            if (!File.Exists(path) ||
                 !GatewayLauncherScript.LooksGenerated(
-                    File.ReadAllText(_options.LauncherPath)))
+                    File.ReadAllText(path)))
             {
-                return false;
+                return new GatewayGeneratedFileRemoval(false, null);
             }
 
-            File.Delete(_options.LauncherPath);
-            return true;
+            (_options.DeleteFile ?? File.Delete)(path);
+            return new GatewayGeneratedFileRemoval(true, null);
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException)
         {
-            return false;
+            return new GatewayGeneratedFileRemoval(
+                false,
+                $"Could not remove generated recovery file '{path}': {exception.Message}");
         }
     }
+
+    private sealed record GatewayGeneratedFileRemoval(bool Changed, string? Detail);
 
     private static string? Combine(string? first, string? second) =>
         (string.IsNullOrWhiteSpace(first), string.IsNullOrWhiteSpace(second)) switch

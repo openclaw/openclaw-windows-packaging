@@ -56,8 +56,7 @@ internal sealed partial class GatewayRuntime
 
     public static GatewayRuntime Create(
         HostOptions options,
-        Action<string> log,
-        Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null)
+        Action<string> log)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(log);
@@ -70,29 +69,54 @@ internal sealed partial class GatewayRuntime
         }
 
         SessionRuntime session = SessionRuntime.Create(log);
-        return Create(options, paths, session, log, resolveNode);
+        return Create(options, paths, session, log);
     }
 
     internal static GatewayRuntime Create(
         HostOptions options,
         HostPaths paths,
         SessionRuntime session,
-        Action<string> log,
-        Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null)
+        Action<string> log)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(log);
 
-        var configuration = new GatewayConfigurationStore(paths.GatewayConfigurationPath);
-        Func<CancellationToken, Task<NodeRuntime>> resolve = resolveNode
-            ?? new Func<CancellationToken, Task<NodeRuntime>>(token => Task.FromResult(
-                NodeRuntimeResolver.Resolve(
-                    options.PackagedNodeArchivePath
-                    ?? throw new SessionException(
-                        "The packaged Node.js runtime archive was not found."))));
+        return new GatewayRuntime(
+            CreateController(options, paths, session, log),
+            session.HelperPath,
+            paths,
+            session);
+    }
 
+    internal static TeardownOrchestrator CreateTeardownOrchestrator(
+        HostOptions options,
+        SessionRuntime session,
+        Action<string> log)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(log);
+
+        HostPaths paths = HostPaths.Create();
+        return new TeardownOrchestrator(
+            session.LifecycleLock,
+            CreateRecoveryManager(log),
+            CreateController(options, paths, session, log),
+            session.Coordinator,
+            session.GatewayState,
+            new GatewayConfigurationStore(paths.GatewayConfigurationPath),
+            session.SetupState);
+    }
+
+    private static GatewayController CreateController(
+        HostOptions options,
+        HostPaths paths,
+        SessionRuntime session,
+        Action<string> log)
+    {
+        var configuration = new GatewayConfigurationStore(paths.GatewayConfigurationPath);
         async Task<GatewayStartRequest> CreateRequestAsync(CancellationToken cancellationToken)
         {
             string applicationDirectory = options.PackagedApplicationDirectory
@@ -100,25 +124,26 @@ internal sealed partial class GatewayRuntime
                     "The packaged OpenClaw application was not found, so the gateway cannot be started.");
             GatewayLaunchConfiguration launch = configuration.Resolve(
                 Environment.GetEnvironmentVariable);
-            NodeRuntime packaged = await resolve(cancellationToken).ConfigureAwait(false);
+            string archivePath = options.PackagedNodeArchivePath
+                ?? throw new SessionException(
+                    "The packaged Node.js runtime archive was not found.");
+            Version packagedVersion = NodeRuntimeInstaller.GetArchiveVersion(
+                archivePath,
+                System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture);
             return new GatewayStartRequest(
                 session.HelperPath,
-                session.RequireAgentNodePath(packaged.Version),
+                session.RequireAgentNodePath(packagedVersion),
                 applicationDirectory,
                 launch.Port);
         }
 
-        return new GatewayRuntime(
-            new GatewayController(
-                session.Coordinator,
-                new SessionGatewayClient(session.Backend, log),
-                new GatewayStateStore(paths.GatewayStatePath),
-                CreateRequestAsync,
-                log,
-                session.RequireSetup,
-                session.LifecycleLock),
-            session.HelperPath,
-            paths,
-            session);
+        return new GatewayController(
+            session.Coordinator,
+            new SessionGatewayClient(session.Backend, log),
+            session.GatewayState,
+            CreateRequestAsync,
+            log,
+            session.RequireSetup,
+            session.LifecycleLock);
     }
 }

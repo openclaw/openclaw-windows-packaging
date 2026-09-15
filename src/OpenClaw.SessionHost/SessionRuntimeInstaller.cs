@@ -55,7 +55,10 @@ internal static class SessionRuntimeInstaller
                     "The installed Node.js runtime did not contain node.exe.");
             }
 
-            bool pathUpdated = request.UpdateUserPath && TryPrependUserPath(directory);
+            string runtimeDirectory = Path.GetDirectoryName(executablePath)
+                ?? throw new SessionLaunchException(
+                    "The installed Node.js runtime has no executable directory.");
+            bool pathUpdated = request.UpdateUserPath && TryPrependUserPath(runtimeDirectory);
 
             writeFile(
                 resultPath,

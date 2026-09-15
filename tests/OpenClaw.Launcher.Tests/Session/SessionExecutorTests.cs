@@ -194,6 +194,38 @@ public sealed class SessionExecutorTests : IDisposable
     }
 
     [Fact]
+    public async Task IsolatedLaunchPrependsTheSelectedAgentNodeDirectory()
+    {
+        SessionLaunchRequest? delivered = null;
+        RespondAsHelper(request =>
+        {
+            delivered = request;
+            return new SessionLaunchResult
+            {
+                RequestId = request.RequestId,
+                Launched = true,
+                ExitCode = 0,
+            };
+        });
+        string node = @"C:\Users\agent\AppData\Local\OpenClawGatewayMSIX\agent-node\node-v24.20.0-win-x64\node.exe";
+
+        await Create().ExecuteAsync(
+            Record(),
+            new SessionExecutionRequest(
+                @"C:\Package\session-host\x64\openclaw-session-host.exe",
+                node,
+                @"C:\Package\app",
+                [],
+                Workspace),
+            CancellationToken.None);
+
+        Assert.StartsWith(
+            Path.GetDirectoryName(node)!,
+            delivered!.Environment!["PATH"],
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task CommandRequestCarriesInteractiveAndShimEnvironment()
     {
         SessionLaunchRequest? delivered = null;
