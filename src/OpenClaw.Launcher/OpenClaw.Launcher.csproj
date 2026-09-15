@@ -79,6 +79,12 @@
     </ItemGroup>
   </Target>
 
+  <PropertyGroup Condition="'$(IncludePackagingContent)' == 'true'">
+    <MxcRuntimeArchitecture Condition="'$(RuntimeIdentifier)' == 'win-x64'">x64</MxcRuntimeArchitecture>
+    <MxcRuntimeArchitecture Condition="'$(RuntimeIdentifier)' == 'win-arm64'">arm64</MxcRuntimeArchitecture>
+    <MxcRuntimeContentDirectory>$(MSBuildThisFileDirectory)..\..\content\mxc\$(MxcRuntimeArchitecture)\</MxcRuntimeContentDirectory>
+  </PropertyGroup>
+
   <ItemGroup Condition="'$(IncludePackagingContent)' == 'true'">
     <Content Include="$(MSBuildThisFileDirectory)..\..\content\openclaw\app\**\*"
              Link="app\%(RecursiveDir)%(Filename)%(Extension)"
@@ -89,6 +95,9 @@
     <Content Include="$(MSBuildThisFileDirectory)..\..\content\openclaw\runtime\$(NodeRuntimeArchiveFileName)"
              Condition="'$(NodeRuntimeArchiveFileName)' != ''"
              Link="runtime\%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(MxcRuntimeContentDirectory)**\*"
+             Link="mxc\$(MxcRuntimeArchitecture)\%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
@@ -101,6 +110,12 @@
            Text="Missing content\openclaw\payload-files.json." />
     <Error Condition="'$(NodeRuntimeArchiveFileName)' == '' Or !Exists('$(MSBuildThisFileDirectory)..\..\content\openclaw\runtime\$(NodeRuntimeArchiveFileName)')"
            Text="Missing architecture-specific bundled Node.js archive." />
+    <Error Condition="'$(MxcRuntimeArchitecture)' == ''"
+           Text="Packaging requires RuntimeIdentifier win-x64 or win-arm64 to select the MXC runtime." />
+    <Error Condition="!Exists('$(MxcRuntimeContentDirectory)wxc-exec.exe')"
+           Text="Missing the staged MXC runtime. Run scripts\Get-MxcRuntime.ps1 -Architecture $(MxcRuntimeArchitecture)." />
+    <Error Condition="!Exists('$(MxcRuntimeContentDirectory)mxc-runtime.json')"
+           Text="Missing MXC runtime provenance. Run scripts\Get-MxcRuntime.ps1 -Architecture $(MxcRuntimeArchitecture)." />
   </Target>
 
   <Target Name="FinalizeNativeAotPackagePayload"
