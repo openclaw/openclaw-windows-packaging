@@ -4,8 +4,9 @@ Builds and registers a local development OpenClaw Gateway package, ready to run.
 .DESCRIPTION
 Takes a clean checkout to a registered, runnable OpenClaw.Gateway package without
 producing, signing, or installing an MSIX. It acquires the OpenClaw payload and
-the bundled Node.js runtime, publishes the NativeAOT launcher, assembles a
-Developer Mode layout, and registers it with Add-AppxPackage -Register.
+the bundled Node.js and MXC runtimes, publishes the NativeAOT launcher and
+session host, assembles a Developer Mode layout, and registers it with
+Add-AppxPackage -Register.
 
 The command is idempotent. Re-running with nothing changed reports that the
 package is already up to date and does nothing; re-running after a source or

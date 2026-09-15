@@ -227,6 +227,8 @@ function New-LocalPackageLayout {
         [string]$LayoutDirectory,
         [string]$RepositoryRoot,
         [string]$HostExecutable,
+        [string]$SessionHostExecutable,
+        [string]$MxcRuntimeDirectory,
         [string]$PayloadDirectory,
         [string]$RuntimeArchive,
         [string]$Architecture,
@@ -289,6 +291,26 @@ function New-LocalPackageLayout {
             Remove-Item -LiteralPath $runtimeStaging -Force
         }
     }
+
+    $sessionHost = Join-Path (Join-Path $LayoutDirectory 'session-host') $Architecture
+    if (Test-Path -LiteralPath $sessionHost) {
+        Remove-Item -LiteralPath $sessionHost -Recurse -Force
+    }
+    New-Item -Path $sessionHost -ItemType Directory -Force | Out-Null
+    Copy-Item `
+        -LiteralPath $SessionHostExecutable `
+        -Destination (Join-Path $sessionHost 'openclaw-session-host.exe') `
+        -Force
+
+    $mxc = Join-Path (Join-Path $LayoutDirectory 'mxc') $Architecture
+    if (Test-Path -LiteralPath $mxc) {
+        Remove-Item -LiteralPath $mxc -Recurse -Force
+    }
+    New-Item -Path $mxc -ItemType Directory -Force | Out-Null
+    foreach ($item in Get-ChildItem -LiteralPath $MxcRuntimeDirectory -Force) {
+        Copy-Item -LiteralPath $item.FullName -Destination $mxc -Recurse -Force
+    }
+
     return $manifestPath
 }
 
@@ -309,12 +331,21 @@ function Test-LocalPackageLayout {
     param(
         [string]$LayoutDirectory,
         [string]$PayloadDirectory,
-        [string]$RuntimeArchiveName
+        [string]$RuntimeArchiveName,
+        [string]$Architecture
     )
 
     # The registered package serves these files directly, so a short circuit
     # must confirm the live layout, not just that a previous run wrote one.
-    foreach ($relative in @('AppxManifest.xml', 'openclaw.exe', "runtime\$RuntimeArchiveName")) {
+    foreach ($relative in @(
+        'AppxManifest.xml',
+        'openclaw.exe',
+        "runtime\$RuntimeArchiveName",
+        "session-host\$Architecture\openclaw-session-host.exe",
+        "mxc\$Architecture\wxc-exec.exe",
+        "mxc\$Architecture\plm.exe",
+        "mxc\$Architecture\mxc-runtime.json"
+    )) {
         if (-not (Test-Path -LiteralPath (Join-Path $LayoutDirectory $relative) -PathType Leaf)) {
             return $false
         }
@@ -402,6 +433,13 @@ function Get-LocalPackageOperations {
                 }
             }
             finally { $archive.Dispose() }
+            return $null
+        }
+        StageMxcRuntime = {
+            param($repositoryRoot, $architecture, $output)
+            & (Join-Path $repositoryRoot 'scripts\Get-MxcRuntime.ps1') `
+                -Architecture $architecture `
+                -OutputDirectory $output
             return $null
         }
         Publish = {
@@ -594,22 +632,46 @@ function Invoke-LocalPackageDeployment {
             Resolve-LocalPackageRuntime -RuntimeDirectory (Join-Path $stateRoot 'runtime') `
                 -Architecture $Architecture -NodeVersion $payload.NodeVersion -Operations $services
         }
+        $mxcRuntimeDirectory = Join-Path $stateRoot 'mxc'
+        Invoke-LocalPackagePhase $progress 'Stage MXC runtime' {
+            & $services.StageMxcRuntime $root $Architecture $mxcRuntimeDirectory
+        } | Out-Null
         $hostDirectory = Join-Path $stateRoot 'host'
         Invoke-LocalPackagePhase $progress 'Build launcher (NativeAOT)' {
             & $services.Publish (Join-Path $root 'src\OpenClaw.Launcher\OpenClaw.Launcher.csproj') `
                 $Architecture $hostDirectory
         } | Out-Null
+        $sessionHostDirectory = Join-Path $stateRoot 'session-host'
+        Invoke-LocalPackagePhase $progress 'Build session host (NativeAOT)' {
+            & $services.Publish (Join-Path $root 'src\OpenClaw.SessionHost\OpenClaw.SessionHost.csproj') `
+                $Architecture $sessionHostDirectory
+        } | Out-Null
         $hostExecutable = Join-Path $hostDirectory 'openclaw.exe'
         if (-not (& $services.TestPath $hostExecutable)) {
             throw "The publish did not produce $hostExecutable."
         }
+        $sessionHostExecutable = Join-Path $sessionHostDirectory 'openclaw-session-host.exe'
+        if (-not (& $services.TestPath $sessionHostExecutable)) {
+            throw "The publish did not produce $sessionHostExecutable."
+        }
 
         $hostInfo = Get-Item -LiteralPath $hostExecutable
+        $sessionHostInfo = Get-Item -LiteralPath $sessionHostExecutable
         $manifestSource = Join-Path $root 'src\OpenClaw.Launcher\Package.appxmanifest'
         # Hash the launcher rather than trusting its timestamp: publish copies
         # into the output directory and can refresh timestamps with no source
         # change, which would defeat the up-to-date check on every run.
         $hostHash = (Get-FileHash -LiteralPath $hostExecutable -Algorithm SHA256).Hash
+        $sessionHostHash = (
+            Get-FileHash -LiteralPath $sessionHostExecutable -Algorithm SHA256
+        ).Hash
+        $mxcHashes = @(
+            Get-ChildItem -LiteralPath $mxcRuntimeDirectory -File -Recurse |
+                Sort-Object FullName |
+                ForEach-Object {
+                    "$($_.Name):$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
+                }
+        )
         $imageHashes = @(
             Get-ChildItem -LiteralPath (Join-Path $root 'src\OpenClaw.Launcher\Images') -File -Recurse |
                 Sort-Object FullName |
@@ -621,8 +683,10 @@ function Invoke-LocalPackageDeployment {
             [IO.Path]::GetFileName($runtimeArchive)
             $hostInfo.Length.ToString()
             $hostHash
+            $sessionHostInfo.Length.ToString()
+            $sessionHostHash
             (Get-FileHash -LiteralPath $manifestSource -Algorithm SHA256).Hash
-        ) + $imageHashes)
+        ) + $imageHashes + $mxcHashes)
         $previous = Read-LocalPackageRecord $statePath
         $setupSatisfied = $SkipSetup -or ($null -ne $previous -and $previous['setupComplete'] -eq $true)
         if (-not $Force -and $null -ne $previous -and $null -ne $installed -and
@@ -634,7 +698,8 @@ function Invoke-LocalPackageDeployment {
             $setupSatisfied -and
             (Test-LocalPackageLayout -LayoutDirectory $layoutDirectory `
                 -PayloadDirectory $payload.Directory `
-                -RuntimeArchiveName ([IO.Path]::GetFileName($runtimeArchive)))) {
+                -RuntimeArchiveName ([IO.Path]::GetFileName($runtimeArchive)) `
+                -Architecture $Architecture)) {
             $total.Stop()
             Write-Host "`nAlready up to date: $($installed.PackageFullName)"
             Write-Host ('Total {0:0.00}s. Use -Force to re-register anyway.' -f $total.Elapsed.TotalSeconds)
@@ -653,7 +718,8 @@ function Invoke-LocalPackageDeployment {
 
         $manifestPath = Invoke-LocalPackagePhase $progress 'Assemble layout' {
             New-LocalPackageLayout -LayoutDirectory $layoutDirectory -RepositoryRoot $root `
-                -HostExecutable $hostExecutable -PayloadDirectory $payload.Directory `
+                -HostExecutable $hostExecutable -SessionHostExecutable $sessionHostExecutable `
+                -MxcRuntimeDirectory $mxcRuntimeDirectory -PayloadDirectory $payload.Directory `
                 -RuntimeArchive $runtimeArchive -Architecture $Architecture -Version $version
         }
         Invoke-LocalPackagePhase $progress 'Register package' {
