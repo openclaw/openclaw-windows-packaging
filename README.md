@@ -4,8 +4,9 @@ This repository builds a Windows MSIX package containing:
 
 - one .NET 10 NativeAOT launcher exposed through the `openclaw` and `clawctl`
   app execution aliases;
-- a pinned, verified build of
-  [`openclaw/openclaw`](https://github.com/openclaw/openclaw);
+- a build of [`openclaw/openclaw`](https://github.com/openclaw/openclaw)
+  selected from upstream extended stable and pinned to one verified source
+  commit for the workflow run;
 - the official Node.js archive matching the upstream build's runtime version
   and the package architecture.
 
@@ -116,12 +117,23 @@ place so an update does not remove a running process's runtime.
 
 ## Selecting the OpenClaw revision
 
-`.github\workflows\gateway-msix.yml` resolves an explicit OpenClaw ref before
-building. Pull-request and `main` push runs use the pinned commit configured in
-both:
+Each new `.github\workflows\gateway-msix.yml` run resolves the channel named in
+`release-policy.json`, currently `extended-stable`. This applies to
+pull-request, `main` push, and manual runs, including official signing.
+The channel is the public npm `openclaw@extended-stable` dist-tag, not a Git
+branch or GitHub's latest release. The resolver selects its exact published
+package version, resolves the matching signed `v<version>` upstream tag to an
+immutable commit, and verifies the registry and source package identities
+agree. Missing channels, unverified tags, and inconsistent metadata fail the
+build; there is no fallback to `latest`, `beta`, or `main`.
 
-- `workflow_dispatch.inputs.openclaw_ref.default`;
-- the non-manual fallback in `env.OPENCLAW_REF`.
+The dedicated resolver job saves `source-resolution.json` before building.
+All source, x64, ARM64, and bundle jobs use that snapshot, even if upstream
+advances the channel while the run is in progress. Retries restore the original
+snapshot and MSIX version rather than querying the channel again. The snapshot
+artifact is retained for 90 days. If it was never uploaded or is no longer
+available, start a new workflow run instead of retrying. Other build artifacts
+remain short-lived.
 
 Changing only the workflow-dispatch default does not change automatic builds.
 For a one-time override, run **Build OpenClaw Gateway MSIX** manually and
@@ -277,14 +289,14 @@ never official-signing inputs.
 Normal pull-request and push workflows publish unsigned packages for
 validation. Manual runs support three signing modes:
 
-- `unsigned` accepts any OpenClaw branch, tag, or commit and publishes unsigned
-  MSIX packages;
-- `test` accepts any OpenClaw ref and publishes MSIX packages signed with a
+- `unsigned` follows the policy channel unless an OpenClaw branch, tag, or commit
+  override is supplied, and publishes unsigned MSIX packages;
+- `test` follows the same source-selection rules and publishes MSIX packages signed with a
   temporary self-signed certificate plus the public `.cer` needed for local
   installation;
-- `official` requires the approved immutable commit from
-  `release-policy.json`, may run only from `main`, and publishes the signed
-  packages as permanent assets on a GitHub Release named by the policy.
+- `official` automatically authorizes the verified channel snapshot, rejects
+  source overrides, may run only from `main`, and publishes signed packages
+  as permanent GitHub Release assets.
 
 Official signing uses the protected `release-signing` environment, Azure OIDC,
 and the existing OpenClaw Artifact Signing account and certificate profile.

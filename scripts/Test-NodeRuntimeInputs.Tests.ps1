@@ -113,6 +113,11 @@ console.log(JSON.stringify({
         requestedRef = '1' * 40
         resolvedCommit = '1' * 40
         packageVersion = '0.0.0'
+        channel = ''
+        releaseTag = ''
+        tagObject = ''
+        resolvedAt = '2026-09-15T00:00:00.0000000Z'
+        registryIntegrity = ''
         nodeVersion = $nodeVersion
     }
     $sourceMetadata | ConvertTo-Json | Set-Content -LiteralPath "$package\source.json"
@@ -124,6 +129,22 @@ console.log(JSON.stringify({
     if ($metadata.nodeVersion -cne $nodeVersion) {
         throw 'The payload did not preserve the exact source build Node.js version.'
     }
+    foreach ($field in @(
+        'requestedRef', 'resolvedCommit', 'packageVersion', 'channel',
+        'releaseTag', 'tagObject', 'registryIntegrity'
+    )) {
+        if ($metadata.$field -cne $sourceMetadata[$field]) {
+            throw "The payload did not preserve the source selection field: $field"
+        }
+    }
+
+    $sourceMetadata.packageVersion = '0.0.1'
+    $sourceMetadata | ConvertTo-Json | Set-Content -LiteralPath "$package\source.json"
+    Assert-Fails -MessagePattern 'does not match the source identity' -Action {
+        & "$PSScriptRoot\Build-Payload.ps1" `
+            -PackageDirectory $package -Architecture x64 -OutputDirectory $payload
+    }
+    $sourceMetadata.packageVersion = '0.0.0'
 
     $reusedPayload = Join-Path $testRoot 'payload-reused'
     & "$PSScriptRoot\Build-Payload.ps1" `

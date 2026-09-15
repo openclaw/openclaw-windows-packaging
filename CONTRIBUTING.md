@@ -48,11 +48,27 @@ or package version logic:
 .\scripts\Test-OpenClawPackage.Tests.ps1
 .\scripts\Test-MSIXReleaseIdentity.Tests.ps1
 .\scripts\Test-WorkflowPackageVersion.Tests.ps1
+.\scripts\Test-OpenClawSource.Tests.ps1
+.\scripts\Test-WorkflowSource.Tests.ps1
+.\scripts\Test-WorkflowSigningConfiguration.ps1
+.\scripts\Test-Build-MSIXBundle.Tests.ps1
 .\scripts\Test-GitHooks.Tests.ps1
 ```
 
 The Node.js input suite requires Node.js and npm. It builds a dependency-free
 local fixture; it does not download or build OpenClaw.
+
+The channel resolver tests use offline registry and GitHub fixtures. Keep
+source selection separate from the source build: new workflow runs resolve
+`release-policy.json`'s `extended-stable` channel once, and retries reuse the
+saved snapshot. Never replace the published channel selection with a
+maintenance branch head or re-resolve it independently for each architecture.
+Changes to source metadata must stay synchronized across resolution, payload
+creation, MSIX composition, signing authorization, and release assets.
+Official signing trusts the verified channel snapshot rather than a reviewed
+per-release commit allowlist. It still requires `main`, the protected signing
+environment, and all artifact checks. For packaging-only official corrections,
+increase the policy's `packageRevision`; do not overwrite an existing release.
 
 Run the NativeAOT publish when you change host JSON, reflection, interop, or
 anything else that is trimming-sensitive. A JIT `dotnet build` does not
