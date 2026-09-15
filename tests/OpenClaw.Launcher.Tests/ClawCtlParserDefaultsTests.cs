@@ -74,7 +74,8 @@ public sealed class ClawCtlParserDefaultsTests : IDisposable
             Setup = _ => throw new InvalidOperationException(
                 "Completion started the readiness operation."),
             Status = _ => Task.FromResult(0),
-            Teardown = (_, _) => Task.FromResult(0)
+            Teardown = (_, _) => Task.FromResult(0),
+            PowerShell = _ => Task.FromResult(0)
         });
 
         IEnumerable<string> completions = root

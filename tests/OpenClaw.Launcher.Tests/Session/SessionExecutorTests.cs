@@ -81,6 +81,55 @@ public sealed class SessionExecutorTests : IDisposable
     }
 
     [Fact]
+    public async Task CommandRequestCarriesInteractiveAndShimEnvironment()
+    {
+        SessionLaunchRequest? delivered = null;
+        RespondAsHelper(request =>
+        {
+            delivered = request;
+            return new SessionLaunchResult
+            {
+                RequestId = request.RequestId,
+                Launched = true,
+                ExitCode = 0,
+            };
+        });
+
+        IReadOnlyDictionary<string, string> environment =
+            SessionExecutor.MergeEnvironment(
+                OpenClawRuntimeEnvironment.Build(
+                    isInteractive: true,
+                    _ => null),
+                AgentToolShim.BuildEnvironment(
+                    @"C:\Users\agent\AppData\Local\OpenClaw\NodeJS\node.exe",
+                    @"C:\Package\app"));
+
+        int exitCode = await Create().ExecuteCommandAsync(
+            Record(),
+            new SessionCommandRequest(
+                @"C:\Package\session-host\x64\openclaw-session-host.exe",
+                @"C:\Program Files\PowerShell\7\pwsh.exe",
+                ["-NoExit"],
+                Workspace)
+            {
+                AdditionalEnvironment = environment
+            },
+            "Opening PowerShell 7 in the isolated session.",
+            "PowerShell 7",
+            CancellationToken.None);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("3", delivered!.Environment!["FORCE_COLOR"]);
+        Assert.Equal("1", delivered.Environment["WT_SESSION"]);
+        Assert.Equal(
+            @"C:\Users\agent\AppData\Local\OpenClaw\NodeJS\node.exe",
+            delivered.Environment[AgentToolShim.NodeVariable]);
+        Assert.Equal(
+            @"C:\Package\app\openclaw.mjs",
+            delivered.Environment[AgentToolShim.EntryPointVariable]);
+    }
+
+    [Fact]
     public async Task ArgumentsTravelAsDataNotOnTheCommandLine()
     {
         // The pinned runtime flattens the command line through cmd.exe, where
