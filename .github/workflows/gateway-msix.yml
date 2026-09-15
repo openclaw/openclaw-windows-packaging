@@ -30,6 +30,10 @@ permissions:
   contents: read
   pull-requests: read
 
+# Upstream build/install scripts must never receive cache read/write authority,
+# including manually selected refs running in the default-branch context.
+cache-mode: none
+
 concurrency:
   group: gateway-msix-${{ inputs.signing_mode == 'official' && 'official' || github.run_id }}
   cancel-in-progress: false
@@ -123,8 +127,6 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           global-json-file: global.json
-          cache: true
-          cache-dependency-path: Directory.Packages.props
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -311,6 +313,8 @@ jobs:
         with:
           install-bun: "false"
           install-deps: "false"
+          use-actions-cache: "false"
+          save-actions-cache: "false"
 
       - name: Install dependencies
         if: ${{ steps.package-cache.outputs.cache-hit != 'true' }}
@@ -474,8 +478,6 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           global-json-file: global.json
-          cache: true
-          cache-dependency-path: Directory.Packages.props
 
       - name: Restore NativeAOT and MSIX dependencies
         shell: pwsh
