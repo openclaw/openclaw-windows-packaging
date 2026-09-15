@@ -121,8 +121,8 @@ package.
   are requested. Preserve the protected signing environment and all artifact
   inventory/hash checks.
 - All workflow jobs deny GitHub Actions cache access with native
-  `cache-mode: none`, including Windows npm lifecycle execution. Keep upstream
-  cache inputs disabled and do not add job-level cache overrides. Current
+  `cache-mode: none`, including Windows npm lifecycle execution. Do not pass
+  version-specific upstream cache switches or add job-level cache overrides. Current
   CodeQL cache-poisoning analysis does not model this native permission;
   document/review the false positives without suppressing the query or hiding
   the checkout. Build identity validation must cover modern explicit build IDs
