@@ -20,13 +20,20 @@ if ($definitionOutput.Count -ne 0) {
 }
 $githubTransport = ${function:Invoke-OpenClawGitHubRequest}
 $registryTransport = ${function:Invoke-OpenClawRegistryRequest}
-$testRoot = Join-Path ([IO.Path]::GetTempPath()) (
-    "openclaw-source-tests-$([guid]::NewGuid().ToString('N'))")
+$testRoot = Join-Path (Split-Path $PSScriptRoot -Parent) (
+    ".openclaw-source-tests-$([guid]::NewGuid().ToString('N'))")
 $commit = 'c283867d7cdd1a93cfc58f829c849834c4426d3b'
-$tagObject = '3f0cb2ac4b8222e5d7fe9930f3aa693b2d68ac87'
-$version = '2026.6.35'
+$tagObject = '8bec206f3c1f787e1e9c45cfd34d3de2a78c7b8e'
+$version = '2026.9.4'
 $integrity = 'sha512-' + [Convert]::ToBase64String([byte[]]::new(64))
 $testCount = 0
+$invalidStableVersions = @(
+    '2026.09.4', '2026.0.4', '2026.13.4', '2026.9.0', '2026.9.33',
+    '2026.6.35', '2026.9.33-1', '2026.9.999', '2026.9.04', '2026.9.4-0',
+    '2026.9.4-01', '2026.9.4-beta.1', '2026.9.4-alpha.1', '2026.9.4+build.1',
+    '2026.9.4-1+build.1', '2026.9.4.1', 'v2026.9.4', '1.2.3', '0.0.0',
+    '2026.9.4?redirect=evil', "2026.9.4`nextra=bad", @('2026.9.4'), 2026
+)
 
 function Assert-TestEqual {
     param($Actual, $Expected)
@@ -62,7 +69,7 @@ function Read-TestPolicy {
 function New-TestPolicy {
     return [pscustomobject]@{
         repository = 'https://github.com/openclaw/openclaw'
-        channel = 'extended-stable'
+        channel = 'stable'
         packageRevision = 0
         publisher = 'CN=OpenClaw Test Publisher'
     }
@@ -122,13 +129,18 @@ function Reset-TestFixture {
     $script:httpCalls = [Collections.Generic.List[object]]::new()
     $script:failures = @{}
     $script:responses = @{
-        'registry:extended-stable' = [pscustomobject]@{
+        'registry:latest' = [pscustomobject]@{
             name = 'openclaw'
             version = $script:version
+        }
+        'registry:extended-stable' = [pscustomobject]@{
+            name = 'openclaw'
+            version = '2026.6.35'
         }
     }
     $script:policy = Read-TestPolicy (New-TestPolicy | ConvertTo-Json)
     Add-TestRelease
+    Add-TestRelease -Version '2026.6.35' -Commit ('e' * 40) -TagObject ('f' * 40)
 }
 
 function Get-TestResponse {
@@ -180,11 +192,12 @@ function Invoke-Test {
 
 New-Item -Path $testRoot -ItemType Directory | Out-Null
 try {
-    Invoke-Test 'signed annotated final release resolves to its immutable source' {
+    Invoke-Test 'npm latest resolves a signed annotated regular stable release' {
         $source = Resolve-OpenClawSource -Policy $policy
+        Assert-TestEqual ($source -is [System.Management.Automation.PSCustomObject]) $true
         Assert-TestEqual $source.repository $policy.repository
-        Assert-TestEqual $source.requestedRef 'extended-stable'
-        Assert-TestEqual $source.channel 'extended-stable'
+        Assert-TestEqual $source.requestedRef 'stable'
+        Assert-TestEqual $source.channel 'stable'
         Assert-TestEqual $source.packageVersion $version
         Assert-TestEqual $source.releaseTag "v$version"
         Assert-TestEqual $source.tagObject $tagObject
@@ -200,7 +213,7 @@ try {
         }
         Assert-TestEqual @(Assert-OpenClawSource $source $policy -RequireChannel).Count 0
         Assert-TestEqual ($requests -join '|') (
-            "registry:extended-stable|github:git/ref/tags/v$version|" +
+            "registry:latest|github:git/ref/tags/v$version|" +
             "github:git/tags/$tagObject|github:contents/package.json?ref=$commit|" +
             "registry:$version"
         )
@@ -209,16 +222,130 @@ try {
     Invoke-Test 'a new call follows an advancing selector without caching' {
         $first = Resolve-OpenClawSource $policy
         $nextCommit = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-        Add-TestRelease -Version '2026.6.36' -Commit $nextCommit -TagObject ('b' * 40)
-        $responses['registry:extended-stable'].version = '2026.6.36'
+        Add-TestRelease -Version '2026.9.5' -Commit $nextCommit -TagObject ('b' * 40)
+        $responses['registry:latest'].version = '2026.9.5'
         $second = Resolve-OpenClawSource $policy
         Assert-TestEqual $first.resolvedCommit $commit
         Assert-TestEqual $second.resolvedCommit $nextCommit
-        Assert-TestEqual $second.packageVersion '2026.6.36'
+        Assert-TestEqual $second.packageVersion '2026.9.5'
+    }
+
+    Invoke-Test 'unpinned policy ref is logical stable without any HTTP lookup' {
+        $refs = @(Get-OpenClawPolicyRef -Policy $policy)
+        Assert-TestEqual $refs.Count 1
+        Assert-TestEqual $refs[0] 'stable'
+        Assert-TestEqual $requests.Count 0
+    }
+
+    foreach ($final in @($false, $true)) {
+        Invoke-Test 'source version Final compatibility always requires regular stable' {
+            foreach ($stableVersion in @($version, "$version-1")) {
+                Assert-TestEqual @(
+                    Assert-OpenClawSourceVersion -Version $stableVersion -Final:$final
+                ).Count 0
+            }
+            foreach ($badVersion in $invalidStableVersions) {
+                Assert-TestThrows {
+                    Assert-OpenClawSourceVersion -Version $badVersion -Final:$final
+                } 'packageVersion'
+            }
+        }
+    }
+
+    foreach ($pin in @('2026.8.31', '2026.8.31-2')) {
+        Invoke-Test "reviewed older stable pin skips latest: $pin" {
+            $policy | Add-Member -NotePropertyName stableVersion -NotePropertyValue $pin
+            $policy = Read-TestPolicy ($policy | ConvertTo-Json)
+            $pinnedCommit = 'a' * 40
+            $pinnedTag = 'b' * 40
+            Add-TestRelease -Version $pin -Commit $pinnedCommit -TagObject $pinnedTag
+            $failures['registry:latest'] = 'A reviewed pin must not query latest.'
+            Assert-TestEqual (Get-OpenClawPolicyRef $policy) $pin
+            $source = Resolve-OpenClawSource $policy
+            Assert-TestEqual $source.channel 'stable'
+            Assert-TestEqual $source.requestedRef $pin
+            Assert-TestEqual $source.packageVersion $pin
+            Assert-TestEqual $source.resolvedCommit $pinnedCommit
+            Assert-TestEqual $source.releaseTag "v$pin"
+            Assert-TestEqual ($requests -join '|') (
+                "registry:$pin|github:git/ref/tags/v$pin|" +
+                "github:git/tags/$pinnedTag|github:contents/package.json?ref=$pinnedCommit"
+            )
+            $replayed = $source | ConvertTo-Json | ConvertFrom-Json
+            Assert-TestEqual @(Assert-OpenClawSource $replayed $policy -RequireChannel).Count 0
+        }
+    }
+
+    foreach ($correctionVersion in @('2026.9.4-1', '2026.12.32-42')) {
+        Invoke-Test "latest accepts a verbatim stable numeric correction: $correctionVersion" {
+            Add-TestRelease -Version $correctionVersion
+            $responses['registry:latest'].version = $correctionVersion
+            $source = Resolve-OpenClawSource $policy
+            Assert-TestEqual $source.packageVersion $correctionVersion
+            Assert-TestEqual $source.releaseTag "v$correctionVersion"
+            Assert-TestEqual $source.requestedRef 'stable'
+            Assert-TestEqual $source.channel 'stable'
+            Assert-TestEqual $requests[$requests.Count - 1] "registry:$correctionVersion"
+            Assert-TestEqual @(Assert-OpenClawSource $source $policy -RequireChannel).Count 0
+        }
+    }
+
+    foreach ($pinned in @($false, $true)) {
+        Invoke-Test 'same-source npm correction cannot silently rewrite the source version' {
+            $correctionVersion = "$version-1"
+            Add-TestRelease -Version $correctionVersion
+            Set-TestPackage -Version $version
+            if ($pinned) {
+                $policy | Add-Member -NotePropertyName stableVersion -NotePropertyValue $correctionVersion
+            }
+            else {
+                $responses['registry:latest'].version = $correctionVersion
+            }
+            Assert-TestThrows { Resolve-OpenClawSource $policy } 'source package version'
+            Assert-TestEqual $requests.Count 4
+            Assert-TestEqual ($requests -match 'extended-stable|2026\.6\.35').Count 0
+        }
+    }
+
+    Invoke-Test 'a withdrawn registry pin fails without latest or cross-channel fallback' {
+        $pin = '2026.8.31'
+        $policy | Add-Member -NotePropertyName stableVersion -NotePropertyValue $pin
+        Assert-TestThrows { Resolve-OpenClawSource $policy } 'No offline fixture'
+        Assert-TestEqual $requests.Count 1
+        Assert-TestEqual $requests[0] "registry:$pin"
+    }
+
+    Invoke-Test 'an exact pin response cannot select a different version' {
+        $pin = '2026.8.31'
+        $policy | Add-Member -NotePropertyName stableVersion -NotePropertyValue $pin
+        Add-TestRelease -Version $pin
+        $responses["registry:$pin"].version = $version
+        Assert-TestThrows { Resolve-OpenClawSource $policy } 'stableVersion pin'
+        Assert-TestEqual $requests.Count 1
+    }
+
+    foreach ($withdrawn in @($false, $true)) {
+        Invoke-Test 'changed or withdrawn policy pins reject old snapshots on replay' {
+            $policy | Add-Member -NotePropertyName stableVersion -NotePropertyValue $version
+            $source = Resolve-OpenClawSource $policy | ConvertTo-Json | ConvertFrom-Json
+            if ($withdrawn) {
+                $policy.PSObject.Properties.Remove('stableVersion')
+            }
+            else {
+                $policy.stableVersion = '2026.9.3'
+            }
+            $requestCount = $requests.Count
+            Assert-TestThrows { Assert-OpenClawSource $source $policy -RequireChannel } 'requestedRef'
+            if (-not $withdrawn) {
+                $source.requestedRef = $policy.stableVersion
+                Assert-TestThrows { Assert-OpenClawSource $source $policy -RequireChannel } 'stableVersion pin'
+            }
+            Assert-TestEqual $requests.Count $requestCount
+        }
     }
 
     foreach ($endpoint in @(
-            'registry:extended-stable', "github:git/ref/tags/v$version",
+            'registry:latest', "github:git/ref/tags/v$version",
             "github:git/tags/$tagObject", "github:contents/package.json?ref=$commit",
             "registry:$version"
         )) {
@@ -226,34 +353,33 @@ try {
             $failures[$endpoint] = 'Offline fixture API failure.'
             Assert-TestThrows { Resolve-OpenClawSource $policy } 'Offline fixture API failure'
             Assert-TestEqual $requests[$requests.Count - 1] $endpoint
+            Assert-TestEqual ($requests -match 'extended-stable|2026\.6\.35').Count 0
         }
     }
 
-    Invoke-Test 'missing channel has no fallback' {
-        $responses.Remove('registry:extended-stable')
+    Invoke-Test 'missing latest never falls back to an available extended-stable release' {
+        $responses.Remove('registry:latest')
         Assert-TestThrows { Resolve-OpenClawSource $policy } 'No offline fixture'
         Assert-TestEqual $requests.Count 1
+        Assert-TestEqual $requests[0] 'registry:latest'
     }
 
-    foreach ($badVersion in @(
-            '2026.06.35', '2026.6.35-beta.1', '2026.6.35+build.1', 'v2026.6.35',
-            '2026.6.35.1', '1.2.3', '2026.6.35?redirect=evil', "2026.6.35`nextra=bad",
-            @('2026.6.35'), 2026
-        )) {
-        Invoke-Test 'channel rejects invalid final versions before GitHub requests' {
-            $responses['registry:extended-stable'].version = $badVersion
+    foreach ($badVersion in $invalidStableVersions) {
+        Invoke-Test 'latest rejects invalid or extended versions without fallback' {
+            $responses['registry:latest'].version = $badVersion
             Assert-TestThrows { Resolve-OpenClawSource $policy } 'packageVersion'
             Assert-TestEqual $requests.Count 1
+            Assert-TestEqual $requests[0] 'registry:latest'
         }
     }
 
     Invoke-Test 'channel package identity must match' {
-        $responses['registry:extended-stable'].name = 'other'
+        $responses['registry:latest'].name = 'other'
         Assert-TestThrows { Resolve-OpenClawSource $policy } 'openclaw package'
     }
 
     foreach ($case in @(
-            @{ Field = 'ref'; Value = 'refs/tags/v2026.6.34'; Error = 'exact annotated' },
+            @{ Field = 'ref'; Value = 'refs/tags/v2026.9.3'; Error = 'exact annotated' },
             @{ Field = 'type'; Value = 'commit'; Error = 'exact annotated' },
             @{ Field = 'sha'; Value = '../../other'; Error = 'tag object' }
         )) {
@@ -272,7 +398,7 @@ try {
 
     foreach ($case in @(
             @{ Field = 'sha'; Value = ('f' * 40) },
-            @{ Field = 'tag'; Value = 'v2026.6.34' },
+            @{ Field = 'tag'; Value = 'v2026.9.3' },
             @{ Field = 'verified'; Value = $false },
             @{ Field = 'verified'; Value = 'true' },
             @{ Field = 'verified'; Value = @($true) },
@@ -312,13 +438,15 @@ try {
     }
 
     Invoke-Test 'immutable package version must match the selection' {
-        Set-TestPackage -Version '2026.6.34'
+        Set-TestPackage -Version '2026.9.3'
         Assert-TestThrows { Resolve-OpenClawSource $policy } 'source package version'
+        Assert-TestEqual ($requests -match 'extended-stable|2026\.6\.35').Count 0
     }
 
     Invoke-Test 'exact registry version must match the selection' {
-        $responses["registry:$version"].version = '2026.6.36'
+        $responses["registry:$version"].version = '2026.9.5'
         Assert-TestThrows { Resolve-OpenClawSource $policy } 'exact registry manifest'
+        Assert-TestEqual ($requests -match 'extended-stable|2026\.6\.35').Count 0
     }
 
     Invoke-Test 'exact registry package name must match' {
@@ -368,17 +496,17 @@ try {
         }
     }
 
-    foreach ($ref in @('feature/source', "v$version", $commit, 'extended-stable')) {
+    foreach ($ref in @('feature/source', "v$version", $commit, 'stable')) {
         Invoke-Test "explicit override resolves only GitHub commit and source: $ref" {
             $escapedRef = [Uri]::EscapeDataString($ref)
             $responses["github:commits/$escapedRef"] = [pscustomobject]@{
                 sha = $commit.ToUpperInvariant()
             }
-            Set-TestPackage -Version '2026.9.1-beta.2+build.3'
+            Set-TestPackage -Version '2026.9.4-2'
             $source = Resolve-OpenClawSource $policy -Ref $ref
             Assert-TestEqual $source.requestedRef $ref
             Assert-TestEqual $source.resolvedCommit $commit
-            Assert-TestEqual $source.packageVersion '2026.9.1-beta.2+build.3'
+            Assert-TestEqual $source.packageVersion '2026.9.4-2'
             foreach ($field in @('channel', 'releaseTag', 'tagObject', 'registryIntegrity')) {
                 Assert-TestEqual $source.$field ''
             }
@@ -404,8 +532,24 @@ try {
         }
     }
 
-    foreach ($badVersion in @('01.2.3', '1.2.3-01', '1.2.3-beta..1', "1.2.3`n", @('1.2.3'))) {
-        Invoke-Test 'override source version must be valid semver' {
+    foreach ($ref in @(
+            'extended-stable', 'extended-stable/2026.9', 'Extended-Stable',
+            'refs/heads/extended-stable/2026.9', 'refs/tags/extended-stable'
+        )) {
+        Invoke-Test 'explicit extended-stable selectors are rejected before networking' {
+            Assert-TestThrows { Resolve-OpenClawSource $policy -Ref $ref } "'Ref'.*extended-stable"
+            Assert-TestEqual $requests.Count 0
+            $source = Resolve-OpenClawSource $policy
+            foreach ($field in @('channel', 'releaseTag', 'tagObject', 'registryIntegrity')) {
+                $source.$field = ''
+            }
+            $source.requestedRef = $ref
+            Assert-TestThrows { Assert-OpenClawSource $source $policy } "'requestedRef'.*extended-stable"
+        }
+    }
+
+    foreach ($badVersion in $invalidStableVersions) {
+        Invoke-Test 'override source version must belong to regular stable' {
             $responses['github:commits/main'] = [pscustomobject]@{ sha = $commit }
             Set-TestPackage -Version $badVersion
             Assert-TestThrows { Resolve-OpenClawSource $policy -Ref 'main' } 'packageVersion'
@@ -416,6 +560,37 @@ try {
         $responses['github:commits/main'] = [pscustomobject]@{ sha = $commit }
         Set-TestPackage -Name 'other'
         Assert-TestThrows { Resolve-OpenClawSource $policy -Ref 'main' } 'source package name'
+    }
+
+    Invoke-Test 'an immutable SHA override cannot opt into an extended-stable source version' {
+        $responses["github:commits/$commit"] = [pscustomobject]@{ sha = $commit }
+        Set-TestPackage -Version '2026.6.35'
+        Assert-TestThrows { Resolve-OpenClawSource $policy -Ref $commit } 'packageVersion'
+        Assert-TestEqual ($requests -join '|') (
+            "github:commits/$commit|github:contents/package.json?ref=$commit"
+        )
+    }
+
+    foreach ($badVersion in $invalidStableVersions) {
+        Invoke-Test 'channel and override snapshots both require regular stable versions' {
+            $source = Resolve-OpenClawSource $policy
+            $source.packageVersion = $badVersion
+            Assert-TestThrows { Assert-OpenClawSource $source $policy } 'packageVersion'
+            foreach ($field in @('channel', 'releaseTag', 'tagObject', 'registryIntegrity')) {
+                $source.$field = ''
+            }
+            $source.requestedRef = 'main'
+            Assert-TestThrows { Assert-OpenClawSource $source $policy } 'packageVersion'
+        }
+    }
+
+    Invoke-Test 'a previous extended-stable snapshot is rejected' {
+        $source = Resolve-OpenClawSource $policy
+        $source.requestedRef = 'extended-stable'
+        $source.channel = 'extended-stable'
+        $source.packageVersion = '2026.6.35'
+        $source.releaseTag = 'v2026.6.35'
+        Assert-TestThrows { Assert-OpenClawSource $source $policy } 'extended-stable'
     }
 
     Invoke-Test 'snapshot timestamp can be old and extra build metadata is allowed' {
@@ -456,13 +631,13 @@ try {
     foreach ($case in @(
             @{ Field = 'repository'; Value = 'https://github.com/other/openclaw'; Error = 'repository' },
             @{ Field = 'requestedRef'; Value = 'main'; Error = 'requestedRef' },
-            @{ Field = 'requestedRef'; Value = "extended-stable`r`nevil=value"; Error = 'requestedRef' },
+            @{ Field = 'requestedRef'; Value = "stable`r`nevil=value"; Error = 'requestedRef' },
             @{ Field = 'resolvedCommit'; Value = $commit.ToUpperInvariant(); Error = 'resolvedCommit' },
             @{ Field = 'resolvedCommit'; Value = @($commit); Error = 'resolvedCommit' },
-            @{ Field = 'packageVersion'; Value = '2026.6.35-beta.1'; Error = 'packageVersion' },
+            @{ Field = 'packageVersion'; Value = '2026.9.4-beta.1'; Error = 'packageVersion' },
             @{ Field = 'channel'; Value = 'latest'; Error = 'channel' },
             @{ Field = 'channel'; Value = ''; Error = 'ref override' },
-            @{ Field = 'releaseTag'; Value = 'v2026.6.34'; Error = 'releaseTag' },
+            @{ Field = 'releaseTag'; Value = 'v2026.9.3'; Error = 'releaseTag' },
             @{ Field = 'tagObject'; Value = ''; Error = 'tagObject' },
             @{ Field = 'tagObject'; Value = $tagObject.ToUpperInvariant(); Error = 'tagObject' },
             @{ Field = 'registryIntegrity'; Value = 'sha512-invalid'; Error = 'registryIntegrity' },
@@ -499,11 +674,25 @@ try {
         }
     }
 
+    foreach ($pin in ($invalidStableVersions + @('', $null, 'stable', 'latest', 'extended-stable'))) {
+        Invoke-Test 'policy rejects invalid, extended, empty, and null stableVersion pins' {
+            $candidate = New-TestPolicy
+            $candidate | Add-Member -NotePropertyName stableVersion -NotePropertyValue $pin
+            Assert-TestThrows {
+                Read-TestPolicy ($candidate | ConvertTo-Json -Depth 8)
+            } 'stableVersion'
+            Assert-TestThrows { Get-OpenClawPolicyRef $candidate } 'stableVersion'
+            Assert-TestThrows { Resolve-OpenClawSource $candidate } 'stableVersion'
+            Assert-TestEqual $requests.Count 0
+        }
+    }
+
     foreach ($case in @(
             @{ Field = 'repository'; Value = 'https://github.com/other/openclaw' },
             @{ Field = 'repository'; Value = @('https://github.com/openclaw/openclaw') },
             @{ Field = 'channel'; Value = 'latest' },
-            @{ Field = 'channel'; Value = 'Extended-Stable' },
+            @{ Field = 'channel'; Value = 'Stable' },
+            @{ Field = 'channel'; Value = 'extended-stable' },
             @{ Field = 'packageRevision'; Value = -1 },
             @{ Field = 'packageRevision'; Value = 65535 },
             @{ Field = 'packageRevision'; Value = '1' },
@@ -537,16 +726,66 @@ try {
         }
     }
 
+    foreach ($case in @(
+            @{ Version = '2026.9.4'; Revision = 0; Expected = '2026.9.4.0' },
+            @{ Version = '2026.9.4'; Revision = 1; Expected = '2026.9.4.1' },
+            @{ Version = '2026.9.4'; Revision = [long]65534; Expected = '2026.9.4.65534' },
+            @{ Version = '2026.9.4-1'; Revision = 0; Expected = '2026.9.4.1' },
+            @{ Version = '2026.9.4-2'; Revision = 3; Expected = '2026.9.4.5' },
+            @{ Version = '2026.9.4-65534'; Revision = 0; Expected = '2026.9.4.65534' },
+            @{ Version = '2026.9.4-65533'; Revision = 1; Expected = '2026.9.4.65534' },
+            @{ Version = '9999.12.32'; Revision = 0; Expected = '9999.12.32.0' },
+            @{ Version = '2026.1.1'; Revision = 0; Expected = '2026.1.1.0' }
+        )) {
+        Invoke-Test "MSIX mapping preserves base and adds numeric corrections: $($case.Expected)" {
+            $results = @(Get-OpenClawMsixReleaseVersion -Version $case.Version -PackageRevision $case.Revision)
+            Assert-TestEqual $results.Count 1
+            Assert-TestEqual ($results[0] -is [string]) $true
+            Assert-TestEqual $results[0] $case.Expected
+        }
+    }
+
+    foreach ($case in @(
+            @{ Version = '2026.9.4-65535'; Revision = 0 },
+            @{ Version = '2026.9.4-65534'; Revision = 1 },
+            @{ Version = '2026.9.4-1'; Revision = 65534 },
+            @{ Version = '2026.9.4-2147483647'; Revision = 0 },
+            @{ Version = '2026.9.4-2147483648'; Revision = 0 },
+            @{ Version = ('2026.9.4-' + ('9' * 200)); Revision = 0 }
+        )) {
+        Invoke-Test 'MSIX correction overflow is rejected before addition' {
+            Assert-TestThrows {
+                Get-OpenClawMsixReleaseVersion -Version $case.Version -PackageRevision $case.Revision
+            } 'correction.*exceeds 65534'
+        }
+    }
+
+    foreach ($revision in @(-1, 65535, '1', 1.0, $true, $null, [long]::MaxValue)) {
+        Invoke-Test 'MSIX mapping requires an in-range integer package revision' {
+            Assert-TestThrows {
+                Get-OpenClawMsixReleaseVersion -Version $version -PackageRevision $revision
+            } 'packageRevision'
+        }
+    }
+
+    foreach ($badVersion in $invalidStableVersions) {
+        Invoke-Test 'MSIX mapping shares regular stable version validation' {
+            Assert-TestThrows {
+                Get-OpenClawMsixReleaseVersion -Version $badVersion -PackageRevision 0
+            } 'packageVersion'
+        }
+    }
+
     Invoke-Test 'HTTP transports pin origins, bound timeouts, and isolate GitHub credentials' {
         $originalToken = $env:GH_TOKEN
         try {
             $env:GH_TOKEN = 'offline-test-token'
             & $githubTransport -Path "git/tags/$tagObject" | Out-Null
-            & $registryTransport -Selector 'extended-stable' | Out-Null
+            & $registryTransport -Selector 'latest' | Out-Null
             & $registryTransport -Selector $version | Out-Null
             Assert-TestEqual $httpCalls[0].Uri "https://api.github.com/repos/openclaw/openclaw/git/tags/$tagObject"
             Assert-TestEqual $httpCalls[0].Headers.Authorization 'Bearer offline-test-token'
-            Assert-TestEqual $httpCalls[1].Uri 'https://registry.npmjs.org/openclaw/extended-stable'
+            Assert-TestEqual $httpCalls[1].Uri 'https://registry.npmjs.org/openclaw/latest'
             Assert-TestEqual $httpCalls[2].Uri "https://registry.npmjs.org/openclaw/$version"
             foreach ($call in $httpCalls) {
                 Assert-TestEqual $call.TimeoutSec 30
@@ -574,6 +813,28 @@ try {
         } 'GitHub API path'
         Assert-TestThrows { & $registryTransport -Selector '../../other' } 'packageVersion'
         Assert-TestEqual $httpCalls.Count 0
+    }
+
+    Invoke-Test 'HTTP helpers accept stable numeric correction manifests and annotated tag refs' {
+        & $registryTransport -Selector '2026.9.4-2' | Out-Null
+        & $githubTransport -Path 'git/ref/tags/v2026.9.4-2' | Out-Null
+        Assert-TestEqual $httpCalls[0].Uri 'https://registry.npmjs.org/openclaw/2026.9.4-2'
+        Assert-TestEqual $httpCalls[1].Uri 'https://api.github.com/repos/openclaw/openclaw/git/ref/tags/v2026.9.4-2'
+    }
+
+    foreach ($selector in @('stable', 'extended-stable', 'extended-stable/2026.9', 'beta', 'LATEST')) {
+        Invoke-Test 'registry transport rejects logical and non-stable channel names' {
+            Assert-TestThrows { & $registryTransport -Selector $selector } 'packageVersion'
+            Assert-TestEqual $httpCalls.Count 0
+        }
+    }
+
+    foreach ($badVersion in ($invalidStableVersions | Where-Object { $_ -is [string] })) {
+        Invoke-Test 'HTTP manifest and release tag endpoints reject non-stable versions' {
+            Assert-TestThrows { & $registryTransport -Selector $badVersion } 'packageVersion'
+            Assert-TestThrows { & $githubTransport -Path "git/ref/tags/v$badVersion" } 'packageVersion|GitHub API path'
+            Assert-TestEqual $httpCalls.Count 0
+        }
     }
 
     Write-Host "Passed $testCount OpenClaw source resolver tests (offline)."

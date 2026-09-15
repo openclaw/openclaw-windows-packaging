@@ -5,7 +5,7 @@ This repository builds a Windows MSIX package containing:
 - one .NET 10 NativeAOT launcher exposed through the `openclaw` and `clawctl`
   app execution aliases;
 - a build of [`openclaw/openclaw`](https://github.com/openclaw/openclaw)
-  selected from upstream extended stable and pinned to one verified source
+  selected from upstream stable and pinned to one verified source
   commit for the workflow run;
 - the official Node.js archive matching the upstream build's runtime version
   and the package architecture.
@@ -118,14 +118,28 @@ place so an update does not remove a running process's runtime.
 ## Selecting the OpenClaw revision
 
 Each new `.github\workflows\gateway-msix.yml` run resolves the channel named in
-`release-policy.json`, currently `extended-stable`. This applies to
+`release-policy.json`, which must be `stable`. This applies to
 pull-request, `main` push, and manual runs, including official signing.
-The channel is the public npm `openclaw@extended-stable` dist-tag, not a Git
+The channel maps to the public npm `openclaw@latest` dist-tag, not a Git
 branch or GitHub's latest release. The resolver selects its exact published
 package version, resolves the matching signed `v<version>` upstream tag to an
 immutable commit, and verifies the registry and source package identities
 agree. Missing channels, unverified tags, and inconsistent metadata fail the
-build; there is no fallback to `latest`, `beta`, or `main`.
+build; there is no automatic fallback to another version or channel.
+Extended-stable and prerelease versions are rejected, including through
+explicit ref overrides and older payload metadata. Upstream reserves patch
+numbers 33 and above for extended stable; they are not regular stable targets.
+
+If the newest stable release is incompatible, a reviewed policy change may
+add an exact `stableVersion`, such as `"stableVersion": "2026.8.2"`, for an older
+known-good **stable** release. Include its compatibility evidence in that
+change, including preservation of external service-management ownership;
+a successful build alone is not sufficient. The resolver then selects that
+exact published version, records it as
+the requested ref, and applies the same signature and identity checks. It does
+not try `latest` first or silently switch versions after an error. Remove the
+pin through review to resume following `latest`. This option cannot select
+extended stable and does not bypass official release ordering checks.
 
 The dedicated resolver job saves `source-resolution.json` before building.
 All source, x64, ARM64, and bundle jobs use that snapshot, even if upstream
@@ -289,8 +303,8 @@ never official-signing inputs.
 Normal pull-request and push workflows publish unsigned packages for
 validation. Manual runs support three signing modes:
 
-- `unsigned` follows the policy channel unless an OpenClaw branch, tag, or commit
-  override is supplied, and publishes unsigned MSIX packages;
+- `unsigned` follows the stable policy unless a stable-source branch, tag, or
+  commit override is supplied, and publishes unsigned MSIX packages;
 - `test` follows the same source-selection rules and publishes MSIX packages signed with a
   temporary self-signed certificate plus the public `.cer` needed for local
   installation;

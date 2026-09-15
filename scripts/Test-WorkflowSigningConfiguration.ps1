@@ -160,7 +160,16 @@ if ($workflow.Contains('OPENCLAW_REF:', [StringComparison]::Ordinal) -or
 }
 if ($workflow.Contains('--allow-unreleased-changelog', [StringComparison]::Ordinal) -or
     $workflow.Contains('--pnpm-pack', [StringComparison]::Ordinal)) {
-    throw 'Use the shared upstream packer options and its defaults, not switches absent from extended stable.'
+    throw 'Use the shared upstream packer options and its defaults, including for older stable pins.'
+}
+if ($workflow.Contains('extended-stable', [StringComparison]::Ordinal) -or
+    -not $workflow.Contains('by the `stable` release policy', [StringComparison]::Ordinal)) {
+    throw 'Workflow inputs and release notes must describe stable, not extended-stable selection.'
+}
+$policy = Get-Content -LiteralPath (Join-Path $repositoryRoot 'release-policy.json') -Raw |
+    ConvertFrom-Json
+if ($policy.channel -cne 'stable') {
+    throw 'MSIX source selection must stay on the stable channel.'
 }
 if ($workflow.IndexOf('name: Enforce official signing policy', [StringComparison]::Ordinal) -gt
     $workflow.IndexOf('name: Azure login', [StringComparison]::Ordinal)) {

@@ -1044,7 +1044,7 @@ jobs:
             release-assets/*.json
           body: |
             Packages OpenClaw `${{ needs.resolve-source.outputs.source_version }}` selected
-            from the upstream `extended-stable` channel for this workflow run,
+            by the `stable` release policy for this workflow run,
             from [`openclaw/openclaw@${{ needs.resolve-source.outputs.source_sha }}`](https://github.com/openclaw/openclaw/commit/${{ needs.resolve-source.outputs.source_sha }}).
             The source snapshot and architecture metadata are included as release assets.
 

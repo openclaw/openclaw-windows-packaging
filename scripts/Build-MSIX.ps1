@@ -209,8 +209,9 @@ if (
     throw 'Payload metadata is not valid for this MSIX package.'
 }
 
+. (Join-Path $PSScriptRoot 'OpenClawSource.ps1')
+Assert-OpenClawSourceVersion -Version $payloadInfo.packageVersion -Final
 if ($null -ne $payloadSelection.channel) {
-    . (Join-Path $PSScriptRoot 'OpenClawSource.ps1')
     $policy = Read-OpenClawReleasePolicy -Path (
         Join-Path $repositoryRoot 'release-policy.json')
     Assert-OpenClawSource -Source $payloadInfo -Policy $policy
@@ -232,6 +233,16 @@ if (-not (Test-Path `
     -LiteralPath (Join-Path $payloadApplication 'openclaw.mjs') `
     -PathType Leaf)) {
     throw 'Expanded payload does not contain openclaw.mjs.'
+}
+$applicationManifestPath = Join-Path $payloadApplication 'package.json'
+if (-not (Test-Path -LiteralPath $applicationManifestPath -PathType Leaf)) {
+    throw 'Expanded payload does not contain package.json.'
+}
+$applicationManifest = Get-Content -LiteralPath $applicationManifestPath -Raw |
+    ConvertFrom-Json
+if ($applicationManifest.name -cne 'openclaw' -or
+    $applicationManifest.version -cne $payloadInfo.packageVersion) {
+    throw 'The expanded application does not match the payload package version.'
 }
 Assert-ApplicationHasNoReparsePoints -Path $payloadApplication
 Assert-ApplicationDoesNotBundleNode -Path $payloadApplication
