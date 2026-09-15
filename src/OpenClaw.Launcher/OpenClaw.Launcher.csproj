@@ -83,6 +83,7 @@
     <MxcRuntimeArchitecture Condition="'$(RuntimeIdentifier)' == 'win-x64'">x64</MxcRuntimeArchitecture>
     <MxcRuntimeArchitecture Condition="'$(RuntimeIdentifier)' == 'win-arm64'">arm64</MxcRuntimeArchitecture>
     <MxcRuntimeContentDirectory>$(MSBuildThisFileDirectory)..\..\content\mxc\$(MxcRuntimeArchitecture)\</MxcRuntimeContentDirectory>
+    <SessionHostContentDirectory>$(MSBuildThisFileDirectory)..\..\content\session-host\$(MxcRuntimeArchitecture)\</SessionHostContentDirectory>
   </PropertyGroup>
 
   <ItemGroup Condition="'$(IncludePackagingContent)' == 'true'">
@@ -98,6 +99,10 @@
              CopyToOutputDirectory="PreserveNewest" />
     <Content Include="$(MxcRuntimeContentDirectory)**\*"
              Link="mxc\$(MxcRuntimeArchitecture)\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(SessionHostContentDirectory)**\*"
+             Exclude="$(SessionHostContentDirectory)**\*.pdb;$(SessionHostContentDirectory)**\*.xml"
+             Link="session-host\$(MxcRuntimeArchitecture)\%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
@@ -116,6 +121,8 @@
            Text="Missing the staged MXC runtime. Run scripts\Get-MxcRuntime.ps1 -Architecture $(MxcRuntimeArchitecture)." />
     <Error Condition="!Exists('$(MxcRuntimeContentDirectory)mxc-runtime.json')"
            Text="Missing MXC runtime provenance. Run scripts\Get-MxcRuntime.ps1 -Architecture $(MxcRuntimeArchitecture)." />
+    <Error Condition="!Exists('$(SessionHostContentDirectory)openclaw-session-host.exe')"
+           Text="Missing the published isolated-session guest helper. scripts\Build-MSIX.ps1 stages it for $(MxcRuntimeArchitecture)." />
   </Target>
 
   <Target Name="FinalizeNativeAotPackagePayload"
