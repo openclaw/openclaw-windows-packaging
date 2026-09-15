@@ -43,6 +43,7 @@ or package version logic:
 ```powershell
 .\scripts\Test-SigningInputs.Tests.ps1
 .\scripts\Test-NodeRuntimeInputs.Tests.ps1
+.\scripts\Test-PackagingRelevance.Tests.ps1
 .\scripts\Test-WorkflowPackageVersion.Tests.ps1
 .\scripts\Test-GitHooks.Tests.ps1
 ```

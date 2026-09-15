@@ -13,6 +13,14 @@ $workflow = Get-Content -LiteralPath $workflowPath -Raw
 $requiredFragments = @(
     'group: gateway-msix-${{ github.event.pull_request.number || github.run_id }}'
     "cancel-in-progress: `${{ github.event_name == 'pull_request' }}"
+    'name: Classify pull request changes'
+    '.\scripts\Get-PackagingRelevance.ps1'
+    'name: Test packaging relevance'
+    "if: `${{ github.event_name != 'pull_request' || needs.changes.outputs.packaging == 'true' }}"
+    'name: Gateway MSIX CI'
+    "if: `${{ always() }}"
+    "contains(needs.*.result, 'failure')"
+    "contains(needs.*.result, 'cancelled')"
     'environment: release-signing'
     'id-token: write'
     'uses: azure/login@v3'
