@@ -25,7 +25,7 @@ internal sealed class HostStartup
 
     public Program.LaunchOpenClawAsync? LaunchOpenClaw { get; init; }
 
-    public Func<Action<string>, Session.SessionRuntime>? CreateSessionRuntime { get; init; }
+    public Session.IInstallationLifecycle? InstallationLifecycle { get; init; }
 
     public Func<string, string?>? ReadEnvironmentVariable { get; init; }
 
@@ -36,6 +36,7 @@ internal sealed class HostStartup
         BaseDirectory = AppContext.BaseDirectory,
         Output = Console.Out,
         Error = Console.Error,
-        InstallNodeRuntime = NodeRuntimeInstaller.EnsureInstalled
+        InstallNodeRuntime = NodeRuntimeInstaller.EnsureInstalled,
+        InstallationLifecycle = Session.InstallationLifecycle.Production
     };
 }

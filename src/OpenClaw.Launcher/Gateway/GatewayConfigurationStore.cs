@@ -140,6 +140,18 @@ internal sealed class GatewayConfigurationStore
         };
     }
 
+    public GatewayLaunchConfiguration Resolve(
+        string workspacePath,
+        Func<string, string?>? readEnvironmentVariable = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspacePath);
+        GatewayLaunchConfiguration configuration = Resolve(readEnvironmentVariable);
+        return configuration with
+        {
+            WorkingDirectory = configuration.WorkingDirectory ?? workspacePath,
+        };
+    }
+
     public GatewayConfigurationResult Read()
     {
         string text;

@@ -38,7 +38,15 @@ internal sealed class TeardownOrchestrator
     {
         using ISessionLockHandle handle = _lock.TryAcquire(SessionCoordinator.DefaultLockTimeout)
             ?? throw new SessionBusyException(SessionCoordinator.DefaultLockTimeout);
+        return await RunUnderLockAsync(helperPath, force, cancellationToken).ConfigureAwait(false);
+    }
 
+    /// <summary>Runs teardown while the caller owns the installation lifecycle lock.</summary>
+    public async Task<TeardownResult> RunUnderLockAsync(
+        string helperPath,
+        bool force,
+        CancellationToken cancellationToken)
+    {
         GatewayPersistenceRemovalResult recovery = await _recovery.UninstallAsync(cancellationToken)
             .ConfigureAwait(false);
         if (!recovery.Succeeded)

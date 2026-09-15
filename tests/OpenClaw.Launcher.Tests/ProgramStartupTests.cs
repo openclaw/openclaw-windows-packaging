@@ -11,6 +11,12 @@ public sealed class ProgramStartupTests : IDisposable
     private readonly string _testDirectory = TestDirectory.Create();
 
     [Fact]
+    public void ProductionStartupProvidesTheLifecycleFactoryForFallbackValidation()
+    {
+        Assert.NotNull(HostStartup.CreateProduction().InstallationLifecycle);
+    }
+
+    [Fact]
     public async Task StartupWritesRecordsToTheSuppliedDiagnosticLog()
     {
         using var output = new StringWriter();
