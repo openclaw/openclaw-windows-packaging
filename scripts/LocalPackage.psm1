@@ -3,6 +3,138 @@ $ErrorActionPreference = 'Stop'
 
 $script:PackageName = 'OpenClaw.Gateway'
 $script:StateSchema = 1
+$script:ControlApplicationId = 'Control'
+
+function Invoke-LocalPackageControlCommand {
+    param(
+        [Parameter(Mandatory)][string]$PackageFamilyName,
+        [Parameter(Mandatory)][string]$Arguments
+    )
+
+    $package = Get-AppxPackage -Name $script:PackageName -ErrorAction Stop |
+        Where-Object { $_.PackageFamilyName -eq $PackageFamilyName } |
+        Select-Object -First 1
+    if ($null -eq $package) {
+        throw "The owning package was not registered for this user: $PackageFamilyName."
+    }
+    if ($package.Status.ToString() -notmatch '^(Ok|Ready)$') {
+        throw "The owning package is not ready: $PackageFamilyName ($($package.Status))."
+    }
+
+    $manifestPath = Join-Path $package.InstallLocation 'AppxManifest.xml'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        throw "The owning package manifest was not found: $manifestPath."
+    }
+    [xml]$manifest = Get-Content -LiteralPath $manifestPath -Raw
+    $application = @(
+        $manifest.Package.Applications.Application |
+            Where-Object { $_.Id -eq $script:ControlApplicationId }
+    ) | Select-Object -First 1
+    if ($null -eq $application -or [string]$application.Executable -ne 'openclaw.exe') {
+        throw "The owning package does not expose the control application: $PackageFamilyName!$script:ControlApplicationId."
+    }
+
+    if (-not ('OpenClaw.PackageActivation.IApplicationActivationManager' -as [type])) {
+        $source = @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+namespace OpenClaw.PackageActivation
+{
+    [ComImport]
+    [Guid("2e941141-7f97-4756-ba1d-9decde894a3d")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface IApplicationActivationManager
+    {
+        [PreserveSig]
+        int ActivateApplication(
+            [MarshalAs(UnmanagedType.LPWStr)] string appUserModelId,
+            [MarshalAs(UnmanagedType.LPWStr)] string arguments,
+            uint options,
+            out uint processId);
+    }
+
+    [ComImport]
+    [Guid("45ba127d-10a8-46ea-8ab7-56ea9078943c")]
+    public class ApplicationActivationManager
+    {
+    }
+
+    public static class ApplicationActivator
+    {
+        private const uint Synchronize = 0x00100000;
+        private const uint QueryLimitedInformation = 0x1000;
+        private const uint Infinite = 0xffffffff;
+        private const uint WaitObject0 = 0;
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr OpenProcess(
+            uint desiredAccess,
+            bool inheritHandle,
+            uint processId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
+
+        [DllImport("kernel32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CloseHandle(IntPtr handle);
+
+        public static int ActivateAndWait(string appUserModelId, string arguments)
+        {
+            var manager =
+                (IApplicationActivationManager)new ApplicationActivationManager();
+            int result = manager.ActivateApplication(
+                appUserModelId,
+                arguments,
+                0,
+                out uint processId);
+            if (result != 0)
+            {
+                Marshal.ThrowExceptionForHR(result);
+            }
+
+            IntPtr process = OpenProcess(
+                Synchronize | QueryLimitedInformation,
+                false,
+                processId);
+            if (process == IntPtr.Zero)
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+
+            try
+            {
+                if (WaitForSingleObject(process, Infinite) != WaitObject0 ||
+                    !GetExitCodeProcess(process, out uint exitCode))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+
+                return checked((int)exitCode);
+            }
+            finally
+            {
+                CloseHandle(process);
+            }
+        }
+    }
+}
+'@
+        Add-Type -TypeDefinition $source -Language CSharp
+    }
+
+    $exitCode = [OpenClaw.PackageActivation.ApplicationActivator]::ActivateAndWait(
+        "$PackageFamilyName!$script:ControlApplicationId",
+        $Arguments)
+    if ($exitCode -ne 0) {
+        throw "clawctl $Arguments failed (exit $exitCode)."
+    }
+}
 
 function Read-LocalPackageRecord {
     param([string]$Path)
@@ -227,6 +359,8 @@ function New-LocalPackageLayout {
         [string]$LayoutDirectory,
         [string]$RepositoryRoot,
         [string]$HostExecutable,
+        [string]$SessionHostExecutable,
+        [string]$MxcRuntimeDirectory,
         [string]$PayloadDirectory,
         [string]$RuntimeArchive,
         [string]$Architecture,
@@ -289,6 +423,26 @@ function New-LocalPackageLayout {
             Remove-Item -LiteralPath $runtimeStaging -Force
         }
     }
+
+    $sessionHost = Join-Path (Join-Path $LayoutDirectory 'session-host') $Architecture
+    if (Test-Path -LiteralPath $sessionHost) {
+        Remove-Item -LiteralPath $sessionHost -Recurse -Force
+    }
+    New-Item -Path $sessionHost -ItemType Directory -Force | Out-Null
+    Copy-Item `
+        -LiteralPath $SessionHostExecutable `
+        -Destination (Join-Path $sessionHost 'openclaw-session-host.exe') `
+        -Force
+
+    $mxc = Join-Path (Join-Path $LayoutDirectory 'mxc') $Architecture
+    if (Test-Path -LiteralPath $mxc) {
+        Remove-Item -LiteralPath $mxc -Recurse -Force
+    }
+    New-Item -Path $mxc -ItemType Directory -Force | Out-Null
+    foreach ($item in Get-ChildItem -LiteralPath $MxcRuntimeDirectory -Force) {
+        Copy-Item -LiteralPath $item.FullName -Destination $mxc -Recurse -Force
+    }
+
     return $manifestPath
 }
 
@@ -309,12 +463,21 @@ function Test-LocalPackageLayout {
     param(
         [string]$LayoutDirectory,
         [string]$PayloadDirectory,
-        [string]$RuntimeArchiveName
+        [string]$RuntimeArchiveName,
+        [string]$Architecture
     )
 
     # The registered package serves these files directly, so a short circuit
     # must confirm the live layout, not just that a previous run wrote one.
-    foreach ($relative in @('AppxManifest.xml', 'openclaw.exe', "runtime\$RuntimeArchiveName")) {
+    foreach ($relative in @(
+        'AppxManifest.xml',
+        'openclaw.exe',
+        "runtime\$RuntimeArchiveName",
+        "session-host\$Architecture\openclaw-session-host.exe",
+        "mxc\$Architecture\wxc-exec.exe",
+        "mxc\$Architecture\plm.exe",
+        "mxc\$Architecture\mxc-runtime.json"
+    )) {
         if (-not (Test-Path -LiteralPath (Join-Path $LayoutDirectory $relative) -PathType Leaf)) {
             return $false
         }
@@ -404,6 +567,13 @@ function Get-LocalPackageOperations {
             finally { $archive.Dispose() }
             return $null
         }
+        StageMxcRuntime = {
+            param($repositoryRoot, $architecture, $output)
+            & (Join-Path $repositoryRoot 'scripts\Get-MxcRuntime.ps1') `
+                -Architecture $architecture `
+                -OutputDirectory $output
+            return $null
+        }
         Publish = {
             param($project, $architecture, $output)
             & dotnet publish $project --configuration Release --runtime "win-$architecture" `
@@ -424,6 +594,7 @@ function Get-LocalPackageOperations {
             return [pscustomobject]@{
                 Version = $package.Version.ToString()
                 PackageFullName = $package.PackageFullName
+                PackageFamilyName = $package.PackageFamilyName
                 InstallLocation = $package.InstallLocation
                 IsDevelopmentMode = [bool]$package.IsDevelopmentMode
                 Status = $package.Status.ToString()
@@ -446,16 +617,8 @@ function Get-LocalPackageOperations {
         }
         TestPath = { param($path) Test-Path -LiteralPath $path }
         RunSetup = {
-            # Control mode is selected by the alias name, so setup must go
-            # through clawctl.exe rather than the layout executable.
-            $alias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\clawctl.exe'
-            if (-not (Test-Path -LiteralPath $alias -PathType Leaf)) {
-                throw "The clawctl alias was not created at $alias."
-            }
-            & $alias setup | ForEach-Object { Write-Host $_ }
-            if ($LASTEXITCODE -ne 0) {
-                throw "clawctl setup failed (exit $LASTEXITCODE)."
-            }
+            param($packageFamilyName)
+            Invoke-LocalPackageControlCommand -PackageFamilyName $packageFamilyName -Arguments 'setup'
             return $null
         }
     }
@@ -594,22 +757,46 @@ function Invoke-LocalPackageDeployment {
             Resolve-LocalPackageRuntime -RuntimeDirectory (Join-Path $stateRoot 'runtime') `
                 -Architecture $Architecture -NodeVersion $payload.NodeVersion -Operations $services
         }
+        $mxcRuntimeDirectory = Join-Path $stateRoot 'mxc'
+        Invoke-LocalPackagePhase $progress 'Stage MXC runtime' {
+            & $services.StageMxcRuntime $root $Architecture $mxcRuntimeDirectory
+        } | Out-Null
         $hostDirectory = Join-Path $stateRoot 'host'
         Invoke-LocalPackagePhase $progress 'Build launcher (NativeAOT)' {
             & $services.Publish (Join-Path $root 'src\OpenClaw.Launcher\OpenClaw.Launcher.csproj') `
                 $Architecture $hostDirectory
         } | Out-Null
+        $sessionHostDirectory = Join-Path $stateRoot 'session-host'
+        Invoke-LocalPackagePhase $progress 'Build session host (NativeAOT)' {
+            & $services.Publish (Join-Path $root 'src\OpenClaw.SessionHost\OpenClaw.SessionHost.csproj') `
+                $Architecture $sessionHostDirectory
+        } | Out-Null
         $hostExecutable = Join-Path $hostDirectory 'openclaw.exe'
         if (-not (& $services.TestPath $hostExecutable)) {
             throw "The publish did not produce $hostExecutable."
         }
+        $sessionHostExecutable = Join-Path $sessionHostDirectory 'openclaw-session-host.exe'
+        if (-not (& $services.TestPath $sessionHostExecutable)) {
+            throw "The publish did not produce $sessionHostExecutable."
+        }
 
         $hostInfo = Get-Item -LiteralPath $hostExecutable
+        $sessionHostInfo = Get-Item -LiteralPath $sessionHostExecutable
         $manifestSource = Join-Path $root 'src\OpenClaw.Launcher\Package.appxmanifest'
         # Hash the launcher rather than trusting its timestamp: publish copies
         # into the output directory and can refresh timestamps with no source
         # change, which would defeat the up-to-date check on every run.
         $hostHash = (Get-FileHash -LiteralPath $hostExecutable -Algorithm SHA256).Hash
+        $sessionHostHash = (
+            Get-FileHash -LiteralPath $sessionHostExecutable -Algorithm SHA256
+        ).Hash
+        $mxcHashes = @(
+            Get-ChildItem -LiteralPath $mxcRuntimeDirectory -File -Recurse |
+                Sort-Object FullName |
+                ForEach-Object {
+                    "$($_.Name):$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
+                }
+        )
         $imageHashes = @(
             Get-ChildItem -LiteralPath (Join-Path $root 'src\OpenClaw.Launcher\Images') -File -Recurse |
                 Sort-Object FullName |
@@ -621,8 +808,10 @@ function Invoke-LocalPackageDeployment {
             [IO.Path]::GetFileName($runtimeArchive)
             $hostInfo.Length.ToString()
             $hostHash
+            $sessionHostInfo.Length.ToString()
+            $sessionHostHash
             (Get-FileHash -LiteralPath $manifestSource -Algorithm SHA256).Hash
-        ) + $imageHashes)
+        ) + $imageHashes + $mxcHashes)
         $previous = Read-LocalPackageRecord $statePath
         $setupSatisfied = $SkipSetup -or ($null -ne $previous -and $previous['setupComplete'] -eq $true)
         if (-not $Force -and $null -ne $previous -and $null -ne $installed -and
@@ -634,7 +823,8 @@ function Invoke-LocalPackageDeployment {
             $setupSatisfied -and
             (Test-LocalPackageLayout -LayoutDirectory $layoutDirectory `
                 -PayloadDirectory $payload.Directory `
-                -RuntimeArchiveName ([IO.Path]::GetFileName($runtimeArchive)))) {
+                -RuntimeArchiveName ([IO.Path]::GetFileName($runtimeArchive)) `
+                -Architecture $Architecture)) {
             $total.Stop()
             Write-Host "`nAlready up to date: $($installed.PackageFullName)"
             Write-Host ('Total {0:0.00}s. Use -Force to re-register anyway.' -f $total.Elapsed.TotalSeconds)
@@ -653,7 +843,8 @@ function Invoke-LocalPackageDeployment {
 
         $manifestPath = Invoke-LocalPackagePhase $progress 'Assemble layout' {
             New-LocalPackageLayout -LayoutDirectory $layoutDirectory -RepositoryRoot $root `
-                -HostExecutable $hostExecutable -PayloadDirectory $payload.Directory `
+                -HostExecutable $hostExecutable -SessionHostExecutable $sessionHostExecutable `
+                -MxcRuntimeDirectory $mxcRuntimeDirectory -PayloadDirectory $payload.Directory `
                 -RuntimeArchive $runtimeArchive -Architecture $Architecture -Version $version
         }
         Invoke-LocalPackagePhase $progress 'Register package' {
@@ -685,7 +876,7 @@ function Invoke-LocalPackageDeployment {
 
         if (-not $SkipSetup) {
             Invoke-LocalPackagePhase $progress 'Prepare bundled Node.js runtime' {
-                & $services.RunSetup
+                & $services.RunSetup $registered.PackageFamilyName
             } | Out-Null
         }
 

@@ -150,8 +150,9 @@ internal static class Program
         await RunAgentAsync(
             options,
             log,
-            resolveNode ?? (_ => Task.FromResult(NodeRuntimeResolver.Resolve(
-                GetPackagedNodeArchivePath(options)))),
+            resolveNode ?? (_ => Task.FromResult(NodeRuntimeInstaller.EnsureInstalled(
+                GetPackagedNodeArchivePath(options),
+                log))),
             GatewayLauncher.RunAsync).ConfigureAwait(false);
 
     // launchOpenClaw is a test seam: tests substitute a fake in place of
