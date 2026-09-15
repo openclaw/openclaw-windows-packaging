@@ -146,6 +146,27 @@ the launcher derives its runtime version and LocalState path from the bundled
 archive name. There is no separate packaging-side Node.js version pin or
 runtime-support policy.
 
+Build validation also checks the root package and generated Gateway provenance
+against the resolved version and full source commit. Newer upstream builds
+must share their explicit `buildId` with the Control UI service worker and
+client assets. Older extended-stable builds that do not emit that field use
+upstream's legacy UI identity (version plus the 12-character source commit).
+Both formats are checked; missing provenance, invalid explicit IDs, and stale
+or mismatched UI assets fail rather than bypassing validation.
+
+All workflow jobs use GitHub's native `cache-mode: none`, which denies cache
+reads and writes at the token boundary. This includes upstream source builds,
+Windows npm lifecycle scripts, and manual ref overrides running from `main`.
+The upstream setup action's cache options and the .NET cache opt-ins
+are also disabled; these options avoid unnecessary cache calls, but are not
+the security boundary. Upstream still selects Node.js and pnpm.
+
+CodeQL's current `actions/cache-poisoning/poisonable-step` query
+(`actions-queries` 0.6.35) does not model `cache-mode`. It can therefore still
+flag upstream execution on `workflow_dispatch` even with native cache access
+denied. Those findings need review against the enforced cache policy; this
+repository does not suppress the query or obscure the upstream checkout.
+
 The snapshot records the selector, exact upstream version, source commit,
 release tag and tag-object identity, resolution time, and npm package integrity,
 plus the packaging commit and workflow identity. Its SHA-256 is passed directly

@@ -46,6 +46,7 @@ or package version logic:
 .\scripts\Test-WorkflowPackageVersion.Tests.ps1
 .\scripts\Test-OpenClawSource.Tests.ps1
 .\scripts\Test-WorkflowSource.Tests.ps1
+.\scripts\Test-OpenClawBuildIdentity.Tests.ps1
 .\scripts\Test-WorkflowSigningConfiguration.ps1
 .\scripts\Test-Build-MSIXBundle.Tests.ps1
 .\scripts\Test-GitHooks.Tests.ps1
@@ -61,6 +62,16 @@ saved snapshot. Never replace the published channel selection with a
 maintenance branch head or re-resolve it independently for each architecture.
 Changes to source metadata must stay synchronized across resolution, payload
 creation, MSIX composition, signing authorization, and release assets.
+Keep build-identity coverage for both modern explicit Gateway/UI `buildId`
+values and older extended-stable version/commit-derived UI identities. Both
+must verify the generated Gateway provenance against the resolved source;
+never skip identity validation merely because an older build lacks `buildId`.
+The workflow denies cache access with native `cache-mode: none`; do not add
+job-level overrides or re-enable cache actions. Read-only `GITHUB_TOKEN`
+permissions and disabling an action's cache input alone are not sufficient
+protection from cache poisoning by upstream scripts. CodeQL currently does not
+model this native cache restriction; keep the query enabled and review the
+documented false positives rather than hiding checkout or execution.
 Official signing trusts the verified channel snapshot rather than a reviewed
 per-release commit allowlist. It still requires `main`, the protected signing
 environment, and all artifact checks. For packaging-only official corrections,

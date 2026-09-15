@@ -25,6 +25,10 @@ on:
 permissions:
   contents: read
 
+# Upstream build/install scripts must never receive cache read/write authority,
+# including manually selected refs running in the default-branch context.
+cache-mode: none
+
 concurrency:
   group: gateway-msix-${{ inputs.signing_mode == 'official' && 'official' || github.run_id }}
   cancel-in-progress: false
@@ -115,8 +119,6 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           global-json-file: global.json
-          cache: true
-          cache-dependency-path: Directory.Packages.props
 
       - name: Restore
         run: dotnet restore .\OpenClaw.Gateway.MSIX.slnx
@@ -238,6 +240,8 @@ jobs:
         with:
           install-bun: "false"
           install-deps: "false"
+          use-actions-cache: "false"
+          save-actions-cache: "false"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -249,9 +253,14 @@ jobs:
 
       - name: Validate OpenClaw build identities
         shell: pwsh
+        env:
+          EXPECTED_SOURCE_COMMIT: ${{ needs.resolve-source.outputs.source_sha }}
+          EXPECTED_PACKAGE_VERSION: ${{ needs.resolve-source.outputs.source_version }}
         run: >
           & "$env:RUNNER_TEMP/Test-OpenClawBuildIdentity.ps1"
           -OpenClawDirectory $env:GITHUB_WORKSPACE
+          -ExpectedSourceCommit $env:EXPECTED_SOURCE_COMMIT
+          -ExpectedPackageVersion $env:EXPECTED_PACKAGE_VERSION
 
       - name: Pack npm package
         id: source
@@ -372,8 +381,6 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           global-json-file: global.json
-          cache: true
-          cache-dependency-path: Directory.Packages.props
 
       - name: Download payload
         uses: actions/download-artifact@v8

@@ -117,6 +117,13 @@ package.
   workflow identity and signing inputs are validated before Azure credentials
   are requested. Preserve the protected signing environment and all artifact
   inventory/hash checks.
+- All workflow jobs deny GitHub Actions cache access with native
+  `cache-mode: none`, including Windows npm lifecycle execution. Keep upstream
+  cache inputs disabled and do not add job-level cache overrides. Current
+  CodeQL cache-poisoning analysis does not model this native permission;
+  document/review the false positives without suppressing the query or hiding
+  the checkout. Build identity validation must cover modern explicit build IDs
+  and legacy version/commit-derived UI IDs, both bound to resolved provenance.
 
 ## Repository conventions
 
