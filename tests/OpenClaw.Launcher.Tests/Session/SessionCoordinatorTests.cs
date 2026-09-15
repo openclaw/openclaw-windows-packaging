@@ -56,6 +56,64 @@ public sealed class SessionCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task StatusProbeReportsRunningOnlyAfterMxcAcceptsTheRecordedProvision()
+    {
+        await Create().EnsureStartedAsync(CancellationToken.None);
+        _backend.Calls.Clear();
+
+        SessionStatus status = await Create().ProbeRecordedStatusAsync(CancellationToken.None);
+
+        Assert.Equal(SessionAvailability.Running, status.Availability);
+        Assert.Equal("iso:sandbox1", status.Record!.SandboxId);
+        Assert.Equal(["start:iso:sandbox1"], _backend.Calls);
+    }
+
+    [Fact]
+    public async Task StatusProbeReportsAStaleProvisionWithoutReplacingIt()
+    {
+        await Create().EnsureStartedAsync(CancellationToken.None);
+        _backend.Calls.Clear();
+        _backend.StartFailure = new MxcException(MxcErrorCode.StaleId, "provision was not found");
+
+        SessionStatus status = await Create().ProbeRecordedStatusAsync(CancellationToken.None);
+
+        Assert.Equal(SessionAvailability.Stale, status.Availability);
+        Assert.Equal("iso:sandbox1", status.Record!.SandboxId);
+        Assert.Equal(["start:iso:sandbox1"], _backend.Calls);
+        Assert.Equal("iso:sandbox1", Store().Read(ApplicationId).Record!.SandboxId);
+    }
+
+    [Fact]
+    public async Task StatusProbeReportsAnUnavailableBackend()
+    {
+        await Create().EnsureStartedAsync(CancellationToken.None);
+        _backend.Calls.Clear();
+        _backend.StartFailure = new MxcException(
+            MxcErrorCode.RuntimeUnavailable,
+            "MXC is unavailable");
+
+        SessionStatus status = await Create().ProbeRecordedStatusAsync(CancellationToken.None);
+
+        Assert.Equal(SessionAvailability.BackendUnavailable, status.Availability);
+        Assert.Equal("MXC is unavailable", status.Detail);
+        Assert.Equal(["start:iso:sandbox1"], _backend.Calls);
+    }
+
+    [Fact]
+    public async Task StatusProbeReportsOtherBackendFailures()
+    {
+        await Create().EnsureStartedAsync(CancellationToken.None);
+        _backend.Calls.Clear();
+        _backend.StartFailure = new MxcException(MxcErrorCode.BackendError, "MXC is unavailable");
+
+        SessionStatus status = await Create().ProbeRecordedStatusAsync(CancellationToken.None);
+
+        Assert.Equal(SessionAvailability.BackendError, status.Availability);
+        Assert.Equal("MXC is unavailable", status.Detail);
+        Assert.Equal(["start:iso:sandbox1"], _backend.Calls);
+    }
+
+    [Fact]
     public async Task ProvisionMetadataIsPersisted()
     {
         await Create().EnsureStartedAsync(CancellationToken.None);

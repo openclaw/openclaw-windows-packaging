@@ -107,12 +107,10 @@ internal sealed partial class GatewayRuntime
 
     public static GatewayRuntime Create(
         HostOptions options,
-        Action<string> log,
-        Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null)
+        Action<string> log)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(log);
-        _ = resolveNode;
 
         HostPaths paths = HostPaths.Create();
         if (paths.PackageFamilyName is null)
@@ -122,23 +120,55 @@ internal sealed partial class GatewayRuntime
         }
 
         SessionRuntime session = SessionRuntime.Create(log);
-        return Create(options, paths, session, log, resolveNode);
+        return Create(options, paths, session, log);
     }
 
     internal static GatewayRuntime Create(
         HostOptions options,
         HostPaths paths,
         SessionRuntime session,
-        Action<string> log,
-        Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null)
+        Action<string> log)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(log);
 
+        return new GatewayRuntime(
+            CreateController(options, paths, session, log),
+            session.HelperPath,
+            paths,
+            session);
+    }
+
+    internal static TeardownOrchestrator CreateTeardownOrchestrator(
+        HostOptions options,
+        SessionRuntime session,
+        Action<string> log)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(log);
+
+        HostPaths paths = HostPaths.Create();
+        return new TeardownOrchestrator(
+            session.LifecycleLock,
+            CreateRecoveryManager(log),
+            CreateController(options, paths, session, log),
+            session.Coordinator,
+            session.GatewayState,
+            new GatewayConfigurationStore(paths.GatewayConfigurationPath),
+            session.SetupState);
+    }
+
+    private static GatewayController CreateController(
+        HostOptions options,
+        HostPaths paths,
+        SessionRuntime session,
+        Action<string> log)
+    {
         var configuration = new GatewayConfigurationStore(paths.GatewayConfigurationPath);
-        Task<GatewayStartRequest> CreateRequestAsync(CancellationToken cancellationToken)
+        async Task<GatewayStartRequest> CreateRequestAsync(CancellationToken cancellationToken)
         {
             string applicationDirectory = options.PackagedApplicationDirectory
                 ?? throw new SessionException(
@@ -148,34 +178,27 @@ internal sealed partial class GatewayRuntime
                 configuration,
                 sessionRecord,
                 Environment.GetEnvironmentVariable);
-            return Task.FromResult(new GatewayStartRequest(
+            string archivePath = options.PackagedNodeArchivePath
+                ?? throw new SessionException(
+                    "The packaged Node.js runtime archive was not found.");
+            return new GatewayStartRequest(
                 session.HelperPath,
-                session.RequireAgentNodePath(
-                    options.PackagedNodeArchivePath
-                    ?? throw new SessionException(
-                        "The packaged Node.js runtime archive was not found.")),
+                session.RequireAgentNodePath(archivePath),
                 applicationDirectory,
-                launch.WorkingDirectory ?? sessionRecord.WorkspacePath
-                    ?? throw new SessionException(
-                        "The isolated session has no shared workspace for the gateway."),
                 launch.Port);
         }
 
-        return new GatewayRuntime(
-            new GatewayController(
-                session.Coordinator,
-                new SessionGatewayClient(
-                    session.Backend,
-                    log,
-                    isCurrentRecord: IsCurrentSessionRecord),
-                new GatewayStateStore(paths.GatewayStatePath),
-                CreateRequestAsync,
+        return new GatewayController(
+            session.Coordinator,
+            new SessionGatewayClient(
+                session.Backend,
                 log,
-                session.RequireSetup,
-                session.LifecycleLock),
-            session.HelperPath,
-            paths,
-            session);
+                isCurrentRecord: IsCurrentSessionRecord),
+            session.GatewayState,
+            CreateRequestAsync,
+            log,
+            session.RequireSetup,
+            session.LifecycleLock);
 
         bool IsCurrentSessionRecord(SessionRecord record)
         {

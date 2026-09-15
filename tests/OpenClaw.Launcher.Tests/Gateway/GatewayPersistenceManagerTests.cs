@@ -28,7 +28,8 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
     private string ActivationScriptPath => Path.ChangeExtension(LauncherPath, ".ps1");
 
     private GatewayPersistenceManager CreateManager(
-        Func<string, string?>? resolveUserSid = null) =>
+        Func<string, string?>? resolveUserSid = null,
+        Action<string>? deleteFile = null) =>
         new(
             _scheduler,
             new GatewayPersistenceOptions(
@@ -37,7 +38,8 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
                 LauncherPath: LauncherPath,
                 StartupFolderPath: StartupFolder,
                 WorkingDirectory: StateRoot,
-                CommandProcessorPath: @"C:\Windows\System32\cmd.exe"),
+                CommandProcessorPath: @"C:\Windows\System32\cmd.exe",
+                DeleteFile: deleteFile),
             resolveUserSid: resolveUserSid);
 
     private GatewayTaskSnapshot DesiredSnapshot() =>
@@ -464,6 +466,38 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
 
         Assert.False(result.Succeeded);
         Assert.Contains("Access is denied.", result.Detail, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task UninstallingReportsGeneratedArtifactDeletionFailure(bool fallback)
+    {
+        string fallbackPath = Path.Combine(
+            StartupFolder,
+            "OpenClaw Gateway OpenClaw.Gateway_test.cmd");
+        GatewayPersistenceManager manager = CreateManager(deleteFile: path =>
+        {
+            if (string.Equals(path, fallback ? fallbackPath : LauncherPath,
+                StringComparison.Ordinal))
+            {
+                throw new IOException("The generated file is locked.");
+            }
+
+            File.Delete(path);
+        });
+        string target = fallback ? fallbackPath : LauncherPath;
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        await File.WriteAllTextAsync(
+            target,
+            GatewayLauncherScript.Create(StateRoot, "clawctl.exe"));
+
+        GatewayPersistenceRemovalResult result =
+            await manager.UninstallAsync(CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("locked", result.Detail, StringComparison.Ordinal);
+        Assert.True(File.Exists(target));
     }
 
     [Fact]

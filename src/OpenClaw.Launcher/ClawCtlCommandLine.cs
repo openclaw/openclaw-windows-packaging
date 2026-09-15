@@ -57,7 +57,9 @@ internal static class ClawCtlCommandLine
         ArgumentNullException.ThrowIfNull(handlers);
         Command setup = new(SetupCommandName, SetupDescription);
         setup.SetAction((_, cancellationToken) => handlers.Setup(cancellationToken));
-        Command status = new(StatusCommandName, "Show the recorded isolated session without changing it.");
+        Command status = new(
+            StatusCommandName,
+            "Show the isolated-session record and MXC-observed provision state without provisioning a replacement.");
         status.SetAction((_, cancellationToken) => handlers.Status(cancellationToken));
         Option<string?> outputPath = new("--output")
         {

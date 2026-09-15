@@ -58,7 +58,7 @@ public sealed class SessionExecutorTests : IDisposable
             Record(),
             new SessionExecutionRequest(
                 @"C:\Package\session-host\x64\openclaw-session-host.exe",
-                @"C:\Program Files\nodejs\node.exe",
+                @"C:\Users\agent\AppData\Local\OpenClawGatewayMSIX\agent-node\node-v24.20.0-win-x64\node.exe",
                 @"C:\Package\app",
                 [],
                 Workspace)
@@ -121,7 +121,7 @@ public sealed class SessionExecutorTests : IDisposable
     private void RespondAsRuntimeInstaller(
         Func<SessionRuntimeInstallRequest, SessionRuntimeInstallResult> respond)
     {
-        _backend.AttachedBehavior = _ =>
+        _backend.ExecuteBehavior = _ =>
         {
             string requestPath = Directory.GetFiles(Workspace, "runtime-*.json")
                 .Single(path => !path.EndsWith(".result.json", StringComparison.Ordinal));
@@ -130,7 +130,7 @@ public sealed class SessionExecutorTests : IDisposable
             File.WriteAllText(
                 SessionLaunchProtocol.ResultPathFor(requestPath),
                 SessionRuntimeProtocol.SerializeResult(respond(request)));
-            return Task.FromResult(0);
+            return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
         };
     }
 
@@ -190,6 +190,7 @@ public sealed class SessionExecutorTests : IDisposable
             @"C:\Package\runtime\node-v24.20.0-win-x64.zip",
             delivered!.ArchivePath);
         Assert.Equal("24.20.0", result.Version);
+        Assert.Equal(["execute:iso:sandbox1"], _backend.Calls);
         Assert.Empty(Directory.GetFiles(Workspace));
     }
 
@@ -226,6 +227,38 @@ public sealed class SessionExecutorTests : IDisposable
             CancellationToken.None);
 
         Assert.Equal(42, exitCode);
+    }
+
+    [Fact]
+    public async Task IsolatedLaunchPrependsTheSelectedAgentNodeDirectory()
+    {
+        SessionLaunchRequest? delivered = null;
+        RespondAsHelper(request =>
+        {
+            delivered = request;
+            return new SessionLaunchResult
+            {
+                RequestId = request.RequestId,
+                Launched = true,
+                ExitCode = 0,
+            };
+        });
+        string node = @"C:\Users\agent\AppData\Local\OpenClawGatewayMSIX\agent-node\node-v24.20.0-win-x64\node.exe";
+
+        await Create().ExecuteAsync(
+            Record(),
+            new SessionExecutionRequest(
+                @"C:\Package\session-host\x64\openclaw-session-host.exe",
+                node,
+                @"C:\Package\app",
+                [],
+                Workspace),
+            CancellationToken.None);
+
+        Assert.StartsWith(
+            Path.GetDirectoryName(node)!,
+            delivered!.Environment!["PATH"],
+            StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

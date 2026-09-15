@@ -110,7 +110,6 @@ public sealed class GatewayControllerTests : IDisposable
                 stagedHelper,
                 nodePath,
                 Path.Combine(_root, "app"),
-                workspace,
                 null),
             CancellationToken.None);
 
