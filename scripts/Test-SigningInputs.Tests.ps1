@@ -167,6 +167,42 @@ function New-TestArtifact {
         Get-FileHash -LiteralPath $nodeRuntimePath -Algorithm SHA256
     ).Hash.ToLowerInvariant()
 
+    $mxcRuntimeVersion = '0.8.0'
+    $mxcRuntimeDirectory = Join-Path $staging "mxc\$Architecture"
+    New-Item -Path $mxcRuntimeDirectory -ItemType Directory -Force | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $mxcRuntimeDirectory 'wxc-exec.exe'),
+        "executor-$Architecture")
+    [IO.File]::WriteAllText(
+        (Join-Path $mxcRuntimeDirectory 'plm.exe'),
+        "plm-$Architecture")
+    [IO.File]::WriteAllText(
+        (Join-Path $mxcRuntimeDirectory 'LICENSE.md'),
+        'fixture license')
+    [IO.File]::WriteAllText(
+        (Join-Path $mxcRuntimeDirectory 'mxc-runtime.json'),
+        "{`"version`":`"$mxcRuntimeVersion`",`"architecture`":`"$Architecture`"}")
+    $mxcRuntimeFiles = @(
+        Get-ChildItem -LiteralPath $mxcRuntimeDirectory -File -Recurse |
+            ForEach-Object {
+                [ordered]@{
+                    path = (
+                        [IO.Path]::GetRelativePath(
+                            $mxcRuntimeDirectory,
+                            $_.FullName
+                        )
+                    ).Replace('\', '/')
+                    length = $_.Length
+                    sha256 = (
+                        Get-FileHash `
+                            -LiteralPath $_.FullName `
+                            -Algorithm SHA256
+                    ).Hash.ToLowerInvariant()
+                }
+            } |
+            Sort-Object path
+    )
+
     $msixName = "OpenClawGateway-$Architecture.msix"
     $msixPath = Join-Path $directory $msixName
     [IO.Compression.ZipFile]::CreateFromDirectory($staging, $msixPath)
@@ -189,6 +225,8 @@ function New-TestArtifact {
         nodeRuntimeVersion = $nodeRuntimeVersion
         nodeRuntimeArchive = $nodeRuntimeArchive
         nodeRuntimeSha256 = $nodeRuntimeHash
+        mxcRuntimeVersion = $mxcRuntimeVersion
+        mxcRuntimeFiles = $mxcRuntimeFiles
         architecture = $Architecture
         archive = $msixName
         sha256 = $msixHash
@@ -393,6 +431,29 @@ try {
         -Action {
             Invoke-PolicyValidation -Root $testRoot -PreserveBundle
         }
+
+    Reset-TestArtifacts
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        Set-Content `
+            -LiteralPath (Join-Path $Expanded 'mxc\x64\wxc-exec.exe') `
+            -Value 'tampered' `
+            -Encoding utf8
+    }
+    Assert-Fails `
+        -MessagePattern 'MXC runtime file is invalid' `
+        -Action { Invoke-PolicyValidation -Root $testRoot }
+
+    Reset-TestArtifacts
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        Remove-Item -LiteralPath (
+            Join-Path $Expanded 'mxc\x64\mxc-runtime.json'
+        )
+    }
+    Assert-Fails `
+        -MessagePattern "Expected one 'mxc/x64/mxc-runtime.json' entry; found 0" `
+        -Action { Invoke-PolicyValidation -Root $testRoot }
 
     Reset-TestArtifacts
     Assert-Fails `

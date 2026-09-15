@@ -312,6 +312,40 @@ $payloadInventoryPath = Join-Path $openClawContent 'payload-files.json'
     ConvertTo-Json -Depth 4 |
     Set-Content -LiteralPath $payloadInventoryPath -Encoding utf8
 
+& (Join-Path $PSScriptRoot 'Get-MxcRuntime.ps1') `
+    -Architecture $Architecture
+
+$mxcRuntimeDirectory = Join-Path $repositoryRoot "content\mxc\$Architecture"
+$mxcRuntimeFiles = @(
+    Get-ChildItem -LiteralPath $mxcRuntimeDirectory -File -Force -Recurse |
+        ForEach-Object {
+            [ordered]@{
+                path = (
+                    [IO.Path]::GetRelativePath(
+                        $mxcRuntimeDirectory,
+                        $_.FullName
+                    )
+                ).Replace('\', '/')
+                length = $_.Length
+                sha256 = (
+                    Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256
+                ).Hash.ToLowerInvariant()
+            }
+        } |
+        Sort-Object path
+)
+if (
+    $mxcRuntimeFiles.Count -eq 0 -or
+    -not ($mxcRuntimeFiles.path -contains 'wxc-exec.exe') -or
+    -not ($mxcRuntimeFiles.path -contains 'mxc-runtime.json')
+) {
+    throw "The staged $Architecture MXC runtime is incomplete."
+}
+$mxcProvenance = Get-Content `
+    -LiteralPath (Join-Path $mxcRuntimeDirectory 'mxc-runtime.json') `
+    -Raw |
+    ConvertFrom-Json
+
 $temporaryRoot = if ($env:RUNNER_TEMP) {
     $env:RUNNER_TEMP
 }
@@ -402,6 +436,14 @@ try {
             Hash = $nodeArchiveHash
         }
     )
+    foreach ($mxcFile in $mxcRuntimeFiles) {
+        $expectedPackageFiles.Add(
+            "mxc/$Architecture/$($mxcFile.path)",
+            [pscustomobject]@{
+                Hash = $mxcFile.sha256
+            }
+        )
+    }
     $packageEntries = [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::OrdinalIgnoreCase
     )
@@ -544,6 +586,8 @@ try {
         nodeRuntimeVersion = $nodeVersion
         nodeRuntimeArchive = $expectedNodeArchiveName
         nodeRuntimeSha256 = $nodeArchiveHash
+        mxcRuntimeVersion = [string]$mxcProvenance.version
+        mxcRuntimeFiles = $mxcRuntimeFiles
         architecture = $Architecture
         archive = $msixName
         sha256 = $msixHash

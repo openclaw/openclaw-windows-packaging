@@ -150,6 +150,10 @@ jobs:
         shell: pwsh
         run: .\scripts\Test-NodeRuntimeInputs.Tests.ps1
 
+      - name: Test MXC packaging inputs
+        shell: pwsh
+        run: .\scripts\Test-Get-MxcRuntime.Tests.ps1
+
       - name: Test signing workflow configuration
         shell: pwsh
         run: >

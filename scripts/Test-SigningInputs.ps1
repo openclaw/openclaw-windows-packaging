@@ -185,6 +185,7 @@ if (
 $expectedPackagingCommit = $PackagingCommit.ToLowerInvariant()
 $expectedPackageVersion = $null
 $expectedNodeRuntimeVersion = $null
+$expectedMxcRuntimeVersion = $null
 $expectedPackages = @{}
 foreach ($architecture in @('x64', 'arm64')) {
     $directory = Join-Path $resolvedArtifactsDirectory $architecture
@@ -220,6 +221,8 @@ foreach ($architecture in @('x64', 'arm64')) {
         $metadata.nodeRuntimeArchive -ne
             "node-v$($metadata.nodeRuntimeVersion)-win-$architecture.zip" -or
         $metadata.nodeRuntimeSha256 -notmatch '^[0-9a-fA-F]{64}$' -or
+        [string]::IsNullOrWhiteSpace([string]$metadata.mxcRuntimeVersion) -or
+        @($metadata.mxcRuntimeFiles).Count -eq 0 -or
         $metadata.architecture -ne $architecture -or
         $metadata.archive -ne $msix.Name -or
         $metadata.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
@@ -242,6 +245,13 @@ foreach ($architecture in @('x64', 'arm64')) {
     }
     elseif ($metadata.nodeRuntimeVersion -ne $expectedNodeRuntimeVersion) {
         throw 'The x64 and ARM64 Node.js runtime versions do not match.'
+    }
+
+    if ($null -eq $expectedMxcRuntimeVersion) {
+        $expectedMxcRuntimeVersion = [string]$metadata.mxcRuntimeVersion
+    }
+    elseif ($metadata.mxcRuntimeVersion -ne $expectedMxcRuntimeVersion) {
+        throw 'The x64 and ARM64 MXC runtime versions do not match.'
     }
 
     $actualMsixHash = (
@@ -291,6 +301,82 @@ foreach ($architecture in @('x64', 'arm64')) {
                     [string]$metadata.nodeRuntimeArchive
                 )
             )
+
+        $expectedMxcPaths =
+            [System.Collections.Generic.HashSet[string]]::new(
+                [System.StringComparer]::OrdinalIgnoreCase
+            )
+        $hasMxcExecutor = $false
+        $hasMxcProvenance = $false
+        foreach ($file in @($metadata.mxcRuntimeFiles)) {
+            $relativePath = [string]$file.path
+            $segments = @($relativePath.Split('/'))
+            if (
+                [string]::IsNullOrWhiteSpace($relativePath) -or
+                $relativePath.StartsWith('/') -or
+                [IO.Path]::IsPathRooted($relativePath) -or
+                $relativePath.Contains('\') -or
+                $relativePath.Contains(':') -or
+                $segments -contains '' -or
+                $segments -contains '.' -or
+                $segments -contains '..' -or
+                $file.length -isnot [int64] -or
+                $file.length -lt 0 -or
+                $file.sha256 -notmatch '^[0-9a-fA-F]{64}$'
+            ) {
+                throw "The embedded $architecture MXC runtime inventory is invalid."
+            }
+
+            $packagePath = "mxc/$architecture/$relativePath"
+            if (-not $expectedMxcPaths.Add($packagePath)) {
+                throw (
+                    "The embedded $architecture MXC runtime inventory has " +
+                    'duplicate paths.'
+                )
+            }
+
+            $entry = Get-PackageEntry `
+                -EntriesByPath $entriesByPath `
+                -Path $packagePath
+            if (
+                $entry.Length -ne $file.length -or
+                (Get-PackageEntrySha256 -Entry $entry) -ine $file.sha256
+            ) {
+                throw (
+                    "The embedded $architecture MXC runtime file is invalid: " +
+                    $relativePath
+                )
+            }
+
+            if ($relativePath -ieq 'wxc-exec.exe') {
+                $hasMxcExecutor = $true
+            }
+            if ($relativePath -ieq 'mxc-runtime.json') {
+                $hasMxcProvenance = $true
+            }
+        }
+
+        if (-not $hasMxcExecutor -or -not $hasMxcProvenance) {
+            throw "The embedded $architecture MXC runtime is incomplete."
+        }
+
+        $actualMxcPaths = @(
+            $entriesByPath.Keys |
+                Where-Object {
+                    $_.StartsWith(
+                        "mxc/$architecture/",
+                        [StringComparison]::OrdinalIgnoreCase
+                    )
+                }
+        )
+        if (
+            $actualMxcPaths.Count -ne $expectedMxcPaths.Count -or
+            @($actualMxcPaths | Where-Object {
+                -not $expectedMxcPaths.Contains($_)
+            }).Count -ne 0
+        ) {
+            throw "The embedded $architecture MXC runtime file set is invalid."
+        }
 
         [xml]$manifest = Read-ZipEntryText `
             -EntriesByPath $entriesByPath `
