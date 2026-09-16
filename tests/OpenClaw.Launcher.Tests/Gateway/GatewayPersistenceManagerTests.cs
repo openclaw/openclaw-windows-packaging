@@ -267,6 +267,70 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task InstallingLeavesALauncherThisInstallationDidNotGenerate()
+    {
+        GatewayPersistenceManager manager = CreateManager();
+        Directory.CreateDirectory(StateRoot);
+        await File.WriteAllTextAsync(
+            LauncherPath,
+            "@echo someone else's launcher",
+            CancellationToken.None);
+
+        GatewayPersistenceInstallResult result =
+            await manager.InstallAsync(CancellationToken.None);
+
+        Assert.Equal(GatewayPersistenceState.ActionRequired, result.State);
+        Assert.Equal(
+            "@echo someone else's launcher",
+            await File.ReadAllTextAsync(LauncherPath, CancellationToken.None));
+        Assert.DoesNotContain(
+            _scheduler.Calls,
+            call => call.StartsWith("register:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task UninstallingWithNoArtifactsIsIdempotent()
+    {
+        GatewayPersistenceRemovalResult result =
+            await CreateManager().UninstallAsync(CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        Assert.False(result.Changed);
+        Assert.Null(result.Detail);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task UninstallingReportsGeneratedArtifactDeletionFailure(bool fallback)
+    {
+        string fallbackPath = Path.Combine(
+            StartupFolder,
+            "OpenClaw Gateway OpenClaw.Gateway_test.cmd");
+        GatewayPersistenceManager manager = CreateManager(path =>
+        {
+            if (string.Equals(path, fallback ? fallbackPath : LauncherPath,
+                StringComparison.Ordinal))
+            {
+                throw new IOException("The generated file is locked.");
+            }
+            File.Delete(path);
+        });
+        string target = fallback ? fallbackPath : LauncherPath;
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        await File.WriteAllTextAsync(
+            target,
+            GatewayLauncherScript.Create(StateRoot, "clawctl.exe"));
+
+        GatewayPersistenceRemovalResult result =
+            await manager.UninstallAsync(CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("locked", result.Detail, StringComparison.Ordinal);
+        Assert.True(File.Exists(target));
+    }
+
+    [Fact]
     public async Task AFailedDeletionIsReportedRatherThanClaimedAsSuccess()
     {
         _scheduler.DeleteResult = GatewayTaskOperation.Failure("Access is denied.");
