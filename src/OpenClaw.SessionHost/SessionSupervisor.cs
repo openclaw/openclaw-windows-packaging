@@ -95,6 +95,7 @@ internal static class SessionSupervisor
         {
             startInfo.Environment[name] = value;
         }
+        SessionProcessLauncher.PrependPath(startInfo, request.PathPrefix);
 
         // The shared launcher creates suspended, assigns the job, then resumes.
         // Assigning after Process.Start leaves a window for orphan descendants.

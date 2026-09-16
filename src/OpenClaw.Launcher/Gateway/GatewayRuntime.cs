@@ -22,6 +22,7 @@ internal sealed class GatewayRuntime
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(log);
+        _ = resolveNode;
 
         HostPaths paths = HostPaths.Create();
         if (paths.PackageFamilyName is null)
@@ -32,14 +33,7 @@ internal sealed class GatewayRuntime
 
         SessionRuntime session = SessionRuntime.Create(log);
         var configuration = new GatewayConfigurationStore(paths.GatewayConfigurationPath);
-        Func<CancellationToken, Task<NodeRuntime>> resolve = resolveNode
-            ?? new Func<CancellationToken, Task<NodeRuntime>>(token => Task.FromResult(
-                NodeRuntimeResolver.Resolve(
-                    options.PackagedNodeArchivePath
-                    ?? throw new SessionException(
-                        "The packaged Node.js runtime archive was not found."))));
-
-        async Task<GatewayStartRequest> CreateRequestAsync(CancellationToken cancellationToken)
+        Task<GatewayStartRequest> CreateRequestAsync(CancellationToken cancellationToken)
         {
             string applicationDirectory = options.PackagedApplicationDirectory
                 ?? throw new SessionException(
@@ -47,13 +41,18 @@ internal sealed class GatewayRuntime
             GatewayLaunchConfiguration launch = configuration.Resolve(
                 paths.StateRoot,
                 Environment.GetEnvironmentVariable);
-            NodeRuntime packaged = await resolve(cancellationToken).ConfigureAwait(false);
-            return new GatewayStartRequest(
+            SessionRecord sessionRecord = session.RequireSetup();
+            return Task.FromResult(new GatewayStartRequest(
                 session.HelperPath,
-                session.RequireAgentNodePath(packaged.Version),
+                session.RequireAgentNodePath(
+                    options.PackagedNodeArchivePath
+                    ?? throw new SessionException(
+                        "The packaged Node.js runtime archive was not found.")),
                 applicationDirectory,
-                launch.WorkingDirectory!,
-                launch.Port);
+                launch.WorkingDirectory ?? sessionRecord.WorkspacePath
+                    ?? throw new SessionException(
+                        "The isolated session has no shared workspace for the gateway."),
+                launch.Port));
         }
 
         return new GatewayRuntime(

@@ -378,6 +378,10 @@ internal static class Program
                         .GetStatusAsync(GetSessionRuntime().HelperPath, cancellationToken)
                         .ConfigureAwait(false);
                     await output.WriteLineAsync(result.Message).ConfigureAwait(false);
+                    if (!string.IsNullOrWhiteSpace(result.Detail))
+                    {
+                        await output.WriteLineAsync(result.Detail).ConfigureAwait(false);
+                    }
                     return result.State is Gateway.GatewayState.Running or Gateway.GatewayState.NotStarted
                         ? 0 : 1;
                 },
@@ -389,6 +393,10 @@ internal static class Program
                         .StopAsync(GetSessionRuntime().HelperPath, cancellationToken)
                         .ConfigureAwait(false);
                     await output.WriteLineAsync(result.Message).ConfigureAwait(false);
+                    if (!string.IsNullOrWhiteSpace(result.Detail))
+                    {
+                        await output.WriteLineAsync(result.Detail).ConfigureAwait(false);
+                    }
                     return result.Succeeded ? 0 : 1;
                 }
             });
