@@ -64,7 +64,8 @@ the read-only application directory the workspace.
 
 | Command | Behavior |
 |---|---|
-| `clawctl setup` | Extract the bundled Node.js runtime when needed and confirm packaged `app\openclaw.mjs` exists. |
+| `clawctl setup` | On a session-capable Windows build, provision the isolated agent session, install its bundled Node.js runtime, and confirm packaged `app\openclaw.mjs` exists. |
+| `clawctl setup --no-isolation` | On a session-capable Windows build, prepare the host runtime without provisioning the isolated session. It still refuses unsupported Windows builds. |
 | `clawctl --version` | Print the packaged launcher version. |
 
 Bare `clawctl`, `clawctl -h`, and `clawctl --help` print help without changing
