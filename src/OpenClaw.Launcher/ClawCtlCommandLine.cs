@@ -16,14 +16,10 @@ internal sealed record ClawCtlHandlers
     public required Func<CancellationToken, Task<int>> GatewayStop { get; init; }
 }
 
-<<<<<<< HEAD
 internal sealed record SetupOptions(
     bool Fresh,
     bool Force = false,
     bool NoIsolation = false);
-=======
-internal sealed record SetupOptions(bool Fresh, bool Force, bool NoIsolation);
->>>>>>> b881f6d (Add forced fresh setup recovery)
 
 // The clawctl command tree. Only the package-readiness surface belongs here:
 // doctor, gateway, uninstall, and every other OpenClaw command is owned by the

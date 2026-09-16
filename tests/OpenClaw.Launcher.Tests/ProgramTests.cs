@@ -102,23 +102,10 @@ public sealed class ProgramTests : IDisposable
     [Fact]
     public async Task AgentUsesTheRuntimeInstalledForTheSessionWithoutHostFallback()
     {
-        string applicationDirectory = Path.Combine(_testDirectory, "app");
-        Directory.CreateDirectory(applicationDirectory);
-        await File.WriteAllTextAsync(
-            Path.Combine(applicationDirectory, "openclaw.mjs"),
-            "console.log('fixture');");
-        string archivePath = Path.Combine(_testDirectory, "node-v24.15.0-win-x64.zip");
-        await File.WriteAllTextAsync(archivePath, "fixture");
-        var options = new HostOptions(applicationDirectory, archivePath, ["gateway"]);
-        var hostNode = new NodeRuntime(
-            Path.Combine(_testDirectory, "host-node.exe"),
-            new Version(24, 15, 0),
-            System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture);
+        string applicationDirectory = await CreateApplicationAsync().ConfigureAwait(true);
+        HostOptions options = CreateSetupOptions(applicationDirectory);
         SessionRuntime runtime = CreateSessionRuntime();
-        var lifecycle = new FailingFreshLifecycle(runtime)
-        {
-            TeardownSucceeds = true,
-        };
+        var lifecycle = new FailingFreshLifecycle(runtime) { TeardownSucceeds = true };
 
         int setupExitCode = await Program.RunControlAsync(
             options,
@@ -126,7 +113,6 @@ public sealed class ProgramTests : IDisposable
             _ => { },
             TextWriter.Null,
             TextWriter.Null,
-            _ => Task.FromResult(hostNode),
             installationLifecycle: lifecycle);
         Assert.Equal(0, setupExitCode);
 
@@ -402,7 +388,6 @@ public sealed class ProgramTests : IDisposable
         Assert.DoesNotContain(
             _lastSessionBackend!.Calls,
             call => call.StartsWith("deprovision:", StringComparison.Ordinal));
-
     }
 
     [Fact]
