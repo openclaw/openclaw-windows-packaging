@@ -114,8 +114,10 @@ internal static class Program
                 : await RunAgentAsync(
                     options,
                     WriteDiagnostic,
-                    startup.ResolveNode ?? (_ => Task.FromResult(NodeRuntimeResolver.Resolve(
-                        GetPackagedNodeArchivePath(options)))),
+                    startup.ResolveNode ?? (_ => Task.FromResult(
+                        (startup.InstallNodeRuntime ?? NodeRuntimeInstaller.EnsureInstalled)(
+                            GetPackagedNodeArchivePath(options),
+                            WriteDiagnostic))),
                     startup.LaunchOpenClaw ?? GatewayLauncher.RunAsync,
                     startup.InstallationLifecycle is null
                         ? null
