@@ -26,7 +26,8 @@ internal static class SessionRuntimeInstaller
         string requestPath,
         Func<string, string> readFile,
         Action<string, string> writeFile,
-        Func<string>? getLocalApplicationData = null)
+        Func<string>? getLocalApplicationData = null,
+        Func<string, bool>? tryPrependUserPath = null)
     {
         string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
         string? requestId = null;
@@ -87,7 +88,11 @@ internal static class SessionRuntimeInstaller
                     "The installed Node.js runtime did not contain node.exe.");
             }
 
-            bool pathUpdated = request.UpdateUserPath && TryPrependUserPath(directory);
+            string runtimeDirectory = Path.GetDirectoryName(executablePath)
+                ?? throw new SessionLaunchException(
+                    "The installed Node.js runtime has no executable directory.");
+            bool pathUpdated = request.UpdateUserPath &&
+                (tryPrependUserPath ?? TryPrependUserPath)(runtimeDirectory);
 
             writeFile(
                 resultPath,
