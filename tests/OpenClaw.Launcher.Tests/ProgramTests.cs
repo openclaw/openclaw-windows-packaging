@@ -601,10 +601,10 @@ public sealed class ProgramTests : IDisposable
                 "node.exe",
                 new Version(24, 15, 0),
                 System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture)),
-            () => runtime,
+            createSessionRuntime: _ => runtime,
             // Setup only reaches Ready once logon recovery is configured, and
             // a test must never register a real scheduled task.
-            _ => Task.FromResult(new GatewayPersistenceInstallResult(
+            installRecovery: (_, _) => Task.FromResult(new GatewayPersistenceInstallResult(
                 GatewayPersistenceState.Ready,
                 GatewayPersistenceLane.TaskScheduler,
                 "Logon recovery is configured.",

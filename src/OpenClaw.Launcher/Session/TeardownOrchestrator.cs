@@ -31,7 +31,10 @@ internal sealed class TeardownOrchestrator
         _setup = setup;
     }
 
-    public async Task<TeardownResult> RunAsync(string helperPath, CancellationToken cancellationToken)
+    public async Task<TeardownResult> RunAsync(
+        string helperPath,
+        bool force,
+        CancellationToken cancellationToken)
     {
         using ISessionLockHandle handle = _lock.TryAcquire(SessionCoordinator.DefaultLockTimeout)
             ?? throw new SessionBusyException(SessionCoordinator.DefaultLockTimeout);
@@ -47,7 +50,8 @@ internal sealed class TeardownOrchestrator
             helperPath,
             cancellationToken,
             clearRecord: false,
-            allowUnconfirmedLaunch: true).ConfigureAwait(false);
+            allowUnconfirmedLaunch: force,
+            allowUnavailableInspection: force).ConfigureAwait(false);
         if (!gateway.Succeeded)
         {
             return new TeardownResult(false, gateway.Message, gateway.Detail);

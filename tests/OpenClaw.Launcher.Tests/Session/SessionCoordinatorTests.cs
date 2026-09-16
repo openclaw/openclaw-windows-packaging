@@ -199,6 +199,24 @@ public sealed class SessionCoordinatorTests : IDisposable
         Assert.Equal("iso:sandbox1", result.SupersededRecord!.SandboxId);
     }
 
+    // This catches a second failed/retried replacement dropping the first
+    // superseded identity before its gateway record can be reconciled.
+    [Fact]
+    public async Task ReplacementsRetainEverySupersededSandboxIdentity()
+    {
+        await Create().EnsureStartedAsync(CancellationToken.None);
+        _backend.StartFailureForSandbox = sandboxId => sandboxId.Value is "iso:sandbox1" or "iso:sandbox2"
+            ? new MxcException(MxcErrorCode.StaleId, "provision was not found")
+            : null;
+
+        await Assert.ThrowsAsync<MxcException>(
+            () => Create().EnsureStartedAsync(CancellationToken.None));
+        SessionRecord replacement = await Create().EnsureStartedAsync(CancellationToken.None);
+
+        Assert.Equal("iso:sandbox3", replacement.SandboxId);
+        Assert.Equal(["iso:sandbox1", "iso:sandbox2"], replacement.SupersededSandboxIds);
+    }
+
     [Fact]
     public async Task FailedStaleProvisionRecoveryRetainsTheRecordedOwnership()
     {

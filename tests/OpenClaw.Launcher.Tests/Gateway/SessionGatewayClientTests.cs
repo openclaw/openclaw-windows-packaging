@@ -19,6 +19,22 @@ public sealed class SessionGatewayClientTests : IDisposable
         }
     }
 
+    // Pending intent remains serializable for explicit teardown recovery; the
+    // guest inspector returns an error rather than treating it as absence.
+    [Fact]
+    public void PendingInspectionRequestIsAcceptedWithoutAProcessIdentity()
+    {
+        SessionInspectRequest request = SessionInspectProtocol.ReadRequest(
+            SessionInspectProtocol.SerializeRequest(new SessionInspectRequest
+            {
+                RequestId = "request",
+                LaunchPending = true
+            }));
+
+        Assert.True(request.LaunchPending);
+        Assert.Equal(0, request.ProcessId);
+    }
+
     [Fact]
     public async Task StartUsesTheSharedWorkspaceRatherThanTheHostWorkingDirectory()
     {

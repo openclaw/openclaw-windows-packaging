@@ -106,7 +106,8 @@ internal sealed partial class GatewayRuntime
         string bundlePath = ResolveBundlePath(
             requestedPath,
             _paths,
-            Environment.CurrentDirectory);
+            Environment.CurrentDirectory,
+            _clock);
 
         List<string> notes = [];
         List<(string Name, string Path)> hostFiles = CollectHostFiles();
@@ -123,7 +124,17 @@ internal sealed partial class GatewayRuntime
                 return new DiagnosticsBundleResult(null, sessionReached, notes);
             }
 
-            WriteBundle(bundlePath, hostFiles, staged, workspace, notes);
+            try
+            {
+                WriteBundle(bundlePath, hostFiles, staged, workspace, notes);
+            }
+            catch (IOException exception) when (File.Exists(bundlePath))
+            {
+                throw new IOException(
+                    $"The diagnostics bundle already exists: {bundlePath}. " +
+                    "Choose another path with --output.",
+                    exception);
+            }
             return new DiagnosticsBundleResult(bundlePath, sessionReached, notes);
         }
         finally
@@ -135,12 +146,15 @@ internal sealed partial class GatewayRuntime
     internal static string ResolveBundlePath(
         string? requestedPath,
         HostPaths paths,
-        string currentDirectory)
+        string currentDirectory,
+        TimeProvider? clock = null)
     {
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentException.ThrowIfNullOrWhiteSpace(currentDirectory);
         return requestedPath is null
-            ? Path.Combine(paths.StateRoot, "openclaw-diagnostics.zip")
+            ? Path.Combine(
+                paths.StateRoot,
+                $"openclaw-diagnostics-{(clock ?? TimeProvider.System).GetUtcNow():yyyyMMdd-HHmmss}.zip")
             : Path.GetFullPath(requestedPath, currentDirectory);
     }
 

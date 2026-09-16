@@ -43,7 +43,7 @@ public sealed class GatewayConfigurationStoreTests : IDisposable
         // chosen interactively has to still be in effect then.
         Store.Write(new GatewayLaunchConfiguration { Port = 9100 });
 
-        Assert.Equal(9100, Store.Resolve(NoEnvironment).Port);
+        Assert.Equal(9100, Store.Resolve(_root, NoEnvironment).Port);
     }
 
     [Fact]
@@ -52,6 +52,7 @@ public sealed class GatewayConfigurationStoreTests : IDisposable
         Store.Write(new GatewayLaunchConfiguration { Port = 9100 });
 
         GatewayLaunchConfiguration resolved = Store.Resolve(
+            _root,
             name => name == GatewayConfigurationStore.PortVariable ? "9200" : null);
 
         Assert.Equal(9200, resolved.Port);
@@ -73,6 +74,7 @@ public sealed class GatewayConfigurationStoreTests : IDisposable
         // override.
         Assert.Throws<GatewayConfigurationException>(
             () => Store.Resolve(
+                _root,
                 name => name == GatewayConfigurationStore.PortVariable ? value : null));
     }
 
@@ -82,7 +84,7 @@ public sealed class GatewayConfigurationStoreTests : IDisposable
         File.WriteAllText(Path_, "{ not json");
 
         Assert.Throws<GatewayConfigurationException>(
-            () => Store.Resolve(NoEnvironment));
+            () => Store.Resolve(_root, NoEnvironment));
     }
 
     [Fact]

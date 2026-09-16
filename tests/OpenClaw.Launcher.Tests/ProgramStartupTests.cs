@@ -120,6 +120,64 @@ public sealed class ProgramStartupTests : IDisposable
         Assert.Empty(output.ToString());
     }
 
+    // This catches production startup bypassing the installer after setup put
+    // Node.js only in the agent profile.
+    [Fact]
+    public async Task AgentStartupInstallsTheHostRuntimeBeforeLaunching()
+    {
+        string applicationDirectory = Path.Combine(_testDirectory, "app");
+        string runtimeDirectory = Path.Combine(_testDirectory, "runtime");
+        Directory.CreateDirectory(applicationDirectory);
+        Directory.CreateDirectory(runtimeDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(applicationDirectory, "openclaw.mjs"),
+            "console.log('fixture');");
+        string archivePath = Path.Combine(
+            runtimeDirectory,
+            $"node-v24.15.0-win-{GetArchitectureName()}.zip");
+        await File.WriteAllTextAsync(archivePath, "fixture");
+        string? installedArchive = null;
+        bool launched = false;
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        HostStartup startup = new()
+        {
+            Entrypoint = HostEntrypoint.Agent,
+            CreateDiagnostics = () => HostDiagnosticLog.Create(
+                Path.Combine(_testDirectory, "logs", "openclaw.log")),
+            BaseDirectory = _testDirectory,
+            Output = output,
+            Error = error,
+            ReadEnvironmentVariable = name =>
+                name == OpenClaw.Launcher.Session.SessionRoutingPolicy.ModeVariable
+                    ? "0"
+                    : null,
+            InstallNodeRuntime = (archive, _) =>
+            {
+                installedArchive = archive;
+                return new NodeRuntime(
+                    Path.Combine(_testDirectory, "node.exe"),
+                    new Version(24, 15, 0),
+                    RuntimeInformation.ProcessArchitecture);
+            },
+            LaunchOpenClaw = (_, _, _, _, _) =>
+            {
+                launched = true;
+                return Task.FromResult(0);
+            }
+        };
+
+        int exitCode = await Program.RunAsync(["--help"], startup);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(archivePath, installedArchive);
+        Assert.True(launched);
+    }
+
+    private static string GetArchitectureName() =>
+        RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? "arm64" : "x64";
+
     private HostStartup CreateStartup(
         string logPath,
         TextWriter output,

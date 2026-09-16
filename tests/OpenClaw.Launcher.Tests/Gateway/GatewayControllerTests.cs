@@ -428,46 +428,14 @@ public sealed class GatewayControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task AConfirmedPendingGatewayIsRetainedWithoutStartingAnother()
-    {
-        RecordPendingGateway(processId: 1234);
-        _client.Inspection = Healthy();
-
-        GatewayStartResult result = await CreateController()
-            .StartAsync("helper.exe", CancellationToken.None);
-
-        Assert.True(result.AlreadyRunning);
-        Assert.DoesNotContain("start", _client.Calls);
-        Assert.False(Store.Read().Record!.LaunchPending);
-    }
-
-    [Fact]
-    public async Task AnExitedPendingGatewayIsReconciledBeforeRetrying()
-    {
-        RecordPendingGateway();
-        _client.Inspection = new SessionInspectResult();
-
-        GatewayStartResult result = await CreateController()
-            .StartAsync("helper.exe", CancellationToken.None);
-
-        Assert.False(result.AlreadyRunning);
-        Assert.Single(_client.Calls, call => call == "start");
-        Assert.False(result.Record.LaunchPending);
-    }
-
-    [Fact]
     public async Task AnAmbiguousPendingGatewayIsNotReplacedOrStopped()
     {
         RecordPendingGateway(processId: 1234);
-        _client.Inspection = new SessionInspectResult
-        {
-            ProcessFound = true,
-            StartTimeMatches = true
-        };
 
-        await Assert.ThrowsAsync<SessionException>(
+        SessionException exception = await Assert.ThrowsAsync<SessionException>(
             () => CreateController().StartAsync("helper.exe", CancellationToken.None));
 
+        Assert.Contains("teardown --force", exception.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(
             _client.Calls,
             call => call == "start" || call.StartsWith("stop:", StringComparison.Ordinal));

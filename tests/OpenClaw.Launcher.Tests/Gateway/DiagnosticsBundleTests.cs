@@ -97,6 +97,39 @@ public sealed class DiagnosticsBundleTests : IDisposable
         Assert.Equal(Path.Combine(_root, "diagnostics.zip"), resolved);
     }
 
+    [Fact]
+    public void DefaultOutputUsesTheInjectedCollectionTime()
+    {
+        HostPaths paths = HostPaths.ForRoot(Path.Combine(_root, "state"));
+
+        string resolved = GatewayRuntime.ResolveBundlePath(
+            null,
+            paths,
+            _root,
+            new FixedTimeProvider(
+                new DateTimeOffset(2025, 1, 2, 3, 4, 5, TimeSpan.Zero)));
+
+        Assert.Equal(
+            Path.Combine(paths.StateRoot, "openclaw-diagnostics-20250102-030405.zip"),
+            resolved);
+    }
+
+    [Fact]
+    public async Task ExplicitExistingOutputNamesThePathAndOutputOption()
+    {
+        (GatewayRuntime runtime, HostPaths paths) = CreateRuntime();
+        string bundlePath = Path.Combine(_root, "existing.zip");
+        Directory.CreateDirectory(Path.GetDirectoryName(paths.LogPath)!);
+        await File.WriteAllTextAsync(paths.LogPath, "host evidence");
+        await File.WriteAllTextAsync(bundlePath, "existing");
+
+        IOException exception = await Assert.ThrowsAsync<IOException>(
+            () => runtime.CollectLogsAsync(bundlePath, CancellationToken.None));
+
+        Assert.Contains(bundlePath, exception.Message, StringComparison.Ordinal);
+        Assert.Contains("--output", exception.Message, StringComparison.Ordinal);
+    }
+
     public void Dispose()
     {
         Directory.Delete(_root, recursive: true);

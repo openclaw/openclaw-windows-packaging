@@ -21,9 +21,13 @@ internal sealed class HostStartup
 
     public Func<CancellationToken, Task<NodeRuntime>>? ResolveNode { get; init; }
 
+    public Func<string, Action<string>, NodeRuntime>? InstallNodeRuntime { get; init; }
+
     public Program.LaunchOpenClawAsync? LaunchOpenClaw { get; init; }
 
     public Func<Action<string>, Session.SessionRuntime>? CreateSessionRuntime { get; init; }
+
+    public Func<string, string?>? ReadEnvironmentVariable { get; init; }
 
     public static HostStartup CreateProduction() => new()
     {
@@ -31,6 +35,7 @@ internal sealed class HostStartup
         CreateDiagnostics = HostDiagnosticLog.Create,
         BaseDirectory = AppContext.BaseDirectory,
         Output = Console.Out,
-        Error = Console.Error
+        Error = Console.Error,
+        InstallNodeRuntime = NodeRuntimeInstaller.EnsureInstalled
     };
 }

@@ -169,6 +169,25 @@ public sealed class GuestProcessObserverTests
 public sealed class SessionInspectorTests
 {
     [Fact]
+    public void AnUnconfirmedLaunchIsUnknownRatherThanSuccessfulAbsence()
+    {
+        SessionInspectResult result = SessionInspector.Inspect(
+            new SessionInspectRequest
+            {
+                RequestId = "pending",
+                LaunchPending = true,
+                ProcessId = 0,
+                ProcessStartTimeUtc = DateTimeOffset.UtcNow
+            },
+            _ => throw new InvalidOperationException("A pending launch must not inspect a process."));
+
+        Assert.Equal("pending", result.RequestId);
+        Assert.False(result.ProcessFound);
+        Assert.NotNull(result.Error);
+        Assert.Contains("not confirmed", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void EvenOneTickMismatchCannotAuthorizeStop()
     {
         using Process child = GuestProcessObserverTests.StartLongRunningProcess();

@@ -12,17 +12,20 @@ internal sealed partial class GatewayRuntime
 
     private readonly HostPaths _paths;
     private readonly SessionRuntime _session;
+    private readonly TimeProvider _clock;
 
     private GatewayRuntime(
         GatewayController controller,
         string helperPath,
         HostPaths paths,
-        SessionRuntime session)
+        SessionRuntime session,
+        TimeProvider clock)
     {
         Controller = controller;
         HelperPath = helperPath;
         _paths = paths;
         _session = session;
+        _clock = clock;
     }
 
     public GatewayController Controller { get; }
@@ -127,7 +130,8 @@ internal sealed partial class GatewayRuntime
         HostOptions options,
         HostPaths paths,
         SessionRuntime session,
-        Action<string> log)
+        Action<string> log,
+        TimeProvider? clock = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(paths);
@@ -138,7 +142,8 @@ internal sealed partial class GatewayRuntime
             CreateController(options, paths, session, log),
             session.HelperPath,
             paths,
-            session);
+            session,
+            clock ?? TimeProvider.System);
     }
 
     internal static TeardownOrchestrator CreateTeardownOrchestrator(

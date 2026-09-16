@@ -111,8 +111,11 @@ internal sealed class GatewayConfigurationStore
     /// nothing explaining why.
     /// </remarks>
     public GatewayLaunchConfiguration Resolve(
+        string defaultWorkingDirectory,
         Func<string, string?>? readEnvironmentVariable = null)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(defaultWorkingDirectory);
+
         GatewayConfigurationResult result = Read();
         if (result.Configuration is null &&
             result.Fault != GatewayConfigurationFault.Missing)
@@ -131,6 +134,9 @@ internal sealed class GatewayConfigurationStore
         return configuration with
         {
             Port = port,
+            WorkingDirectory = string.IsNullOrWhiteSpace(configuration.WorkingDirectory)
+                ? defaultWorkingDirectory
+                : configuration.WorkingDirectory
         };
     }
 

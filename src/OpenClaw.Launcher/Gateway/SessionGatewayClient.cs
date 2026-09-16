@@ -234,6 +234,7 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
                 {
                     RequestId = requestId,
                     ProcessId = gateway.ProcessId,
+                    LaunchPending = gateway.LaunchPending,
                     ProcessStartTimeUtc = gateway.ProcessStartTimeUtc,
                     HelperPath = gateway.HelperPath,
                     StatusPath = gateway.StatusPath,

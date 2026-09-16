@@ -24,6 +24,14 @@ public sealed record SessionInspectRequest
     public int ProcessId { get; init; }
 
     /// <summary>
+    /// Requests a safe reconciliation of a launch whose process identity was
+    /// never persisted. The guest must not inspect or stop a process for this
+    /// request.
+    /// </summary>
+    [JsonPropertyName("launchPending")]
+    public bool LaunchPending { get; init; }
+
+    /// <summary>
     /// The recorded creation time. A live process whose creation time differs
     /// is an unrelated process that inherited a reused identifier, never ours.
     /// </summary>
@@ -197,6 +205,11 @@ public static class SessionInspectProtocol
         if (string.IsNullOrWhiteSpace(request.RequestId))
         {
             throw new SessionLaunchException("The inspect request has no request id.");
+        }
+
+        if (request.LaunchPending)
+        {
+            return request;
         }
 
         if (request.ProcessId <= 0)

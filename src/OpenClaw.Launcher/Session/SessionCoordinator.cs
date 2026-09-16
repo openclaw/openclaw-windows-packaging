@@ -291,7 +291,7 @@ internal sealed class SessionCoordinator
                     "The recorded OpenClaw provision no longer exists. " +
                     "Provisioning a replacement for this installation.");
                 SessionRecord replacement = await ProvisionAndStartAsync(
-                    state.Record.SandboxId,
+                    GetSupersededSandboxIds(state.Record),
                     cancellationToken)
                     .ConfigureAwait(false);
                 return new SessionStartResult(replacement, state.Record);
@@ -306,13 +306,13 @@ internal sealed class SessionCoordinator
         }
 
         _log("Creating the first OpenClaw session for this installation.");
-        SessionRecord provisioned = await ProvisionAndStartAsync(null, cancellationToken)
+        SessionRecord provisioned = await ProvisionAndStartAsync([], cancellationToken)
             .ConfigureAwait(false);
         return new SessionStartResult(provisioned, null);
     }
 
     private async Task<SessionRecord> ProvisionAndStartAsync(
-        string? supersededSandboxId,
+        IReadOnlyList<string> supersededSandboxIds,
         CancellationToken cancellationToken)
     {
         MxcProvisionResult provisioned = await _backend
@@ -331,7 +331,7 @@ internal sealed class SessionCoordinator
             WorkspacePath = provisioned.Metadata?.EphemeralWorkspacePath,
             Generation = Guid.NewGuid().ToString("N"),
             CreatedUtc = _clock.GetUtcNow(),
-            SupersededSandboxId = supersededSandboxId,
+            SupersededSandboxIds = [.. supersededSandboxIds],
         };
         try
         {
@@ -358,6 +358,14 @@ internal sealed class SessionCoordinator
         await StartAsync(record, cancellationToken).ConfigureAwait(false);
         return record;
     }
+
+    private static IReadOnlyList<string> GetSupersededSandboxIds(SessionRecord record) =>
+        [.. (record.SupersededSandboxIds ?? [])
+            .Append(record.SupersededSandboxId)
+            .Append(record.SandboxId)
+            .Where(static id => !string.IsNullOrWhiteSpace(id))
+            .Select(static id => id!)
+            .Distinct(StringComparer.Ordinal)];
 
     /// <summary>
     /// Starts the recorded session without provisioning a replacement.

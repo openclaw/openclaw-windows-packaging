@@ -113,10 +113,13 @@ internal static class Program
                 : await RunAgentAsync(
                     options,
                     WriteDiagnostic,
-                    startup.ResolveNode ?? (_ => Task.FromResult(NodeRuntimeResolver.Resolve(
-                        GetPackagedNodeArchivePath(options)))),
+                    startup.ResolveNode ?? (_ => Task.FromResult(
+                        (startup.InstallNodeRuntime ?? NodeRuntimeInstaller.EnsureInstalled)(
+                            GetPackagedNodeArchivePath(options),
+                            WriteDiagnostic))),
                     startup.LaunchOpenClaw ?? GatewayLauncher.RunAsync,
-                    startup.CreateSessionRuntime)
+                    startup.CreateSessionRuntime,
+                    readEnvironmentVariable: startup.ReadEnvironmentVariable)
                     .ConfigureAwait(false);
         }
         catch (Exception exception)
@@ -325,13 +328,22 @@ internal static class Program
                         // A replacement whose first start failed leaves the
                         // superseded identity only in the persisted record, so
                         // a retry still reconciles the stale gateway.
-                        string? supersededSandboxId = session.SupersededRecord?.SandboxId
-                            ?? session.Record.SupersededSandboxId;
-                        if (supersededSandboxId is not null &&
-                            runtime.GatewayState.ClearForSupersededSession(
-                                supersededSandboxId))
+                        IEnumerable<string> supersededSandboxIds =
+                            (session.SupersededRecord is null
+                                ? Enumerable.Empty<string>()
+                                : [session.SupersededRecord.SandboxId])
+                            .Concat(session.Record.SupersededSandboxIds ?? [])
+                            .Append(session.Record.SupersededSandboxId)
+                            .Where(static id => !string.IsNullOrWhiteSpace(id))
+                            .Select(static id => id!)
+                            .Distinct(StringComparer.Ordinal);
+                        foreach (string supersededSandboxId in supersededSandboxIds)
                         {
-                            log("Removed the gateway record for the superseded session.");
+                            if (runtime.GatewayState.ClearForSupersededSession(
+                                supersededSandboxId))
+                            {
+                                log("Removed the gateway record for the superseded session.");
+                            }
                         }
 
                         Session.SessionRecord record = session.Record;
@@ -456,7 +468,7 @@ internal static class Program
                         ((current, writeLog) => Gateway.GatewayRuntime
                             .CreateTeardownOrchestrator(options, current, writeLog)))(runtime, log);
                     Session.TeardownResult result = await teardown.RunAsync(
-                        runtime.HelperPath, cancellationToken).ConfigureAwait(false);
+                        runtime.HelperPath, force, cancellationToken).ConfigureAwait(false);
                     await output.WriteLineAsync(result.Message).ConfigureAwait(false);
                     if (!string.IsNullOrWhiteSpace(result.Detail))
                     {

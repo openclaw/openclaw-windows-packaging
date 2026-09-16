@@ -161,6 +161,43 @@ public sealed class SessionExecutorTests : IDisposable
             @"AppData\Roaming\openclaw\logs",
             Assert.Single(delivered!.Sources!).RelativePath);
         Assert.True(Assert.Single(result.Entries!).Copied);
+    }
+
+    // This catches collection following a guest-writable result link to a
+    // host-readable file before checking the response's request identity.
+    [Fact]
+    public async Task CollectionRefusesAReparsePointResultOutsideTheWorkspace()
+    {
+        string outside = TestDirectory.Create();
+        try
+        {
+            string target = Path.Combine(outside, "result.json");
+            await File.WriteAllTextAsync(target, """{"requestId":"other"}""");
+            _backend.ExecuteBehavior = _ =>
+            {
+                string requestPath = Directory.GetFiles(Workspace, "collect-*.json")
+                    .Single(path => !path.EndsWith(".result.json", StringComparison.Ordinal));
+                File.CreateSymbolicLink(
+                    SessionLaunchProtocol.ResultPathFor(requestPath),
+                    target);
+                return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
+            };
+
+            SessionException exception = await Assert.ThrowsAsync<SessionException>(
+                () => Create().CollectAsync(
+                    Record(),
+                    @"C:\Package\session-host\x64\openclaw-session-host.exe",
+                    Path.Combine(Workspace, "staged"),
+                    [],
+                    [],
+                    CancellationToken.None));
+
+            Assert.Contains("reparse", exception.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(outside, recursive: true);
+        }
         Assert.Empty(Directory.GetFiles(Workspace));
     }
 

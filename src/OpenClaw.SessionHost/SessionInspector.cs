@@ -47,6 +47,20 @@ internal static class SessionInspector
         SessionInspectRequest request,
         Func<string, string> readFile)
     {
+        if (request.LaunchPending)
+        {
+            // No verified PID was recorded before the interrupted launch, so
+            // this reconciliation must never select or act on a process. The
+            // caller must retain the launch intent and use owned teardown for
+            // recovery rather than treating the absence of a PID as proof
+            // that no process exists.
+            return new SessionInspectResult
+            {
+                RequestId = request.RequestId,
+                Error = "The gateway launch was not confirmed; process ownership cannot be established."
+            };
+        }
+
         try
         {
             using Process process = Process.GetProcessById(request.ProcessId);

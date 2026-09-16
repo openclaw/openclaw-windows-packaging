@@ -51,6 +51,14 @@ internal sealed record SessionRecord
 
     [JsonPropertyName("supersededSandboxId")]
     public string? SupersededSandboxId { get; init; }
+
+    /// <summary>
+    /// Every prior owned session whose gateway record still may need
+    /// reconciliation. The singular property remains for records written by
+    /// earlier package versions.
+    /// </summary>
+    [JsonPropertyName("supersededSandboxIds")]
+    public IReadOnlyList<string>? SupersededSandboxIds { get; init; }
 }
 
 /// <summary>
