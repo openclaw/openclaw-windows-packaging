@@ -30,6 +30,10 @@ internal static class Program
         bool diagnosticWarningWritten = false;
         bool consoleWarningWritten = false;
         IDisposable? consoleRestore = null;
+        var controlOutputOptions = new ClawCtlOutputOptions
+        {
+            Json = ResolveBooleanOption(args, "--json")
+        };
         TextWriter output = startup.Output;
         TextWriter error = startup.Error;
 
@@ -137,7 +141,8 @@ internal static class Program
                     WriteDiagnostic,
                     output,
                     error,
-                    startup.InstallationLifecycle).ConfigureAwait(false)
+                    startup.InstallationLifecycle,
+                    controlOutputOptions: controlOutputOptions).ConfigureAwait(false)
                 : await RunAgentAsync(
                     options,
                     WriteDiagnostic,
@@ -152,35 +157,49 @@ internal static class Program
             WriteDiagnostic($"Unhandled failure: {GetDiagnosticFailure(exception)}");
             if (startup.Entrypoint == HostEntrypoint.Control)
             {
-                string command = args.Length == 0 ? "command" : args[0];
-                WriteFailureOutput(() =>
+                string command = ResolveClawCtlCommand(args);
+                if (controlOutputOptions.Json)
                 {
-                    bool outputIsProcessConsoleWriter =
-                        ReferenceEquals(error, Console.Error);
-                    bool consoleIsInteractive =
-                        WindowsHostConsole.Instance.IsInteractiveOutput(error);
-                    IDisposable? restore = null;
-                    bool useColor = ClawCtlColorPolicy.PrepareOutput(
-                        args.Contains("--no-color", StringComparer.Ordinal),
-                        outputIsProcessConsoleWriter,
-                        consoleIsInteractive,
-                        Environment.GetEnvironmentVariable,
-                        () => WindowsHostConsole.Instance
-                            .TryEnableVirtualTerminalProcessing(
-                                error,
-                                WriteDiagnostic,
-                                out restore));
-
-                    using (restore)
-                    {
-                        ClawCtlConsole.WriteUnexpectedFailure(
-                            error,
+                    WriteFailureOutput(
+                        () => ClawCtlJson.WriteFailure(
+                            output,
                             command,
-                            exception.Message,
-                            useColor);
-                    }
-                }, "standard error");
+                            exception.Message),
+                        "standard output");
+                }
+                else
+                {
+                    WriteFailureOutput(() =>
+                    {
+                        bool outputIsProcessConsoleWriter =
+                            ReferenceEquals(error, Console.Error);
+                        bool consoleIsInteractive =
+                            WindowsHostConsole.Instance.IsInteractiveOutput(error);
+                        IDisposable? restore = null;
+                        bool useColor = ClawCtlColorPolicy.PrepareOutput(
+                            args.Contains("--no-color", StringComparer.Ordinal),
+                            json: false,
+                            outputIsProcessConsoleWriter,
+                            consoleIsInteractive,
+                            Environment.GetEnvironmentVariable,
+                            () => WindowsHostConsole.Instance
+                                .TryEnableVirtualTerminalProcessing(
+                                    error,
+                                    WriteDiagnostic,
+                                    out restore));
+
+                        using (restore)
+                        {
+                            ClawCtlConsole.WriteUnexpectedFailure(
+                                error,
+                                command,
+                                exception.Message,
+                                useColor);
+                        }
+                    }, "standard error");
+                }
             }
+
             else
             {
                 WriteConsoleError($"{commandName}: {exception.Message}");
@@ -198,6 +217,55 @@ internal static class Program
             consoleRestore?.Dispose();
             diagnostics?.Dispose();
         }
+    }
+
+    private static string ResolveClawCtlCommand(string[] args)
+    {
+        for (int index = 0; index < args.Length; index++)
+        {
+            string argument = args[index];
+            if (argument == "gateway-service")
+            {
+                string? action = args
+                    .Skip(index + 1)
+                    .FirstOrDefault(candidate =>
+                        candidate is "start" or "status" or "stop");
+                return action is null ? argument : $"{argument} {action}";
+            }
+
+            if (argument is "setup" or "status" or "collect-logs" or "teardown" or "pwsh")
+            {
+                return argument;
+            }
+        }
+
+        return "command";
+    }
+
+    private static bool ResolveBooleanOption(string[] args, string option)
+    {
+        bool value = false;
+        for (int index = 0; index < args.Length; index++)
+        {
+            string argument = args[index];
+            if (argument.Equals(option, StringComparison.Ordinal))
+            {
+                value = index + 1 >= args.Length ||
+                    !bool.TryParse(args[index + 1], out bool explicitValue) ||
+                    explicitValue;
+                continue;
+            }
+
+            if (argument.StartsWith($"{option}=", StringComparison.Ordinal) ||
+                argument.StartsWith($"{option}:", StringComparison.Ordinal))
+            {
+                int separator = option.Length;
+                value = bool.TryParse(argument[(separator + 1)..], out bool explicitValue) &&
+                    explicitValue;
+            }
+        }
+
+        return value;
     }
 
     // Every collaborator after the readiness probe is a test seam: tests
@@ -255,11 +323,13 @@ internal static class Program
         TextWriter output,
         TextWriter error,
         Session.IInstallationLifecycle? installationLifecycle = null,
-        Func<string, string?>? readEnvironmentVariable = null)
+        Func<string, string?>? readEnvironmentVariable = null,
+        ClawCtlOutputOptions? controlOutputOptions = null)
     {
         Session.IInstallationLifecycle lifecycle =
             installationLifecycle ?? Session.InstallationLifecycle.Production;
-        var outputOptions = new ClawCtlOutputOptions();
+        ClawCtlOutputOptions outputOptions =
+            controlOutputOptions ?? new ClawCtlOutputOptions();
         Session.SessionRuntime? sessionRuntime = null;
         Session.SessionRuntime GetSessionRuntime() =>
             sessionRuntime ??= lifecycle.CreateRuntime(log);
@@ -272,6 +342,7 @@ internal static class Program
             IDisposable? restore = null;
             bool useColor = ClawCtlColorPolicy.PrepareOutput(
                 outputOptions.NoColor,
+                outputOptions.Json,
                 outputIsProcessConsoleWriter,
                 consoleIsInteractive,
                 Environment.GetEnvironmentVariable,
@@ -282,42 +353,68 @@ internal static class Program
 
         int WriteResult(IClawCtlResult result)
         {
-            (bool useColor, IDisposable? restore) = PrepareColor();
-            using (restore)
+            if (outputOptions.Json)
             {
-                ClawCtlConsole.WriteResult(output, result, useColor);
+                ClawCtlJson.WriteResult(output, result);
             }
-
+            else
+            {
+                (bool useColor, IDisposable? restore) = PrepareColor();
+                using (restore)
+                {
+                    ClawCtlConsole.WriteResult(output, result, useColor);
+                }
+            }
             return result.ExitCode;
+        }
+
+        async Task<int> RunSetupCommandAsync(
+            SetupOptions setupOptions,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                (bool useColor, IDisposable? restore) = outputOptions.Json
+                    ? (false, null)
+                    : PrepareColor();
+                SetupCommandResult result;
+                using (restore)
+                {
+                    result = await ClawCtlConsole.NarrateAsync(
+                        output,
+                        useColor,
+                        narrate: !outputOptions.Json,
+                        new ClawCtlProgress("Checking isolated-session support."),
+                        progress => RunSetupAsync(
+                            setupOptions,
+                            options,
+                            GetSessionRuntime,
+                            lifecycle,
+                            log,
+                            progress,
+                            cancellationToken))
+                        .ConfigureAwait(false);
+                }
+
+                return WriteResult(result);
+            }
+            catch (Session.SessionException exception) when (outputOptions.Json)
+            {
+                return WriteResult(new SetupCommandResult(
+                    1,
+                    GetPackagedApplicationDirectory(options),
+                    null,
+                    null,
+                    false,
+                    Error: exception.Message,
+                    Fresh: setupOptions.Fresh));
+            }
         }
 
         RootCommand command = ClawCtlCommandLine.Create(
             new ClawCtlHandlers
             {
-                Setup = async (setupOptions, cancellationToken) =>
-                {
-                    (bool useColor, IDisposable? restore) = PrepareColor();
-                    SetupCommandResult result;
-                    using (restore)
-                    {
-                        result = await ClawCtlConsole.NarrateAsync(
-                            output,
-                            useColor,
-                            narrate: true,
-                            new ClawCtlProgress("Checking isolated-session support."),
-                            progress => RunSetupAsync(
-                        setupOptions,
-                        options,
-                        GetSessionRuntime,
-                        lifecycle,
-                        log,
-                                progress,
-                                cancellationToken))
-                            .ConfigureAwait(false);
-                    }
-
-                    return WriteResult(result);
-                },
+                Setup = RunSetupCommandAsync,
                 Status = async cancellationToken =>
                 {
                     Session.SessionRuntime runtime = GetSessionRuntime();
@@ -357,9 +454,16 @@ internal static class Program
                 {
                     if (!force)
                     {
-                        await error.WriteLineAsync(
-                            "Teardown removes the isolated session and its data. Re-run with --force to continue.")
-                            .ConfigureAwait(false);
+                        const string message =
+                            "Teardown removes the isolated session and its data. " +
+                            "Re-run with --force to continue.";
+                        if (outputOptions.Json)
+                        {
+                            return WriteResult(new TeardownCommandResult(
+                                new Session.TeardownResult(false, message)));
+                        }
+
+                        await error.WriteLineAsync(message).ConfigureAwait(false);
                         return 1;
                     }
 

@@ -4,6 +4,7 @@ internal static class ClawCtlColorPolicy
 {
     internal static bool PrepareOutput(
         bool noColor,
+        bool json,
         bool outputIsProcessConsoleWriter,
         bool consoleIsInteractive,
         Func<string, string?> readEnvironmentVariable,
@@ -13,6 +14,7 @@ internal static class ClawCtlColorPolicy
 
         bool useColor = ShouldUseColor(
             noColor,
+            json,
             outputIsProcessConsoleWriter,
             consoleIsInteractive,
             readEnvironmentVariable);
@@ -25,13 +27,14 @@ internal static class ClawCtlColorPolicy
 
     internal static bool ShouldUseColor(
         bool noColor,
+        bool json,
         bool outputIsConsole,
         bool consoleIsInteractive,
         Func<string, string?> readEnvironmentVariable)
     {
         ArgumentNullException.ThrowIfNull(readEnvironmentVariable);
 
-        if (noColor || readEnvironmentVariable("NO_COLOR") is not null)
+        if (noColor || json || readEnvironmentVariable("NO_COLOR") is not null)
         {
             return false;
         }

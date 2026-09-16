@@ -4,6 +4,7 @@ using OpenClaw.Launcher.Gateway;
 using OpenClaw.Launcher.Session;
 using OpenClaw.Launcher.Tests.Session;
 using OpenClaw.SessionProtocol;
+using System.Text.Json;
 
 namespace OpenClaw.Launcher.Tests;
 
@@ -203,6 +204,33 @@ public sealed class ProgramTests : IDisposable
         Assert.DoesNotContain("ready", output.ToString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task SetupJsonFailureWritesOnlyTheVersionedErrorDocument()
+    {
+        string applicationDirectory = Path.Combine(_testDirectory, "app");
+        Directory.CreateDirectory(applicationDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(applicationDirectory, "openclaw.mjs"),
+            "console.log('fixture');");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        int exitCode = await Program.RunControlAsync(
+            new HostOptions(applicationDirectory, null, []),
+            ["setup", "--json"],
+            _ => { },
+            output,
+            error);
+
+        Assert.Equal(1, exitCode);
+        Assert.Empty(error.ToString());
+        using JsonDocument document = JsonDocument.Parse(output.ToString());
+        JsonElement root = document.RootElement;
+        Assert.False(root.GetProperty("ok").GetBoolean());
+        Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("setup", root.GetProperty("command").GetString());
+        Assert.Equal("cli_error", root.GetProperty("error").GetProperty("type").GetString());
+    }
 
     [Fact]
     public async Task AgentUsesTheRuntimeInstalledForTheSessionWithoutHostFallback()
@@ -544,6 +572,102 @@ public sealed class ProgramTests : IDisposable
         Assert.Contains("configured", status, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task StatusJsonReportsStructuredSessionGatewayAndRecovery()
+    {
+        string applicationDirectory = await CreateApplicationAsync().ConfigureAwait(true);
+        SessionRuntime runtime = CreateSessionRuntime();
+        var lifecycle = new FailingFreshLifecycle(runtime);
+        using var setupOutput = new StringWriter();
+        int setupExitCode = await Program.RunControlAsync(
+            CreateSetupOptions(applicationDirectory),
+            ["setup"],
+            _ => { },
+            setupOutput,
+            TextWriter.Null,
+            installationLifecycle: lifecycle);
+        using var statusOutput = new StringWriter();
+        using var statusError = new StringWriter();
+
+        int statusExitCode = await Program.RunControlAsync(
+            CreateSetupOptions(applicationDirectory),
+            ["status", "--json"],
+            _ => { },
+            statusOutput,
+            statusError,
+            installationLifecycle: lifecycle);
+
+        Assert.Equal(0, setupExitCode);
+        Assert.Equal(0, statusExitCode);
+        Assert.Empty(statusError.ToString());
+        using JsonDocument document = JsonDocument.Parse(statusOutput.ToString());
+        JsonElement root = document.RootElement;
+        Assert.True(root.GetProperty("ok").GetBoolean());
+        Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("running", root.GetProperty("session").GetProperty("state").GetString());
+        Assert.Equal("24.20.0", root.GetProperty("session").GetProperty("nodeVersion").GetString());
+        Assert.Equal("not-started", root.GetProperty("gateway").GetProperty("state").GetString());
+        Assert.Equal("configured", root.GetProperty("recovery").GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public void StatusJsonFailureRetainsStateDetails()
+    {
+        using var output = new StringWriter();
+        var result = new StatusCommandResult(
+            new SessionStatus(
+                SessionAvailability.Stale,
+                null,
+                SessionStateFault.Missing,
+                "The recorded session is missing."),
+            new GatewayStatusReport(
+                GatewayState.Unhealthy,
+                null,
+                "The gateway is unhealthy."),
+            new GatewayPersistenceStatus(
+                GatewayPersistenceState.ActionRequired,
+                GatewayPersistenceLane.TaskScheduler,
+                "Recovery needs attention."),
+            null);
+
+        ClawCtlJson.WriteResult(output, result);
+
+        using JsonDocument document = JsonDocument.Parse(output.ToString());
+        JsonElement root = document.RootElement;
+        Assert.False(root.GetProperty("ok").GetBoolean());
+        Assert.Equal("stale", root.GetProperty("session").GetProperty("state").GetString());
+        Assert.Equal("unhealthy", root.GetProperty("gateway").GetProperty("state").GetString());
+        Assert.Equal(
+            "action-required",
+            root.GetProperty("recovery").GetProperty("state").GetString());
+        Assert.Equal("cli_error", root.GetProperty("error").GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public async Task TeardownJsonWithoutForceWritesAFailureDocument()
+    {
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        int exitCode = await Program.RunControlAsync(
+            new HostOptions(null, null, []),
+            ["teardown", "--json"],
+            _ => { },
+            output,
+            error,
+            installationLifecycle: new FailingFreshLifecycle(CreateSessionRuntime()));
+
+        Assert.Equal(1, exitCode);
+        Assert.Empty(error.ToString());
+        using JsonDocument document = JsonDocument.Parse(output.ToString());
+        JsonElement root = document.RootElement;
+        Assert.False(root.GetProperty("ok").GetBoolean());
+        Assert.Equal("teardown", root.GetProperty("command").GetString());
+        Assert.Contains(
+            "--force",
+            root.GetProperty("error").GetProperty("message").GetString(),
+            StringComparison.Ordinal);
+    }
 
     [Fact]
     public async Task FreshSetupCleanerFailurePreventsProvisionAndReady()

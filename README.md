@@ -97,10 +97,15 @@ and completion come from
 Invalid management input is rejected with exit code `1` and a parse diagnostic
 on standard error; no readiness check runs.
 
+All non-interactive commands accept `--json` and emit a versioned JSON document
+on standard output. Human diagnostics remain on standard error, and command
+exit codes do not change. `clawctl pwsh --json` is rejected because the command
+hands the terminal to an interactive shell.
+
 Interactive terminals use color for headings and status marks. `--no-color`,
 the `NO_COLOR` environment variable, redirected output, and CI disable color;
 `FORCE_COLOR` enables it for redirected output or CI unless color was
-explicitly disabled.
+explicitly disabled. JSON output never contains terminal escape sequences.
 
 Help and version requests take precedence over the rest of the command line.
 `clawctl --version bogus` prints the launcher version and exits `0` rather than

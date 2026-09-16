@@ -113,6 +113,49 @@ public sealed class ClawCtlCommandLineTests
     }
 
     [Theory]
+    [InlineData("setup --json")]
+    [InlineData("--json status")]
+    [InlineData("status --json")]
+    [InlineData("collect-logs --json")]
+    [InlineData("teardown --json")]
+    [InlineData("gateway-service start --json")]
+    [InlineData("gateway-service status --json")]
+    [InlineData("gateway-service stop --json")]
+    public async Task JsonIsAvailableToEveryNonInteractiveCommand(string commandLine)
+    {
+        var outputOptions = new ClawCtlOutputOptions();
+        RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
+        {
+            Setup = (_, _) => Task.FromResult(0),
+            Status = _ => Task.FromResult(0),
+            CollectLogs = (_, _) => Task.FromResult(0),
+            Teardown = (_, _) => Task.FromResult(0),
+            PowerShell = _ => Task.FromResult(0),
+            GatewayStart = _ => Task.FromResult(0),
+            GatewayStatus = _ => Task.FromResult(0),
+            GatewayStop = _ => Task.FromResult(0)
+        }, outputOptions);
+
+        int exitCode = await root.Parse(commandLine).InvokeAsync();
+
+        Assert.Equal(0, exitCode);
+        Assert.True(outputOptions.Json);
+    }
+
+    [Fact]
+    public async Task JsonIsRejectedForInteractivePowerShell()
+    {
+        (int exitCode, _, string error) =
+            await RunAsync("pwsh", "--json").ConfigureAwait(true);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains(
+            "'--json' is not supported for 'pwsh'",
+            error,
+            StringComparison.Ordinal);
+    }
+
+    [Theory]
     [InlineData("setup --no-color")]
     [InlineData("--no-color status")]
     [InlineData("status --no-color")]

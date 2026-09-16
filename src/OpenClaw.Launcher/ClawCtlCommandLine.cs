@@ -20,6 +20,8 @@ internal sealed record SetupOptions(bool Fresh, bool Force);
 
 internal sealed class ClawCtlOutputOptions
 {
+    public bool Json { get; set; }
+
     public bool NoColor { get; set; }
 }
 
@@ -67,6 +69,11 @@ internal static class ClawCtlCommandLine
     {
         ArgumentNullException.ThrowIfNull(handlers);
         outputOptions ??= new ClawCtlOutputOptions();
+        Option<bool> json = new("--json")
+        {
+            Description = "Write a machine-readable JSON result.",
+            Recursive = true
+        };
         Option<bool> noColor = new("--no-color")
         {
             Description = "Disable colored output.",
@@ -92,6 +99,7 @@ internal static class ClawCtlCommandLine
         });
         setup.SetAction((parsed, cancellationToken) =>
         {
+            outputOptions.Json = parsed.GetValue(json);
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.Setup(
                 new SetupOptions(
@@ -104,6 +112,7 @@ internal static class ClawCtlCommandLine
             "Show whether the session, gateway, and sign-in recovery are ready.");
         status.SetAction((parsed, cancellationToken) =>
         {
+            outputOptions.Json = parsed.GetValue(json);
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.Status(cancellationToken);
         });
@@ -117,6 +126,7 @@ internal static class ClawCtlCommandLine
         collectLogs.Options.Add(outputPath);
         collectLogs.SetAction((parsed, cancellationToken) =>
         {
+            outputOptions.Json = parsed.GetValue(json);
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.CollectLogs(parsed.GetValue(outputPath), cancellationToken);
         });
@@ -128,6 +138,7 @@ internal static class ClawCtlCommandLine
         teardown.Options.Add(teardownForce);
         teardown.SetAction((parsed, cancellationToken) =>
         {
+            outputOptions.Json = parsed.GetValue(json);
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.Teardown(parsed.GetValue(teardownForce), cancellationToken);
         });
@@ -135,6 +146,14 @@ internal static class ClawCtlCommandLine
             "pwsh",
             "Open PowerShell inside the isolated agent. `openclaw` and `node` " +
             "are available there; `clawctl` manages the session from outside it.");
+        powerShell.Validators.Add(result =>
+        {
+            if (result.GetValue(json))
+            {
+                result.AddError(
+                    "'--json' is not supported for 'pwsh', which opens an interactive shell.");
+            }
+        });
         powerShell.SetAction((parsed, cancellationToken) =>
         {
             outputOptions.NoColor = parsed.GetValue(noColor);
@@ -146,18 +165,21 @@ internal static class ClawCtlCommandLine
         Command gatewayStart = new("start", "Start the gateway if needed.");
         gatewayStart.SetAction((parsed, token) =>
         {
+            outputOptions.Json = parsed.GetValue(json);
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.GatewayStart(token);
         });
         Command gatewayStatus = new("status", "Show whether the gateway is running.");
         gatewayStatus.SetAction((parsed, token) =>
         {
+            outputOptions.Json = parsed.GetValue(json);
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.GatewayStatus(token);
         });
         Command gatewayStop = new("stop", "Stop the gateway but keep the session and its data.");
         gatewayStop.SetAction((parsed, token) =>
         {
+            outputOptions.Json = parsed.GetValue(json);
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.GatewayStop(token);
         });
@@ -174,6 +196,7 @@ internal static class ClawCtlCommandLine
             powerShell,
             gateway
         };
+        root.Options.Add(json);
         root.Options.Add(noColor);
 
         // Bare `clawctl` is a discovery request, not a usage error, so the root

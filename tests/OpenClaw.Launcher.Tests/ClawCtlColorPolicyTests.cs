@@ -7,6 +7,7 @@ public sealed class ClawCtlColorPolicyTests
     {
         bool enabled = ClawCtlColorPolicy.ShouldUseColor(
             noColor: false,
+            json: false,
             outputIsConsole: true,
             consoleIsInteractive: true,
             _ => null);
@@ -15,11 +16,13 @@ public sealed class ClawCtlColorPolicyTests
     }
 
     [Theory]
-    [InlineData(true, null, null)]
-    [InlineData(false, "1", null)]
-    [InlineData(false, null, "true")]
+    [InlineData(true, false, null, null)]
+    [InlineData(false, true, null, null)]
+    [InlineData(false, false, "1", null)]
+    [InlineData(false, false, null, "true")]
     public void ExplicitAndNonInteractiveConditionsDisableColor(
         bool noColor,
+        bool json,
         string? noColorEnvironment,
         string? continuousIntegration)
     {
@@ -32,6 +35,7 @@ public sealed class ClawCtlColorPolicyTests
 
         bool enabled = ClawCtlColorPolicy.ShouldUseColor(
             noColor,
+            json,
             outputIsConsole: true,
             consoleIsInteractive: true,
             ReadEnvironment);
@@ -47,6 +51,7 @@ public sealed class ClawCtlColorPolicyTests
 
         bool enabled = ClawCtlColorPolicy.ShouldUseColor(
             noColor: false,
+            json: false,
             outputIsConsole: false,
             consoleIsInteractive: false,
             ReadEnvironment);
@@ -63,6 +68,7 @@ public sealed class ClawCtlColorPolicyTests
 
         bool enabled = ClawCtlColorPolicy.PrepareOutput(
             noColor: false,
+            json: false,
             outputIsProcessConsoleWriter: true,
             consoleIsInteractive: false,
             ReadEnvironment,
@@ -83,6 +89,7 @@ public sealed class ClawCtlColorPolicyTests
 
         bool enabled = ClawCtlColorPolicy.PrepareOutput(
             noColor: false,
+            json: false,
             outputIsProcessConsoleWriter: true,
             consoleIsInteractive: true,
             _ => null,

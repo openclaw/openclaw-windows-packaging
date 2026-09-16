@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Text.Json;
 using OpenClaw.Launcher.Gateway;
 using OpenClaw.Launcher.Session;
 using LauncherProgram = OpenClaw.Launcher.Program;
@@ -43,6 +44,7 @@ internal static class SmokeProgram
             ("response-file token is not expanded", ResponseFileTokenIsNotExpandedAsync),
             ("completion directive suggests commands", CompletionDirectiveSuggestsAsync),
             ("unpackaged setup reports identity failure", SetupReportsReadinessAsync),
+            ("JSON failures survive NativeAOT", JsonFailureIsStructuredAsync),
             ("Spectre renders clawctl output under NativeAOT", SpectreOutputRenders),
             ("missing application reports diagnostics", MissingApplicationReportsAsync),
             ("openclaw never parses its arguments", AgentNeverParsesItsArgumentsAsync)
@@ -245,6 +247,24 @@ internal static class SmokeProgram
         Assert(
             File.Exists(fixture.EntryPoint),
             "The readiness check removed or replaced the fixture entry point.");
+    }
+
+    private static async Task JsonFailureIsStructuredAsync()
+    {
+        using Fixture fixture = Fixture.CreateWithoutApplication();
+
+        int exitCode = await fixture.RunAsync(["setup", "--json"]).ConfigureAwait(false);
+
+        AssertExitCode(1, exitCode, fixture);
+        using JsonDocument document = JsonDocument.Parse(fixture.Output.ToString());
+        JsonElement root = document.RootElement;
+        Assert(!root.GetProperty("ok").GetBoolean(), "The JSON failure reported success.");
+        Assert(
+            root.GetProperty("schemaVersion").GetInt32() == 1,
+            "The JSON failure did not report schema version 1.");
+        Assert(
+            root.GetProperty("error").GetProperty("type").GetString() == "cli_error",
+            "The JSON failure did not use the cli_error envelope.");
     }
 
     // Spectre.Console composes the renderables; this proves the composition,

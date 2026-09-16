@@ -70,8 +70,8 @@ the label alone.
 | Error, note border | `#ed1805` |
 
 Color supplements text and status marks; it never carries meaning by itself.
-Keep the text obtained after removing ANSI escape sequences identical to
-ordinary non-color output.
+Do not color JSON. Keep the text obtained after removing ANSI escape sequences
+identical to ordinary non-color output.
 
 Build values with `Paragraph.Append`, never by interpolating caller text into
 markup: package paths and error messages contain `[` and `\`, which Spectre
