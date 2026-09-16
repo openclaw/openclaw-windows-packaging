@@ -234,13 +234,9 @@ internal sealed class SchTasksGatewayScheduler : IGatewayTaskScheduler
             RedirectStandardOutput = true,
             RedirectStandardError = true,
 
-            // schtasks writes its XML in the console output code page even
-            // though the declaration claims UTF-16. Every element this code
-            // compares is ASCII apart from the launcher path, so a code-page
-            // mismatch can at worst be reported as drift; it can never be
-            // mistaken for a missing task.
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
+            // schtasks uses the console output code page when redirected.
+            StandardOutputEncoding = Console.OutputEncoding,
+            StandardErrorEncoding = Console.OutputEncoding
         };
 
         foreach (string argument in arguments)
@@ -268,7 +264,20 @@ internal sealed class SchTasksGatewayScheduler : IGatewayTaskScheduler
             cancellationToken);
         Task<string> standardError = process.StandardError.ReadToEndAsync(
             cancellationToken);
-        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+
+            throw;
+        }
 
         return new SchTasksOutcome(
             process.ExitCode,
