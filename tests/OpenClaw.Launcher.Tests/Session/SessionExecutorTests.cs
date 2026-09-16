@@ -266,6 +266,9 @@ public sealed class SessionExecutorTests : IDisposable
         Assert.Equal(42, exitCode);
     }
 
+    // The host cannot know what the agent account's PATH contains, so it names
+    // the directory and lets the guest prepend it. Sending a host-built PATH
+    // would replace the guest's own.
     [Fact]
     public async Task IsolatedLaunchPrependsTheSelectedAgentNodeDirectory()
     {
