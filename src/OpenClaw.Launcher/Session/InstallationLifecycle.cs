@@ -95,8 +95,8 @@ internal sealed class InstallationLifecycle : IInstallationLifecycle
         TeardownOrchestrator teardown =
             GatewayRuntime.CreateTeardownOrchestrator(options, runtime, log);
         return lockAlreadyHeld
-            ? teardown.RunUnderLockAsync(runtime.HelperPath, cancellationToken)
-            : teardown.RunAsync(runtime.HelperPath, cancellationToken);
+            ? teardown.RunUnderLockAsync(runtime.HelperPath, force: true, cancellationToken)
+            : teardown.RunAsync(runtime.HelperPath, force: true, cancellationToken);
     }
 
     public IInstallationStateCleaner CreateStateCleaner(SessionRuntime runtime) =>
