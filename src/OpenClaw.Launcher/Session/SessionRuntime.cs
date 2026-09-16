@@ -65,7 +65,14 @@ internal sealed class SessionRuntime
     {
         using ISessionLockHandle handle = AcquireLifecycleLock();
         RequireSetup();
-        return await Coordinator.StartRecordedAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await Coordinator.StartRecordedAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (MxcException exception) when (exception.Code == MxcErrorCode.RuntimeUnavailable)
+        {
+            throw new SessionCapabilityUnavailableException(exception.Message, exception);
+        }
     }
 
     public string StageHelper(SessionRecord record)
@@ -103,7 +110,7 @@ internal sealed class SessionRuntime
 
         if (paths.PackageFamilyName is null)
         {
-            throw new SessionException(
+            throw new SessionCapabilityUnavailableException(
                 "OpenClaw is not running from its installed package, so it " +
                 "has no identity to provision an isolated session with.");
         }
@@ -168,8 +175,10 @@ internal sealed class SessionRuntime
         if (session.Record is null)
         {
             throw new SessionException(
-                "OpenClaw setup is incomplete because its isolated session is " +
-                "not recorded. Run `clawctl setup` again.");
+                session.Detail is null
+                    ? "OpenClaw setup is incomplete because its isolated session is " +
+                      "not recorded. Run `clawctl setup` again."
+                    : $"{session.Detail} Run `clawctl setup` again.");
         }
 
         if (setup.Record.SandboxId is { } sandboxId &&

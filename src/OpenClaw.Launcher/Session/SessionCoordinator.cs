@@ -24,6 +24,26 @@ internal class SessionException : Exception
 }
 
 /// <summary>
+/// The current installation or machine cannot host an isolated session.
+/// </summary>
+internal sealed class SessionCapabilityUnavailableException : SessionException
+{
+    public SessionCapabilityUnavailableException()
+    {
+    }
+
+    public SessionCapabilityUnavailableException(string message)
+        : base(message)
+    {
+    }
+
+    public SessionCapabilityUnavailableException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+/// <summary>
 /// The recorded session exists but cannot be used, and replacing it silently
 /// would risk abandoning a live backend session.
 /// </summary>

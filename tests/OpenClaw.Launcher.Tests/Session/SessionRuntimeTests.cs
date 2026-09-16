@@ -42,7 +42,8 @@ public sealed class SessionRuntimeTests : IDisposable
     [Fact]
     public void UnpackagedExecutionIsRefusedWithAnExplicitReason()
     {
-        SessionException failure = Assert.Throws<SessionException>(
+        SessionCapabilityUnavailableException failure =
+            Assert.Throws<SessionCapabilityUnavailableException>(
             () => SessionRuntime.Create(
                 HostPaths.ForRoot(_root, packageFamilyName: null),
                 () => throw new InvalidOperationException("not reached"),
