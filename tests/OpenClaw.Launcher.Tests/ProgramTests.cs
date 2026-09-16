@@ -1069,16 +1069,19 @@ public sealed class ProgramTests : IDisposable
     private sealed class StubbedRecoveryLifecycle(SessionRuntime runtime)
         : IInstallationLifecycle
     {
-        private static readonly IInstallationLifecycle Inner =
+        private static readonly InstallationLifecycle Inner =
             InstallationLifecycle.Production;
 
         public SessionRuntime CreateRuntime(Action<string> log) => runtime;
 
-        public Task<SessionRoutingDecision> GetSessionRoutingDecisionAsync(
+        public Task<SessionRoutingDecision> CheckSessionSupportAsync(
             CancellationToken cancellationToken) =>
             Task.FromResult(new SessionRoutingDecision(
                 SessionRouting.Session,
                 "Test session support is available."));
+
+        public NodeRuntime PrepareHostRuntime(HostOptions options, Action<string> log) =>
+            Inner.PrepareHostRuntime(options, log);
 
         public PackageRuntimeMetadata ValidatePackageRuntime(
             HostOptions options, SessionRuntime sessionRuntime) =>
