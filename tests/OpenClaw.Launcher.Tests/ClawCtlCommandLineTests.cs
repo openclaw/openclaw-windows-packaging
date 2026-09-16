@@ -70,7 +70,7 @@ public sealed class ClawCtlCommandLineTests
     {
         RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
         {
-            Setup = _ => Task.FromResult(0),
+            Setup = (_, _) => Task.FromResult(0),
             Status = _ => Task.FromResult(0),
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
@@ -98,7 +98,7 @@ public sealed class ClawCtlCommandLineTests
         int starts = 0;
         RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
         {
-            Setup = _ => Task.FromResult(0),
+            Setup = (_, _) => Task.FromResult(0),
             Status = _ => Task.FromResult(0),
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),

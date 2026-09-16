@@ -34,6 +34,9 @@ internal sealed record SessionCommandRequest(
     IReadOnlyList<string> Arguments,
     string WorkingDirectory)
 {
+    /// <summary>Guest directory that must lead the child process PATH.</summary>
+    public string? PathPrefix { get; init; }
+
     /// <summary>
     /// Values merged over the shared runtime environment for this command only.
     /// </summary>
@@ -89,7 +92,6 @@ internal sealed class SessionExecutor
             ?? throw new SessionException(
                 "The agent Node.js executable has no parent directory.");
         IReadOnlyDictionary<string, string> environment = _buildEnvironment();
-        environment.TryGetValue("PATH", out string? path);
 
         return await ExecuteCommandAsync(
             record,
@@ -99,13 +101,9 @@ internal sealed class SessionExecutor
                 BuildNodeArguments(request),
                 request.WorkingDirectory)
             {
+                PathPrefix = nodeDirectory,
                 AdditionalEnvironment = MergeEnvironment(
-                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-                    {
-                        ["PATH"] = string.IsNullOrEmpty(path)
-                            ? nodeDirectory
-                            : nodeDirectory + Path.PathSeparator + path
-                    },
+                    environment,
                     request.AdditionalEnvironment)
             },
             "Running OpenClaw in the isolated session.",
@@ -145,6 +143,7 @@ internal sealed class SessionExecutor
             WorkingDirectory = request.WorkingDirectory,
             Environment = MergeEnvironment(
                 _buildEnvironment(), request.AdditionalEnvironment),
+            PathPrefix = request.PathPrefix,
         };
 
         try
