@@ -78,10 +78,41 @@ public sealed record SessionRuntimeInstallResult
     public string? Error { get; init; }
 }
 
+/// <summary>Asks the guest to install its OpenClaw command shim.</summary>
+public sealed record SessionToolInstallRequest
+{
+    [JsonPropertyName("schemaVersion")]
+    public int SchemaVersion { get; init; } = SessionLaunchProtocol.CurrentSchemaVersion;
+
+    [JsonPropertyName("requestId")]
+    public string? RequestId { get; init; }
+
+    [JsonPropertyName("workspacePath")]
+    public string? WorkspacePath { get; init; }
+}
+
+/// <summary>Reports guest-side command shim installation.</summary>
+public sealed record SessionToolInstallResult
+{
+    [JsonPropertyName("schemaVersion")]
+    public int SchemaVersion { get; init; } = SessionLaunchProtocol.CurrentSchemaVersion;
+
+    [JsonPropertyName("requestId")]
+    public string? RequestId { get; init; }
+
+    [JsonPropertyName("shimPath")]
+    public string? ShimPath { get; init; }
+
+    [JsonPropertyName("error")]
+    public string? Error { get; init; }
+}
+
 [JsonSourceGenerationOptions(
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 [JsonSerializable(typeof(SessionRuntimeInstallRequest))]
 [JsonSerializable(typeof(SessionRuntimeInstallResult))]
+[JsonSerializable(typeof(SessionToolInstallRequest))]
+[JsonSerializable(typeof(SessionToolInstallResult))]
 internal sealed partial class SessionRuntimeJsonContext : JsonSerializerContext;
 
 public static class SessionRuntimeProtocol
@@ -95,6 +126,16 @@ public static class SessionRuntimeProtocol
         JsonSerializer.Serialize(
             result,
             SessionRuntimeJsonContext.Default.SessionRuntimeInstallResult);
+
+    public static string SerializeToolInstallRequest(SessionToolInstallRequest request) =>
+        JsonSerializer.Serialize(
+            request,
+            SessionRuntimeJsonContext.Default.SessionToolInstallRequest);
+
+    public static string SerializeToolInstallResult(SessionToolInstallResult result) =>
+        JsonSerializer.Serialize(
+            result,
+            SessionRuntimeJsonContext.Default.SessionToolInstallResult);
 
     public static SessionRuntimeInstallRequest ReadRequest(string json)
     {
@@ -122,6 +163,33 @@ public static class SessionRuntimeProtocol
         }
 
         return request;
+    }
+
+    public static SessionToolInstallRequest ReadToolInstallRequest(string json)
+    {
+        SessionToolInstallRequest request = Deserialize(
+            json,
+            SessionRuntimeJsonContext.Default.SessionToolInstallRequest,
+            "tool install request");
+        RequireCurrentSchema(request.SchemaVersion, "tool install request", "helper");
+        if (string.IsNullOrWhiteSpace(request.RequestId) ||
+            string.IsNullOrWhiteSpace(request.WorkspacePath))
+        {
+            throw new SessionLaunchException(
+                "The tool install request is missing its request ID or workspace path.");
+        }
+
+        return request;
+    }
+
+    public static SessionToolInstallResult ReadToolInstallResult(string json)
+    {
+        SessionToolInstallResult result = Deserialize(
+            json,
+            SessionRuntimeJsonContext.Default.SessionToolInstallResult,
+            "tool install result");
+        RequireCurrentSchema(result.SchemaVersion, "tool install result", "launcher");
+        return result;
     }
 
     public static SessionRuntimeInstallResult ReadResult(string json)

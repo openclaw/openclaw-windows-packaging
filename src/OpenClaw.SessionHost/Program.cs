@@ -31,13 +31,21 @@ internal static class Program
                 File.WriteAllText);
         }
 
+        if (args.Count == 2 && args[0] == "--install-tools")
+        {
+            return SessionToolInstaller.Run(
+                args[1],
+                readFile,
+                File.WriteAllText);
+        }
+
         if (args.Count != 2 || args[0] != "--request")
         {
             // No request path means no control file to report through, so this
             // is the one failure that can only surface on stderr.
             errorOutput.WriteLine(
                 "openclaw-session-host: usage: openclaw-session-host " +
-                "--request <path>");
+                "--request|--install-runtime|--install-tools <path>");
             return SessionLaunchProtocol.HelperFailureExitCode;
         }
 

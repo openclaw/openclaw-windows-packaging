@@ -403,7 +403,15 @@ internal static class Program
         string nodeDirectory = Path.GetDirectoryName(agentNodePath)
             ?? throw new Session.SessionException(
                 "The agent's Node.js runtime has no parent directory.");
-        Session.AgentTools tools = Session.AgentToolShim.Install(record.WorkspacePath!);
+        SessionToolInstallResult installedTools = await runtime.Executor.InstallToolsAsync(
+            record,
+            helperPath,
+            cancellationToken).ConfigureAwait(false);
+        Session.AgentTools tools = new(
+            Path.GetDirectoryName(installedTools.ShimPath)
+                ?? throw new Session.SessionException(
+                    "The installed agent command shim has no parent directory."),
+            installedTools.ShimPath!);
         Session.AgentShell shell = Session.AgentShellResolver.Resolve(File.Exists);
 
         await output.WriteLineAsync(

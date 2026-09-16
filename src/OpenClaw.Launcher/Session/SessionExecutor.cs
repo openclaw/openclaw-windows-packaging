@@ -265,6 +265,77 @@ internal sealed class SessionExecutor
         return merged;
     }
 
+    /// <summary>Installs the agent command shim under the guest identity.</summary>
+    public async Task<SessionToolInstallResult> InstallToolsAsync(
+        SessionRecord record,
+        string helperPath,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        ArgumentException.ThrowIfNullOrWhiteSpace(helperPath);
+        string requestId = _createRequestId();
+        using var operation = new SessionWorkspaceOperation(record, _isCurrentRecord);
+        string requestPath = operation.FilePath("tools", requestId);
+        string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
+        try
+        {
+            await operation.WriteTextNewAsync(
+                requestPath,
+                SessionRuntimeProtocol.SerializeToolInstallRequest(new SessionToolInstallRequest
+                {
+                    RequestId = requestId,
+                    WorkspacePath = record.WorkspacePath
+                }),
+                cancellationToken).ConfigureAwait(false);
+
+            _log("Installing OpenClaw agent tools in the isolated session.");
+            MxcExecutionResult execution = await _backend.ExecuteAsync(
+                record.ToSandboxIdOrThrow(),
+                new MxcExecutionRequest(
+                    BuildGuestCommandLine(helperPath, requestPath, "--install-tools")),
+                null,
+                cancellationToken).ConfigureAwait(false);
+            string resultText;
+            try
+            {
+                resultText = await operation.ReadTextAsync(resultPath, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (
+                exception is FileNotFoundException or DirectoryNotFoundException)
+            {
+                throw new SessionException(
+                    "The isolated session did not report a tool install " +
+                    DescribeMissingResult(execution));
+            }
+
+            SessionToolInstallResult result =
+                SessionRuntimeProtocol.ReadToolInstallResult(resultText);
+            if (!string.Equals(result.RequestId, requestId, StringComparison.Ordinal))
+            {
+                throw new SessionException(
+                    "The isolated session reported a tool install result for a different request.");
+            }
+            if (!string.IsNullOrWhiteSpace(result.Error))
+            {
+                throw new SessionException(
+                    $"The OpenClaw agent tools could not be installed: {result.Error}");
+            }
+            if (string.IsNullOrWhiteSpace(result.ShimPath))
+            {
+                throw new SessionException(
+                    "The isolated session did not report the installed command shim.");
+            }
+
+            return result;
+        }
+        finally
+        {
+            operation.Delete(requestPath);
+            operation.Delete(resultPath);
+        }
+    }
+
     private static List<string> BuildNodeArguments(
         SessionExecutionRequest request)
     {
