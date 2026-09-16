@@ -57,10 +57,16 @@ internal sealed class InstallationStateCleaner : IInstallationStateCleaner
             throw new SessionException("The installation state root is unsafe to clear.");
         }
 
-        if (fileSystem.DirectoryExists(fullRoot) &&
-            (fileSystem.GetAttributes(fullRoot) & FileAttributes.ReparsePoint) != 0)
+        for (DirectoryInfo? current = new DirectoryInfo(fullRoot);
+            current is not null;
+            current = current.Parent)
         {
-            throw new SessionException("The installation state root is a reparse point and cannot be cleared.");
+            if (fileSystem.DirectoryExists(current.FullName) &&
+                (fileSystem.GetAttributes(current.FullName) & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new SessionException(
+                    "The installation state root has a reparse-point ancestor and cannot be cleared.");
+            }
         }
 
         return fullRoot;

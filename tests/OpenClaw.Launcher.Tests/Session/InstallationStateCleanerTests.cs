@@ -50,4 +50,21 @@ public sealed class InstallationStateCleanerTests : IDisposable
             Path.Combine(_root, "data")));
         Assert.True(File.Exists(Path.Combine(target, "must-survive.txt")));
     }
+
+    [Fact]
+    public void ClearRejectsAReparsePointAncestor()
+    {
+        string external = Path.Combine(_root, "external");
+        string redirectedParent = Path.Combine(_root, "redirected");
+        string stateRoot = Path.Combine(redirectedParent, "state");
+        Directory.CreateDirectory(external);
+        Directory.CreateSymbolicLink(redirectedParent, external);
+        Directory.CreateDirectory(stateRoot);
+        File.WriteAllText(Path.Combine(stateRoot, "must-survive.txt"), "outside");
+
+        Assert.Throws<SessionException>(() => new InstallationStateCleaner(
+            HostPaths.ForRoot(stateRoot, "OpenClaw.Gateway_test"),
+            Path.Combine(_root, "data")));
+        Assert.True(File.Exists(Path.Combine(stateRoot, "must-survive.txt")));
+    }
 }
