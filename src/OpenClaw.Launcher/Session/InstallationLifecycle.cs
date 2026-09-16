@@ -1,4 +1,5 @@
 using OpenClaw.Launcher.Gateway;
+using OpenClaw.Launcher.Mxc;
 
 namespace OpenClaw.Launcher.Session;
 
@@ -10,8 +11,10 @@ internal interface IInstallationLifecycle
 {
     SessionRuntime CreateRuntime(Action<string> log);
 
-    Task<SessionRoutingDecision> GetSessionRoutingDecisionAsync(
+    Task<SessionRoutingDecision> CheckSessionSupportAsync(
         CancellationToken cancellationToken);
+
+    NodeRuntime PrepareHostRuntime(HostOptions options, Action<string> log);
 
     PackageRuntimeMetadata ValidatePackageRuntime(HostOptions options, SessionRuntime runtime);
 
@@ -37,16 +40,22 @@ internal sealed class InstallationLifecycle : IInstallationLifecycle
 
     public SessionRuntime CreateRuntime(Action<string> log) => SessionRuntime.Create(log);
 
-    public async Task<SessionRoutingDecision> GetSessionRoutingDecisionAsync(
+    public async Task<SessionRoutingDecision> CheckSessionSupportAsync(
         CancellationToken cancellationToken)
     {
-        Mxc.MxcReadinessReport readiness = await Mxc.MxcReadiness
-            .ProbeAsync(cancellationToken).ConfigureAwait(false);
+        MxcReadinessReport readiness = await MxcReadiness.ProbeAsync(cancellationToken)
+            .ConfigureAwait(false);
         return SessionRoutingPolicy.Decide(
             SessionMode.Automatic,
             HostPaths.Create().PackageFamilyName,
             readiness);
     }
+
+    public NodeRuntime PrepareHostRuntime(HostOptions options, Action<string> log) =>
+        NodeRuntimeInstaller.EnsureInstalled(
+            options.PackagedNodeArchivePath
+            ?? throw new FileNotFoundException("The packaged Node.js runtime archive was not found."),
+            log);
 
     public PackageRuntimeMetadata ValidatePackageRuntime(HostOptions options, SessionRuntime runtime)
     {
@@ -86,8 +95,8 @@ internal sealed class InstallationLifecycle : IInstallationLifecycle
         TeardownOrchestrator teardown =
             GatewayRuntime.CreateTeardownOrchestrator(options, runtime, log);
         return lockAlreadyHeld
-            ? teardown.RunUnderLockAsync(runtime.HelperPath, force: true, cancellationToken)
-            : teardown.RunAsync(runtime.HelperPath, force: true, cancellationToken);
+            ? teardown.RunUnderLockAsync(runtime.HelperPath, cancellationToken)
+            : teardown.RunAsync(runtime.HelperPath, cancellationToken);
     }
 
     public IInstallationStateCleaner CreateStateCleaner(SessionRuntime runtime) =>

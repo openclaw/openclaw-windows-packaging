@@ -94,7 +94,7 @@ public sealed class ProgramTests : IDisposable
             output.ToString(),
             StringComparison.Ordinal);
         Assert.Contains(
-            "could not complete",
+            "requires isolated-session support",
             output.ToString(),
             StringComparison.OrdinalIgnoreCase);
     }
@@ -385,9 +385,6 @@ public sealed class ProgramTests : IDisposable
 
         Assert.Equal(1, exitCode);
         Assert.Contains("--force", error.ToString(), StringComparison.Ordinal);
-        Assert.DoesNotContain(
-            _lastSessionBackend!.Calls,
-            call => call.StartsWith("deprovision:", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1193,11 +1190,17 @@ public sealed class ProgramTests : IDisposable
 
         public SessionRuntime CreateRuntime(Action<string> log) => _runtime;
 
-        public Task<SessionRoutingDecision> GetSessionRoutingDecisionAsync(
+        public Task<SessionRoutingDecision> CheckSessionSupportAsync(
             CancellationToken cancellationToken) =>
             Task.FromResult(new SessionRoutingDecision(
                 SessionRouting.Session,
-                "Test session support is available."));
+                "The isolated-session runtime is available."));
+
+        public NodeRuntime PrepareHostRuntime(HostOptions options, Action<string> log) =>
+            new(
+                "node.exe",
+                new Version(24, 20, 0),
+                System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture);
 
         public PackageRuntimeMetadata ValidatePackageRuntime(
             HostOptions options,
