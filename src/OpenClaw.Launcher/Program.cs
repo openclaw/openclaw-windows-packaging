@@ -361,7 +361,10 @@ internal static class Program
                         .GetStatusAsync(GetSessionRuntime().HelperPath, cancellationToken)
                         .ConfigureAwait(false);
                     await Gateway.GatewayControlOutput.WriteStatusAsync(
-                        output, result, runtime.Paths, cancellationToken).ConfigureAwait(false);
+                        output,
+                        result,
+                        runtime.GetRecordedWorkspacePath(),
+                        cancellationToken).ConfigureAwait(false);
                     return result.State is Gateway.GatewayState.Running or Gateway.GatewayState.NotStarted
                         ? 0 : 1;
                 },

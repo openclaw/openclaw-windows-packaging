@@ -12,14 +12,18 @@ internal static class GatewayControlOutput
     public static async Task WriteStatusAsync(
         TextWriter output,
         GatewayStatusReport result,
-        HostPaths paths,
+        string? workspacePath,
         CancellationToken cancellationToken)
     {
         await output.WriteLineAsync(result.Message).ConfigureAwait(false);
         await WriteDetailAsync(output, result.Detail).ConfigureAwait(false);
         if (result.State is GatewayState.Stopped or GatewayState.Unhealthy)
         {
-            await WriteLogTailAsync(output, paths, cancellationToken).ConfigureAwait(false);
+            await WriteLogTailAsync(
+                output,
+                workspacePath,
+                result.Record?.LogPath,
+                cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -41,12 +45,19 @@ internal static class GatewayControlOutput
 
     private static async Task WriteLogTailAsync(
         TextWriter output,
-        HostPaths paths,
+        string? workspacePath,
+        string? logPath,
         CancellationToken cancellationToken)
     {
+        if (string.IsNullOrWhiteSpace(workspacePath) ||
+            string.IsNullOrWhiteSpace(logPath))
+        {
+            return;
+        }
+
         try
         {
-            using FileStream stream = TrustedPath.OpenRead(paths.StateRoot, paths.LogPath);
+            using FileStream stream = TrustedPath.OpenRead(workspacePath, logPath);
             if (stream.Length == 0)
             {
                 return;
@@ -81,7 +92,7 @@ internal static class GatewayControlOutput
                 return;
             }
 
-            await output.WriteLineAsync($"Gateway log tail ({paths.LogPath}):").ConfigureAwait(false);
+            await output.WriteLineAsync($"Gateway log tail ({logPath}):").ConfigureAwait(false);
             foreach (string line in tail)
             {
                 await output.WriteLineAsync(line).ConfigureAwait(false);
@@ -91,7 +102,7 @@ internal static class GatewayControlOutput
             exception is IOException or UnauthorizedAccessException or SessionException)
         {
             // A guest-writable diagnostic must not change a status command's result.
-            await output.WriteLineAsync($"Gateway log unavailable: {paths.LogPath}").ConfigureAwait(false);
+            await output.WriteLineAsync($"Gateway log unavailable: {logPath}").ConfigureAwait(false);
         }
     }
 

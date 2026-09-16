@@ -34,6 +34,9 @@ internal sealed partial class GatewayRuntime
 
     internal HostPaths Paths => _paths;
 
+    internal string? GetRecordedWorkspacePath() =>
+        _session.Coordinator.GetRecordedStatus().Record?.WorkspacePath;
+
     private SessionRuntime Session => _session;
 
     private static bool FileExists(string path) => File.Exists(path);
