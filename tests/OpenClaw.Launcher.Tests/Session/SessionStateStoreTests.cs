@@ -275,4 +275,67 @@ public sealed class SessionStateStoreTests : IDisposable
             SandboxId,
             document.RootElement.GetProperty("sandboxId").GetString());
     }
+
+    // The record file is writable by the signed-in user. Substituting only the
+    // sandbox id leaves every other identity field intact, so the record's own
+    // application check still passes and the forged id would otherwise be
+    // replayed to the backend on this installation's authority.
+    [Fact]
+    public void ASandboxIssuedToAnotherApplicationIsForeign()
+    {
+        var store = new SessionStateStore(StatePath);
+        store.Write(Record());
+        Rewrite(store, SandboxIdFor("PFN:Attacker.App_zzzzzzzzzzzzz"));
+
+        SessionStateResult result = store.Read(ApplicationId);
+
+        Assert.False(result.HasRecord);
+        Assert.Equal(SessionStateFault.ForeignIdentity, result.Fault);
+    }
+
+    [Fact]
+    public void ASandboxIssuedToThisApplicationIsUsable()
+    {
+        var store = new SessionStateStore(StatePath);
+        store.Write(Record());
+        Rewrite(store, SandboxIdFor(ApplicationId));
+
+        Assert.True(store.Read(ApplicationId).HasRecord);
+    }
+
+    // The identity stays opaque. A payload this package cannot read is not
+    // evidence of a foreign owner, and rejecting it would strand every existing
+    // session the moment the backend changed its encoding.
+    [Theory]
+    [InlineData("iso:AAAAbbbbCCCC")]
+    [InlineData("iso:!!!not-base64!!!")]
+    [InlineData("iso:eyJ2ZXJzaW9uIjoxfQ")]
+    public void AnUnreadableSandboxPayloadIsNotTreatedAsForeign(string sandboxId)
+    {
+        var store = new SessionStateStore(StatePath);
+        store.Write(Record());
+        Rewrite(store, sandboxId);
+
+        Assert.True(store.Read(ApplicationId).HasRecord);
+    }
+
+    private void Rewrite(SessionStateStore store, string sandboxId)
+    {
+        _ = store;
+        string text = File.ReadAllText(StatePath);
+        using JsonDocument document = JsonDocument.Parse(text);
+        Dictionary<string, JsonElement> fields = document.RootElement
+            .EnumerateObject()
+            .ToDictionary(property => property.Name, property => property.Value.Clone());
+        fields["sandboxId"] = JsonSerializer.SerializeToElement(sandboxId);
+        File.WriteAllText(StatePath, JsonSerializer.Serialize(fields));
+    }
+
+    private static string SandboxIdFor(string applicationId) =>
+        "iso:" + Convert.ToBase64String(
+            System.Text.Encoding.UTF8.GetBytes(
+                $"{{\"version\":1,\"agentUserName\":\"F4-F8\",\"appId\":\"{applicationId}\"}}"))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
 }

@@ -1,3 +1,6 @@
+using System.Diagnostics.CodeAnalysis;
+using System.Text.Json;
+
 namespace OpenClaw.Launcher.Mxc;
 
 internal sealed record MxcBackendProbe(
@@ -63,6 +66,84 @@ internal readonly record struct MxcSandboxId
         }
 
         return new MxcSandboxId(value, value[..separator]);
+    }
+
+    /// <summary>
+    /// Reports the application this identity was issued to, when the backend
+    /// encodes one.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The value stays opaque to this package: it is replayed verbatim and is
+    /// never rebuilt from parts. This reads the owning application only so a
+    /// caller can refuse an identity that provably belongs to someone else
+    /// before asking the backend to act on it. A record naming this
+    /// installation does not establish that the identity inside it does.
+    /// </para>
+    /// <para>
+    /// False is returned whenever the payload cannot be read, including a
+    /// backend or format this package does not recognize. Absence of evidence
+    /// is not evidence of a foreign owner, and inventing a failure here would
+    /// strand every existing session the moment the backend changed its
+    /// encoding.
+    /// </para>
+    /// </remarks>
+    public bool TryGetOwningApplicationId([NotNullWhen(true)] out string? applicationId)
+    {
+        applicationId = null;
+        if (!IsIsolationSession)
+        {
+            return false;
+        }
+
+        int separator = Value.IndexOf(':', StringComparison.Ordinal);
+        string payload = Value[(separator + 1)..];
+        if (payload.Length == 0)
+        {
+            return false;
+        }
+
+        // The payload is base64url without padding.
+        string normalized = payload.Replace('-', '+').Replace('_', '/');
+        normalized = (normalized.Length % 4) switch
+        {
+            2 => normalized + "==",
+            3 => normalized + "=",
+            0 => normalized,
+            _ => string.Empty
+        };
+        if (normalized.Length == 0)
+        {
+            return false;
+        }
+
+        byte[] decoded;
+        try
+        {
+            decoded = Convert.FromBase64String(normalized);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(decoded);
+            if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                !document.RootElement.TryGetProperty("appId", out JsonElement appId) ||
+                appId.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            applicationId = appId.GetString();
+            return !string.IsNullOrWhiteSpace(applicationId);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     public override string ToString() => Value;
