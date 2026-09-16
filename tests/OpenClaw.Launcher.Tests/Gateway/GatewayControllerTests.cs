@@ -182,6 +182,20 @@ public sealed class GatewayControllerTests : IDisposable
         ListeningPorts = [18789]
     };
 
+    [Fact]
+    public void RuntimeDefaultsTheGatewayWorkingDirectoryToTheSessionWorkspace()
+    {
+        string workspace = Path.Combine(_root, "workspace");
+        var configuration = new GatewayConfigurationStore(Path.Combine(_root, "gateway-config.json"));
+
+        GatewayLaunchConfiguration launch = GatewayRuntime.ResolveLaunchConfiguration(
+            configuration,
+            new SessionRecord { WorkspacePath = workspace },
+            static _ => null);
+
+        Assert.Equal(workspace, launch.WorkingDirectory);
+    }
+
     // The user has to be told where their gateway actually is. OpenClaw picks
     // the port from its own configuration, so only the observed value is true.
     [Fact]
@@ -263,6 +277,40 @@ public sealed class GatewayControllerTests : IDisposable
             await controller.GetStatusAsync("helper.exe", CancellationToken.None);
 
         Assert.Equal(GatewayState.Stopped, report.State);
+    }
+
+    [Fact]
+    public async Task AStoppedGatewayReportsTheSupervisorReasonAndLogPath()
+    {
+        RecordGateway();
+        Store.Write(Store.Read().Record! with { LogPath = "gateway.log" });
+        _client.Inspection = new SessionInspectResult
+        {
+            SupervisorDetail = "the application exited with code 78"
+        };
+
+        GatewayStatusReport report = await CreateController()
+            .GetStatusAsync("helper.exe", CancellationToken.None);
+
+        Assert.Equal(GatewayState.Stopped, report.State);
+        Assert.Contains("the application exited with code 78", report.Detail!, StringComparison.Ordinal);
+        Assert.Contains("gateway.log", report.Detail!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AStartupExitReportsTheSupervisorReasonAndLogPath()
+    {
+        _client.Inspection = new SessionInspectResult
+        {
+            SupervisorDetail = "the application exited with code 78"
+        };
+
+        GatewayStartResult result = await CreateController()
+            .StartAsync("helper.exe", CancellationToken.None);
+
+        Assert.Equal(GatewayState.Stopped, result.State);
+        Assert.Contains("the application exited with code 78", result.Message, StringComparison.Ordinal);
+        Assert.Contains("gateway.log", result.Message, StringComparison.Ordinal);
     }
 
     [Fact]

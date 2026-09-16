@@ -4,8 +4,16 @@ using SessionHostProgram = OpenClaw.SessionHost.Program;
 
 namespace OpenClaw.Launcher.Tests.Session;
 
-public sealed class SessionHostProgramTests
+public sealed class SessionHostProgramTests : IDisposable
 {
+    private readonly string _root = TestDirectory.Create();
+
+    public void Dispose()
+    {
+        Directory.Delete(_root, recursive: true);
+        GC.SuppressFinalize(this);
+    }
+
     private sealed class RecordingLauncher(int exitCode) : ISessionProcessLauncher
     {
         public SessionLaunchRequest? Request { get; private set; }
@@ -63,6 +71,34 @@ public sealed class SessionHostProgramTests
             Arguments = arguments ?? [@"C:\app\openclaw.mjs"],
             WorkingDirectory = @"C:\work"
         });
+
+    [Fact]
+    public void ToolInstallModeReachesTheGuestInstallerThroughTheHelperEntrypoint()
+    {
+        string workspace = Path.Combine(_root, "workspace");
+        Directory.CreateDirectory(workspace);
+        string requestPath = Path.Combine(workspace, "tools.json");
+        File.WriteAllText(
+            requestPath,
+            SessionRuntimeProtocol.SerializeToolInstallRequest(new SessionToolInstallRequest
+            {
+                RequestId = "tools1",
+                WorkspacePath = workspace
+            }));
+
+        int exitCode = SessionHostProgram.Run(
+            ["--install-tools", requestPath],
+            new RecordingLauncher(0),
+            new StringWriter(),
+            File.ReadAllText,
+            (_, _) => throw new InvalidOperationException("The tool installer writes its own result."));
+
+        Assert.Equal(0, exitCode);
+        SessionToolInstallResult result = SessionRuntimeProtocol.ReadToolInstallResult(
+            File.ReadAllText(SessionLaunchProtocol.ResultPathFor(requestPath)));
+        Assert.Equal("tools1", result.RequestId);
+        Assert.True(File.Exists(result.ShimPath));
+    }
 
     [Fact]
     public void TheArgumentVectorReachesTheLauncherUnchanged()

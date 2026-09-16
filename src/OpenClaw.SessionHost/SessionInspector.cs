@@ -53,10 +53,11 @@ internal static class SessionInspector
             _ = process.Handle;
             if (process.HasExited)
             {
-                return new SessionInspectResult { RequestId = request.RequestId };
+                return NotFound(request, readFile);
             }
             bool matches = process.StartTime.ToUniversalTime() == request.ProcessStartTimeUtc;
             string? error = matches ? ValidateImage(process, request) : null;
+            SessionSupervisorStatus? supervisor = ReadSupervisorStatus(request.StatusPath, readFile);
 
             // Ownership is established by finding a listener belonging to this
             // process tree, not by confirming a port the host supplied. When
@@ -74,7 +75,8 @@ internal static class SessionInspector
                 RequestId = request.RequestId,
                 ProcessFound = true,
                 StartTimeMatches = matches,
-                SupervisorState = ReadSupervisorState(request.StatusPath, readFile),
+                SupervisorState = supervisor?.State,
+                SupervisorDetail = supervisor?.Detail,
                 PortListening = request.Port is int probe
                     ? GuestProcessObserver.AnythingListeningOn(probe)
                     : owned.Count > 0,
@@ -85,7 +87,7 @@ internal static class SessionInspector
         }
         catch (ArgumentException)
         {
-            return new SessionInspectResult { RequestId = request.RequestId };
+            return NotFound(request, readFile);
         }
         catch (Exception exception) when (
             exception is Win32Exception or InvalidOperationException or NotSupportedException)
@@ -104,7 +106,20 @@ internal static class SessionInspector
             ? null : "The process image differs from the recorded gateway helper.";
     }
 
-    private static string? ReadSupervisorState(
+    private static SessionInspectResult NotFound(
+        SessionInspectRequest request,
+        Func<string, string> readFile)
+    {
+        SessionSupervisorStatus? supervisor = ReadSupervisorStatus(request.StatusPath, readFile);
+        return new SessionInspectResult
+        {
+            RequestId = request.RequestId,
+            SupervisorState = supervisor?.State,
+            SupervisorDetail = supervisor?.Detail
+        };
+    }
+
+    private static SessionSupervisorStatus? ReadSupervisorStatus(
         string? statusPath,
         Func<string, string> readFile)
     {
@@ -115,7 +130,7 @@ internal static class SessionInspector
 
         try
         {
-            return SessionInspectProtocol.ReadStatus(readFile(statusPath)).State;
+            return SessionInspectProtocol.ReadStatus(readFile(statusPath));
         }
         catch (Exception exception) when (
             exception is SessionLaunchException or IOException or

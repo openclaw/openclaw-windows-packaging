@@ -81,6 +81,10 @@ public sealed record SessionInspectResult
     [JsonPropertyName("supervisorState")]
     public string? SupervisorState { get; init; }
 
+    /// <summary>What the supervising helper last recorded about its state.</summary>
+    [JsonPropertyName("supervisorDetail")]
+    public string? SupervisorDetail { get; init; }
+
     /// <summary>Something is listening on the recorded port.</summary>
     [JsonPropertyName("portListening")]
     [JsonRequired]

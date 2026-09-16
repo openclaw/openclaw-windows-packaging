@@ -120,7 +120,7 @@ internal static class Program
         }
 
         if (args[0] is not ("--request" or "--supervise" or "--inspect" or "--stop" or
-            "--collect" or "--install-runtime"))
+            "--collect" or "--install-runtime" or "--install-tools"))
         {
             return false;
         }

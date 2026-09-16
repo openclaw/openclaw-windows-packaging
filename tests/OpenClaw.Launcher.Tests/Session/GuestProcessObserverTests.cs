@@ -288,18 +288,27 @@ public sealed class SessionInspectorTests
     }
 
     [Fact]
-    public void AnExitedProcessIsReportedAsGone()
+    public void AnExitedProcessReportsItsLastSupervisorObservation()
     {
         using Process child = GuestProcessObserverTests.StartLongRunningProcess();
         GuestProcessObserverTests.Kill(child);
         child.WaitForExit();
 
         SessionInspectResult result = SessionInspector.Inspect(
-            RequestFor(child, startTimeOverride: DateTimeOffset.UnixEpoch),
-            _ => throw new FileNotFoundException());
+            RequestFor(
+                child,
+                startTimeOverride: DateTimeOffset.UnixEpoch,
+                statusPath: "status.json"),
+            _ => SessionInspectProtocol.SerializeStatus(new SessionSupervisorStatus
+            {
+                State = SessionSupervisorStatus.ExitedState,
+                Detail = "the application exited with code 78"
+            }));
 
         Assert.False(result.ProcessFound);
         Assert.False(result.IsOwnedAndHealthy);
+        Assert.Equal(SessionSupervisorStatus.ExitedState, result.SupervisorState);
+        Assert.Equal("the application exited with code 78", result.SupervisorDetail);
     }
 
     [Fact]

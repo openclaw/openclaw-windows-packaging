@@ -272,7 +272,7 @@ internal sealed class GatewayController
                 GatewayState.Running => $"The gateway is running on {DescribePorts(record)}.",
                 GatewayState.Starting => "The gateway process started but is not listening yet. Run `clawctl gateway-service status`.",
                 GatewayState.Unknown => $"The gateway launch could not be verified: {observed.Error}",
-                _ => "The gateway process exited during startup. Inspect its log."
+                _ => DescribeExitedDuringStartup(record, observed)
             });
     }
 
@@ -434,7 +434,7 @@ internal sealed class GatewayController
                 inspection.ProcessFound
                     ? "The recorded process identifier now belongs to an " +
                       "unrelated process."
-                    : null);
+                    : DescribeStoppedGateway(record, inspection));
         }
 
         return new GatewayStatusReport(
@@ -443,6 +443,28 @@ internal sealed class GatewayController
             "The gateway is running but is not serving.",
             DescribeUnhealthy(record, inspection));
     }
+
+    private static string? DescribeStoppedGateway(
+        GatewayRecord record,
+        SessionInspectResult inspection)
+    {
+        if (string.IsNullOrWhiteSpace(inspection.SupervisorDetail))
+        {
+            return null;
+        }
+
+        return string.IsNullOrWhiteSpace(record.LogPath)
+            ? $"The supervisor reported: {inspection.SupervisorDetail}"
+            : $"The supervisor reported: {inspection.SupervisorDetail} " +
+              $"Inspect the gateway log at '{record.LogPath}'.";
+    }
+
+    private static string DescribeExitedDuringStartup(
+        GatewayRecord record,
+        SessionInspectResult inspection) =>
+        DescribeStoppedGateway(record, inspection) is string detail
+            ? $"The gateway process exited during startup. {detail}"
+            : "The gateway process exited during startup. Inspect its log.";
 
     /// <summary>
     /// Explains an unhealthy gateway in terms of what was observed.

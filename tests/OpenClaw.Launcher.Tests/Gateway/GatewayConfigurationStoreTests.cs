@@ -27,12 +27,13 @@ public sealed class GatewayConfigurationStoreTests : IDisposable
     // would override `gateway.port` in OpenClaw's own configuration and move
     // the gateway away from where its clients look.
     [Fact]
-    public void AnUnconfiguredInstallationLeavesThePortToOpenClaw()
+    public void AnUnconfiguredInstallationUsesTheSuppliedGuestWorkspace()
     {
-        GatewayLaunchConfiguration resolved = Store.Resolve(_root, NoEnvironment);
+        string workspace = Path.Combine(_root, "workspace");
+        GatewayLaunchConfiguration resolved = Store.Resolve(workspace, NoEnvironment);
 
         Assert.Null(resolved.Port);
-        Assert.Equal(_root, resolved.WorkingDirectory);
+        Assert.Equal(workspace, resolved.WorkingDirectory);
     }
 
     [Fact]
