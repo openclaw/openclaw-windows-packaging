@@ -17,6 +17,22 @@ public sealed class HostEntrypointResolverTests
                 "\"C:\\Users\\someone\\AppData\\Local\\Microsoft\\WindowsApps\\openclaw.exe\" setup"));
 
     [Fact]
+    public void ControlApplicationUserModelIdSelectsTheManagementEntrypoint() =>
+        Assert.Equal(
+            HostEntrypoint.Control,
+            HostEntrypointResolver.Resolve(
+                "\"C:\\Program Files\\WindowsApps\\OpenClaw\\openclaw.exe\" setup",
+                "OpenClaw.Gateway_abc123!Control"));
+
+    [Fact]
+    public void AgentApplicationUserModelIdDoesNotSelectTheManagementEntrypoint() =>
+        Assert.Equal(
+            HostEntrypoint.Agent,
+            HostEntrypointResolver.Resolve(
+                "\"C:\\Program Files\\WindowsApps\\OpenClaw\\openclaw.exe\" setup",
+                "OpenClaw.Gateway_abc123!App"));
+
+    [Fact]
     public void UnknownOrMalformedInvocationDefaultsToAgent()
     {
         Assert.Equal(

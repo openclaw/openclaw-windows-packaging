@@ -560,17 +560,18 @@ try {
                 "//*[local-name()='Extension' and @Category='windows.appExecutionAlias']"
             )
         )
-        if ($aliasExtension.Count -ne 1) {
-            throw 'The MSIX must contain one app execution alias extension.'
+        if ($aliasExtension.Count -ne 2) {
+            throw 'The MSIX must contain public and control app execution alias extensions.'
         }
-        if ($aliasExtension[0].Executable -ne 'openclaw.exe') {
-            throw 'Both command aliases must target openclaw.exe.'
+        foreach ($extension in $aliasExtension) {
+            if ($extension.Executable -ne 'openclaw.exe') {
+                throw 'Both command aliases must target openclaw.exe.'
+            }
         }
 
         $registeredAliases = @(
-            $aliasExtension[0].SelectNodes(
-                ".//*[local-name()='ExecutionAlias']"
-            ) |
+            $aliasExtension |
+                ForEach-Object { $_.SelectNodes(".//*[local-name()='ExecutionAlias']") } |
                 ForEach-Object { $_.Alias }
         )
         foreach ($requiredAlias in @('openclaw.exe', 'clawctl.exe')) {

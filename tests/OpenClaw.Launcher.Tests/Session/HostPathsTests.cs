@@ -69,4 +69,10 @@ public sealed class HostPathsTests
         // is reported rather than thrown.
         Assert.Null(PackageIdentity.TryGetPackageFamilyName());
     }
+
+    [Fact]
+    public void ApplicationUserModelIdIsAbsentWithoutAnApplicationIdentity()
+    {
+        Assert.Null(PackageIdentity.TryGetApplicationUserModelId());
+    }
 }

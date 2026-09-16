@@ -47,6 +47,27 @@
           EntryPoint="Windows.FullTrustApplication">
           <uap5:AppExecutionAlias>
             <uap5:ExecutionAlias Alias="openclaw.exe" />
+          </uap5:AppExecutionAlias>
+        </uap5:Extension>
+      </Extensions>
+    </Application>
+    <Application
+      Id="Control"
+      Executable="openclaw.exe"
+      EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="OpenClaw Gateway"
+        Description="OpenClaw Gateway management CLI"
+        AppListEntry="none"
+        BackgroundColor="transparent"
+        Square150x150Logo="Images\Square150x150Logo.png"
+        Square44x44Logo="Images\Square44x44Logo.png" />
+      <Extensions>
+        <uap5:Extension
+          Category="windows.appExecutionAlias"
+          Executable="openclaw.exe"
+          EntryPoint="Windows.FullTrustApplication">
+          <uap5:AppExecutionAlias>
             <uap5:ExecutionAlias Alias="clawctl.exe" />
           </uap5:AppExecutionAlias>
         </uap5:Extension>

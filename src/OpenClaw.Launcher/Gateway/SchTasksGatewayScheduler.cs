@@ -348,6 +348,8 @@ internal sealed class SchTasksGatewayScheduler : IGatewayTaskScheduler
         string[] arguments,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         if (_run is not null)
         {
             return await _run(arguments, cancellationToken).ConfigureAwait(false);

@@ -342,6 +342,7 @@ public sealed class ProgramTests : IDisposable
     public async Task TeardownClearsPendingGatewayStateAfterSessionRemoval()
     {
         SessionRuntime runtime = CreateSessionRuntime();
+        bool recoveryRemoved = false;
         runtime.GatewayState.Write(new GatewayRecord
         {
             SchemaVersion = GatewayStateStore.CurrentSchemaVersion,
@@ -356,9 +357,16 @@ public sealed class ProgramTests : IDisposable
             _ => { },
             TextWriter.Null,
             TextWriter.Null,
-            createSessionRuntime: () => runtime);
+            createSessionRuntime: () => runtime,
+            removeRecovery: _ =>
+            {
+                recoveryRemoved = true;
+                return Task.FromResult(
+                    new GatewayPersistenceRemovalResult(true, false, "removed"));
+            });
 
         Assert.Equal(0, exitCode);
+        Assert.True(recoveryRemoved);
         GatewayStateResult state = runtime.GatewayState.Read();
         Assert.Equal(GatewayStateFault.Missing, state.Fault);
     }
@@ -463,7 +471,14 @@ public sealed class ProgramTests : IDisposable
                 "node.exe",
                 new Version(24, 15, 0),
                 System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture)),
-            () => runtime).ConfigureAwait(false);
+            () => runtime,
+            // Setup only reaches Ready once logon recovery is configured, and
+            // a test must never register a real scheduled task.
+            _ => Task.FromResult(new GatewayPersistenceInstallResult(
+                GatewayPersistenceState.Ready,
+                GatewayPersistenceLane.TaskScheduler,
+                "Logon recovery is configured.",
+                Changed: true))).ConfigureAwait(false);
 
         Assert.Equal(0, exitCode);
         return runtime;

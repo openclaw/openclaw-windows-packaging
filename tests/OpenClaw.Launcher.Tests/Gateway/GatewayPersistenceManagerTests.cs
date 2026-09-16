@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using OpenClaw.Launcher.Gateway;
 
 namespace OpenClaw.Launcher.Tests.Gateway;
@@ -24,7 +25,10 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
 
     private string LauncherPath => Path.Combine(StateRoot, "gateway-launcher.cmd");
 
-    private GatewayPersistenceManager CreateManager() =>
+    private string ActivationScriptPath => Path.ChangeExtension(LauncherPath, ".ps1");
+
+    private GatewayPersistenceManager CreateManager(
+        Func<string, string?>? resolveUserSid = null) =>
         new(
             _scheduler,
             new GatewayPersistenceOptions(
@@ -33,14 +37,33 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
                 LauncherPath: LauncherPath,
                 StartupFolderPath: StartupFolder,
                 WorkingDirectory: StateRoot,
-                AliasCommand: "clawctl.exe",
-                CommandProcessorPath: @"C:\Windows\System32\cmd.exe"));
+                CommandProcessorPath: @"C:\Windows\System32\cmd.exe"),
+            resolveUserSid: resolveUserSid);
 
     private GatewayTaskSnapshot DesiredSnapshot() =>
         GatewayTaskDefinition.CreateSnapshot(
             "S-1-5-21-1",
             @"C:\Windows\System32\cmd.exe",
             LauncherPath);
+
+    [Theory]
+    [InlineData(@"C:\outside\gateway-launcher.cmd")]
+    [InlineData(@"state\child\gateway-launcher.cmd")]
+    public void RejectsLauncherPathOutsideTheStateRoot(string launcherPath)
+    {
+        GatewayPersistenceOptions options = new(
+            UserSid: "S-1-5-21-1",
+            PackageFamilyName: "OpenClaw.Gateway_test",
+            LauncherPath: Path.IsPathRooted(launcherPath)
+                ? launcherPath
+                : Path.Combine(_root, launcherPath),
+            StartupFolderPath: StartupFolder,
+            WorkingDirectory: StateRoot,
+            CommandProcessorPath: @"C:\Windows\System32\cmd.exe");
+
+        Assert.Throws<ArgumentException>(() =>
+            new GatewayPersistenceManager(_scheduler, options));
+    }
 
     [Fact]
     public async Task InstallingWritesTheLauncherAndRegistersTheTask()
@@ -54,6 +77,7 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
         Assert.Equal(GatewayPersistenceLane.TaskScheduler, result.Lane);
         Assert.True(result.Changed);
         Assert.True(File.Exists(LauncherPath));
+        Assert.True(File.Exists(ActivationScriptPath));
         Assert.Contains($"register:{manager.TaskName}", _scheduler.Calls);
     }
 
@@ -74,6 +98,33 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task TheGeneratedLauncherActivatesTheOwningPackageControlApplication()
+    {
+        await CreateManager().InstallAsync(CancellationToken.None);
+
+        string launcher = await File.ReadAllTextAsync(LauncherPath, CancellationToken.None);
+        string activation = await File.ReadAllTextAsync(ActivationScriptPath, CancellationToken.None);
+
+        Assert.Contains("chcp 65001", launcher, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("OpenClaw.Gateway_test!Control", activation, StringComparison.Ordinal);
+        Assert.Contains("ActivateApplication", activation, StringComparison.Ordinal);
+        Assert.Contains("gateway-service start", activation, StringComparison.Ordinal);
+        Assert.DoesNotContain("WindowsApps", launcher + activation, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task TheControlActivationScriptFailsClosedOnMissingOrMismatchedTargets()
+    {
+        await CreateManager().InstallAsync(CancellationToken.None);
+
+        string activation = await File.ReadAllTextAsync(ActivationScriptPath, CancellationToken.None);
+
+        Assert.Contains("PackageFamilyName -eq $packageFamilyName", activation, StringComparison.Ordinal);
+        Assert.Contains("does not declare application '$applicationId'", activation, StringComparison.Ordinal);
+        Assert.Contains("does not target openclaw.exe", activation, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AMatchingRegistrationIsNotRewritten()
     {
         _scheduler.Probe = GatewayTaskProbe.Present(DesiredSnapshot());
@@ -84,6 +135,61 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
 
         Assert.Equal(GatewayPersistenceState.Ready, result.State);
         Assert.DoesNotContain(
+            _scheduler.Calls,
+            call => call.StartsWith("register:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AnAccountNameTriggerResolvingToTheOwnerSidIsNotRewritten()
+    {
+        GatewayTaskSnapshot scheduledTask = DesiredSnapshot() with
+        {
+            LogonTriggerUserId = @"CONTOSO\agent",
+        };
+        _scheduler.Probe = GatewayTaskProbe.Present(scheduledTask);
+
+        GatewayPersistenceInstallResult result = await CreateManager(
+            account => account == @"CONTOSO\agent" ? "S-1-5-21-1" : null)
+            .InstallAsync(CancellationToken.None);
+
+        Assert.Equal(GatewayPersistenceState.Ready, result.State);
+        Assert.DoesNotContain(
+            _scheduler.Calls,
+            call => call.StartsWith("register:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AnUnresolvableAccountNameTriggerIsRewritten()
+    {
+        GatewayTaskSnapshot scheduledTask = DesiredSnapshot() with
+        {
+            LogonTriggerUserId = @"CONTOSO\former-agent",
+        };
+        _scheduler.Probe = GatewayTaskProbe.Present(scheduledTask);
+
+        GatewayPersistenceInstallResult result = await CreateManager(_ => null)
+            .InstallAsync(CancellationToken.None);
+
+        Assert.Equal(GatewayPersistenceState.Ready, result.State);
+        Assert.Contains(
+            _scheduler.Calls,
+            call => call.StartsWith("register:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ATaskPointingAtAnOldPackageVersionIsRewritten()
+    {
+        _scheduler.Probe = GatewayTaskProbe.Present(DesiredSnapshot() with
+        {
+            Command = Path.Combine(_root, "old-package", "openclaw.exe"),
+            Arguments = "gateway-service start",
+        });
+
+        GatewayPersistenceInstallResult result =
+            await CreateManager().InstallAsync(CancellationToken.None);
+
+        Assert.Equal(GatewayPersistenceState.Ready, result.State);
+        Assert.Contains(
             _scheduler.Calls,
             call => call.StartsWith("register:", StringComparison.Ordinal));
     }
@@ -134,6 +240,54 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
                 manager.FallbackPath,
                 CancellationToken.None),
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FallbackStatusRequiresAnUnmodifiedLauncher()
+    {
+        _scheduler.RegisterResult = GatewayTaskOperation.Failure("Access is denied.");
+        GatewayPersistenceManager manager = CreateManager();
+        await manager.InstallAsync(CancellationToken.None);
+        await File.WriteAllTextAsync(
+            LauncherPath,
+            GatewayLauncherScript.Create(StateRoot, "stale.ps1"),
+            CancellationToken.None);
+
+        GatewayPersistenceStatus status =
+            await manager.GetStatusAsync(CancellationToken.None);
+
+        Assert.Equal(GatewayPersistenceState.NotInstalled, status.State);
+    }
+
+    [Fact]
+    public async Task FallbackStatusRejectsAGeneratedMarkerWithARedirectedTarget()
+    {
+        _scheduler.RegisterResult = GatewayTaskOperation.Failure("Access is denied.");
+        GatewayPersistenceManager manager = CreateManager();
+        await manager.InstallAsync(CancellationToken.None);
+        await File.WriteAllTextAsync(
+            manager.FallbackPath,
+            GatewayLauncherScript.CreateFallback(Path.Combine(_root, "redirected.cmd")),
+            CancellationToken.None);
+
+        GatewayPersistenceStatus status =
+            await manager.GetStatusAsync(CancellationToken.None);
+
+        Assert.Equal(GatewayPersistenceState.NotInstalled, status.State);
+    }
+
+    [Fact]
+    public async Task GeneratedCommandFilesUseUtf8WithoutABom()
+    {
+        _scheduler.RegisterResult = GatewayTaskOperation.Failure("Access is denied.");
+        GatewayPersistenceManager manager = CreateManager();
+
+        await manager.InstallAsync(CancellationToken.None);
+
+        Assert.DoesNotContain((byte)0, await File.ReadAllBytesAsync(LauncherPath));
+        Assert.DoesNotContain((byte)0, await File.ReadAllBytesAsync(manager.FallbackPath));
+        Assert.NotEqual(new byte[] { 0xEF, 0xBB, 0xBF },
+            (await File.ReadAllBytesAsync(LauncherPath))[..3]);
     }
 
     [Fact]
@@ -247,6 +401,7 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
         Assert.True(result.Succeeded);
         Assert.True(result.Changed);
         Assert.False(File.Exists(LauncherPath));
+        Assert.False(File.Exists(ActivationScriptPath));
         Assert.False(File.Exists(manager.FallbackPath));
         Assert.Contains($"delete:{manager.TaskName}", _scheduler.Calls);
     }
@@ -312,7 +467,27 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
     }
 
     [Fact]
-    public async Task TheLaunchCommandCanChangeWithoutReRegisteringTheTask()
+    public async Task AGeneratedLauncherThatCannotBeDeletedIsReported()
+    {
+        GatewayPersistenceManager manager = CreateManager();
+        await manager.InstallAsync(CancellationToken.None);
+
+        using (FileStream handle = new(
+            LauncherPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read))
+        {
+            GatewayPersistenceRemovalResult result =
+                await manager.UninstallAsync(CancellationToken.None).ConfigureAwait(true);
+
+            Assert.False(result.Succeeded);
+            Assert.Contains(LauncherPath, result.Detail, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task ThePackageActivationScriptCanChangeWithoutReRegisteringTheTask()
     {
         GatewayPersistenceManager manager = CreateManager();
         await manager.InstallAsync(CancellationToken.None);
@@ -320,8 +495,8 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
         string before = _scheduler.RegisteredXml!;
 
         await File.WriteAllTextAsync(
-            LauncherPath,
-            GatewayLauncherScript.Create(StateRoot, "stale.exe"),
+            ActivationScriptPath,
+            GatewayLauncherScript.CreateActivationScript("OpenClaw.Gateway_stale"),
             CancellationToken.None);
         GatewayPersistenceInstallResult result =
             await manager.InstallAsync(CancellationToken.None);
@@ -330,11 +505,67 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
         Assert.Equal(GatewayPersistenceState.Ready, result.State);
         Assert.Equal(before, _scheduler.RegisteredXml);
         Assert.Contains(
-            "clawctl.exe",
+            "OpenClaw.Gateway_test!Control",
             await File.ReadAllTextAsync(
-                LauncherPath,
+                ActivationScriptPath,
                 CancellationToken.None),
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ThePackageActivationSourceCompilesWithWindowsPowerShell()
+    {
+        string script = GatewayLauncherScript.CreateActivationScript(
+            "OpenClaw.Gateway_test");
+        int sourceIndex = script.IndexOf(
+            "$source = @'",
+            StringComparison.Ordinal);
+        int addTypeIndex = script.IndexOf(
+            "Add-Type -TypeDefinition $source -Language CSharp",
+            sourceIndex,
+            StringComparison.Ordinal);
+        Assert.True(sourceIndex > 0);
+        Assert.True(addTypeIndex > sourceIndex);
+        int addTypeEnd = script.IndexOf("\r\n", addTypeIndex, StringComparison.Ordinal);
+        Assert.True(addTypeEnd > addTypeIndex);
+        string compileOnlyPath = Path.Combine(_root, "compile-activation.ps1");
+        File.WriteAllText(
+            compileOnlyPath,
+            string.Concat(
+                "$ErrorActionPreference = 'Stop'\r\n",
+                script.AsSpan(sourceIndex, addTypeEnd - sourceIndex),
+                "\r\nexit 0\r\n"));
+
+        using Process process = Process.Start(new ProcessStartInfo
+        {
+            FileName = Path.Combine(
+                Environment.SystemDirectory,
+                "WindowsPowerShell",
+                "v1.0",
+                "powershell.exe"),
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            ArgumentList =
+            {
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                compileOnlyPath
+            }
+        })!;
+        string output = process.StandardOutput.ReadToEnd();
+        string error = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+
+        Assert.True(
+            process.ExitCode == 0,
+            $"Windows PowerShell exited {process.ExitCode}.{Environment.NewLine}" +
+            $"{output}{Environment.NewLine}{error}");
     }
 
     [Fact]

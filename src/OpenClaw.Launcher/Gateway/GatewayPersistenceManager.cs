@@ -1,4 +1,5 @@
 using System.Text;
+using OpenClaw.Launcher.Session;
 
 namespace OpenClaw.Launcher.Gateway;
 
@@ -26,11 +27,13 @@ internal sealed class GatewayPersistenceManager
     private readonly GatewayPersistenceOptions _options;
     private readonly GatewayTaskIdentity _identity;
     private readonly Action<string> _log;
+    private readonly Func<string, string?> _resolveUserSid;
 
     public GatewayPersistenceManager(
         IGatewayTaskScheduler scheduler,
         GatewayPersistenceOptions options,
-        Action<string>? log = null)
+        Action<string>? log = null,
+        Func<string, string?>? resolveUserSid = null)
     {
         ArgumentNullException.ThrowIfNull(scheduler);
         ArgumentNullException.ThrowIfNull(options);
@@ -41,6 +44,9 @@ internal sealed class GatewayPersistenceManager
             options.PackageFamilyName,
             options.UserSid);
         _log = log ?? (_ => { });
+        _resolveUserSid = resolveUserSid ?? (_ => null);
+        _ = LauncherPath;
+        _ = FallbackPath;
     }
 
     public string TaskName => _identity.Name;
@@ -50,9 +56,17 @@ internal sealed class GatewayPersistenceManager
     /// name so the public and internal packages cannot overwrite each other's
     /// fallback in a folder they both write to.
     /// </summary>
-    public string FallbackPath => Path.Combine(
+    public string FallbackPath => ResolveOwnedFilePath(
         _options.StartupFolderPath,
         $"{GatewayTaskIdentity.DisplayName} {_options.PackageFamilyName}.cmd");
+
+    private string LauncherPath => ResolveOwnedFilePath(
+        _options.WorkingDirectory,
+        _options.LauncherPath);
+
+    private string ActivationScriptPath => ResolveOwnedFilePath(
+        _options.WorkingDirectory,
+        Path.ChangeExtension(LauncherPath, ".ps1"));
 
     public async Task<GatewayPersistenceStatus> GetStatusAsync(
         CancellationToken cancellationToken)
@@ -71,7 +85,7 @@ internal sealed class GatewayPersistenceManager
                 RepairCommand);
         }
 
-        bool fallbackPresent = FallbackMatches();
+        bool fallbackPresent = FallbackMatches() && LauncherMatches();
 
         if (probe.Presence == GatewayTaskPresence.Missing)
         {
@@ -163,7 +177,7 @@ internal sealed class GatewayPersistenceManager
 
         if (alreadyCorrect)
         {
-            RemoveFallback();
+            _ = RemoveFallback();
             return new GatewayPersistenceInstallResult(
                 GatewayPersistenceState.Ready,
                 GatewayPersistenceLane.TaskScheduler,
@@ -179,7 +193,7 @@ internal sealed class GatewayPersistenceManager
         if (registration.Succeeded)
         {
             _log($"Registered the logon task '{_identity.Name}'.");
-            RemoveFallback();
+            _ = RemoveFallback();
             return new GatewayPersistenceInstallResult(
                 GatewayPersistenceState.Ready,
                 GatewayPersistenceLane.TaskScheduler,
@@ -197,16 +211,35 @@ internal sealed class GatewayPersistenceManager
             _identity.Name,
             cancellationToken).ConfigureAwait(false);
 
-        bool changed = RemoveFallback();
-        changed |= RemoveLauncher();
+        CleanupResult fallback = RemoveFallback();
+        CleanupResult launcher = RemoveLauncher();
+        CleanupResult activationScript = RemoveActivationScript();
+        bool changed =
+            fallback == CleanupResult.Removed ||
+            launcher == CleanupResult.Removed ||
+            activationScript == CleanupResult.Removed;
 
-        if (!deletion.Succeeded)
+        if (!deletion.Succeeded ||
+            fallback == CleanupResult.Failed ||
+            launcher == CleanupResult.Failed ||
+            activationScript == CleanupResult.Failed)
         {
             return new GatewayPersistenceRemovalResult(
                 Succeeded: false,
                 changed,
                 "Logon recovery could not be fully removed.",
-                deletion.Detail);
+                Combine(
+                    deletion.Succeeded ? null : deletion.Detail,
+                    Combine(
+                        fallback == CleanupResult.Failed
+                            ? $"'{FallbackPath}' could not be removed."
+                            : null,
+                        launcher == CleanupResult.Failed
+                            ? $"'{_options.LauncherPath}' could not be removed."
+                            : null,
+                        activationScript == CleanupResult.Failed
+                            ? $"'{ActivationScriptPath}' could not be removed."
+                            : null)));
         }
 
         return new GatewayPersistenceRemovalResult(
@@ -239,7 +272,7 @@ internal sealed class GatewayPersistenceManager
         {
             differences.Add("The logon trigger is disabled.");
         }
-        else if (!Same(actual.LogonTriggerUserId, desired.LogonTriggerUserId))
+        else if (!MatchesUserSid(actual.LogonTriggerUserId, desired.LogonTriggerUserId))
         {
             differences.Add("The logon trigger is scoped to a different user.");
         }
@@ -329,13 +362,17 @@ internal sealed class GatewayPersistenceManager
     {
         string content = GatewayLauncherScript.Create(
             _options.WorkingDirectory,
-            _options.AliasCommand);
+            ActivationScriptPath);
+        string activationScript =
+            GatewayLauncherScript.CreateActivationScript(_options.PackageFamilyName);
 
         Directory.CreateDirectory(
-            Path.GetDirectoryName(_options.LauncherPath)
+            Path.GetDirectoryName(LauncherPath)
             ?? throw new InvalidOperationException(
-                $"'{_options.LauncherPath}' has no parent directory."));
-        return WriteGeneratedFile(_options.LauncherPath, content);
+                $"'{LauncherPath}' has no parent directory."));
+        bool launcherChanged = WriteGeneratedFile(LauncherPath, content);
+        bool activationChanged = WriteGeneratedFile(ActivationScriptPath, activationScript);
+        return launcherChanged || activationChanged;
     }
 
     private static bool WriteGeneratedFile(string path, string content)
@@ -355,9 +392,7 @@ internal sealed class GatewayPersistenceManager
             }
         }
 
-        // Cmd.exe recognizes UTF-16 batch files and retains non-ASCII profile
-        // paths, unlike the active console code page.
-        File.WriteAllText(path, content, Encoding.Unicode);
+        File.WriteAllText(path, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         return true;
     }
 
@@ -365,12 +400,18 @@ internal sealed class GatewayPersistenceManager
     {
         try
         {
-            return File.Exists(_options.LauncherPath) &&
+            return File.Exists(LauncherPath) &&
                    string.Equals(
-                       File.ReadAllText(_options.LauncherPath),
+                       File.ReadAllText(LauncherPath),
                        GatewayLauncherScript.Create(
                            _options.WorkingDirectory,
-                           _options.AliasCommand),
+                           ActivationScriptPath),
+                       StringComparison.Ordinal) &&
+                   File.Exists(ActivationScriptPath) &&
+                   string.Equals(
+                       File.ReadAllText(ActivationScriptPath),
+                       GatewayLauncherScript.CreateActivationScript(
+                           _options.PackageFamilyName),
                        StringComparison.Ordinal);
         }
         catch (Exception exception) when (
@@ -385,8 +426,10 @@ internal sealed class GatewayPersistenceManager
         try
         {
             return File.Exists(FallbackPath) &&
-                   GatewayLauncherScript.LooksGenerated(
-                       File.ReadAllText(FallbackPath));
+                   string.Equals(
+                       File.ReadAllText(FallbackPath),
+                       GatewayLauncherScript.CreateFallback(_options.LauncherPath),
+                       StringComparison.Ordinal);
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException)
@@ -395,47 +438,60 @@ internal sealed class GatewayPersistenceManager
         }
     }
 
-    private bool RemoveFallback()
+    private CleanupResult RemoveFallback() =>
+        RemoveGeneratedFile(FallbackPath);
+
+    private CleanupResult RemoveLauncher() =>
+        RemoveGeneratedFile(LauncherPath);
+
+    private CleanupResult RemoveActivationScript() =>
+        RemoveGeneratedFile(ActivationScriptPath);
+
+    private static CleanupResult RemoveGeneratedFile(string path)
     {
         // Only a file this installation generated is deleted. A same-named file
         // someone else placed there is left alone.
         try
         {
-            if (!File.Exists(FallbackPath) ||
-                !GatewayLauncherScript.LooksGenerated(File.ReadAllText(FallbackPath)))
+            if (!File.Exists(path) ||
+                !GatewayLauncherScript.LooksGenerated(File.ReadAllText(path)))
             {
-                return false;
+                return CleanupResult.Absent;
             }
 
-            File.Delete(FallbackPath);
-            return true;
+            File.Delete(path);
+            return CleanupResult.Removed;
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException)
         {
-            return false;
+            return CleanupResult.Failed;
         }
     }
 
-    private bool RemoveLauncher()
-    {
-        try
-        {
-            if (!File.Exists(_options.LauncherPath) ||
-                !GatewayLauncherScript.LooksGenerated(
-                    File.ReadAllText(_options.LauncherPath)))
-            {
-                return false;
-            }
+    private bool MatchesUserSid(string userId, string desiredSid) =>
+        Same(userId, desiredSid) ||
+        Same(_resolveUserSid(userId) ?? string.Empty, desiredSid);
 
-            File.Delete(_options.LauncherPath);
-            return true;
-        }
-        catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException)
+    private static string ResolveOwnedFilePath(string directory, string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        string root = Path.GetFullPath(directory)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string candidate = Path.GetFullPath(
+            Path.IsPathRooted(path) ? path : Path.Combine(root, path));
+        string? parent = Path.GetDirectoryName(candidate);
+        if (!string.Equals(parent, root, StringComparison.OrdinalIgnoreCase))
         {
-            return false;
+            throw new ArgumentException(
+                $"'{path}' is not a direct child of '{directory}'.",
+                nameof(path));
         }
+
+        TrustedPath.EnsureNoReparsePoints(root, candidate);
+        return candidate;
     }
 
     private static string? Combine(string? first, string? second) =>
@@ -447,6 +503,16 @@ internal sealed class GatewayPersistenceManager
             _ => $"{first} {second}"
         };
 
+    private static string? Combine(string? first, string? second, string? third) =>
+        Combine(first, Combine(second, third));
+
     private static bool Same(string left, string right) =>
         string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
+
+    private enum CleanupResult
+    {
+        Absent,
+        Removed,
+        Failed,
+    }
 }

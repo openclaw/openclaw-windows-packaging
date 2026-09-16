@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Security.Principal;
 using OpenClaw.Launcher.Session;
 
@@ -6,6 +7,9 @@ namespace OpenClaw.Launcher.Gateway;
 /// <summary>Assembles gateway management from the running installation.</summary>
 internal sealed class GatewayRuntime
 {
+    private static readonly Guid StartupFolderId =
+        new("B97D20BB-F46A-4C97-BA10-5E3608430854");
+
     private GatewayRuntime(GatewayController controller, string helperPath)
     {
         Controller = controller;
@@ -34,11 +38,58 @@ internal sealed class GatewayRuntime
                 userSid,
                 packageFamilyName,
                 paths.GatewayLauncherPath,
-                Environment.GetFolderPath(Environment.SpecialFolder.Startup),
+                GetStartupFolderPath(),
                 paths.StateRoot,
-                Path.Combine(AppContext.BaseDirectory, "openclaw.exe"),
                 Path.Combine(Environment.SystemDirectory, "cmd.exe")),
-            log);
+            log,
+            ResolveUserSid);
+    }
+
+    private static string GetStartupFolderPath()
+    {
+        int result = SHGetKnownFolderPath(
+            StartupFolderId,
+            flags: 0,
+            token: IntPtr.Zero,
+            out IntPtr path);
+        if (result < 0)
+        {
+            throw new SessionException(
+                $"Windows could not resolve the Startup folder " +
+                $"(HRESULT 0x{result:X8}).");
+        }
+
+        try
+        {
+            return Marshal.PtrToStringUni(path)
+                ?? throw new SessionException(
+                    "Windows returned an empty Startup folder path.");
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(path);
+        }
+    }
+
+    [DllImport("shell32.dll")]
+    private static extern int SHGetKnownFolderPath(
+        in Guid folderId,
+        uint flags,
+        IntPtr token,
+        out IntPtr path);
+
+    private static string? ResolveUserSid(string accountName)
+    {
+        try
+        {
+            return new NTAccount(accountName)
+                .Translate(typeof(SecurityIdentifier))
+                .Value;
+        }
+        catch (IdentityNotMappedException)
+        {
+            return null;
+        }
     }
 
     public static GatewayRuntime Create(

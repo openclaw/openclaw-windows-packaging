@@ -257,7 +257,9 @@ internal static class Program
         Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null,
         Func<Session.SessionRuntime>? createSessionRuntime = null,
         Func<CancellationToken, Task<Gateway.GatewayPersistenceInstallResult>>?
-            installRecovery = null)
+            installRecovery = null,
+        Func<CancellationToken, Task<Gateway.GatewayPersistenceRemovalResult>>?
+            removeRecovery = null)
     {
         Session.SessionRuntime? sessionRuntime = null;
         Session.SessionRuntime GetSessionRuntime() =>
@@ -365,6 +367,22 @@ internal static class Program
                     Session.SessionRuntime runtime = GetSessionRuntime();
                     using Session.ISessionLockHandle handle =
                         runtime.AcquireLifecycleLock();
+                    Gateway.GatewayPersistenceRemovalResult recoveryRemoval =
+                        removeRecovery is null
+                            ? await Gateway.GatewayRuntime
+                                .CreateRecoveryManager(log)
+                                .UninstallAsync(cancellationToken)
+                                .ConfigureAwait(false)
+                            : await removeRecovery(cancellationToken)
+                                .ConfigureAwait(false);
+                    if (!recoveryRemoval.Succeeded)
+                    {
+                        await error.WriteLineAsync(
+                            $"OpenClaw recovery could not be removed: {recoveryRemoval.Detail}")
+                            .ConfigureAwait(false);
+                        return 1;
+                    }
+
                     await runtime.Coordinator.RemoveAsync(cancellationToken)
                         .ConfigureAwait(false);
                     runtime.GatewayState.Clear();

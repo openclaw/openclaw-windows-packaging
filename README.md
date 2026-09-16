@@ -2,8 +2,8 @@
 
 This repository builds a Windows MSIX package containing:
 
-- one .NET 10 NativeAOT launcher exposed through the `openclaw` and `clawctl`
-  app execution aliases;
+- one .NET 10 NativeAOT launcher exposed through separate packaged
+  `openclaw` and `clawctl` application identities and app execution aliases;
 - a pinned, verified build of
   [`openclaw/openclaw`](https://github.com/openclaw/openclaw);
 - the official Node.js archive matching the upstream build's runtime version
@@ -17,9 +17,10 @@ packages.
 
 ## Command model
 
-Both aliases activate the same packaged `openclaw.exe`. The launcher recovers
-the alias used to start it from the native process command line and selects one
-of two deliberately separate surfaces.
+Both application identities activate the same packaged `openclaw.exe`. The
+launcher recovers either the package-qualified application identity or the alias
+used to start it from the native process command line and selects one of two
+deliberately separate surfaces.
 
 ### `openclaw`
 

@@ -17,10 +17,19 @@ internal static class HostEntrypointResolver
     private static extern IntPtr GetCommandLineW();
 
     public static HostEntrypoint Resolve() =>
-        Resolve(TryGetNativeCommandLine());
+        Resolve(TryGetNativeCommandLine(), PackageIdentity.TryGetApplicationUserModelId());
 
-    internal static HostEntrypoint Resolve(string? commandLine)
+    internal static HostEntrypoint Resolve(
+        string? commandLine,
+        string? applicationUserModelId = null)
     {
+        if (applicationUserModelId?.EndsWith(
+            "!" + Gateway.GatewayLauncherScript.ControlApplicationId,
+            StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return HostEntrypoint.Control;
+        }
+
         return TryMatch(GetInvokedName(commandLine), out HostEntrypoint invoked)
             ? invoked
             : HostEntrypoint.Agent;

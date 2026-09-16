@@ -9,6 +9,7 @@ internal static class PackageIdentity
 {
     private const int ErrorInsufficientBuffer = 122;
     private const int AppModelErrorNoPackage = 15700;
+    private const int AppModelErrorNoApplication = 15703;
 
     /// <summary>
     /// Prefix required by MXC when a packaged caller provisions a sandbox.
@@ -29,9 +30,25 @@ internal static class PackageIdentity
             return null;
         }
 
+        return TryGetPackageIdentity(GetCurrentPackageFamilyName);
+    }
+
+    public static string? TryGetApplicationUserModelId()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return null;
+        }
+
+        return TryGetPackageIdentity(GetCurrentApplicationUserModelId);
+    }
+
+    private static string? TryGetPackageIdentity(
+        PackageIdentityReader readIdentity)
+    {
         uint length = 0;
-        int result = GetCurrentPackageFamilyName(ref length, null);
-        if (result == AppModelErrorNoPackage)
+        int result = readIdentity(ref length, null);
+        if (result is AppModelErrorNoPackage or AppModelErrorNoApplication)
         {
             return null;
         }
@@ -43,7 +60,7 @@ internal static class PackageIdentity
         }
 
         var value = new char[length];
-        result = GetCurrentPackageFamilyName(ref length, value);
+        result = readIdentity(ref length, value);
         if (result != 0)
         {
             throw new InvalidOperationException(
@@ -69,6 +86,16 @@ internal static class PackageIdentity
         ref uint packageFamilyNameLength,
         [Out, MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 0)]
         char[]? packageFamilyName);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetCurrentApplicationUserModelId(
+        ref uint applicationUserModelIdLength,
+        [Out, MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 0)]
+        char[]? applicationUserModelId);
+
+    private delegate int PackageIdentityReader(
+        ref uint length,
+        char[]? value);
 }
 
 /// <summary>

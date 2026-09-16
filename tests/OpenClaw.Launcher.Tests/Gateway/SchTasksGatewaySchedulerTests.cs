@@ -38,6 +38,24 @@ public sealed class SchTasksGatewaySchedulerTests
         });
 
     [Fact]
+    public async Task AnAlreadyCancelledRequestDoesNotInvokeTheScheduler()
+    {
+        bool invoked = false;
+        SchTasksGatewayScheduler scheduler = new((_, _) =>
+        {
+            invoked = true;
+            return Task.FromResult(new SchTasksGatewayScheduler.SchTasksOutcome(0, string.Empty, string.Empty));
+        });
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => scheduler.QueryAsync(TaskName, cancellation.Token));
+
+        Assert.False(invoked);
+    }
+
+    [Fact]
     public async Task AnAbsentTaskIsMissingWhenDiagnosticsAreNotEnglish()
     {
         SchTasksGatewayScheduler scheduler = CreateScheduler(
