@@ -57,14 +57,25 @@ internal sealed class WindowsHostConsole : IHostConsole
         _encoding = encoding ?? new ConsoleEncoding();
     }
 
-    public bool IsInteractive
+    public bool IsInteractive => IsInteractiveOutput(Console.Out);
+
+    internal bool IsInteractiveOutput(TextWriter output)
     {
-        get
+        ArgumentNullException.ThrowIfNull(output);
+
+        uint standardHandle = ReferenceEquals(output, Console.Out)
+            ? StdOutput
+            : ReferenceEquals(output, Console.Error)
+                ? StdError
+                : 0;
+        if (standardHandle == 0)
         {
-            nint output = _native.GetStdHandle(StdOutput);
-            return output != 0 && output != InvalidHandle &&
-                _native.GetConsoleMode(output, out _);
+            return false;
         }
+
+        nint handle = _native.GetStdHandle(standardHandle);
+        return handle != 0 && handle != InvalidHandle &&
+            _native.GetConsoleMode(handle, out _);
     }
 
     public void InitializeUtf8()
@@ -77,6 +88,55 @@ internal sealed class WindowsHostConsole : IHostConsole
         TrySetEncoding(
             encoding => _encoding.OutputEncoding = encoding,
             new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+    }
+
+    internal bool TryEnableVirtualTerminalProcessing(
+        TextWriter output,
+        Action<string> log,
+        out IDisposable? restore)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(log);
+        restore = null;
+
+        uint standardHandle = ReferenceEquals(output, Console.Out)
+            ? StdOutput
+            : ReferenceEquals(output, Console.Error)
+                ? StdError
+                : 0;
+        if (standardHandle == 0)
+        {
+            return false;
+        }
+
+        nint handle = _native.GetStdHandle(standardHandle);
+        if (handle == 0 || handle == InvalidHandle ||
+            !_native.GetConsoleMode(handle, out uint mode))
+        {
+            return false;
+        }
+
+        if ((mode & EnableVirtualTerminalProcessing) != 0)
+        {
+            return true;
+        }
+
+        try
+        {
+            if (!_native.SetConsoleMode(handle, mode | EnableVirtualTerminalProcessing))
+            {
+                return false;
+            }
+
+            restore = new VirtualTerminalScope(_native, handle, mode, log);
+            return true;
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or
+            System.ComponentModel.Win32Exception)
+        {
+            log($"Could not enable colored console output: {exception.Message}");
+            return false;
+        }
     }
 
     public IDisposable Capture(Action<string> log)
@@ -230,6 +290,46 @@ internal sealed class WindowsHostConsole : IHostConsole
                 InvalidOperationException or System.ComponentModel.Win32Exception)
             {
                 _log($"Console {name} restoration failed: {exception.Message}");
+            }
+        }
+    }
+
+    private sealed class VirtualTerminalScope : IDisposable
+    {
+        private readonly IConsoleNativeApi _native;
+        private readonly nint _handle;
+        private readonly uint _mode;
+        private readonly Action<string> _log;
+        private int _disposed;
+
+        public VirtualTerminalScope(
+            IConsoleNativeApi native,
+            nint handle,
+            uint mode,
+            Action<string> log)
+        {
+            _native = native;
+            _handle = handle;
+            _mode = mode;
+            _log = log;
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+
+            try
+            {
+                _native.WriteConsole(_handle, "\u001b[0m");
+                _native.SetConsoleMode(_handle, _mode);
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or
+                System.ComponentModel.Win32Exception)
+            {
+                _log($"Could not restore console output mode: {exception.Message}");
             }
         }
     }

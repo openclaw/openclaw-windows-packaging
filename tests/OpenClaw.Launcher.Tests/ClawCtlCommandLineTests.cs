@@ -52,7 +52,7 @@ public sealed class ClawCtlCommandLineTests
 
         Assert.Contains("setup", help, StringComparison.Ordinal);
         Assert.Contains("--version", help, StringComparison.Ordinal);
-        Assert.Contains("bundled Node.js", help, StringComparison.Ordinal);
+        Assert.Contains("ready", help, StringComparison.Ordinal);
         Assert.Contains("clawctl setup", help, StringComparison.Ordinal);
         Assert.Contains("openclaw <arguments>", help, StringComparison.Ordinal);
     }
@@ -110,6 +110,37 @@ public sealed class ClawCtlCommandLineTests
 
         Assert.Equal(0, exitCode);
         Assert.Equal(1, starts);
+    }
+
+    [Theory]
+    [InlineData("setup --no-color")]
+    [InlineData("--no-color status")]
+    [InlineData("status --no-color")]
+    [InlineData("collect-logs --no-color")]
+    [InlineData("teardown --no-color")]
+    [InlineData("pwsh --no-color")]
+    [InlineData("gateway-service start --no-color")]
+    [InlineData("gateway-service status --no-color")]
+    [InlineData("gateway-service stop --no-color")]
+    public async Task NoColorIsAvailableToEveryCommand(string commandLine)
+    {
+        var outputOptions = new ClawCtlOutputOptions();
+        RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
+        {
+            Setup = (_, _) => Task.FromResult(0),
+            Status = _ => Task.FromResult(0),
+            CollectLogs = (_, _) => Task.FromResult(0),
+            Teardown = (_, _) => Task.FromResult(0),
+            PowerShell = _ => Task.FromResult(0),
+            GatewayStart = _ => Task.FromResult(0),
+            GatewayStatus = _ => Task.FromResult(0),
+            GatewayStop = _ => Task.FromResult(0)
+        }, outputOptions);
+
+        int exitCode = await root.Parse(commandLine).InvokeAsync();
+
+        Assert.Equal(0, exitCode);
+        Assert.True(outputOptions.NoColor);
     }
 
     [Fact]

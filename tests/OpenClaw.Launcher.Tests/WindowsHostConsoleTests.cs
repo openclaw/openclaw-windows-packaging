@@ -55,7 +55,8 @@ public sealed class WindowsHostConsoleTests
         {
             InputCodePage = 0,
             OutputCodePage = 0,
-            OutputIsConsole = false
+            OutputIsConsole = false,
+            ErrorIsConsole = false
         };
         var console = new WindowsHostConsole(native);
 
@@ -110,6 +111,39 @@ public sealed class WindowsHostConsoleTests
         Assert.Equal(1252u, native.OutputCodePage);
     }
 
+    [Fact]
+    public void VirtualTerminalScopeEnablesAndRestoresOutputMode()
+    {
+        var native = new FakeConsoleNativeApi { OutputMode = 0x20 };
+        var console = new WindowsHostConsole(native);
+
+        bool enabled = console.TryEnableVirtualTerminalProcessing(
+            Console.Out,
+            _ => { },
+            out IDisposable? restore);
+
+        Assert.True(enabled);
+        Assert.Equal(0x24u, native.OutputMode);
+        restore!.Dispose();
+        Assert.Equal(0x20u, native.OutputMode);
+        Assert.Equal("\u001b[0m", Assert.Single(native.Writes));
+    }
+
+    [Fact]
+    public void InteractivityIsResolvedForTheSelectedOutputStream()
+    {
+        var native = new FakeConsoleNativeApi
+        {
+            OutputIsConsole = false,
+            ErrorIsConsole = true
+        };
+        var console = new WindowsHostConsole(native);
+
+        Assert.False(console.IsInteractiveOutput(Console.Out));
+        Assert.True(console.IsInteractiveOutput(Console.Error));
+        Assert.False(console.IsInteractiveOutput(new StringWriter()));
+    }
+
     private sealed class FakeConsoleNativeApi : IConsoleNativeApi
     {
         public uint InputMode { get; set; }
@@ -117,6 +151,7 @@ public sealed class WindowsHostConsoleTests
         public uint InputCodePage { get; set; }
         public uint OutputCodePage { get; set; }
         public bool OutputIsConsole { get; set; } = true;
+        public bool ErrorIsConsole { get; set; } = true;
         public List<string> Writes { get; } = [];
         public List<(nint Handle, uint Mode)> SetModes { get; } = [];
         public List<uint> SetCodePages { get; } = [];
@@ -138,7 +173,7 @@ public sealed class WindowsHostConsoleTests
             }
 
             mode = OutputMode;
-            return OutputIsConsole;
+            return handle == 2 ? OutputIsConsole : ErrorIsConsole;
         }
 
         public bool SetConsoleMode(nint handle, uint mode)

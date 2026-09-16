@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace OpenClaw.Launcher.Tests;
 
 // Startup is the part of the host that owns diagnostics, argument routing, the
@@ -35,7 +37,7 @@ public sealed class ProgramStartupTests : IDisposable
     // The library's default exception handler is disabled so this boundary,
     // not System.CommandLine, reports operational failures.
     [Fact]
-    public async Task OperationalFailureReportsTheDiagnosticPathAndExitsNonZero()
+    public async Task OperationalFailureRecommendsCollectingLogsAndExitsNonZero()
     {
         using var output = new StringWriter();
         using var error = new StringWriter();
@@ -46,12 +48,51 @@ public sealed class ProgramStartupTests : IDisposable
             CreateStartup(logPath, output, error));
 
         Assert.Equal(1, exitCode);
-        Assert.Contains(logPath, error.ToString(), StringComparison.Ordinal);
+        Assert.Contains("clawctl collect-logs", error.ToString(), StringComparison.Ordinal);
+        Assert.Contains(
+            "https://github.com/openclaw/openclaw-windows-packaging/issues",
+            error.ToString(),
+            StringComparison.Ordinal);
         Assert.DoesNotContain("package is ready", output.ToString(), StringComparison.Ordinal);
         Assert.Contains(
             "Unhandled failure",
             await File.ReadAllTextAsync(logPath),
             StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OperationalFailureStillExitsAndDisposesDiagnosticsWhenRenderingFails(
+        bool disposed)
+    {
+        using var output = new StringWriter();
+        TextWriter error = disposed
+            ? new UnavailableTextWriter(new ObjectDisposedException("stderr"))
+            : new UnavailableTextWriter(new IOException("stderr is unavailable"));
+        string logPath = Path.Combine(_testDirectory, "logs", "openclaw.log");
+        HostDiagnosticLog diagnostics = HostDiagnosticLog.Create(logPath);
+        HostStartup startup = new()
+        {
+            Entrypoint = HostEntrypoint.Control,
+            CreateDiagnostics = () => diagnostics,
+            BaseDirectory = _testDirectory,
+            Output = output,
+            Error = error
+        };
+
+        int exitCode = await Program.RunAsync(["setup"], startup);
+
+        Assert.Equal(1, exitCode);
+        string log = await File.ReadAllTextAsync(logPath);
+        Assert.Contains("Unhandled failure", log, StringComparison.Ordinal);
+        Assert.Contains(
+            disposed
+                ? "Failure output to standard error failed: ObjectDisposedException."
+                : "Failure output to standard error failed: IOException.",
+            log,
+            StringComparison.Ordinal);
+        Assert.Throws<ObjectDisposedException>(() => diagnostics.Write("after return"));
     }
 
     // Losing the log must not take the command down with it: the host warns
@@ -134,5 +175,12 @@ public sealed class ProgramStartupTests : IDisposable
     {
         Directory.Delete(_testDirectory, recursive: true);
         GC.SuppressFinalize(this);
+    }
+
+    private sealed class UnavailableTextWriter(Exception exception) : TextWriter
+    {
+        public override Encoding Encoding => Encoding.UTF8;
+
+        public override void WriteLine(string? value) => throw exception;
     }
 }

@@ -35,4 +35,8 @@ internal sealed class FailIfWorkStartsLifecycle : IInstallationLifecycle
     public Task<GatewayPersistenceInstallResult> InstallRecoveryAsync(
         Action<string> log,
         CancellationToken cancellationToken) => throw Fail();
+
+    public Task<GatewayPersistenceStatus> GetRecoveryStatusAsync(
+        Action<string> log,
+        CancellationToken cancellationToken) => throw Fail();
 }

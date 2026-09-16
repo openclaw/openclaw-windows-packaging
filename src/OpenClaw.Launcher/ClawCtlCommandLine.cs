@@ -18,6 +18,11 @@ internal sealed record ClawCtlHandlers
 
 internal sealed record SetupOptions(bool Fresh, bool Force);
 
+internal sealed class ClawCtlOutputOptions
+{
+    public bool NoColor { get; set; }
+}
+
 // The clawctl command tree. Only the package-readiness surface belongs here:
 // doctor, gateway, uninstall, and every other OpenClaw command is owned by the
 // bundled CLI and reached through `openclaw`, which forwards its arguments
@@ -40,10 +45,10 @@ internal static class ClawCtlCommandLine
 
     // Setup guidance is available without preparing the runtime.
     public static string RootDescription =>
-        "Set up and manage the packaged OpenClaw application." +
+        "Get packaged OpenClaw and its bundled Node.js runtime ready, and manage its isolated session." +
         Environment.NewLine +
         Environment.NewLine +
-        "Run `clawctl setup` to prepare the bundled runtime and isolated session." +
+        "Run `clawctl setup` before using OpenClaw for the first time." +
         Environment.NewLine +
         Environment.NewLine +
         "Run `openclaw <arguments>` to invoke the OpenClaw CLI.";
@@ -56,9 +61,17 @@ internal static class ClawCtlCommandLine
 
     // runSetup stays a delegate so the command tree owns parsing and help while
     // Program keeps the readiness operation and its test seams.
-    public static RootCommand Create(ClawCtlHandlers handlers)
+    public static RootCommand Create(
+        ClawCtlHandlers handlers,
+        ClawCtlOutputOptions? outputOptions = null)
     {
         ArgumentNullException.ThrowIfNull(handlers);
+        outputOptions ??= new ClawCtlOutputOptions();
+        Option<bool> noColor = new("--no-color")
+        {
+            Description = "Disable colored output.",
+            Recursive = true
+        };
         Command setup = new(SetupCommandName, SetupDescription);
         Option<bool> fresh = new("--fresh")
         {
@@ -78,43 +91,76 @@ internal static class ClawCtlCommandLine
             }
         });
         setup.SetAction((parsed, cancellationToken) =>
-            handlers.Setup(
+        {
+            outputOptions.NoColor = parsed.GetValue(noColor);
+            return handlers.Setup(
                 new SetupOptions(
                     parsed.GetValue(fresh),
                     parsed.GetValue(force)),
-                cancellationToken));
+                cancellationToken);
+        });
         Command status = new(
             StatusCommandName,
-            "Show the isolated-session record and MXC-observed provision state without provisioning a replacement.");
-        status.SetAction((_, cancellationToken) => handlers.Status(cancellationToken));
+            "Show whether the session, gateway, and sign-in recovery are ready.");
+        status.SetAction((parsed, cancellationToken) =>
+        {
+            outputOptions.NoColor = parsed.GetValue(noColor);
+            return handlers.Status(cancellationToken);
+        });
         Option<string?> outputPath = new("--output")
         {
             Description = "Path for the diagnostics ZIP file."
         };
         Command collectLogs = new(
             CollectLogsCommandName,
-            "Create a redacted diagnostics bundle, including session files when reachable.");
+            "Gather redacted diagnostics into one ZIP file for troubleshooting.");
         collectLogs.Options.Add(outputPath);
         collectLogs.SetAction((parsed, cancellationToken) =>
-            handlers.CollectLogs(parsed.GetValue(outputPath), cancellationToken));
-        Option<bool> teardownForce = new("--force") { Description = "Skip confirmation and remove the owned session." };
-        Command teardown = new("teardown", "Stop and remove the owned isolated session.");
+        {
+            outputOptions.NoColor = parsed.GetValue(noColor);
+            return handlers.CollectLogs(parsed.GetValue(outputPath), cancellationToken);
+        });
+        Option<bool> teardownForce = new("--force")
+        {
+            Description = "Remove the session without asking for confirmation."
+        };
+        Command teardown = new("teardown", "Remove OpenClaw's isolated session and gateway.");
         teardown.Options.Add(teardownForce);
         teardown.SetAction((parsed, cancellationToken) =>
-            handlers.Teardown(parsed.GetValue(teardownForce), cancellationToken));
+        {
+            outputOptions.NoColor = parsed.GetValue(noColor);
+            return handlers.Teardown(parsed.GetValue(teardownForce), cancellationToken);
+        });
         Command powerShell = new(
             "pwsh",
-            "Open an interactive PowerShell session inside the isolated agent.");
-        powerShell.SetAction((_, cancellationToken) => handlers.PowerShell(cancellationToken));
+            "Open PowerShell inside the isolated agent. `openclaw` and `node` " +
+            "are available there; `clawctl` manages the session from outside it.");
+        powerShell.SetAction((parsed, cancellationToken) =>
+        {
+            outputOptions.NoColor = parsed.GetValue(noColor);
+            return handlers.PowerShell(cancellationToken);
+        });
         Command gateway = new(
             "gateway-service",
             "Manage the background OpenClaw gateway inside the isolated session.");
-        Command gatewayStart = new("start", "Start the gateway if it is not running.");
-        gatewayStart.SetAction((_, token) => handlers.GatewayStart(token));
-        Command gatewayStatus = new("status", "Show the gateway state without changing it.");
-        gatewayStatus.SetAction((_, token) => handlers.GatewayStatus(token));
-        Command gatewayStop = new("stop", "Stop the gateway, keeping the session and its data.");
-        gatewayStop.SetAction((_, token) => handlers.GatewayStop(token));
+        Command gatewayStart = new("start", "Start the gateway if needed.");
+        gatewayStart.SetAction((parsed, token) =>
+        {
+            outputOptions.NoColor = parsed.GetValue(noColor);
+            return handlers.GatewayStart(token);
+        });
+        Command gatewayStatus = new("status", "Show whether the gateway is running.");
+        gatewayStatus.SetAction((parsed, token) =>
+        {
+            outputOptions.NoColor = parsed.GetValue(noColor);
+            return handlers.GatewayStatus(token);
+        });
+        Command gatewayStop = new("stop", "Stop the gateway but keep the session and its data.");
+        gatewayStop.SetAction((parsed, token) =>
+        {
+            outputOptions.NoColor = parsed.GetValue(noColor);
+            return handlers.GatewayStop(token);
+        });
         gateway.Subcommands.Add(gatewayStart);
         gateway.Subcommands.Add(gatewayStatus);
         gateway.Subcommands.Add(gatewayStop);
@@ -128,6 +174,7 @@ internal static class ClawCtlCommandLine
             powerShell,
             gateway
         };
+        root.Options.Add(noColor);
 
         // Bare `clawctl` is a discovery request, not a usage error, so the root
         // prints help and succeeds instead of reporting a missing command.

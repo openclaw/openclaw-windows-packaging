@@ -60,6 +60,9 @@ internal sealed record SessionCommandRequest(
 /// </remarks>
 internal sealed class SessionExecutor
 {
+    private const int ControlCExitCode = unchecked((int)0xc000013a);
+    private const int PortableInterruptedExitCode = 130;
+
     private readonly IMxcSessionClient _backend;
     private readonly Action<string> _log;
     private readonly Func<IReadOnlyDictionary<string, string>> _buildEnvironment;
@@ -519,6 +522,11 @@ internal sealed class SessionExecutor
         catch (Exception exception) when (
             exception is FileNotFoundException or DirectoryNotFoundException or IOException)
         {
+            if (executorExitCode == ControlCExitCode)
+            {
+                return PortableInterruptedExitCode;
+            }
+
             throw new SessionException(
                 "The isolated session did not report a launch result " +
                 $"(executor exit code {executorExitCode}). {subject} may not " +

@@ -63,6 +63,30 @@ public sealed class DiagnosticsBundleTests : IDisposable
     }
 
     [Fact]
+    public async Task CollectionIncludesThePreResetDiagnosticReport()
+    {
+        (GatewayRuntime runtime, HostPaths paths) = CreateRuntime();
+        Directory.CreateDirectory(Path.GetDirectoryName(paths.PreResetReportPath)!);
+        await File.WriteAllTextAsync(paths.PreResetReportPath, "sessionSandboxId=fixture");
+        string bundlePath = Path.Combine(_root, "pre-reset.zip");
+
+        DiagnosticsBundleResult result = await runtime.CollectLogsAsync(
+            bundlePath,
+            CancellationToken.None);
+
+        Assert.Equal(bundlePath, result.BundlePath);
+        using ZipArchive archive = ZipFile.OpenRead(bundlePath);
+        ZipArchiveEntry entry = Assert.Single(
+            archive.Entries,
+            candidate => candidate.FullName == "host/pre-reset.log");
+        using var reader = new StreamReader(entry.Open());
+        Assert.Contains(
+            "sessionSandboxId=fixture",
+            await reader.ReadToEndAsync(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task CorruptSessionStateStillProducesAHostOnlyBundle()
     {
         (GatewayRuntime runtime, HostPaths paths) = CreateRuntime();

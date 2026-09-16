@@ -572,6 +572,20 @@ public sealed class SessionExecutorTests : IDisposable
     }
 
     [Fact]
+    public async Task ControlCWithoutAControlResultReturnsPortableInterruptedExitCode()
+    {
+        _backend.AttachedBehavior = _ =>
+            Task.FromResult(unchecked((int)0xc000013a));
+
+        int exitCode = await Create().ExecuteAsync(
+            Record(),
+            Request(),
+            CancellationToken.None);
+
+        Assert.Equal(130, exitCode);
+    }
+
+    [Fact]
     public async Task UnreadableControlResultIsReported()
     {
         _backend.AttachedBehavior = _ =>

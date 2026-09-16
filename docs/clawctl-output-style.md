@@ -1,0 +1,90 @@
+# `clawctl` output style
+
+`clawctl` manages the packaged Windows environment around OpenClaw. Its output
+should describe that environment in terms an operator can act on, while
+`openclaw` remains the entry point for the application itself.
+
+## Human-readable output
+
+- Start command results with `🦀 clawctl <command>` when Unicode is available,
+  followed by aligned `Label: value` rows. Fall back to `clawctl <command>` for
+  legacy or non-Unicode output.
+- Use lowercase status words such as `ready`, `running`, `stopped`, and
+  `not configured`.
+- Use a check mark for success, an exclamation mark for attention, and a cross
+  for failure. Non-Unicode output uses `[ok]`, `[!]`, and `[x]`.
+- Narrate long-running human operations at their real lifecycle boundaries.
+  Use one updating status in an interactive terminal and durable stage lines
+  when output is redirected. Structured output remains exactly one document.
+- End successful setup with a tentative `openclaw onboard` suggestion. The
+  user may need flags or may choose a different advanced path, so setup neither
+  presents onboarding as mandatory nor launches it automatically.
+- End neutral states with the command that moves the user forward, such as
+  `Run: clawctl setup`.
+- Keep a successful `clawctl pwsh` launch silent so the user reaches the shell
+  prompt directly. Its help text explains which commands are available inside
+  the session.
+- Treat Windows Ctrl-C termination of an attached foreground command as user
+  cancellation: emit no failure guidance and return portable exit code 130.
+
+Prefer keeping package paths, sandbox identifiers, process identifiers, and
+other non-actionable implementation details out of human output. Preserve them
+in structured output and diagnostics when they are useful for automation or
+support.
+
+## Failures and diagnostics
+
+Expected refusals should state the condition and the next usable action without
+asking the user to file an issue. Unexpected faults should explain how to
+capture diagnostics and where to report the problem:
+
+1. Run `clawctl collect-logs`.
+2. Review the resulting bundle before sharing it.
+3. File an issue at
+   <https://github.com/openclaw/openclaw-windows-packaging/issues>.
+
+`clawctl collect-logs` is the user-facing diagnostics entry point. Other
+commands should not expose individual log paths when the bundle can collect the
+same evidence. Its final bundle path is emitted as an exact standalone line,
+outside a width-constrained grid, so it remains copyable.
+
+## Color
+
+Output is composed from Spectre.Console renderables — a `Grid` for
+`Label: value` rows and a `Panel` for the note callout — rather than from
+hand-padded strings. Let the grid own column alignment instead of reintroducing
+per-command width constants.
+
+Color is an event, not a wash. Labels stay in the terminal's own foreground,
+which is legible on whatever background the user runs, and only the leading
+status word carries a hue. This follows OpenClaw's `styleHealthChannelLine`,
+which colors the status word of a `label: detail` row and deliberately leaves
+the label alone.
+
+| Role | Color |
+|---|---|
+| Accent (heading, next-action command) | `#1687ff` |
+| Muted (labels' detail lines, neutral states) | `#697a8b` |
+| Success | `#048b41` |
+| Warning | `#b26501` |
+| Error, note border | `#ed1805` |
+
+Color supplements text and status marks; it never carries meaning by itself.
+Keep the text obtained after removing ANSI escape sequences identical to
+ordinary non-color output.
+
+Build values with `Paragraph.Append`, never by interpolating caller text into
+markup: package paths and error messages contain `[` and `\`, which Spectre
+would otherwise parse as markup. Use `Text` or `Markup.Escape` for any string
+the user or the system supplied.
+
+Reserve the note callout for a genuine fault, and cap it at 88 columns the way
+OpenClaw caps its own notes. Unicode terminals get a rounded border; everything
+else gets the ASCII border.
+
+The status vocabulary intentionally follows OpenClaw's terminal output, while
+the crab mark and blue palette give `clawctl` its own identity. The accent
+favors the dark terminals most users run while retaining readable contrast on
+light backgrounds. When OpenClaw changes its status vocabulary or semantic
+colors, review this guide for useful parity rather than copying its
+dark-terminal palette mechanically.

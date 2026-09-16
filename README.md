@@ -81,7 +81,7 @@ the read-only application directory the workspace.
 |---|---|
 | `clawctl setup` | Confirm packaged `app\openclaw.mjs` exists, provision or reuse the owned isolated session, and install the bundled Node.js runtime in the agent profile. It also configures gateway sign-in recovery without starting a gateway. On a machine that cannot host a session it fails with the Windows requirement described under [Requirements](#requirements). |
 | `clawctl setup --fresh [--force]` | Remove this installation's owned session and package-local state, then run setup again. Without `--force`, incomplete external cleanup stops before local state is erased. `--force` is valid only with `--fresh`; it preserves an explicit warning when cleanup of owned external resources cannot be confirmed, but still stops if bounded local deletion fails. |
-| `clawctl status` | Report the recorded isolated-session state without provisioning or replacing it. It asks the backend to start the recorded provision as its status probe, so it is not a passive diagnostic. Use `clawctl gateway-service status` to inspect the gateway. |
+| `clawctl status` | Report the recorded isolated session, installed Node.js runtime, gateway, and sign-in recovery state without provisioning or replacing the session. It asks the backend to start the recorded provision as its status probe, so it is not a passive diagnostic. Use `clawctl gateway-service status` to inspect the gateway alone. |
 | `clawctl teardown --force` | Confirm deletion, then stop and deprovision the owned session and remove its data and setup state. The MSIX remains installed. |
 | `clawctl pwsh` | Open an interactive PowerShell session inside the agent session. |
 | `clawctl collect-logs [--output <path>]` | Create a redacted host-and-agent diagnostics ZIP. |
@@ -96,6 +96,11 @@ and completion come from
 [System.CommandLine](https://learn.microsoft.com/en-us/dotnet/standard/commandline/).
 Invalid management input is rejected with exit code `1` and a parse diagnostic
 on standard error; no readiness check runs.
+
+Interactive terminals use color for headings and status marks. `--no-color`,
+the `NO_COLOR` environment variable, redirected output, and CI disable color;
+`FORCE_COLOR` enables it for redirected output or CI unless color was
+explicitly disabled.
 
 Help and version requests take precedence over the rest of the command line.
 `clawctl --version bogus` prints the launcher version and exits `0` rather than

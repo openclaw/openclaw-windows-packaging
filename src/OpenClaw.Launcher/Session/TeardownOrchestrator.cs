@@ -76,8 +76,13 @@ internal sealed class TeardownOrchestrator
             session.Removed
                 ? "OpenClaw isolated session and gateway service were removed."
                 : "No isolated session was recorded; gateway service records were removed.",
-            session.StopFailure);
+            session.StopFailure,
+            session.Removed);
     }
 }
 
-internal sealed record TeardownResult(bool Succeeded, string Message, string? Detail = null);
+internal sealed record TeardownResult(
+    bool Succeeded,
+    string Message,
+    string? Detail = null,
+    bool SessionRemoved = false);

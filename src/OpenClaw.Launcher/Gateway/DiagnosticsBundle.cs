@@ -163,6 +163,7 @@ internal sealed partial class GatewayRuntime
     {
         List<(string Name, string Path)> files = [];
         Add("host/openclaw.log", _paths.LogPath);
+        Add("host/pre-reset.log", _paths.PreResetReportPath);
         Add("host/setup.json", _paths.SetupStatePath);
         Add("host/session.json", _paths.SessionStatePath);
         Add("host/gateway-config.json", _paths.GatewayConfigurationPath);

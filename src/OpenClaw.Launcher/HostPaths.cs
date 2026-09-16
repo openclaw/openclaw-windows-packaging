@@ -122,6 +122,9 @@ internal sealed class HostPaths
 
     public string LogPath => Path.Combine(StateRoot, "Logs", "openclaw.log");
 
+    public string PreResetReportPath =>
+        Path.Combine(StateRoot, "Logs", "pre-reset.log");
+
     public string SessionStatePath => Path.Combine(StateRoot, "session.json");
 
     /// <summary>

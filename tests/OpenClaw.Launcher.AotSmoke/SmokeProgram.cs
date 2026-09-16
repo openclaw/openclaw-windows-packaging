@@ -43,6 +43,7 @@ internal static class SmokeProgram
             ("response-file token is not expanded", ResponseFileTokenIsNotExpandedAsync),
             ("completion directive suggests commands", CompletionDirectiveSuggestsAsync),
             ("unpackaged setup reports identity failure", SetupReportsReadinessAsync),
+            ("Spectre renders clawctl output under NativeAOT", SpectreOutputRenders),
             ("missing application reports diagnostics", MissingApplicationReportsAsync),
             ("openclaw never parses its arguments", AgentNeverParsesItsArgumentsAsync)
         ];
@@ -224,16 +225,21 @@ internal static class SmokeProgram
         int exitCode = await fixture.RunAsync(["setup"]).ConfigureAwait(false);
 
         AssertExitCode(1, exitCode, fixture);
+        string error = FlattenRendered(fixture.Error.ToString());
         AssertContains(
-            fixture.Error.ToString(),
+            error,
             "not running from its installed package",
             fixture);
-        AssertContains(fixture.Error.ToString(), "newer version of Windows", fixture);
-        AssertContains(fixture.Error.ToString(), fixture.LogPath, fixture);
+        AssertContains(error, "newer version of Windows", fixture);
+        AssertContains(error, "clawctl collect-logs", fixture);
 
-        // Nothing is reported as ready when the support check refuses.
+        // The attempted requirement check is visible, but nothing is reported
+        // as ready when the support check refuses.
         Assert(
-            fixture.Output.ToString().Length == 0,
+            fixture.Output.ToString().Contains(
+                "Checking isolated-session support.",
+                StringComparison.Ordinal) &&
+            !fixture.Output.ToString().Contains("ready", StringComparison.Ordinal),
             "A failed support check still reported readiness on standard output.");
         fixture.AssertLogRecordsStartupAndExit();
         Assert(
@@ -241,8 +247,70 @@ internal static class SmokeProgram
             "The readiness check removed or replaced the fixture entry point.");
     }
 
+    // Spectre.Console composes the renderables; this proves the composition,
+    // the ANSI writer, and the no-colour writer all survive trimming and
+    // ahead-of-time compilation, and that the two stay textually identical.
+    private static Task SpectreOutputRenders()
+    {
+        var result = new SetupCommandResult(
+            0,
+            @"C:\package\app",
+            "24.20.0",
+            new GatewayPersistenceInstallResult(
+                GatewayPersistenceState.Ready,
+                GatewayPersistenceLane.TaskScheduler,
+                "ready",
+                Changed: true),
+            SessionReady: true,
+            RuntimeLocation: SetupRuntimeLocation.IsolatedSession);
+
+        using var colored = new StringWriter();
+        using var plain = new StringWriter();
+        ClawCtlConsole.WriteResult(colored, result, useColor: true);
+        ClawCtlConsole.WriteResult(plain, result);
+
+        string coloredText = colored.ToString();
+        Assert(
+            coloredText.Contains('\u001b', StringComparison.Ordinal),
+            "Spectre did not emit an ANSI color sequence.");
+        Assert(
+            !plain.ToString().Contains('\u001b', StringComparison.Ordinal),
+            "The plain renderer leaked an ANSI color sequence.");
+        Assert(
+            StripAnsi(coloredText) == plain.ToString(),
+            "Colored output did not match plain output once ANSI was stripped.");
+
+        using var failure = new StringWriter();
+        ClawCtlConsole.WriteUnexpectedFailure(failure, "setup", "no package identity.");
+        Assert(
+            failure.ToString().Contains("no package identity.", StringComparison.Ordinal),
+            "The note callout did not render its message.");
+        return Task.CompletedTask;
+    }
+
+    private static string StripAnsi(string value)
+    {
+        var builder = new System.Text.StringBuilder(value.Length);
+        for (int index = 0; index < value.Length; index++)
+        {
+            if (value[index] != '\u001b')
+            {
+                builder.Append(value[index]);
+                continue;
+            }
+
+            while (index < value.Length && value[index] != 'm')
+            {
+                index++;
+            }
+        }
+
+        return builder.ToString();
+    }
+
     // The operational error boundary is part of startup, not of the parser.
-    // It must still name the diagnostic log, which here is the fixture's.
+    // It directs users to the diagnostics command instead of exposing an
+    // implementation-specific log path.
     private static async Task MissingApplicationReportsAsync()
     {
         using Fixture fixture = Fixture.CreateWithoutApplication();
@@ -250,7 +318,7 @@ internal static class SmokeProgram
         int exitCode = await fixture.RunAsync(["setup"]).ConfigureAwait(false);
 
         AssertExitCode(1, exitCode, fixture);
-        AssertContains(fixture.Error.ToString(), fixture.LogPath, fixture);
+        AssertContains(fixture.Error.ToString(), "clawctl collect-logs", fixture);
         Assert(
             !fixture.Output.ToString().Contains("package is ready", StringComparison.Ordinal),
             "A failed readiness check still reported success.");
@@ -278,6 +346,11 @@ internal static class SmokeProgram
 
     private static string LauncherVersion() =>
         typeof(HostStartup).Assembly.GetName().Version?.ToString() ?? "unknown";
+
+    private static string FlattenRendered(string value) =>
+        string.Join(' ', value.Replace('|', ' ').Split(
+            (char[]?)null,
+            StringSplitOptions.RemoveEmptyEntries));
 
     private static string DriverVersion() =>
         typeof(SmokeProgram).Assembly.GetName().Version?.ToString() ?? "unknown";
@@ -432,6 +505,10 @@ internal static class SmokeProgram
                 SessionRuntime sessionRuntime) => throw Started();
 
             public Task<GatewayPersistenceInstallResult> InstallRecoveryAsync(
+                Action<string> log,
+                CancellationToken cancellationToken) => throw Started();
+
+            public Task<GatewayPersistenceStatus> GetRecoveryStatusAsync(
                 Action<string> log,
                 CancellationToken cancellationToken) => throw Started();
         }

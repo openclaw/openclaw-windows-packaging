@@ -30,6 +30,10 @@ internal interface IInstallationLifecycle
     Task<GatewayPersistenceInstallResult> InstallRecoveryAsync(
         Action<string> log,
         CancellationToken cancellationToken);
+
+    Task<GatewayPersistenceStatus> GetRecoveryStatusAsync(
+        Action<string> log,
+        CancellationToken cancellationToken);
 }
 
 internal sealed class InstallationLifecycle : IInstallationLifecycle
@@ -98,6 +102,11 @@ internal sealed class InstallationLifecycle : IInstallationLifecycle
         Action<string> log,
         CancellationToken cancellationToken) =>
         GatewayRuntime.CreateRecoveryManager(log).InstallAsync(cancellationToken);
+
+    public Task<GatewayPersistenceStatus> GetRecoveryStatusAsync(
+        Action<string> log,
+        CancellationToken cancellationToken) =>
+        GatewayRuntime.CreateRecoveryManager(log).GetStatusAsync(cancellationToken);
 }
 
 internal sealed record PackageRuntimeMetadata(
