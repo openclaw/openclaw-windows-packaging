@@ -139,7 +139,14 @@ public sealed class ProgramTests : IDisposable
             TextWriter.Null,
             TextWriter.Null,
             _ => Task.FromResult(hostNode),
-            () => runtime);
+            () => runtime,
+            // Setup only reaches Ready once logon recovery is configured, and
+            // a test must never register a real scheduled task.
+            _ => Task.FromResult(new GatewayPersistenceInstallResult(
+                GatewayPersistenceState.Ready,
+                GatewayPersistenceLane.TaskScheduler,
+                "Logon recovery is configured.",
+                Changed: true)));
         Assert.Equal(0, setupExitCode);
 
         string expectedAgentNode = runtime.SetupState
