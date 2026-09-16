@@ -84,6 +84,9 @@ internal sealed record GatewayPersistenceRemovalResult(
 /// <param name="DeleteFile">
 /// Optional file-delete seam used to make persistence failures observable in tests.
 /// </param>
+/// <param name="LogonTriggerUserSid">
+/// The interactive user whose logon starts recovery. Defaults to <paramref name="UserSid"/>.
+/// </param>
 internal sealed record GatewayPersistenceOptions(
     string UserSid,
     string PackageFamilyName,
@@ -91,4 +94,5 @@ internal sealed record GatewayPersistenceOptions(
     string StartupFolderPath,
     string WorkingDirectory,
     string CommandProcessorPath,
-    Action<string>? DeleteFile = null);
+    Action<string>? DeleteFile = null,
+    string? LogonTriggerUserSid = null);

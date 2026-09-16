@@ -52,7 +52,8 @@ internal static class GatewayTaskDefinition
     public static GatewayTaskSnapshot CreateSnapshot(
         string userSid,
         string commandProcessorPath,
-        string launcherPath) =>
+        string launcherPath,
+        string? logonTriggerUserSid = null) =>
         new(
             UserId: userSid,
             // InteractiveToken runs with the user's interactive session and
@@ -63,7 +64,7 @@ internal static class GatewayTaskDefinition
             Enabled: true,
             HasSingleLogonTrigger: true,
             LogonTriggerEnabled: true,
-            LogonTriggerUserId: userSid,
+            LogonTriggerUserId: logonTriggerUserSid ?? userSid,
             HasSingleExecAction: true,
             MultipleInstancesPolicy: IgnoreNewInstances,
             // A gateway that refuses to start on battery, or dies when the

@@ -237,7 +237,8 @@ internal sealed class GatewayPersistenceManager
         GatewayTaskDefinition.CreateSnapshot(
             _options.UserSid,
             _options.CommandProcessorPath,
-            _options.LauncherPath);
+            LauncherPath,
+            _options.LogonTriggerUserSid);
 
     private string? DescribeDrift(GatewayTaskSnapshot actual)
     {

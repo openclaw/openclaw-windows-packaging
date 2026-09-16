@@ -47,6 +47,10 @@ internal sealed partial class GatewayRuntime
         string userSid = WindowsIdentity.GetCurrent().User?.Value
             ?? throw new SessionException(
                 "The signed-in user's security identifier is unavailable, so gateway recovery cannot be configured.");
+        string logonUserSid = ResolveUserSid(
+            $@"{Environment.UserDomainName}\{Environment.UserName}")
+            ?? throw new SessionException(
+                "The signed-in user's logon identity could not be resolved, so gateway recovery cannot be configured.");
 
         return new GatewayPersistenceManager(
             new SchTasksGatewayScheduler(),
@@ -56,7 +60,8 @@ internal sealed partial class GatewayRuntime
                 paths.GatewayLauncherPath,
                 GetStartupFolderPath(),
                 paths.StateRoot,
-                Path.Combine(Environment.SystemDirectory, "cmd.exe")),
+                Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+                LogonTriggerUserSid: logonUserSid),
             log,
             ResolveUserSid);
     }

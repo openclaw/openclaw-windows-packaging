@@ -60,6 +60,19 @@ public sealed class GatewayTaskDefinitionTests
     }
 
     [Fact]
+    public void TheLogonTriggerCanUseTheInteractiveUsersSid()
+    {
+        GatewayTaskSnapshot snapshot = GatewayTaskDefinition.CreateSnapshot(
+            "S-1-12-1-1-2-3-4",
+            @"C:\Windows\System32\cmd.exe",
+            @"C:\state\gateway-launcher.cmd",
+            "S-1-5-21-1-2-3-4");
+
+        Assert.Equal("S-1-12-1-1-2-3-4", snapshot.UserId);
+        Assert.Equal("S-1-5-21-1-2-3-4", snapshot.LogonTriggerUserId);
+    }
+
+    [Fact]
     public void TheGatewayIsNotGatedOnPowerOrATimeLimit()
     {
         GatewayTaskSnapshot desired = Desired();
