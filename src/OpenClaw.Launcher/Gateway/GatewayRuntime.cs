@@ -168,7 +168,7 @@ internal sealed partial class GatewayRuntime
         Action<string> log)
     {
         var configuration = new GatewayConfigurationStore(paths.GatewayConfigurationPath);
-        async Task<GatewayStartRequest> CreateRequestAsync(CancellationToken cancellationToken)
+        Task<GatewayStartRequest> CreateRequestAsync(CancellationToken cancellationToken)
         {
             string applicationDirectory = options.PackagedApplicationDirectory
                 ?? throw new SessionException(
@@ -181,11 +181,16 @@ internal sealed partial class GatewayRuntime
             string archivePath = options.PackagedNodeArchivePath
                 ?? throw new SessionException(
                     "The packaged Node.js runtime archive was not found.");
-            return new GatewayStartRequest(
+            return Task.FromResult(new GatewayStartRequest(
                 session.HelperPath,
                 session.RequireAgentNodePath(archivePath),
                 applicationDirectory,
-                launch.Port);
+                launch.Port)
+            {
+                WorkingDirectory = launch.WorkingDirectory ?? sessionRecord.WorkspacePath
+                    ?? throw new SessionException(
+                        "The isolated session has no shared workspace for the gateway.")
+            });
         }
 
         return new GatewayController(
