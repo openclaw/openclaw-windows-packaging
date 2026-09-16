@@ -251,7 +251,8 @@ internal static class Program
         TextWriter output,
         TextWriter error,
         Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null,
-        Session.IInstallationLifecycle? installationLifecycle = null)
+        Session.IInstallationLifecycle? installationLifecycle = null,
+        Func<string, string?>? readEnvironmentVariable = null)
     {
         _ = resolveNode;
         Session.IInstallationLifecycle lifecycle =
@@ -270,6 +271,7 @@ internal static class Program
                     lifecycle,
                     log,
                     output,
+                    readEnvironmentVariable ?? Environment.GetEnvironmentVariable,
                     cancellationToken),
                 Status = async cancellationToken =>
                 {
@@ -352,12 +354,12 @@ internal static class Program
                 },
                 GatewayStatus = async cancellationToken =>
                 {
-                    Gateway.GatewayStatusReport result = await Gateway.GatewayRuntime
-                        .Create(options, log)
-                        .Controller
+                    Gateway.GatewayRuntime runtime = Gateway.GatewayRuntime.Create(options, log);
+                    Gateway.GatewayStatusReport result = await runtime.Controller
                         .GetStatusAsync(GetSessionRuntime().HelperPath, cancellationToken)
                         .ConfigureAwait(false);
-                    await output.WriteLineAsync(result.Message).ConfigureAwait(false);
+                    await Gateway.GatewayControlOutput.WriteStatusAsync(
+                        output, result, runtime.Paths, cancellationToken).ConfigureAwait(false);
                     return result.State is Gateway.GatewayState.Running or Gateway.GatewayState.NotStarted
                         ? 0 : 1;
                 },
@@ -368,7 +370,8 @@ internal static class Program
                         .Controller
                         .StopAsync(GetSessionRuntime().HelperPath, cancellationToken)
                         .ConfigureAwait(false);
-                    await output.WriteLineAsync(result.Message).ConfigureAwait(false);
+                    await Gateway.GatewayControlOutput.WriteStopAsync(output, result)
+                        .ConfigureAwait(false);
                     return result.Succeeded ? 0 : 1;
                 }
             });
@@ -402,6 +405,7 @@ internal static class Program
         Session.IInstallationLifecycle lifecycle,
         Action<string> log,
         TextWriter output,
+        Func<string, string?> readEnvironmentVariable,
         CancellationToken cancellationToken)
     {
         string applicationDirectory = GetPackagedApplicationDirectory(options);
@@ -420,8 +424,16 @@ internal static class Program
 
         if (setupOptions.NoIsolation ||
             Session.SessionRoutingPolicy.ReadMode(
-                Environment.GetEnvironmentVariable) == Session.SessionMode.Disabled)
+                readEnvironmentVariable) == Session.SessionMode.Disabled)
         {
+            if (setupOptions.Fresh)
+            {
+                await output.WriteLineAsync(
+                    "OpenClaw setup --fresh requires isolated-session provisioning. Remove --fresh or enable isolation before retrying.")
+                    .ConfigureAwait(false);
+                return 1;
+            }
+
             NodeRuntime nodeRuntime = lifecycle.PrepareHostRuntime(options, log);
             ClawCtlConsole.WriteNodeRuntimeSummary(output, nodeRuntime);
             await output.WriteLineAsync(

@@ -52,6 +52,41 @@ public sealed class InstallationStateCleanerTests : IDisposable
     }
 
     [Fact]
+    public void ClearSkipsAReplacedRootAndContinuesClearingOtherOwnedState()
+    {
+        string stateRoot = Path.Combine(_root, "state");
+        string dataRoot = Path.Combine(_root, "data");
+        string movedStateRoot = Path.Combine(_root, "state-before-replacement");
+        string externalRoot = Path.Combine(_root, "external");
+        Directory.CreateDirectory(stateRoot);
+        Directory.CreateDirectory(dataRoot);
+        Directory.CreateDirectory(externalRoot);
+        File.WriteAllText(Path.Combine(stateRoot, "owned.txt"), "owned");
+        File.WriteAllText(Path.Combine(dataRoot, "owned-runtime.txt"), "owned");
+        File.WriteAllText(Path.Combine(externalRoot, "must-survive.txt"), "outside");
+        bool replaced = false;
+
+        var cleaner = new InstallationStateCleaner(
+            [stateRoot, dataRoot],
+            beforeTraversal: root =>
+            {
+                if (!replaced && string.Equals(root, stateRoot, StringComparison.OrdinalIgnoreCase))
+                {
+                    replaced = true;
+                    Directory.Move(stateRoot, movedStateRoot);
+                    Directory.CreateSymbolicLink(stateRoot, externalRoot);
+                }
+            });
+
+        cleaner.Clear();
+
+        Assert.True(replaced);
+        Assert.True(File.Exists(Path.Combine(externalRoot, "must-survive.txt")));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(dataRoot));
+        Assert.True(File.Exists(Path.Combine(movedStateRoot, "owned.txt")));
+    }
+
+    [Fact]
     public void ClearRejectsAReparsePointAncestor()
     {
         string external = Path.Combine(_root, "external");

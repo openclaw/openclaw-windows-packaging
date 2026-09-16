@@ -5,6 +5,7 @@ internal sealed class InstallationStateCleaner : IInstallationStateCleaner
 {
     private readonly string[] _roots;
     private readonly IInstallationFileSystem _fileSystem;
+    private readonly Action<string>? _beforeTraversal;
 
     public InstallationStateCleaner(HostPaths paths, string productLocalStateRoot)
         : this([paths.StateRoot, productLocalStateRoot], paths.PackageFamilyName)
@@ -14,10 +15,12 @@ internal sealed class InstallationStateCleaner : IInstallationStateCleaner
     internal InstallationStateCleaner(
         IReadOnlyList<string> trustedRoots,
         string? packageFamilyName = "test",
-        IInstallationFileSystem? fileSystem = null)
+        IInstallationFileSystem? fileSystem = null,
+        Action<string>? beforeTraversal = null)
     {
         ArgumentNullException.ThrowIfNull(trustedRoots);
         _fileSystem = fileSystem ?? PhysicalInstallationFileSystem.Instance;
+        _beforeTraversal = beforeTraversal;
         if (packageFamilyName is null)
         {
             throw new SessionException(
@@ -37,6 +40,13 @@ internal sealed class InstallationStateCleaner : IInstallationStateCleaner
         foreach (string root in _roots.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             if (!_fileSystem.DirectoryExists(root))
+            {
+                continue;
+            }
+
+            _beforeTraversal?.Invoke(root);
+            if (!_fileSystem.DirectoryExists(root) ||
+                (_fileSystem.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
             {
                 continue;
             }

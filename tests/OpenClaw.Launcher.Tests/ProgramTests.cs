@@ -387,6 +387,35 @@ public sealed class ProgramTests : IDisposable
         Assert.Contains("--force", error.ToString(), StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("--no-isolation", null)]
+    [InlineData(null, "0")]
+    public async Task FreshSetupRejectsDisabledIsolationBeforePreparingTheHostRuntime(
+        string? option,
+        string? sessionMode)
+    {
+        string applicationDirectory = await CreateApplicationAsync().ConfigureAwait(true);
+        var lifecycle = new FailingFreshLifecycle(CreateSessionRuntime());
+        using var output = new StringWriter();
+        string[] arguments = option is null
+            ? ["setup", "--fresh"]
+            : ["setup", "--fresh", option];
+
+        int exitCode = await Program.RunControlAsync(
+            CreateSetupOptions(applicationDirectory),
+            arguments,
+            _ => { },
+            output,
+            TextWriter.Null,
+            installationLifecycle: lifecycle,
+            readEnvironmentVariable: name =>
+                name == SessionRoutingPolicy.ModeVariable ? sessionMode : null);
+
+        Assert.Equal(1, exitCode);
+        Assert.Empty(lifecycle.Calls);
+        Assert.Contains("--fresh requires isolated-session provisioning", output.ToString(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task FreshSetupStopsBeforeClearingStateWhenTeardownFails()
     {
