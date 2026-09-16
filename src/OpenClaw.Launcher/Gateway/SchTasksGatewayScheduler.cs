@@ -22,6 +22,7 @@ namespace OpenClaw.Launcher.Gateway;
 internal sealed class SchTasksGatewayScheduler : IGatewayTaskScheduler
 {
     private readonly string _executablePath;
+    private readonly Func<string[], CancellationToken, Task<SchTasksOutcome>>? _run;
 
     public SchTasksGatewayScheduler()
         : this(ResolveDefaultExecutablePath())
@@ -32,6 +33,16 @@ internal sealed class SchTasksGatewayScheduler : IGatewayTaskScheduler
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executablePath);
         _executablePath = executablePath;
+    }
+
+    // Tests drive classification without launching schtasks.exe, which must
+    // never register, run, or delete a real task on a developer's machine.
+    internal SchTasksGatewayScheduler(
+        Func<string[], CancellationToken, Task<SchTasksOutcome>> run)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        _executablePath = "schtasks.exe";
+        _run = run;
     }
 
     public async Task<GatewayTaskProbe> QueryAsync(
@@ -57,9 +68,8 @@ internal sealed class SchTasksGatewayScheduler : IGatewayTaskScheduler
             // "Not found" and "refused" must not collapse into one answer. A
             // caller that re-registers on a refused read retries forever: the
             // write is as likely to be refused as the read was.
-            return LooksLikeTaskNotFound(outcome)
-                ? GatewayTaskProbe.Missing
-                : GatewayTaskProbe.Unreadable(Describe(outcome));
+            return await ClassifyQueryFailureAsync(taskName, outcome, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         return GatewayTaskDefinition.TryParse(
@@ -137,7 +147,12 @@ internal sealed class SchTasksGatewayScheduler : IGatewayTaskScheduler
         }
 
         // Deleting what is already gone is the requested end state.
-        return outcome.ExitCode == 0 || LooksLikeTaskNotFound(outcome)
+        if (outcome.ExitCode == 0)
+        {
+            return GatewayTaskOperation.Success;
+        }
+
+        return await IsAbsentAsync(taskName, cancellationToken).ConfigureAwait(false)
             ? GatewayTaskOperation.Success
             : GatewayTaskOperation.Failure(Describe(outcome));
     }
@@ -174,19 +189,126 @@ internal sealed class SchTasksGatewayScheduler : IGatewayTaskScheduler
             : Path.Combine(system, "schtasks.exe");
     }
 
-    private static bool LooksLikeTaskNotFound(SchTasksOutcome outcome)
+    /// <summary>
+    /// Separates a missing task from a refused one without reading localized
+    /// diagnostics.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>schtasks.exe</c> writes its errors in the console's display language
+    /// and returns exit code 1 for both "no such task" and "access denied", so
+    /// neither the text nor the exit code can classify the failure. Matching
+    /// English phrases made every absent task look unreadable on a localized
+    /// Windows installation, which suppressed both registration and the
+    /// Startup-folder fallback and left setup unable to reach Ready.
+    /// </para>
+    /// <para>
+    /// Enumeration answers the same question structurally. The listing reports
+    /// the task names this account can see, and the name being looked for is
+    /// one this package generated, so the comparison is ordinal and carries no
+    /// language. A successful listing that omits the name proves absence; a
+    /// listing that contains it proves the earlier read was refused rather
+    /// than empty; a listing that fails leaves the question open.
+    /// </para>
+    /// </remarks>
+    private async Task<GatewayTaskProbe> ClassifyQueryFailureAsync(
+        string taskName,
+        SchTasksOutcome queryOutcome,
+        CancellationToken cancellationToken)
     {
-        string combined = outcome.StandardOutput + outcome.StandardError;
-        return combined.Contains(
-                   "cannot find the file specified",
-                   StringComparison.OrdinalIgnoreCase) ||
-               combined.Contains(
-                   "cannot find the task",
-                   StringComparison.OrdinalIgnoreCase) ||
-               combined.Contains(
-                   "does not exist",
-                   StringComparison.OrdinalIgnoreCase);
+        SchTasksOutcome listing;
+        try
+        {
+            listing = await RunAsync(
+                ["/Query", "/FO", "CSV", "/NH"],
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (SchTasksLaunchException exception)
+        {
+            return GatewayTaskProbe.Unreadable(
+                Combine(Describe(queryOutcome), exception.Message));
+        }
+
+        if (listing.ExitCode != 0)
+        {
+            return GatewayTaskProbe.Unreadable(
+                Combine(Describe(queryOutcome), Describe(listing)));
+        }
+
+        return ListingContains(listing.StandardOutput, taskName)
+            ? GatewayTaskProbe.Unreadable(Describe(queryOutcome))
+            : GatewayTaskProbe.Missing;
     }
+
+    /// <summary>
+    /// Reports whether this account can see that the task is gone.
+    /// </summary>
+    /// <remarks>
+    /// Answers false when the listing itself fails, because an unanswerable
+    /// question is not evidence of absence.
+    /// </remarks>
+    private async Task<bool> IsAbsentAsync(
+        string taskName,
+        CancellationToken cancellationToken)
+    {
+        SchTasksOutcome listing;
+        try
+        {
+            listing = await RunAsync(
+                ["/Query", "/FO", "CSV", "/NH"],
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (SchTasksLaunchException)
+        {
+            return false;
+        }
+
+        return listing.ExitCode == 0 &&
+               !ListingContains(listing.StandardOutput, taskName);
+    }
+
+    /// <summary>
+    /// Reports whether the CSV listing names this task.
+    /// </summary>
+    /// <remarks>
+    /// Only the first column is considered. The remaining columns carry the
+    /// next run time and a localized status, neither of which identifies a
+    /// task. Task Scheduler reports names as absolute paths, so a caller's
+    /// leading separator is optional.
+    /// </remarks>
+    internal static bool ListingContains(string listing, string taskName)
+    {
+        ArgumentNullException.ThrowIfNull(listing);
+        ArgumentException.ThrowIfNullOrWhiteSpace(taskName);
+
+        string wanted = taskName.TrimStart('\\');
+        foreach (string line in listing.Split(
+            ['\r', '\n'],
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!line.StartsWith('"'))
+            {
+                continue;
+            }
+
+            int closing = line.IndexOf('"', 1);
+            if (closing <= 1)
+            {
+                continue;
+            }
+
+            string name = line[1..closing].TrimStart('\\');
+            if (string.Equals(name, wanted, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string Combine(string first, string second) =>
+        string.IsNullOrWhiteSpace(second) ? first : $"{first} {second}";
 
     private static string Describe(SchTasksOutcome outcome)
     {
@@ -226,6 +348,11 @@ internal sealed class SchTasksGatewayScheduler : IGatewayTaskScheduler
         string[] arguments,
         CancellationToken cancellationToken)
     {
+        if (_run is not null)
+        {
+            return await _run(arguments, cancellationToken).ConfigureAwait(false);
+        }
+
         ProcessStartInfo startInfo = new()
         {
             FileName = _executablePath,
@@ -285,7 +412,7 @@ internal sealed class SchTasksGatewayScheduler : IGatewayTaskScheduler
             await standardError.ConfigureAwait(false));
     }
 
-    private sealed record SchTasksOutcome(
+    internal sealed record SchTasksOutcome(
         int ExitCode,
         string StandardOutput,
         string StandardError);
