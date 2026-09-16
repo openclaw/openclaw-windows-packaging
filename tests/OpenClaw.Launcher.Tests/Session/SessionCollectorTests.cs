@@ -251,4 +251,54 @@ public sealed class SessionCollectorTests : IDisposable
         Assert.False(File.Exists(Path.Combine(Destination, "config", "completions.ps1")));
         Assert.Equal(2, result.Entries!.Count);
     }
+
+    [Fact]
+    public void DirectoryEnumerationFailureIsReportedInsteadOfFailingCollection()
+    {
+        _ = Directory.CreateDirectory(Path.Combine(Source, "logs"));
+        var request = new SessionCollectRequest
+        {
+            RequestId = "c1",
+            DestinationDirectory = Destination,
+            Sources = [new SessionCollectSource
+            {
+                RelativePath = "logs",
+                Name = "logs",
+                Recursive = true
+            }]
+        };
+        File.WriteAllText(RequestPath, SessionCollectProtocol.SerializeRequest(request));
+        string retained = Write("logs\\retained.log", "retained");
+
+        int exitCode = SessionCollector.Run(
+            RequestPath,
+            File.ReadAllText,
+            File.WriteAllText,
+            Source,
+            (_, _, _) => ThrowAfterYield(retained));
+
+        Assert.Equal(0, exitCode);
+        SessionCollectResult result = SessionCollectProtocol.ReadResult(
+            File.ReadAllText(SessionLaunchProtocol.ResultPathFor(RequestPath)));
+        Assert.Collection(
+            result.Entries!,
+            entry =>
+            {
+                Assert.True(entry.Copied);
+                Assert.Equal("logs/retained.log", entry.Name);
+                Assert.Equal("retained", File.ReadAllText(Path.Combine(Destination, "logs", "retained.log")));
+            },
+            entry =>
+            {
+                Assert.False(entry.Copied);
+                Assert.Equal("logs", entry.Name);
+                Assert.StartsWith("unreadable:", entry.Detail, StringComparison.Ordinal);
+            });
+
+        static IEnumerable<string> ThrowAfterYield(string first)
+        {
+            yield return first;
+            throw new UnauthorizedAccessException("fixture access denied");
+        }
+    }
 }

@@ -24,7 +24,8 @@ internal static class SessionCollector
         string requestPath,
         Func<string, string> readFile,
         Action<string, string> writeFile,
-        string? profileRoot = null)
+        string? profileRoot = null,
+        Func<string, string, SearchOption, IEnumerable<string>>? enumerateFiles = null)
     {
         string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
         string? requestId = null;
@@ -42,7 +43,12 @@ internal static class SessionCollector
 
             foreach (SessionCollectSource source in request.Sources ?? [])
             {
-                Collect(request, source, profile, entries);
+                Collect(
+                    request,
+                    source,
+                    profile,
+                    entries,
+                    enumerateFiles ?? Directory.EnumerateFiles);
             }
 
             writeFile(
@@ -67,7 +73,8 @@ internal static class SessionCollector
         SessionCollectRequest request,
         SessionCollectSource source,
         string profile,
-        List<SessionCollectEntry> entries)
+        List<SessionCollectEntry> entries,
+        Func<string, string, SearchOption, IEnumerable<string>> enumerateFiles)
     {
         string path;
         try
@@ -87,7 +94,7 @@ internal static class SessionCollector
 
         if (Directory.Exists(path))
         {
-            CollectDirectory(request, source, path, entries);
+            CollectDirectory(request, source, path, entries, enumerateFiles);
             return;
         }
 
@@ -109,12 +116,13 @@ internal static class SessionCollector
         SessionCollectRequest request,
         SessionCollectSource source,
         string root,
-        List<SessionCollectEntry> entries)
+        List<SessionCollectEntry> entries,
+        Func<string, string, SearchOption, IEnumerable<string>> enumerateFiles)
     {
         IEnumerable<string> files;
         try
         {
-            files = Directory.EnumerateFiles(
+            files = enumerateFiles(
                 root,
                 string.IsNullOrWhiteSpace(source.Pattern) ? "*" : source.Pattern,
                 source.Recursive
@@ -134,15 +142,29 @@ internal static class SessionCollector
         }
 
         bool any = false;
-        foreach (string file in files)
+        try
         {
-            any = true;
-            string relative = Path.GetRelativePath(root, file);
-            CopyOne(
-                request,
-                file,
-                Path.Combine(source.Name!, relative).Replace('\\', '/'),
-                entries);
+            foreach (string file in files)
+            {
+                any = true;
+                string relative = Path.GetRelativePath(root, file);
+                CopyOne(
+                    request,
+                    file,
+                    Path.Combine(source.Name!, relative).Replace('\\', '/'),
+                    entries);
+            }
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            entries.Add(new SessionCollectEntry
+            {
+                Name = source.Name,
+                Copied = false,
+                Detail = $"unreadable: {exception.Message}"
+            });
+            return;
         }
 
         if (!any)
