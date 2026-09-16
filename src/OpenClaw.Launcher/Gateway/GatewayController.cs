@@ -324,11 +324,24 @@ internal sealed class GatewayController
     internal async Task<GatewayStopResult> StopUnderLockAsync(
         string helperPath,
         CancellationToken cancellationToken,
-        bool clearRecord = true)
+        bool clearRecord = true,
+        bool allowUnconfirmedLaunch = false)
     {
         GatewayStateResult state = _store.Read();
         if (state.Record?.LaunchPending == true)
         {
+            if (allowUnconfirmedLaunch)
+            {
+                if (clearRecord)
+                {
+                    _store.Clear();
+                }
+
+                return new GatewayStopResult(
+                    Stopped: false,
+                    "The unconfirmed gateway launch record was removed before session teardown.");
+            }
+
             return new GatewayStopResult(false,
                 "The previous launch was not confirmed; its ownership intent was retained.",
                 "Use `clawctl teardown` to stop/deprovision the owned session through MXC.", false);

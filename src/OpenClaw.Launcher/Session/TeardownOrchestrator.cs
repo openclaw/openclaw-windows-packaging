@@ -44,7 +44,10 @@ internal sealed class TeardownOrchestrator
         }
 
         GatewayStopResult gateway = await _gateway.StopUnderLockAsync(
-            helperPath, cancellationToken, clearRecord: false).ConfigureAwait(false);
+            helperPath,
+            cancellationToken,
+            clearRecord: false,
+            allowUnconfirmedLaunch: true).ConfigureAwait(false);
         if (!gateway.Succeeded)
         {
             return new TeardownResult(false, gateway.Message, gateway.Detail);
