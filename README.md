@@ -64,10 +64,10 @@ the read-only application directory the workspace.
 
 | Command | Behavior |
 |---|---|
-| `clawctl setup` | On a session-capable Windows build, prepare the bundled Node.js runtime, confirm packaged `app\openclaw.mjs` exists, and provision or reuse the owned isolated session. It also configures gateway sign-in recovery without starting a gateway. |
-| `clawctl setup --no-isolation` | Prepare the host runtime without provisioning the isolated session. It still refuses a Windows build that cannot host one. |
+| `clawctl setup` | On a session-capable Windows build, confirm packaged `app\openclaw.mjs` exists, provision or reuse the owned isolated session, and install the bundled Node.js runtime in the agent profile. It does not prepare the invoking user's host runtime. It also configures gateway sign-in recovery without starting a gateway. |
+| `clawctl setup --no-isolation` | After the isolated-session support check, prepare the invoking user's host runtime without provisioning the isolated session. |
 | `clawctl setup --fresh [--force]` | Remove this installation's owned session and package-local state, then run setup again. Without `--force`, incomplete external cleanup stops before local state is erased. `--force` is valid only with `--fresh`; it preserves an explicit warning when cleanup of owned external resources cannot be confirmed, but still stops if bounded local deletion fails. |
-| `clawctl status` | Report the recorded isolated-session state without changing it. Use `clawctl gateway-service status` to inspect the gateway. |
+| `clawctl status` | Report the recorded isolated-session state without provisioning or replacing it. It asks the backend to start the recorded provision as its status probe, so it is not a passive diagnostic. Use `clawctl gateway-service status` to inspect the gateway. |
 | `clawctl teardown [--force]` | Stop and deprovision the owned session and remove its setup state. The MSIX remains installed. |
 | `clawctl pwsh` | Open an interactive PowerShell session inside the agent session. |
 | `clawctl collect-logs [--output <path>]` | Create a redacted host-and-agent diagnostics ZIP. |

@@ -50,17 +50,21 @@ incomplete. It does not onboard OpenClaw or start the gateway.
 | `1`, `true`, `on`, or `yes` | Require the isolated session. A session failure is reported; the launcher does not silently fall back to the host. |
 
 Unrecognized values are rejected rather than interpreted as disabled.
-`clawctl status` is read-only: it reports recorded ownership and observed
-state without provisioning or starting a session.
+`clawctl status` preserves the recorded ownership record and does not provision
+or replace a session. It is not passive: `ProbeRecordedStatusAsync` invokes the
+backend `StartAsync` operation for the recorded provision as its status probe.
 
 ## Agent runtime and helper
 
 The package application tree is immutable and runs directly from the MSIX; the
-launcher does not extract, copy, hash, or repair it at runtime. The bundled
-Node.js archive remains available for direct host execution, which extracts it
-on demand into the invoking user's LocalState. Session setup does not prepare
-that host runtime: it asks the guest helper to install the runtime under the
-agent's own profile.
+launcher does not extract, copy, hash, or repair it at runtime. Direct host
+execution calls `NodeRuntimeResolver.Resolve` and requires the bundled Node.js
+runtime to have already been extracted into the invoking user's LocalState.
+Normal isolated-session setup does not prepare that host runtime:
+`RunSetupCoreAsync` asks the guest helper to install the runtime under the
+agent's own profile. To prepare the host runtime, use
+`clawctl setup --no-isolation`; it first requires the isolated-session support
+check and then runs the session-free host setup.
 
 The agent cannot execute the package's WindowsApps helper binary directly.
 During setup, the launcher stages only `openclaw-session-host.exe` into the
@@ -68,9 +72,11 @@ shared session workspace. It does not stage the application tree. The helper
 has distinct modes for launching a request, inspecting processes/listeners,
 installing the agent runtime, and collecting requested diagnostics.
 
-Setup also installs an ASCII `openclaw.cmd` shim in the shared workspace. The
-shim reads its Node.js and entry-point paths from environment variables rather
-than embedding profile paths, which avoids batch-file code-page corruption.
+Opening the agent shell with `clawctl pwsh` installs an ASCII `openclaw.cmd`
+shim in the shared workspace: `RunPowerShellAsync` calls `InstallToolsAsync`.
+Setup alone does not guarantee that shim exists. The shim reads its Node.js and
+entry-point paths from environment variables rather than embedding profile
+paths, which avoids batch-file code-page corruption.
 The agent's persistent user PATH is prefixed with its bundled Node.js runtime
 for independently started processes; each helper launch also supplies a
 request-level PATH prefix. Together these ensure the agent resolves its own
