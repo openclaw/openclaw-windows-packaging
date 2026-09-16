@@ -266,7 +266,7 @@ internal sealed partial class GatewayRuntime
             foreach (string file in EnumerateStagedFiles(workspace, staged, notes))
             {
                 string relative = Path.GetRelativePath(staged, file).Replace('\\', '/');
-                AddEntry(archive, $"agent/{relative}", file, notes);
+                AddEntry(archive, $"agent/{relative}", file, notes, staged);
             }
         }
 
@@ -329,7 +329,11 @@ internal sealed partial class GatewayRuntime
     }
 
     private static void AddEntry(
-        ZipArchive archive, string name, string path, List<string> notes)
+        ZipArchive archive,
+        string name,
+        string path,
+        List<string> notes,
+        string? trustedRoot = null)
     {
         string fileName = Path.GetFileName(path);
 
@@ -344,9 +348,13 @@ internal sealed partial class GatewayRuntime
         try
         {
             string text;
-            using (FileStream input = new(
-                path, FileMode.Open, FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete))
+            using FileStream input = trustedRoot is null
+                ? new FileStream(
+                    path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete)
+                : TrustedPath.OpenRead(trustedRoot, path);
             using (StreamReader reader = new(input))
             {
                 text = reader.ReadToEnd();
@@ -357,7 +365,7 @@ internal sealed partial class GatewayRuntime
             writer.Write(DiagnosticsRedactor.Redact(text));
         }
         catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException)
+            exception is SessionException or IOException or UnauthorizedAccessException)
         {
             notes.Add($"{name}: unreadable ({exception.Message})");
         }
