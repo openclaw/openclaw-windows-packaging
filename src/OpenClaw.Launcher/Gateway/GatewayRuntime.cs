@@ -36,7 +36,7 @@ internal sealed class GatewayRuntime
                 paths.GatewayLauncherPath,
                 Environment.GetFolderPath(Environment.SpecialFolder.Startup),
                 paths.StateRoot,
-                "clawctl.exe",
+                Path.Combine(AppContext.BaseDirectory, "openclaw.exe"),
                 Path.Combine(Environment.SystemDirectory, "cmd.exe")),
             log);
     }
