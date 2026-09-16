@@ -91,9 +91,11 @@ the read-only application directory the workspace.
 | `clawctl --version` | Print the packaged launcher version. |
 
 Bare `clawctl`, `clawctl -h`, and `clawctl --help` print help without changing
-state. `clawctl setup --help` prints help for that command alone. Help, usage,
-and completion come from
-[System.CommandLine](https://learn.microsoft.com/en-us/dotnet/standard/commandline/).
+state. `clawctl setup --help` prints help for that command alone. Parsing,
+usage errors, and completion come from
+[System.CommandLine](https://learn.microsoft.com/en-us/dotnet/standard/commandline/),
+while help is rendered by `clawctl` itself from the live command tree, so a
+command added to the parser is documented without a separate help edit.
 Invalid management input is rejected with exit code `1` and a parse diagnostic
 on standard error; no readiness check runs.
 

@@ -77,6 +77,55 @@ internal static class ClawCtlConsole
         }
     }
 
+    internal static void WriteHelp(
+        TextWriter output,
+        ClawCtlHelpModel model,
+        bool useColor = false)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(model);
+
+        var view = new ResultView(
+            SupportsUnicode(output),
+            model.CommandPath,
+            ResolveWidth(output));
+
+        if (!string.IsNullOrWhiteSpace(model.Description))
+        {
+            foreach (string paragraph in model.Description.Split(
+                $"{Environment.NewLine}{Environment.NewLine}",
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                view.Line(paragraph);
+                view.Blank();
+            }
+        }
+
+        view.Row("Usage", new Text(model.Usage));
+
+        if (model.Commands.Count > 0)
+        {
+            view.Blank();
+            view.Line("Commands");
+            foreach (ClawCtlHelpEntry entry in model.Commands)
+            {
+                view.Term(entry.Term, entry.Description);
+            }
+        }
+
+        if (model.Options.Count > 0)
+        {
+            view.Blank();
+            view.Line("Options");
+            foreach (ClawCtlHelpEntry entry in model.Options)
+            {
+                view.Term(entry.Term, entry.Description);
+            }
+        }
+
+        Render(output, view.Build(), useColor, view.Unicode);
+    }
+
     internal static void WriteUnexpectedFailure(
         TextWriter error,
         string command,
@@ -634,7 +683,15 @@ internal static class ClawCtlConsole
         public bool Unicode { get; } = unicode;
 
         public void Row(string label, IRenderable value) =>
-            _items.Add(Item.ForRow(label, value));
+            _items.Add(Item.ForRow($"{label}:", new Text($"{label}:"), value));
+
+        // A help term is something the user types, so it takes the same accent
+        // as a next-action command rather than a label's plain foreground.
+        public void Term(string term, string? description) =>
+            _items.Add(Item.ForRow(
+                term,
+                new Text(term, AccentStyle),
+                description is null ? Text.Empty : new Text(description)));
 
         public void Command(string label, string command) =>
             Row(label, new Text(command, AccentStyle));
@@ -645,7 +702,10 @@ internal static class ClawCtlConsole
                 ['\r', '\n'],
                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             {
-                _items.Add(Item.ForRow(null, new Text(LowercaseFirst(line), MutedStyle)));
+                _items.Add(Item.ForRow(
+                    string.Empty,
+                    Text.Empty,
+                    new Text(LowercaseFirst(line), MutedStyle)));
             }
         }
 
@@ -675,9 +735,9 @@ internal static class ClawCtlConsole
             int labelWidth = 0;
             foreach (Item item in _items)
             {
-                if (item.Label is not null)
+                if (item.ColumnText is not null)
                 {
-                    labelWidth = Math.Max(labelWidth, item.Label.Length + 1);
+                    labelWidth = Math.Max(labelWidth, item.ColumnText.Length + 1);
                 }
             }
 
@@ -700,9 +760,7 @@ internal static class ClawCtlConsole
                     blocks.Add(grid);
                 }
 
-                grid.AddRow(
-                    item.Label is null ? Text.Empty : new Text($"{item.Label}:"),
-                    item.Value!);
+                grid.AddRow(item.Column!, item.Value!);
             }
 
             var heading = new Paragraph();
@@ -711,8 +769,12 @@ internal static class ClawCtlConsole
                 heading.Append($"{IdentityMark} ");
             }
 
-            heading.Append("clawctl ", MutedStyle);
-            heading.Append(command, AccentStyle);
+            heading.Append(HostEntrypointResolver.ControlCommandName, MutedStyle);
+            if (!string.IsNullOrEmpty(command))
+            {
+                heading.Append(" ");
+                heading.Append(command, AccentStyle);
+            }
 
             return new Rows(
                 heading,
@@ -722,23 +784,26 @@ internal static class ClawCtlConsole
 
         private readonly struct Item
         {
-            private Item(string? label, IRenderable? value, IRenderable? free)
+            private Item(string? columnText, IRenderable? column, IRenderable? value, IRenderable? free)
             {
-                Label = label;
+                ColumnText = columnText;
+                Column = column;
                 Value = value;
                 Free = free;
             }
 
-            public string? Label { get; }
+            public string? ColumnText { get; }
+
+            public IRenderable? Column { get; }
 
             public IRenderable? Value { get; }
 
             public IRenderable? Free { get; }
 
-            public static Item ForRow(string? label, IRenderable value) =>
-                new(label, value, null);
+            public static Item ForRow(string columnText, IRenderable column, IRenderable value) =>
+                new(columnText, column, value, null);
 
-            public static Item ForFree(IRenderable free) => new(null, null, free);
+            public static Item ForFree(IRenderable free) => new(null, null, null, free);
         }
     }
 }

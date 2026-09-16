@@ -31,6 +31,22 @@ public sealed class ClawCtlCommandLineTests
             text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     [Theory]
+    [InlineData(1, "status", "--no-color=invalid")]
+    [InlineData(0, "status", "--help", "--no-color=invalid")]
+    public async Task MalformedNoColorStillRendersOrdinaryHelp(
+        int expectedExitCode,
+        params string[] args)
+    {
+        (int exitCode, string output, string error) =
+            await RunAsync(args).ConfigureAwait(true);
+
+        Assert.Equal(expectedExitCode, exitCode);
+        Assert.Contains("Usage:", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("This shouldn't happen", error, StringComparison.Ordinal);
+        Assert.DoesNotContain("\u001b[", output, StringComparison.Ordinal);
+    }
+
+    [Theory]
     [InlineData()]
     [InlineData("--help")]
     [InlineData("-h")]

@@ -201,16 +201,27 @@ internal static class ClawCtlCommandLine
 
         // Bare `clawctl` is a discovery request, not a usage error, so the root
         // prints help and succeeds instead of reporting a missing command.
-        root.SetAction((parseResult, _) => Task.FromResult(WriteHelp(parseResult)));
+        var helpAction = new ClawCtlHelpAction(noColor);
+        root.SetAction((parseResult, _) => Task.FromResult(helpAction.Invoke(parseResult)));
         UseLauncherVersion(root);
+        UseClawCtlHelp(root, helpAction);
 
         return root;
     }
 
-    private static int WriteHelp(ParseResult parseResult)
+    // The built-in help action is sealed and exposes only a wrap width, so
+    // replacing it is the supported way to render help. One replacement covers
+    // every command: the root's help option is recursive, so a command added
+    // later reaches the same action and is described from the live tree.
+    private static void UseClawCtlHelp(RootCommand root, ClawCtlHelpAction helpAction)
     {
-        HelpAction help = new();
-        return help.Invoke(parseResult);
+        foreach (Option option in root.Options)
+        {
+            if (option is HelpOption helpOption)
+            {
+                helpOption.Action = helpAction;
+            }
+        }
     }
 
     // The built-in version action reports the entry assembly, which is the test

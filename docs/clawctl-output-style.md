@@ -48,6 +48,29 @@ commands should not expose individual log paths when the bundle can collect the
 same evidence. Its final bundle path is emitted as an exact standalone line,
 outside a width-constrained grid, so it remains copyable.
 
+## Help
+
+Help is rendered by `clawctl`, not by System.CommandLine, so it uses the same
+heading, grid, and palette as every other command. The built-in help action is
+sealed and exposes only a wrap width, so replacing the action is the supported
+extension point; the version action is replaced for a related reason.
+
+`ClawCtlHelp` describes the command the user asked about by walking the live
+tree, so a command added to `ClawCtlCommandLine` appears in help with no edit
+here. Three obligations come with that:
+
+- Give every command and option a description. An entry without one renders as
+  a blank column.
+- Honor `Hidden`. The library's renderer filters hidden symbols and so must
+  this one.
+- Report inherited recursive options. `--json` and `--no-color` are declared
+  once on the root and apply to every command, so subcommand help lists them;
+  `--version` is not recursive and must not appear.
+
+Never take the command name from `RootCommand.Name`. It defaults to the entry
+assembly, which is the test host under `dotnet test` and the scenario driver
+under the NativeAOT suite. Use the known control command name instead.
+
 ## Color
 
 Output is composed from Spectre.Console renderables — a `Grid` for
