@@ -72,6 +72,7 @@ internal sealed class SessionProcessLauncher : ISessionProcessLauncher
         {
             startInfo.Environment[name] = value;
         }
+        PrependPath(startInfo, Path.GetDirectoryName(request.Executable));
 
         using Process process = new() { StartInfo = startInfo };
         try

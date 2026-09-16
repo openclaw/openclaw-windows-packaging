@@ -133,13 +133,13 @@ public sealed class SessionLockTests
     }
 
     [Fact]
-    public void NameIsScopedToTheCurrentUserSession()
+    public void NameIsScopedAcrossWindowsSessions()
     {
         var sessionLock = new NamedSessionLock("PFN:OpenClaw.Gateway_abc123");
 
-        Assert.StartsWith("Local\\", sessionLock.Name, StringComparison.Ordinal);
-        Assert.DoesNotContain(':', sessionLock.Name[6..]);
-        Assert.DoesNotContain('\\', sessionLock.Name[6..]);
+        Assert.StartsWith("Global\\", sessionLock.Name, StringComparison.Ordinal);
+        Assert.DoesNotContain(':', sessionLock.Name[7..]);
+        Assert.DoesNotContain('\\', sessionLock.Name[7..]);
     }
 
     [Fact]

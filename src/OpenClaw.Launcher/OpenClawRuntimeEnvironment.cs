@@ -14,6 +14,7 @@ internal static class OpenClawRuntimeEnvironment
     public const string SupervisorModeVariable = "OPENCLAW_SUPERVISOR_MODE";
     public const string ServiceRepairPolicyVariable = "OPENCLAW_SERVICE_REPAIR_POLICY";
     public const string NoAutoUpdateVariable = "OPENCLAW_NO_AUTO_UPDATE";
+    public const string GatewayIsolationVariable = "CLAWCTL_GATEWAY_ISOLATION";
 
     public const string ExternalValue = "external";
     public const string NoAutoUpdateValue = "1";
@@ -30,21 +31,26 @@ internal static class OpenClawRuntimeEnvironment
     /// <summary>
     /// The variables to apply, as an ordinary dictionary.
     /// </summary>
-    public static IReadOnlyDictionary<string, string> Build() =>
+    public static IReadOnlyDictionary<string, string> Build(
+        GatewayIsolationMode gatewayIsolationMode = GatewayIsolationMode.Disabled) =>
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             [SupervisorModeVariable] = ExternalValue,
             [ServiceRepairPolicyVariable] = ExternalValue,
             [NoAutoUpdateVariable] = NoAutoUpdateValue,
+            [GatewayIsolationVariable] = gatewayIsolationMode.ToEnvironmentValue(),
         };
 
     public static IReadOnlyDictionary<string, string> Build(
         bool isInteractive,
-        Func<string, string?> readEnvironmentVariable)
+        Func<string, string?> readEnvironmentVariable,
+        GatewayIsolationMode gatewayIsolationMode = GatewayIsolationMode.Disabled)
     {
         ArgumentNullException.ThrowIfNull(readEnvironmentVariable);
 
-        Dictionary<string, string> result = new(Build(), StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, string> result = new(
+            Build(gatewayIsolationMode),
+            StringComparer.OrdinalIgnoreCase);
         string? forceColor = readEnvironmentVariable(ForceColorVariable);
         string? wtSession = readEnvironmentVariable(WindowsTerminalSessionVariable);
         string? noColor = readEnvironmentVariable(NoColorVariable);

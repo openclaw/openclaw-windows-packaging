@@ -250,6 +250,15 @@ internal static class Program
                         return result;
                     }
 
+                    if (Session.SessionRoutingPolicy.ReadMode(
+                        Environment.GetEnvironmentVariable) == Session.SessionMode.Disabled)
+                    {
+                        await output.WriteLineAsync(
+                            "Isolated session setup was skipped because OPENCLAW_SESSION is disabled.")
+                            .ConfigureAwait(false);
+                        return 0;
+                    }
+
                     try
                     {
                         Session.SessionRuntime runtime = GetSessionRuntime();
@@ -296,9 +305,20 @@ internal static class Program
                         .ConfigureAwait(false);
                     return 0;
                 },
-                Teardown = async (_, cancellationToken) =>
+                Teardown = async (force, cancellationToken) =>
                 {
-                    await GetSessionRuntime().Coordinator.RemoveAsync(cancellationToken)
+                    if (!force)
+                    {
+                        await error.WriteLineAsync(
+                            "Teardown removes the isolated session and its data. Re-run with --force to continue.")
+                            .ConfigureAwait(false);
+                        return 1;
+                    }
+
+                    Session.SessionRuntime runtime = GetSessionRuntime();
+                    using Session.ISessionLockHandle handle =
+                        runtime.AcquireLifecycleLock();
+                    await runtime.Coordinator.RemoveAsync(cancellationToken)
                         .ConfigureAwait(false);
                     await output.WriteLineAsync("OpenClaw isolated session was removed.")
                         .ConfigureAwait(false);

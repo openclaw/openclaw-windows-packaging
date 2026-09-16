@@ -27,7 +27,8 @@ internal sealed class SessionRuntime
         IMxcSessionClient backend,
         string helperPath,
         string applicationId,
-        SetupStateStore setupState)
+        SetupStateStore setupState,
+        string lifecycleLockScope)
     {
         Coordinator = coordinator;
         Executor = executor;
@@ -35,7 +36,7 @@ internal sealed class SessionRuntime
         HelperPath = helperPath;
         ApplicationId = applicationId;
         SetupState = setupState;
-        LifecycleLock = new NamedSessionLock(applicationId + "_Installation");
+        LifecycleLock = new NamedSessionLock(lifecycleLockScope);
     }
 
     public SessionCoordinator Coordinator { get; }
@@ -115,7 +116,7 @@ internal sealed class SessionRuntime
         var coordinator = new SessionCoordinator(
             client,
             new SessionStateStore(paths.SessionStatePath),
-            new NamedSessionLock(applicationId),
+            new NamedSessionLock(paths.SessionStatePath),
             applicationId,
             log);
 
@@ -125,7 +126,8 @@ internal sealed class SessionRuntime
             client,
             ResolveHelperPath(baseDirectory),
             applicationId,
-            new SetupStateStore(paths.SetupStatePath));
+            new SetupStateStore(paths.SetupStatePath),
+            paths.SessionStatePath + "_Installation");
 
         bool IsCurrentSessionRecord(SessionRecord record)
         {
@@ -178,6 +180,30 @@ internal sealed class SessionRuntime
         }
 
         return session.Record;
+    }
+
+    /// <summary>
+    /// Returns the Node.js executable extracted by the agent for the currently
+    /// packaged runtime.
+    /// </summary>
+    public string RequireAgentNodePath(string packagedArchivePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(packagedArchivePath);
+
+        SetupStateResult setup = SetupState.Read(ApplicationId);
+        SetupRecord? record = setup.Record;
+        if (record?.AgentNodePath is not { Length: > 0 } executablePath ||
+            !string.Equals(
+                record.AgentNodeArchive,
+                Path.GetFileName(packagedArchivePath),
+                StringComparison.Ordinal))
+        {
+            throw new SessionException(
+                "The isolated session runtime does not match this package. " +
+                "Run `clawctl setup` again.");
+        }
+
+        return executablePath;
     }
 
     /// <summary>Records a completed guest runtime installation.</summary>

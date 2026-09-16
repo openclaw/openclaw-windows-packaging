@@ -25,7 +25,7 @@ internal interface ISessionLock
 }
 
 /// <summary>
-/// Named-mutex lifecycle lock, scoped to one user and package identity.
+/// Named-mutex lifecycle lock, scoped to one installation's LocalState path.
 /// </summary>
 internal sealed class NamedSessionLock : ISessionLock
 {
@@ -35,10 +35,9 @@ internal sealed class NamedSessionLock : ISessionLock
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scope);
 
-        // Local\ keeps the lock inside the session of the current user, which
-        // matches the one-session-per-user-and-package rule and avoids needing
-        // rights on a Global object.
-        _name = "Local\\OpenClawSessionLifecycle_" + Sanitize(scope);
+        // The LocalState path makes this installation-specific. Global\ then
+        // carries that same lock across console and remote desktop sessions.
+        _name = "Global\\OpenClawSessionLifecycle_" + Sanitize(scope);
     }
 
     public string Name => _name;

@@ -44,7 +44,7 @@ public sealed class SessionRuntimeInstallerTests : IDisposable
             }));
 
         int exitCode = SessionRuntimeInstaller.Run(
-            RequestPath, File.ReadAllText, File.WriteAllText);
+            RequestPath, File.ReadAllText, File.WriteAllText, () => _root);
         Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode, exitCode);
 
         return SessionRuntimeProtocol.ReadResult(
