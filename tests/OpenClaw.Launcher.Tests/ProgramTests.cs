@@ -85,11 +85,9 @@ public sealed class ProgramTests : IDisposable
             TextWriter.Null,
             _ => Task.FromResult(nodeRuntime),
             _ => runtime,
-            installRecovery: (_, _) => Task.FromResult(new GatewayPersistenceInstallResult(
-                GatewayPersistenceState.Ready,
-                GatewayPersistenceLane.TaskScheduler,
-                "Logon recovery is configured.",
-                Changed: true)));
+            installRecovery: RecoveryConfigured,
+            probeReadiness: SupportedHost,
+            getPackageFamilyName: () => "OpenClaw.Gateway_test");
 
         Assert.Equal(0, exitCode);
         Assert.True(File.Exists(entryPoint));
@@ -141,11 +139,9 @@ public sealed class ProgramTests : IDisposable
             _ => runtime,
             // Setup only reaches Ready once logon recovery is configured, and
             // a test must never register a real scheduled task.
-            installRecovery: (_, _) => Task.FromResult(new GatewayPersistenceInstallResult(
-                GatewayPersistenceState.Ready,
-                GatewayPersistenceLane.TaskScheduler,
-                "Logon recovery is configured.",
-                Changed: true)));
+            installRecovery: RecoveryConfigured,
+            probeReadiness: SupportedHost,
+            getPackageFamilyName: () => "OpenClaw.Gateway_test");
         Assert.Equal(0, setupExitCode);
 
         string expectedAgentNode = runtime.SetupState
@@ -424,7 +420,6 @@ public sealed class ProgramTests : IDisposable
     public async Task TeardownClearsPendingGatewayStateAfterSessionRemoval()
     {
         SessionRuntime runtime = CreateSessionRuntime();
-        bool recoveryRemoved = false;
         runtime.GatewayState.Write(new GatewayRecord
         {
             SchemaVersion = GatewayStateStore.CurrentSchemaVersion,
@@ -440,21 +435,17 @@ public sealed class ProgramTests : IDisposable
             TextWriter.Null,
             TextWriter.Null,
             createSessionRuntime: _ => runtime,
-            removeRecovery: _ =>
-            {
-                recoveryRemoved = true;
-                return Task.FromResult(
-                    new GatewayPersistenceRemovalResult(true, false, "removed"));
-            });
+            createTeardownOrchestrator: CreateTeardownOrchestrator);
 
         Assert.Equal(0, exitCode);
-        Assert.True(recoveryRemoved);
         GatewayStateResult state = runtime.GatewayState.Read();
         Assert.Equal(GatewayStateFault.Missing, state.Fault);
     }
 
+    // Preparing a runtime for an application that is not there wastes an
+    // extraction; the missing application is reported first.
     [Fact]
-    public async Task AgentResolvesNodeBeforeReportingMissingApplication()
+    public async Task AgentReportsMissingApplicationBeforeResolvingHostNode()
     {
         bool nodeResolutionAttempted = false;
 
@@ -473,13 +464,72 @@ public sealed class ProgramTests : IDisposable
                             .ProcessArchitecture));
             }));
 
-        Assert.True(nodeResolutionAttempted);
+        Assert.False(nodeResolutionAttempted);
     }
 
     public void Dispose()
     {
         Directory.Delete(_testDirectory, recursive: true);
         GC.SuppressFinalize(this);
+    }
+
+    // Setup refuses to provision on a host that cannot isolate, so every test
+    // that drives setup to completion has to state that this one can.
+    private static Task<MxcReadinessReport> SupportedHost(CancellationToken _) =>
+        Task.FromResult(new MxcReadinessReport(
+            "runtime",
+            null,
+            null,
+            MxcHostSupport.Supported,
+            null,
+            MxcSupportEvidence.HostBuild));
+
+    private static Task<GatewayPersistenceInstallResult> RecoveryConfigured(
+        Action<string> _,
+        CancellationToken __) =>
+        Task.FromResult(new GatewayPersistenceInstallResult(
+            GatewayPersistenceState.Ready,
+            GatewayPersistenceLane.TaskScheduler,
+            "Logon recovery is configured.",
+            Changed: true));
+
+    // Teardown removes logon recovery as well as the session, so the test has
+    // to supply a scheduler fixture rather than let it reach Task Scheduler.
+    private TeardownOrchestrator CreateTeardownOrchestrator(
+        SessionRuntime runtime,
+        Action<string> log)
+    {
+        string stateRoot = Path.Combine(_testDirectory, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(stateRoot);
+        var recovery = new GatewayPersistenceManager(
+            new Gateway.FakeGatewayTaskScheduler(),
+            new GatewayPersistenceOptions(
+                UserSid: "S-1-5-21-1",
+                PackageFamilyName: "OpenClaw.Gateway_test",
+                LauncherPath: Path.Combine(stateRoot, "gateway-launcher.cmd"),
+                StartupFolderPath: Path.Combine(stateRoot, "startup"),
+                WorkingDirectory: stateRoot,
+                AliasCommand: "openclaw.exe",
+                CommandProcessorPath: @"C:\Windows\System32\cmd.exe"),
+            log);
+        var controller = new GatewayController(
+            runtime.Coordinator,
+            new SessionGatewayClient(runtime.Backend, log),
+            runtime.GatewayState,
+            _ => throw new InvalidOperationException(
+                "Teardown must never start the gateway."),
+            log,
+            runtime.RequireSetup,
+            runtime.LifecycleLock);
+
+        return new TeardownOrchestrator(
+            runtime.LifecycleLock,
+            recovery,
+            controller,
+            runtime.Coordinator,
+            runtime.GatewayState,
+            new GatewayConfigurationStore(Path.Combine(stateRoot, "gateway-config.json")),
+            runtime.SetupState);
     }
 
     private SessionRuntime CreateSessionRuntime()

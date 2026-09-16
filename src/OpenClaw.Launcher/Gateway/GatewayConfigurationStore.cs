@@ -42,6 +42,15 @@ internal sealed record GatewayLaunchConfiguration
     [JsonPropertyName("port")]
     public int? Port { get; init; }
 
+    /// <summary>
+    /// The guest-visible directory the gateway runs in. Stated rather than
+    /// inherited: at logon a task's directory is the system directory, and an
+    /// interactive caller's directory would make the gateway's behavior depend
+    /// on where it happened to be started from.
+    /// </summary>
+    [JsonPropertyName("workingDirectory")]
+    public string? WorkingDirectory { get; init; }
+
 }
 
 /// <summary>Why a stored launch configuration could not be used.</summary>

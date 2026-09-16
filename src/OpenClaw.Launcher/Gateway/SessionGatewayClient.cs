@@ -13,7 +13,14 @@ internal sealed record GatewayStartRequest(
     string HelperPath,
     string NodePath,
     string ApplicationDirectory,
-    int? Port);
+    int? Port)
+{
+    /// <summary>
+    /// The guest-visible directory to run in. The shared workspace is used when
+    /// the user configured nothing.
+    /// </summary>
+    public string? WorkingDirectory { get; init; }
+}
 
 /// <summary>The identity of a gateway that was started.</summary>
 internal sealed record GatewayStartOutcome(
@@ -118,7 +125,7 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
             Mode = SessionLaunchMode.Detached,
             Executable = request.NodePath,
             Arguments = arguments,
-            WorkingDirectory = workspace,
+            WorkingDirectory = request.WorkingDirectory ?? workspace,
             Environment = _buildEnvironment(),
             PathPrefix = Path.GetDirectoryName(request.NodePath)
                 ?? throw new SessionException(
