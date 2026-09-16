@@ -270,7 +270,7 @@ internal sealed class GatewayController
             resultState switch
             {
                 GatewayState.Running => $"The gateway is running on {DescribePorts(record)}.",
-                GatewayState.Starting => "The gateway process started but is not listening yet. Run `clawctl status`.",
+                GatewayState.Starting => "The gateway process started but is not listening yet. Run `clawctl gateway-service status`.",
                 GatewayState.Unknown => $"The gateway launch could not be verified: {observed.Error}",
                 _ => "The gateway process exited during startup. Inspect its log."
             });
