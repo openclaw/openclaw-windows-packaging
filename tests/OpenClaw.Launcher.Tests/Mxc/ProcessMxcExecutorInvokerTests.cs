@@ -36,7 +36,10 @@ public sealed class ProcessMxcExecutorInvokerTests : IDisposable
         Assert.Contains("eof", outcome.StandardOutput, StringComparison.Ordinal);
     }
 
-    [Fact]
+    // The deadline is a hang detector, not a synchronization budget. The wait
+    // below completes as soon as the executor connects or exits, so a slow
+    // cold start cannot reach it; only a genuine hang can.
+    [Fact(Timeout = 300_000)]
     public async Task CancellationTerminatesBufferedExecutorBeforeReturning()
     {
         string scriptPath = Path.Combine(_root, "wait.ps1");
@@ -60,7 +63,6 @@ public sealed class ProcessMxcExecutorInvokerTests : IDisposable
             PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous);
         using var cancellation = new CancellationTokenSource();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var invoker = new ProcessMxcExecutorInvoker();
         string powershell = Path.Combine(
             Environment.SystemDirectory,
@@ -74,14 +76,26 @@ public sealed class ProcessMxcExecutorInvokerTests : IDisposable
                  pipeName]),
             cancellation.Token);
 
-        await pipe.WaitForConnectionAsync(timeout.Token);
+        Task connection = pipe.WaitForConnectionAsync(CancellationToken.None);
+        Task completed = await Task.WhenAny(connection, invocation)
+            .ConfigureAwait(true);
+        if (completed == invocation)
+        {
+            MxcExecutorOutcome outcome = await invocation.ConfigureAwait(true);
+            throw new Xunit.Sdk.XunitException(
+                "Executor exited before connecting to the named pipe " +
+                $"(exit code {outcome.ExitCode}). Standard output: " +
+                $"{outcome.StandardOutput} Standard error: {outcome.StandardError}");
+        }
+
+        await connection.ConfigureAwait(true);
         using var reader = new StreamReader(
             pipe,
             Encoding.UTF8,
             detectEncodingFromByteOrderMarks: true,
             bufferSize: 1024,
             leaveOpen: true);
-        string processIdText = await reader.ReadLineAsync(timeout.Token)
+        string processIdText = await reader.ReadLineAsync(CancellationToken.None)
             ?? throw new InvalidOperationException("Executor did not report its process ID.");
         int processId = int.Parse(
             processIdText,
