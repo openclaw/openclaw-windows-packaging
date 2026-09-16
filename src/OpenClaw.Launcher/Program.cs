@@ -528,9 +528,12 @@ internal static class Program
         }
         catch (OperationCanceledException)
         {
-            log("Fresh setup was cancelled before it completed.");
+            string retryCommand = setupOptions.Fresh
+                ? "clawctl setup --fresh"
+                : "clawctl setup";
+            log($"Setup was cancelled before it completed. Retry `{retryCommand}`.");
             await output.WriteLineAsync(
-                "OpenClaw setup was cancelled; cleanup or setup may be incomplete. Rerun `clawctl setup --fresh` to retry.")
+                $"OpenClaw setup was cancelled; setup may be incomplete. Rerun `{retryCommand}` to retry.")
                 .ConfigureAwait(false);
             return 1;
         }
