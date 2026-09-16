@@ -203,7 +203,7 @@ internal static class ClawCtlCommandLine
         // prints help and succeeds instead of reporting a missing command.
         var helpAction = new ClawCtlHelpAction(noColor);
         root.SetAction((parseResult, _) => Task.FromResult(helpAction.Invoke(parseResult)));
-        UseLauncherVersion(root);
+        UseLauncherVersion(root, json, noColor);
         UseClawCtlHelp(root, helpAction);
 
         return root;
@@ -225,31 +225,71 @@ internal static class ClawCtlCommandLine
     }
 
     // The built-in version action reports the entry assembly, which is the test
-    // or scenario host rather than the launcher. Report the launcher assembly so
-    // the value identifies the shipped package binary in every host.
-    private static void UseLauncherVersion(RootCommand root)
+    // or scenario host rather than the launcher. Report the build identity that
+    // was compiled into this binary so the value identifies the shipped package
+    // in every host.
+    private static void UseLauncherVersion(
+        RootCommand root,
+        Option<bool> json,
+        Option<bool> noColor)
     {
         foreach (Option option in root.Options)
         {
             if (option is VersionOption versionOption)
             {
-                versionOption.Action = new LauncherVersionAction();
+                versionOption.Action = new LauncherVersionAction(json, noColor);
             }
         }
     }
 
-    private sealed class LauncherVersionAction : SynchronousCommandLineAction
+    private sealed class LauncherVersionAction(Option<bool> json, Option<bool> noColor)
+        : SynchronousCommandLineAction
     {
         public override bool ClearsParseErrors => true;
 
         public override int Invoke(ParseResult parseResult)
         {
-            string version = typeof(LauncherVersionAction).Assembly
-                .GetName()
-                .Version?
-                .ToString() ?? "unknown";
-            parseResult.InvocationConfiguration.Output.WriteLine(version);
+            ArgumentNullException.ThrowIfNull(parseResult);
+
+            TextWriter output = parseResult.InvocationConfiguration.Output;
+            bool jsonValue = GetBooleanValue(parseResult, json, defaultValue: false);
+            if (jsonValue)
+            {
+                ClawCtlJson.WriteVersion(output);
+                return 0;
+            }
+
+            IDisposable? restore = null;
+            bool useColor = ClawCtlColorPolicy.PrepareOutput(
+                GetBooleanValue(parseResult, noColor, defaultValue: true),
+                json: false,
+                ReferenceEquals(output, Console.Out),
+                WindowsHostConsole.Instance.IsInteractive,
+                Environment.GetEnvironmentVariable,
+                () => WindowsHostConsole.Instance
+                    .TryEnableVirtualTerminalProcessing(output, _ => { }, out restore));
+
+            using (restore)
+            {
+                ClawCtlConsole.WriteVersion(output, useColor);
+            }
+
             return 0;
+        }
+
+        private static bool GetBooleanValue(
+            ParseResult parseResult,
+            Option<bool> option,
+            bool defaultValue)
+        {
+            try
+            {
+                return parseResult.GetValue(option);
+            }
+            catch (InvalidOperationException)
+            {
+                return defaultValue;
+            }
         }
     }
 }

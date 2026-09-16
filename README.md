@@ -110,11 +110,43 @@ the `NO_COLOR` environment variable, redirected output, and CI disable color;
 explicitly disabled. JSON output never contains terminal escape sequences.
 
 Help and version requests take precedence over the rest of the command line.
-`clawctl --version bogus` prints the launcher version and exits `0` rather than
+`clawctl --version bogus` reports the build identity and exits `0` rather than
 reporting `bogus`, because the version request is satisfied before the
-remaining arguments are validated. The version printed is always the packaged
-launcher's assembly version, including when the launcher is hosted by another
-process.
+remaining arguments are validated.
+
+`clawctl --version` reports the package version and packaging-repository
+commit alongside the bundled OpenClaw payload version and its commit:
+
+```text
+clawctl 0.0.0.1
+
+  Package:   0.0.0.1 (bfcb5ba73e7ea3e88ceed8c326e58e5baadc3191)
+  Payload:   2026.8.2 (0965053fe6b9341776df147a6934b7485c60b5ca)
+```
+
+Each commit is the one that produced the version it follows, and is muted so
+the version stays the value a reader compares.
+
+`clawctl --version --json` reports the same identity as a versioned document,
+so a support or deployment script can collect it without parsing prose:
+
+```json
+{
+  "ok": true,
+  "schemaVersion": 1,
+  "command": "version",
+  "package": { "version": "0.0.0.1", "commit": "bfcb5ba…" },
+  "payload": { "version": "2026.8.2", "commit": "0965053…" }
+}
+```
+
+Those four values are compiled into the binary as constants by the build that
+produces the package, so the report cannot drift from the payload it shipped
+with and costs no file or process access at startup. `Build-MSIX.ps1` supplies
+the versions and commits it also records in `msix-metadata.json`; an ordinary
+build falls back to the pin recorded in `release-policy.json`, and reports
+`unknown` for a value no build supplied. The report never comes from the entry
+assembly, so it stays correct when the launcher is hosted by another process.
 
 Response-file expansion is disabled. A leading `@` has no meaning to `clawctl`
 and is reported as an unrecognized argument rather than read from disk.

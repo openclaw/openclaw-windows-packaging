@@ -45,6 +45,7 @@ internal static class SmokeProgram
             ("completion directive suggests commands", CompletionDirectiveSuggestsAsync),
             ("unpackaged setup reports identity failure", SetupReportsReadinessAsync),
             ("JSON failures survive NativeAOT", JsonFailureIsStructuredAsync),
+            ("version JSON survives NativeAOT", VersionJsonIsStructuredAsync),
             ("Spectre renders clawctl output under NativeAOT", SpectreOutputRenders),
             ("missing application reports diagnostics", MissingApplicationReportsAsync),
             ("openclaw never parses its arguments", AgentNeverParsesItsArgumentsAsync)
@@ -137,23 +138,58 @@ internal static class SmokeProgram
 
     // This driver's assembly version is 9.9.9.9. The library's built-in action
     // reports the entry assembly, so if the custom action were ever dropped
-    // this scenario would print 9.9.9.9 instead of the launcher's version.
+    // this scenario would print 9.9.9.9 instead of the baked build identity.
     private static async Task VersionReportsLauncherAssemblyAsync()
     {
         using Fixture fixture = Fixture.CreateWithoutApplication();
-        string launcherVersion = LauncherVersion();
         string driverVersion = DriverVersion();
 
         int exitCode = await fixture.RunAsync(["--version"]).ConfigureAwait(false);
 
         AssertExitCode(0, exitCode, fixture);
-        string reported = fixture.Output.ToString().Trim();
+        string reported = fixture.Output.ToString();
+        foreach (string expected in new[]
+        {
+            ClawCtlBuildMetadata.PackageVersion,
+            ClawCtlBuildMetadata.PackageCommit,
+            ClawCtlBuildMetadata.PayloadVersion,
+            ClawCtlBuildMetadata.PayloadCommit
+        })
+        {
+            Assert(
+                reported.Contains(expected, StringComparison.Ordinal),
+                $"Expected the version report to contain '{expected}'.");
+        }
+
         Assert(
-            string.Equals(reported, launcherVersion, StringComparison.Ordinal),
-            $"Expected the launcher version '{launcherVersion}' but got '{reported}'.");
-        Assert(
-            !string.Equals(reported, driverVersion, StringComparison.Ordinal),
+            !string.Equals(reported.Trim(), driverVersion, StringComparison.Ordinal),
             $"Reported this driver's version '{driverVersion}' instead of the launcher's.");
+    }
+
+    // The build identity is the one document produced outside the command
+    // result path, and it adds a type to the serializer context. Source
+    // generation has to cover it ahead of time or this returns an empty object.
+    private static async Task VersionJsonIsStructuredAsync()
+    {
+        using Fixture fixture = Fixture.CreateWithoutApplication();
+
+        int exitCode = await fixture.RunAsync(["--version", "--json"]).ConfigureAwait(false);
+
+        AssertExitCode(0, exitCode, fixture);
+        using JsonDocument document = JsonDocument.Parse(fixture.Output.ToString());
+        JsonElement root = document.RootElement;
+        Assert(root.GetProperty("ok").GetBoolean(), "The version document reported failure.");
+        Assert(
+            root.GetProperty("command").GetString() == "version",
+            "The version document did not name the version command.");
+        Assert(
+            root.GetProperty("package").GetProperty("version").GetString() ==
+                ClawCtlBuildMetadata.PackageVersion,
+            "The version document did not carry the baked package version.");
+        Assert(
+            root.GetProperty("payload").GetProperty("commit").GetString() ==
+                ClawCtlBuildMetadata.PayloadCommit,
+            "The version document did not carry the baked payload commit.");
     }
 
     private static async Task VersionWinsOverTrailingAsync()
@@ -164,9 +200,8 @@ internal static class SmokeProgram
 
         AssertExitCode(0, exitCode, fixture);
         Assert(
-            string.Equals(
-                fixture.Output.ToString().Trim(),
-                LauncherVersion(),
+            fixture.Output.ToString().Contains(
+                ClawCtlBuildMetadata.PackageVersion,
                 StringComparison.Ordinal),
             "Expected the launcher version with a trailing argument present.");
     }

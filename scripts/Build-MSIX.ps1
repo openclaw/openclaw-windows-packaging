@@ -428,6 +428,10 @@ try {
                 "-p:AssemblyVersion=$PackageVersion" `
                 "-p:FileVersion=$PackageVersion" `
                 "-p:PackageIdentityVersion=$PackageVersion" `
+                "-p:ClawCtlPackageVersion=$PackageVersion" `
+                "-p:ClawCtlPackageCommit=$($SourceCommit.ToLowerInvariant())" `
+                "-p:ClawCtlPayloadVersion=$([string]$payloadInfo.packageVersion)" `
+                "-p:ClawCtlPayloadCommit=$($payloadInfo.resolvedCommit.ToLowerInvariant())" `
                 "-p:AppxPackageDir=$appxOutput" `
                 -p:AppxBundle=Never `
                 -p:AppxPackageSigningEnabled=false `

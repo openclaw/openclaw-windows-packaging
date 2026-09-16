@@ -64,6 +64,73 @@
     <InternalsVisibleTo Include="OpenClaw.Launcher.AotSmoke" />
   </ItemGroup>
 
+  <!--
+    Build identity is baked into the binary as compile-time constants rather
+    than read from a file or an attribute at run time. That keeps the version
+    report honest for a package whose payload is immutable, costs nothing at
+    startup, and survives trimming and NativeAOT, which would otherwise be
+    free to drop metadata nothing statically references.
+
+    Values come from the build that produces the package. release-policy.json
+    is the fallback so an ordinary build still reports the pin this checkout
+    describes instead of a placeholder.
+  -->
+  <PropertyGroup>
+    <_ReleasePolicyPath>$(MSBuildThisFileDirectory)..\..\release-policy.json</_ReleasePolicyPath>
+    <_ReleasePolicyText Condition="Exists('$(_ReleasePolicyPath)')">$([System.IO.File]::ReadAllText('$(_ReleasePolicyPath)'))</_ReleasePolicyText>
+
+    <ClawCtlPackageVersion Condition="'$(ClawCtlPackageVersion)' == '' and '$(PackageIdentityVersion)' != ''">$(PackageIdentityVersion)</ClawCtlPackageVersion>
+    <_GatewayTag Condition="'$(ClawCtlPackageVersion)' == '' and '$(_ReleasePolicyText)' != ''">$([System.Text.RegularExpressions.Regex]::Replace($(_ReleasePolicyText), '(?s)^.*"gatewayTag"\s*:\s*"([^"]*)".*$', '$1'))</_GatewayTag>
+    <_MSIXRevision Condition="'$(ClawCtlPackageVersion)' == '' and '$(_ReleasePolicyText)' != ''">$([System.Text.RegularExpressions.Regex]::Replace($(_ReleasePolicyText), '(?s)^.*"msixRevision"\s*:\s*(\d+).*$','$1'))</_MSIXRevision>
+    <_GatewayYear Condition="'$(_GatewayTag)' != ''">$([System.Text.RegularExpressions.Regex]::Replace($(_GatewayTag), '^v(\d+)\.(\d+)\.(\d+)(?:-(\d+))?$', '$1'))</_GatewayYear>
+    <_GatewayMonth Condition="'$(_GatewayTag)' != ''">$([System.Text.RegularExpressions.Regex]::Replace($(_GatewayTag), '^v(\d+)\.(\d+)\.(\d+)(?:-(\d+))?$', '$2'))</_GatewayMonth>
+    <_GatewayPatch Condition="'$(_GatewayTag)' != ''">$([System.Text.RegularExpressions.Regex]::Replace($(_GatewayTag), '^v(\d+)\.(\d+)\.(\d+)(?:-(\d+))?$', '$3'))</_GatewayPatch>
+    <_GatewayReleaseSequence Condition="'$(_GatewayTag)' != ''">$([System.Text.RegularExpressions.Regex]::Replace($(_GatewayTag), '^v(\d+)\.(\d+)\.(\d+)-(\d+)$', '$4'))</_GatewayReleaseSequence>
+    <_GatewayReleaseSequence Condition="'$(_GatewayReleaseSequence)' == '$(_GatewayTag)'">1</_GatewayReleaseSequence>
+    <_PackageRevisionBase Condition="'$(_GatewayReleaseSequence)' != ''">$([MSBuild]::Multiply($(_GatewayReleaseSequence), 1000))</_PackageRevisionBase>
+    <_PackageRevision Condition="'$(_PackageRevisionBase)' != '' and '$(_MSIXRevision)' != ''">$([MSBuild]::Add($(_PackageRevisionBase), $(_MSIXRevision)))</_PackageRevision>
+    <ClawCtlPackageVersion Condition="'$(ClawCtlPackageVersion)' == '' and '$(_GatewayYear)' != '' and '$(_GatewayMonth)' != '' and '$(_GatewayPatch)' != '' and '$(_PackageRevision)' != ''">$(_GatewayYear).$(_GatewayMonth).$(_GatewayPatch).$(_PackageRevision)</ClawCtlPackageVersion>
+    <ClawCtlPayloadVersion Condition="'$(ClawCtlPayloadVersion)' == '' and '$(_ReleasePolicyText)' != ''">$([System.Text.RegularExpressions.Regex]::Replace($(_ReleasePolicyText), '(?s)^.*"payloadPackageVersion"\s*:\s*"([^"]*)".*$', '$1'))</ClawCtlPayloadVersion>
+    <ClawCtlPayloadCommit Condition="'$(ClawCtlPayloadCommit)' == '' and '$(_ReleasePolicyText)' != ''">$([System.Text.RegularExpressions.Regex]::Replace($(_ReleasePolicyText), '(?s)^.*"approvedCommit"\s*:\s*"([^"]*)".*$', '$1'))</ClawCtlPayloadCommit>
+    <ClawCtlPackageCommit Condition="'$(ClawCtlPackageCommit)' == ''">$(SourceRevisionId)</ClawCtlPackageCommit>
+
+    <ClawCtlPackageVersion Condition="'$(ClawCtlPackageVersion)' == ''">unknown</ClawCtlPackageVersion>
+    <ClawCtlPackageCommit Condition="'$(ClawCtlPackageCommit)' == ''">unknown</ClawCtlPackageCommit>
+    <ClawCtlPayloadVersion Condition="'$(ClawCtlPayloadVersion)' == ''">unknown</ClawCtlPayloadVersion>
+    <ClawCtlPayloadCommit Condition="'$(ClawCtlPayloadCommit)' == ''">unknown</ClawCtlPayloadCommit>
+  </PropertyGroup>
+
+  <Target Name="GenerateClawCtlBuildMetadata" BeforeTargets="BeforeCompile">
+    <PropertyGroup>
+      <_BuildMetadataFile>$(IntermediateOutputPath)ClawCtlBuildMetadata.g.cs</_BuildMetadataFile>
+    </PropertyGroup>
+    <ItemGroup>
+      <_BuildMetadataLine Include="// &lt;auto-generated /&gt;" />
+      <_BuildMetadataLine Include="namespace OpenClaw.Launcher%3B" />
+      <_BuildMetadataLine Include="internal static class ClawCtlBuildMetadata" />
+      <_BuildMetadataLine Include="{" />
+      <_BuildMetadataLine Include="    public const string PackageVersion = &quot;$(ClawCtlPackageVersion)&quot;%3B" />
+      <_BuildMetadataLine Include="    public const string PackageCommit = &quot;$(ClawCtlPackageCommit)&quot;%3B" />
+      <_BuildMetadataLine Include="    public const string PayloadVersion = &quot;$(ClawCtlPayloadVersion)&quot;%3B" />
+      <_BuildMetadataLine Include="    public const string PayloadCommit = &quot;$(ClawCtlPayloadCommit)&quot;%3B" />
+      <_BuildMetadataLine Include="}" />
+    </ItemGroup>
+    <MakeDir Directories="$(IntermediateOutputPath)" />
+    <!--
+      WriteOnlyWhenDifferent keeps an unchanged checkout from dirtying the
+      compile input, which the local deployment script's up-to-date check and
+      incremental builds both depend on.
+    -->
+    <WriteLinesToFile File="$(_BuildMetadataFile)"
+                      Lines="@(_BuildMetadataLine)"
+                      Overwrite="true"
+                      WriteOnlyWhenDifferent="true" />
+    <ItemGroup>
+      <Compile Include="$(_BuildMetadataFile)" />
+      <FileWrites Include="$(_BuildMetadataFile)" />
+    </ItemGroup>
+  </Target>
+
   <Target Name="GenerateVersionedAppxManifest"
           BeforeTargets="_ValidatePresenceOfAppxManifestItems"
           Condition="'$(PackageIdentityVersion)' != ''">

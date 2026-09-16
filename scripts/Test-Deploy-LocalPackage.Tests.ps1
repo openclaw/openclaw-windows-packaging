@@ -104,13 +104,18 @@ function New-Fixture {
         SetupFailure = $false
         Removals = @()
         PreserveFlags = @()
+        PublishMetadata = $null
     }
     $state.WritePayload = {
         param($directory, $architecture, $text, $nodeVersion)
         New-Item -Path (Join-Path $directory 'app') -ItemType Directory -Force | Out-Null
         [IO.File]::WriteAllText((Join-Path $directory 'app\openclaw.mjs'), $text)
         [IO.File]::WriteAllText((Join-Path $directory 'payload-metadata.json'), (@{
-            architecture = $architecture; layout = 'expanded-directory'; nodeVersion = $nodeVersion
+            architecture = $architecture
+            layout = 'expanded-directory'
+            nodeVersion = $nodeVersion
+            packageVersion = '2026.9.4'
+            resolvedCommit = '0965053fe6b9341776df147a6934b7485c60b5ca'
         } | ConvertTo-Json))
     }
     $state.Operations = @{
@@ -147,8 +152,11 @@ function New-Fixture {
             return $null
         }.GetNewClosure()
         Publish = {
-            param($project, $architecture, $output)
+            param($project, $architecture, $output, $metadata)
             $state.Publishes++
+            if ($project -like '*OpenClaw.Launcher.csproj') {
+                $state.PublishMetadata = $metadata
+            }
             if ($state.PublishFailure) { throw 'NativeAOT publish failed.' }
             New-Item -Path $output -ItemType Directory -Force | Out-Null
             $isSessionHost = $project -like '*OpenClaw.SessionHost*'
@@ -159,8 +167,17 @@ function New-Fixture {
             }
             elseif (-not $state.SkipHost) {
                 # Unchanged source must produce identical bytes, as a real
-                # incremental publish does; HostVersion models a source edit.
-                [IO.File]::WriteAllText((Join-Path $output 'openclaw.exe'), "host $($state.HostVersion)")
+                # incremental publish does; HostVersion models a source edit
+                # and metadata models generated compile-time constants.
+                $identity = if ($null -eq $metadata) {
+                    ''
+                }
+                else {
+                    $metadata | ConvertTo-Json -Compress
+                }
+                [IO.File]::WriteAllText(
+                    (Join-Path $output 'openclaw.exe'),
+                    "host $($state.HostVersion) $identity")
             }
             return $null
         }.GetNewClosure()
@@ -212,6 +229,17 @@ try {
         $f.MxcStages -eq 1 -and $f.Publishes -eq 2 -and
         $f.Registrations -eq 1) 'First deployment did not acquire, build, and register exactly once.'
     Assert-True ($f.Setups -eq 1) 'Deployment did not leave the package runnable by preparing the runtime.'
+    Assert-True (
+        $f.PublishMetadata.PackageVersion -eq $first.Version -and
+        $f.PublishMetadata.PayloadVersion -eq '2026.9.4' -and
+        $f.PublishMetadata.PayloadCommit -eq '0965053fe6b9341776df147a6934b7485c60b5ca'
+    ) 'Launcher publish did not receive the selected local package and payload identity.'
+    $localPackageModule = Get-Module LocalPackage
+    Assert-True (
+        (& $localPackageModule {
+            Get-LocalPackageCheckoutCommit -FindGit { $null }
+        }) -eq ''
+    ) 'Missing Git should leave optional checkout metadata empty.'
     Assert-True (@($f.SetupPackageFamilyNames)[0] -eq 'OpenClaw.Gateway_fixture') 'Setup did not target the owning package family.'
     Assert-True (@($first).Count -eq 1 -and $first.PackageFullName) 'Deployment did not return a single registration record.'
     $layout = $first.LayoutDirectory
@@ -254,7 +282,13 @@ try {
     $f.HostVersion = 2
     $changed = Invoke-Fixture $f
     Assert-True ($changed.Changed) 'A launcher change was not detected.'
-    Assert-True ((Get-Content (Join-Path $layout 'openclaw.exe') -Raw) -eq 'host 2') 'The layout kept a stale launcher.'
+    $changedLauncher = Get-Content (Join-Path $layout 'openclaw.exe') -Raw
+    Assert-True (
+        $changedLauncher.StartsWith('host 2 ', [StringComparison]::Ordinal) -and
+        $changedLauncher.Contains(
+            "`"PackageVersion`":`"$($changed.Version)`"",
+            [StringComparison]::Ordinal)
+    ) 'The layout kept a stale launcher or package identity.'
 
     # Payload refresh replaces content and retires the old generation only on success.
     $f.Offline = $false
@@ -327,6 +361,21 @@ try {
     $supplied = Invoke-Fixture $j @{ PayloadDirectory = $external }
     Assert-True ($j.Downloads -eq 0 -and $j.Queries -eq 0) 'A supplied payload still contacted GitHub.'
     Assert-True ((Get-Content (Join-Path $supplied.LayoutDirectory 'app\openclaw.mjs') -Raw) -eq 'supplied') 'A supplied payload was not used.'
+    $legacy = New-Fixture
+    $legacyPayload = Join-Path $testRoot 'legacy supplied payload'
+    & $legacy.WritePayload $legacyPayload 'x64' 'legacy' '24.20.0'
+    $legacyMetadataPath = Join-Path $legacyPayload 'payload-metadata.json'
+    $legacyMetadata = Get-Content -LiteralPath $legacyMetadataPath -Raw | ConvertFrom-Json
+    $legacyMetadata.PSObject.Properties.Remove('packageVersion')
+    $legacyMetadata.PSObject.Properties.Remove('resolvedCommit')
+    [IO.File]::WriteAllText(
+        $legacyMetadataPath,
+        ($legacyMetadata | ConvertTo-Json))
+    Invoke-Fixture $legacy @{ PayloadDirectory = $legacyPayload } | Out-Null
+    Assert-True (
+        $legacy.PublishMetadata.PayloadVersion -eq 'unknown' -and
+        $legacy.PublishMetadata.PayloadCommit -eq 'unknown'
+    ) 'A legacy supplied payload did not use safe unknown identity fallbacks.'
     Assert-Fails { Invoke-Fixture $j @{ PayloadDirectory = $external; RefreshPayload = $true } } 'cannot be combined'
     Assert-Fails { Invoke-Fixture $j @{ PayloadDirectory = $external; PayloadRunId = [long]7 } } 'cannot be combined'
     Assert-Fails { Invoke-Fixture $j @{ PayloadRunId = [long]-1 } } 'positive workflow run'

@@ -240,9 +240,13 @@ public sealed class ProgramStartupTests : IDisposable
             "Unable to create diagnostics",
             error.ToString(),
             StringComparison.Ordinal);
-        Assert.Equal(
-            typeof(Program).Assembly.GetName().Version?.ToString(),
-            output.ToString().Trim());
+
+        // The point of the test is that the command still produced its result
+        // after diagnostics failed, not what the version happens to be.
+        Assert.Contains(
+            ClawCtlBuildMetadata.PackageVersion,
+            output.ToString(),
+            StringComparison.Ordinal);
     }
 
     // Startup routes the agent alias without letting the clawctl parser see

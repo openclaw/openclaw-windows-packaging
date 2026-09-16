@@ -77,6 +77,38 @@ internal static class ClawCtlConsole
         }
     }
 
+    internal static void WriteVersion(TextWriter output, bool useColor = false)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+
+        var view = new ResultView(
+            SupportsUnicode(output),
+            ClawCtlBuildMetadata.PackageVersion,
+            ResolveWidth(output));
+        view.Row(
+            "Package",
+            VersionValue(
+                ClawCtlBuildMetadata.PackageVersion,
+                ClawCtlBuildMetadata.PackageCommit));
+        view.Row(
+            "Payload",
+            VersionValue(
+                ClawCtlBuildMetadata.PayloadVersion,
+                ClawCtlBuildMetadata.PayloadCommit));
+        Render(output, view.Build(), useColor, view.Unicode);
+    }
+
+    // The version is what a user compares; the commit is what support pastes
+    // into a bug. Keeping the commit on the same row as a muted parenthetical
+    // says that without spending a second label on it.
+    private static Paragraph VersionValue(string version, string commit)
+    {
+        var paragraph = new Paragraph();
+        paragraph.Append(version);
+        paragraph.Append($" ({commit})", MutedStyle);
+        return paragraph;
+    }
+
     internal static void WriteHelp(
         TextWriter output,
         ClawCtlHelpModel model,

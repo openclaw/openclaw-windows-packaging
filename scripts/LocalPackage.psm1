@@ -193,6 +193,21 @@ function Assert-LocalPackagePayload {
     return ([string]$metadata['nodeVersion']).TrimStart('v')
 }
 
+function Get-LocalPackageCheckoutCommit {
+    param(
+        [scriptblock]$FindGit = {
+            @(Get-Command git -CommandType Application -ErrorAction SilentlyContinue) |
+                Select-Object -First 1
+        }
+    )
+
+    $git = & $FindGit
+    if ($null -eq $git) { return '' }
+    $commit = (& $git.Source -C $PSScriptRoot rev-parse HEAD 2>$null)
+    if ($LASTEXITCODE -ne 0 -or -not $commit) { return '' }
+    return $commit.Trim().ToLowerInvariant()
+}
+
 function Assert-LocalPackagePayloadIsSafe {
     param([string]$Directory)
 
@@ -575,9 +590,23 @@ function Get-LocalPackageOperations {
             return $null
         }
         Publish = {
-            param($project, $architecture, $output)
+            param($project, $architecture, $output, $metadata)
+            # Bake the checkout's commit into the local build so `clawctl
+            # --version` identifies what was deployed. A detached or missing
+            # git falls back to the project's own default.
+            $metadataArgs = @()
+            $commit = Get-LocalPackageCheckoutCommit
+            if ($commit) {
+                $metadataArgs += "-p:ClawCtlPackageCommit=$commit"
+            }
+            if ($null -ne $metadata) {
+                $metadataArgs += "-p:ClawCtlPackageVersion=$($metadata.PackageVersion)"
+                $metadataArgs += "-p:ClawCtlPayloadVersion=$($metadata.PayloadVersion)"
+                $metadataArgs += "-p:ClawCtlPayloadCommit=$($metadata.PayloadCommit)"
+            }
             & dotnet publish $project --configuration Release --runtime "win-$architecture" `
                 --self-contained "-p:Platform=$architecture" -p:PublishAot=true `
+                @metadataArgs `
                 --output $output --nologo |
                 ForEach-Object { Write-Host $_ }
             if ($LASTEXITCODE -ne 0) {
@@ -753,6 +782,40 @@ function Invoke-LocalPackageDeployment {
                 -Architecture $Architecture -PayloadDirectory $PayloadDirectory `
                 -PayloadRunId $PayloadRunId -RefreshPayload:$RefreshPayload -Operations $services
         }
+        $payloadMetadata = Read-LocalPackageRecord (
+            Join-Path $payload.Directory 'payload-metadata.json'
+        )
+        $previous = Read-LocalPackageRecord $statePath
+        $now = & $services.Now
+        $publishVersion = if ($null -ne $installed -and
+            $installed.IsDevelopmentMode -and
+            $null -ne $previous -and
+            $previous['version'] -eq $installed.Version) {
+            $installed.Version
+        }
+        else {
+            Get-LocalPackageNextVersion `
+                -InstalledVersion $(if ($null -ne $installed) { $installed.Version } else { '' }) `
+                -PreviousVersion $(if ($null -ne $previous) { [string]$previous['version'] } else { '' }) `
+                -Now $now
+        }
+        $publishMetadata = @{
+            PackageVersion = $publishVersion
+            PayloadVersion = if ([string]::IsNullOrWhiteSpace(
+                [string]$payloadMetadata['packageVersion'])) {
+                'unknown'
+            }
+            else {
+                [string]$payloadMetadata['packageVersion']
+            }
+            PayloadCommit = if (
+                [string]$payloadMetadata['resolvedCommit'] -match '^[0-9a-fA-F]{40}$') {
+                ([string]$payloadMetadata['resolvedCommit']).ToLowerInvariant()
+            }
+            else {
+                'unknown'
+            }
+        }
         $runtimeArchive = Invoke-LocalPackagePhase $progress 'Resolve Node.js runtime' {
             Resolve-LocalPackageRuntime -RuntimeDirectory (Join-Path $stateRoot 'runtime') `
                 -Architecture $Architecture -NodeVersion $payload.NodeVersion -Operations $services
@@ -764,12 +827,12 @@ function Invoke-LocalPackageDeployment {
         $hostDirectory = Join-Path $stateRoot 'host'
         Invoke-LocalPackagePhase $progress 'Build launcher (NativeAOT)' {
             & $services.Publish (Join-Path $root 'src\OpenClaw.Launcher\OpenClaw.Launcher.csproj') `
-                $Architecture $hostDirectory
+                $Architecture $hostDirectory $publishMetadata
         } | Out-Null
         $sessionHostDirectory = Join-Path $stateRoot 'session-host'
         Invoke-LocalPackagePhase $progress 'Build session host (NativeAOT)' {
             & $services.Publish (Join-Path $root 'src\OpenClaw.SessionHost\OpenClaw.SessionHost.csproj') `
-                $Architecture $sessionHostDirectory
+                $Architecture $sessionHostDirectory $null
         } | Out-Null
         $hostExecutable = Join-Path $hostDirectory 'openclaw.exe'
         if (-not (& $services.TestPath $hostExecutable)) {
@@ -812,7 +875,6 @@ function Invoke-LocalPackageDeployment {
             $sessionHostHash
             (Get-FileHash -LiteralPath $manifestSource -Algorithm SHA256).Hash
         ) + $imageHashes + $mxcHashes)
-        $previous = Read-LocalPackageRecord $statePath
         $setupSatisfied = $SkipSetup -or ($null -ne $previous -and $previous['setupComplete'] -eq $true)
         if (-not $Force -and $null -ne $previous -and $null -ne $installed -and
             $installed.IsDevelopmentMode -and
@@ -839,7 +901,27 @@ function Invoke-LocalPackageDeployment {
         $version = Get-LocalPackageNextVersion `
             -InstalledVersion $(if ($null -ne $installed) { $installed.Version } else { '' }) `
             -PreviousVersion $(if ($null -ne $previous) { [string]$previous['version'] } else { '' }) `
-            -Now (& $services.Now)
+            -Now $now
+        if ($version -ne $publishVersion) {
+            $publishMetadata.PackageVersion = $version
+            Invoke-LocalPackagePhase $progress 'Rebuild launcher with package identity' {
+                & $services.Publish (
+                    Join-Path $root 'src\OpenClaw.Launcher\OpenClaw.Launcher.csproj'
+                ) $Architecture $hostDirectory $publishMetadata
+            } | Out-Null
+            $hostInfo = Get-Item -LiteralPath $hostExecutable
+            $hostHash = (Get-FileHash -LiteralPath $hostExecutable -Algorithm SHA256).Hash
+            $fingerprint = Get-LocalPackageFingerprint (@(
+                $Architecture
+                $payload.Directory
+                [IO.Path]::GetFileName($runtimeArchive)
+                $hostInfo.Length.ToString()
+                $hostHash
+                $sessionHostInfo.Length.ToString()
+                $sessionHostHash
+                (Get-FileHash -LiteralPath $manifestSource -Algorithm SHA256).Hash
+            ) + $imageHashes + $mxcHashes)
+        }
 
         $manifestPath = Invoke-LocalPackagePhase $progress 'Assemble layout' {
             New-LocalPackageLayout -LayoutDirectory $layoutDirectory -RepositoryRoot $root `

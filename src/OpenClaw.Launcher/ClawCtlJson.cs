@@ -9,6 +9,8 @@ internal sealed record ClawCtlJsonDocument(
     bool Ok,
     int SchemaVersion,
     string Command,
+    ClawCtlJsonBuild? Package = null,
+    ClawCtlJsonBuild? Payload = null,
     ClawCtlJsonSession? Session = null,
     ClawCtlJsonRuntime? Runtime = null,
     ClawCtlJsonGateway? Gateway = null,
@@ -16,6 +18,10 @@ internal sealed record ClawCtlJsonDocument(
     ClawCtlJsonBundle? Bundle = null,
     ClawCtlJsonWarning? Warning = null,
     ClawCtlJsonError? Error = null);
+
+// A version and the commit that produced it. Reported for the package and for
+// the OpenClaw payload it carries.
+internal sealed record ClawCtlJsonBuild(string Version, string Commit);
 
 internal sealed record ClawCtlJsonSession(
     string State,
@@ -69,6 +75,26 @@ internal static class ClawCtlJson
         output.WriteLine(JsonSerializer.Serialize(
             document,
             ClawCtlJsonContext.Default.ClawCtlJsonDocument));
+    }
+
+    // The build identity is known at compile time, so the version document is
+    // produced directly rather than from a command result. --version is handled
+    // by the version option before command dispatch and has no result to
+    // project.
+    internal static void WriteVersion(TextWriter output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+
+        Write(output, new ClawCtlJsonDocument(
+            true,
+            SchemaVersion,
+            "version",
+            Package: new ClawCtlJsonBuild(
+                ClawCtlBuildMetadata.PackageVersion,
+                ClawCtlBuildMetadata.PackageCommit),
+            Payload: new ClawCtlJsonBuild(
+                ClawCtlBuildMetadata.PayloadVersion,
+                ClawCtlBuildMetadata.PayloadCommit)));
     }
 
     internal static void WriteFailure(TextWriter output, string command, string message)
