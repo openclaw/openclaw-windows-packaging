@@ -290,7 +290,9 @@ internal sealed class SessionCoordinator
                 _log(
                     "The recorded OpenClaw provision no longer exists. " +
                     "Provisioning a replacement for this installation.");
-                SessionRecord replacement = await ProvisionAndStartAsync(cancellationToken)
+                SessionRecord replacement = await ProvisionAndStartAsync(
+                    state.Record.SandboxId,
+                    cancellationToken)
                     .ConfigureAwait(false);
                 return new SessionStartResult(replacement, state.Record);
             }
@@ -304,12 +306,13 @@ internal sealed class SessionCoordinator
         }
 
         _log("Creating the first OpenClaw session for this installation.");
-        SessionRecord provisioned = await ProvisionAndStartAsync(cancellationToken)
+        SessionRecord provisioned = await ProvisionAndStartAsync(null, cancellationToken)
             .ConfigureAwait(false);
         return new SessionStartResult(provisioned, null);
     }
 
     private async Task<SessionRecord> ProvisionAndStartAsync(
+        string? supersededSandboxId,
         CancellationToken cancellationToken)
     {
         MxcProvisionResult provisioned = await _backend
@@ -328,6 +331,7 @@ internal sealed class SessionCoordinator
             WorkspacePath = provisioned.Metadata?.EphemeralWorkspacePath,
             Generation = Guid.NewGuid().ToString("N"),
             CreatedUtc = _clock.GetUtcNow(),
+            SupersededSandboxId = supersededSandboxId,
         };
         try
         {

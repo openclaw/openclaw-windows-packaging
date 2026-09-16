@@ -321,9 +321,15 @@ internal static class Program
                         });
                         Session.SessionStartResult session = await runtime.Coordinator
                             .EnsureStartedWithResultAsync(cancellationToken).ConfigureAwait(false);
-                        if (session.SupersededRecord is not null &&
+
+                        // A replacement whose first start failed leaves the
+                        // superseded identity only in the persisted record, so
+                        // a retry still reconciles the stale gateway.
+                        string? supersededSandboxId = session.SupersededRecord?.SandboxId
+                            ?? session.Record.SupersededSandboxId;
+                        if (supersededSandboxId is not null &&
                             runtime.GatewayState.ClearForSupersededSession(
-                                session.SupersededRecord.SandboxId))
+                                supersededSandboxId))
                         {
                             log("Removed the gateway record for the superseded session.");
                         }
