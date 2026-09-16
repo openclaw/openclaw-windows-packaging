@@ -4,8 +4,10 @@ namespace OpenClaw.Launcher.Session;
 internal sealed class InstallationStateCleaner : IInstallationStateCleaner
 {
     private readonly string[] _roots;
+    private readonly Dictionary<string, TrustedPath.FileIdentity?> _rootIdentities;
     private readonly IInstallationFileSystem _fileSystem;
     private readonly Action<string>? _beforeTraversal;
+    private readonly Action<string>? _beforeDeleteEntry;
 
     public InstallationStateCleaner(HostPaths paths, string productLocalStateRoot)
         : this([paths.StateRoot, productLocalStateRoot], paths.PackageFamilyName)
@@ -16,11 +18,13 @@ internal sealed class InstallationStateCleaner : IInstallationStateCleaner
         IReadOnlyList<string> trustedRoots,
         string? packageFamilyName = "test",
         IInstallationFileSystem? fileSystem = null,
-        Action<string>? beforeTraversal = null)
+        Action<string>? beforeTraversal = null,
+        Action<string>? beforeDeleteEntry = null)
     {
         ArgumentNullException.ThrowIfNull(trustedRoots);
         _fileSystem = fileSystem ?? PhysicalInstallationFileSystem.Instance;
         _beforeTraversal = beforeTraversal;
+        _beforeDeleteEntry = beforeDeleteEntry;
         if (packageFamilyName is null)
         {
             throw new SessionException(
@@ -28,6 +32,12 @@ internal sealed class InstallationStateCleaner : IInstallationStateCleaner
         }
 
         _roots = [.. trustedRoots.Select(root => ValidateRoot(root, _fileSystem))];
+        _rootIdentities = _fileSystem is PhysicalInstallationFileSystem
+            ? _roots.ToDictionary(
+                root => root,
+                root => TrustedPath.TryGetDirectoryIdentity(root),
+                StringComparer.OrdinalIgnoreCase)
+            : [];
         if (_roots[0].StartsWith(_roots[1] + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
             _roots[1].StartsWith(_roots[0] + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
         {
@@ -45,6 +55,38 @@ internal sealed class InstallationStateCleaner : IInstallationStateCleaner
             }
 
             _beforeTraversal?.Invoke(root);
+            if (_fileSystem is PhysicalInstallationFileSystem)
+            {
+                using TrustedPath.ValidatedDirectory? directory =
+                    TrustedPath.TryOpenValidatedDirectory(root, _rootIdentities[root]);
+                if (directory is null)
+                {
+                    if (_fileSystem.DirectoryExists(root))
+                    {
+                        throw new SessionException(
+                            $"The installation state root could not be opened safely: {root}");
+                    }
+
+                    continue;
+                }
+
+                foreach (string entry in _fileSystem.EnumerateFileSystemEntries(root))
+                {
+                    _beforeDeleteEntry?.Invoke(entry);
+                    if (!TrustedPath.TryDeleteOwnedEntry(
+                            directory,
+                            entry,
+                            deleteReparsePointLeaf: true) &&
+                        EntryExists(entry))
+                    {
+                        throw new SessionException(
+                            $"The installation state entry could not be deleted: {entry}");
+                    }
+                }
+
+                continue;
+            }
+
             if (!_fileSystem.DirectoryExists(root) ||
                 (_fileSystem.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
             {
@@ -53,7 +95,7 @@ internal sealed class InstallationStateCleaner : IInstallationStateCleaner
 
             foreach (string entry in _fileSystem.EnumerateFileSystemEntries(root))
             {
-                DeleteEntry(entry, _fileSystem);
+                DeleteEntry(entry);
             }
         }
     }
@@ -82,18 +124,29 @@ internal sealed class InstallationStateCleaner : IInstallationStateCleaner
         return fullRoot;
     }
 
-    private static void DeleteEntry(string path, IInstallationFileSystem fileSystem)
+    private void DeleteEntry(string path)
     {
-        FileAttributes attributes = fileSystem.GetAttributes(path);
+        FileAttributes attributes;
+        try
+        {
+            attributes = _fileSystem.GetAttributes(path);
+        }
+        catch (Exception exception) when (
+            exception is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return;
+        }
+
+        _beforeDeleteEntry?.Invoke(path);
         if ((attributes & FileAttributes.ReparsePoint) != 0)
         {
             if ((attributes & FileAttributes.Directory) != 0)
             {
-                fileSystem.DeleteDirectory(path);
+                _fileSystem.DeleteDirectory(path);
             }
             else
             {
-                fileSystem.DeleteFile(path);
+                _fileSystem.DeleteFile(path);
             }
 
             return;
@@ -101,17 +154,20 @@ internal sealed class InstallationStateCleaner : IInstallationStateCleaner
 
         if ((attributes & FileAttributes.Directory) == 0)
         {
-            fileSystem.DeleteFile(path);
+            _fileSystem.DeleteFile(path);
             return;
         }
 
-        foreach (string child in fileSystem.EnumerateFileSystemEntries(path))
+        foreach (string child in _fileSystem.EnumerateFileSystemEntries(path))
         {
-            DeleteEntry(child, fileSystem);
+            DeleteEntry(child);
         }
 
-        fileSystem.DeleteDirectory(path);
+        _fileSystem.DeleteDirectory(path);
     }
+
+    private static bool EntryExists(string path) =>
+        File.Exists(path) || Directory.Exists(path);
 }
 
 internal interface IInstallationFileSystem
