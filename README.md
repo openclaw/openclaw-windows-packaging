@@ -295,21 +295,23 @@ key is stored in the repository.
 Official releases derive their GitHub tag and four-part numeric MSIX identity
 from `gatewayTag` and `msixRevision` in `release-policy.json`. The GitHub tag is
 `<gateway-tag>-msix.<revision>`. The MSIX identity is
-`year.month.patch.(gateway-correction * 10 + msix-revision)`. Each Gateway
-correction gets ten deterministic MSIX-only rebuild slots, so rebuilding one
+`year.month.patch.(gateway-release-sequence * 1000 + msix-revision)`. The
+unsuffixed Gateway tag is release sequence 1; a correction suffix such as `-2`
+is release sequence 2. Each Gateway release gets 1,000 deterministic MSIX-only
+rebuild slots, so rebuilding one
 Gateway release cannot shift the version assigned to a later correction. For
 example:
 
 - Gateway `v2026.9.4`, MSIX revision `0` becomes release tag
-  `v2026.9.4-msix.0` and MSIX version `2026.9.4.0`;
+  `v2026.9.4-msix.0` and MSIX version `2026.9.4.1000`;
 - Gateway `v2026.7.1`, MSIX revision `1` becomes release tag
-  `v2026.7.1-msix.1` and MSIX version `2026.7.1.1`;
+  `v2026.7.1-msix.1` and MSIX version `2026.7.1.1001`;
 - Gateway correction `v2026.7.1-2`, MSIX revision `0` becomes release tag
-  `v2026.7.1-2-msix.0` and MSIX version `2026.7.1.20`;
+  `v2026.7.1-2-msix.0` and MSIX version `2026.7.1.2000`;
 - rebuilding that correction at MSIX revision `1` becomes release tag
-  `v2026.7.1-2-msix.1` and MSIX version `2026.7.1.21`.
+  `v2026.7.1-2-msix.1` and MSIX version `2026.7.1.2001`.
 
-Set `msixRevision` from `0` through `9`, incrementing it only when the same
+Set `msixRevision` from `0` through `999`, incrementing it only when the same
 Gateway tag is repackaged. The Gateway correction suffix is encoded separately,
 so later Gateway corrections keep their deterministic version. Microsoft Store
 submissions reserve the fourth component as zero, so Store publication will

@@ -24,11 +24,15 @@ if (-not $match.Success) {
 [int]$year = $match.Groups['year'].Value
 [int]$month = $match.Groups['month'].Value
 [int]$patch = $match.Groups['patch'].Value
-[int]$correction = if ($match.Groups['correction'].Success) {
-    $match.Groups['correction'].Value
+[int]$releaseSequence = if ($match.Groups['correction'].Success) {
+    [int]$correction = $match.Groups['correction'].Value
+    if ($correction -lt 2 -or $correction -gt 64) {
+        throw 'The Gateway correction suffix must be between 2 and 64.'
+    }
+    $correction
 }
 else {
-    0
+    1
 }
 
 if ($year -lt 1 -or $year -gt 9999) {
@@ -40,19 +44,17 @@ if ($month -lt 1 -or $month -gt 12) {
 if ($patch -lt 0 -or $patch -gt 65534) {
     throw 'The Gateway patch must be between 0 and 65534.'
 }
-if ($correction -lt 0 -or $correction -gt 6553) {
-    throw 'The Gateway correction must be between 0 and 6553.'
-}
-if ($MSIXRevision -lt 0 -or $MSIXRevision -gt 9) {
-    throw 'MSIXRevision must be between 0 and 9.'
+if ($MSIXRevision -lt 0 -or $MSIXRevision -gt 999) {
+    throw 'MSIXRevision must be between 0 and 999.'
 }
 
-# Give every Gateway correction ten deterministic MSIX revision slots. This
+# Give every Gateway release sequence 1,000 deterministic MSIX revision slots. The
+# unsuffixed tag is sequence 1 and correction tags use their numeric suffix. This
 # prevents an MSIX-only rebuild from consuming the number assigned to a later
-# Gateway correction while keeping the fourth component short and readable.
-$packageRevision = ($correction * 10) + $MSIXRevision
+# Gateway correction.
+$packageRevision = ($releaseSequence * 1000) + $MSIXRevision
 if ($packageRevision -gt 65534) {
-    throw 'The combined Gateway correction and MSIXRevision must not exceed 65534.'
+    throw 'The combined Gateway release sequence and MSIXRevision must not exceed 65534.'
 }
 $packageVersion = "$year.$month.$patch.$packageRevision"
 $releaseTag = "$($GatewayTag.Trim())-msix.$MSIXRevision"

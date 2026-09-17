@@ -70,22 +70,32 @@ function Assert-Fails {
 Assert-Identity `
     -GatewayTag 'v2026.9.4' `
     -MSIXRevision 0 `
-    -PackageVersion '2026.9.4.0' `
+    -PackageVersion '2026.9.4.1000' `
     -ReleaseTag 'v2026.9.4-msix.0'
 Assert-Identity `
     -GatewayTag 'v2026.7.12' `
     -MSIXRevision 0 `
-    -PackageVersion '2026.7.12.0' `
+    -PackageVersion '2026.7.12.1000' `
     -ReleaseTag 'v2026.7.12-msix.0'
+Assert-Identity `
+    -GatewayTag 'v2026.7.2' `
+    -MSIXRevision 0 `
+    -PackageVersion '2026.7.2.1000' `
+    -ReleaseTag 'v2026.7.2-msix.0'
+Assert-Identity `
+    -GatewayTag 'v2026.7.1' `
+    -MSIXRevision 1 `
+    -PackageVersion '2026.7.1.1001' `
+    -ReleaseTag 'v2026.7.1-msix.1'
 Assert-Identity `
     -GatewayTag 'v2026.7.1-2' `
     -MSIXRevision 0 `
-    -PackageVersion '2026.7.1.20' `
+    -PackageVersion '2026.7.1.2000' `
     -ReleaseTag 'v2026.7.1-2-msix.0'
 Assert-Identity `
     -GatewayTag 'v2026.7.1-2' `
     -MSIXRevision 1 `
-    -PackageVersion '2026.7.1.21' `
+    -PackageVersion '2026.7.1.2001' `
     -ReleaseTag 'v2026.7.1-2-msix.1'
 
 $gatewayCorrection = & $scriptPath `
@@ -120,29 +130,29 @@ Assert-Fails -MessagePattern 'month must be between 1 and 12' -Action {
 Assert-Fails -MessagePattern 'patch must be between 0 and 65534' -Action {
     & $scriptPath -GatewayTag 'v2026.9.65535' -MSIXRevision 0
 }
-Assert-Fails -MessagePattern 'correction must be between 0 and 6553' -Action {
-    & $scriptPath -GatewayTag 'v2026.9.4-6554' -MSIXRevision 0
+Assert-Fails -MessagePattern 'correction suffix must be between 2 and 64' -Action {
+    & $scriptPath -GatewayTag 'v2026.9.4-1' -MSIXRevision 0
 }
-Assert-Fails -MessagePattern 'MSIXRevision must be between 0 and 9' -Action {
-    & $scriptPath -GatewayTag 'v2026.9.4' -MSIXRevision 10
+Assert-Fails -MessagePattern 'correction suffix must be between 2 and 64' -Action {
+    & $scriptPath -GatewayTag 'v2026.9.4-65' -MSIXRevision 0
 }
-Assert-Fails -MessagePattern 'combined Gateway correction and MSIXRevision' -Action {
-    & $scriptPath -GatewayTag 'v2026.9.4-6553' -MSIXRevision 5
+Assert-Fails -MessagePattern 'MSIXRevision must be between 0 and 999' -Action {
+    & $scriptPath -GatewayTag 'v2026.9.4' -MSIXRevision 1000
 }
 Assert-Identity `
-    -GatewayTag 'v2026.9.4-6553' `
-    -MSIXRevision 4 `
-    -PackageVersion '2026.9.4.65534' `
-    -ReleaseTag 'v2026.9.4-6553-msix.4'
+    -GatewayTag 'v2026.9.4-64' `
+    -MSIXRevision 999 `
+    -PackageVersion '2026.9.4.64999' `
+    -ReleaseTag 'v2026.9.4-64-msix.999'
 
 $maximumIdentity = & $scriptPath `
-    -GatewayTag 'v2026.9.4-6553' `
-    -MSIXRevision 4
+    -GatewayTag 'v2026.9.4-64' `
+    -MSIXRevision 999
 $validatedMaximumVersion = & $workflowVersionScriptPath `
     -RunNumber 1 `
     -RunAttempt 1 `
     -ReleaseVersion $maximumIdentity.PackageVersion
-if ($validatedMaximumVersion -ne '2026.9.4.65534') {
+if ($validatedMaximumVersion -ne '2026.9.4.64999') {
     throw 'The maximum derived identity did not pass workflow validation.'
 }
 
