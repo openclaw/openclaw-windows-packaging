@@ -45,8 +45,11 @@ $requiredFragments = @(
     'name: Upload unsigned multi-architecture MSIX bundle'
     'name: Test proof-release MSIX upgrades'
     "needs.changes.outputs.versioning == 'true'"
+    'scripts/Test-MSIXReleaseIdentity.Tests.ps1'
     '.\scripts\msix-upgrade-baselines.json'
     '.\scripts\Test-MSIXUpgrade.ps1'
+    'name: Download unsigned bundle candidate'
+    '-CandidateBundlePath test-signed\bundle\OpenClawGateway.msixbundle'
     'openclaw-gateway-msix-upgrade-evidence'
     'retention-days: 90'
     '-BundlePath artifacts\bundle\OpenClawGateway.msixbundle'

@@ -339,10 +339,14 @@ Store publication will need its own version policy when it is introduced.
 
 The signed `v0.0.0.0` and `v0.0.0.1` proof releases are not production version
 identities, but they are retained as transition baselines. Pull requests that
-change release versioning download the hash-pinned x64 packages, install each
-one on a Windows runner, upgrade it in place to the proposed package identity,
-and verify that the package family remains stable and a LocalState marker is
-retained. The resulting JSON evidence is retained as a workflow artifact for
+change release versioning download the hash-pinned standalone x64 and
+recommended `.msixbundle` assets, install each one on a clean GitHub-hosted
+Windows runner, upgrade it in place through the same delivery format, and
+verify that the package family remains stable and a LocalState marker is
+retained. The gate also proves fresh installation of both the standalone and
+bundle candidates. It refuses to run when an OpenClaw Gateway package is
+already registered and removes only packages installed by that test
+invocation. The resulting JSON evidence is retained as a workflow artifact for
 90 days. Future versioning schemes must keep this transition gate green or
 explicitly document and obtain approval for a breaking reset.
 

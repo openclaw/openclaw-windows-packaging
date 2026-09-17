@@ -39,11 +39,13 @@ $architectureDirectories = @(
             }
         }
 )
-if ($architectureDirectories.Count -eq 0) {
+$bundleDirectory = Join-Path $resolvedArtifactsDirectory 'bundle'
+$hasBundleDirectory = Test-Path -LiteralPath $bundleDirectory -PathType Container
+if ($architectureDirectories.Count -eq 0 -and -not $hasBundleDirectory) {
     throw (
-        "No architecture directories were found under " +
+        "No signable package directories were found under " +
         "'$resolvedArtifactsDirectory'. Expected at least one of: " +
-        ($architectures -join ', ') + '.'
+        ($architectures -join ', ') + ', bundle.'
     )
 }
 
@@ -175,6 +177,52 @@ try {
                     Join-Path $destinationDirectory 'msix-metadata.json'
                 ) `
                 -Encoding utf8
+    }
+
+    if ($hasBundleDirectory) {
+        $sourceBundles = @(
+            Get-ChildItem `
+                -LiteralPath $bundleDirectory `
+                -Filter '*.msixbundle' `
+                -File
+        )
+        if ($sourceBundles.Count -ne 1) {
+            throw (
+                "Expected one unsigned MSIX bundle in '$bundleDirectory'; " +
+                "found $($sourceBundles.Count)."
+            )
+        }
+
+        $destinationDirectory = Join-Path $OutputDirectory 'bundle'
+        New-Item `
+            -Path $destinationDirectory `
+            -ItemType Directory `
+            -Force |
+            Out-Null
+        $signedBundlePath = Join-Path `
+            $destinationDirectory `
+            $sourceBundles[0].Name
+        Copy-Item `
+            -LiteralPath $sourceBundles[0].FullName `
+            -Destination $signedBundlePath `
+            -Force
+
+        & $signtool.FullName sign `
+            /fd SHA256 `
+            /f $temporaryPfx `
+            /p $passwordText `
+            $signedBundlePath
+        if ($LASTEXITCODE -ne 0) {
+            throw "Test signing failed for the bundle with exit code $LASTEXITCODE."
+        }
+
+        $signature = Get-AuthenticodeSignature -LiteralPath $signedBundlePath
+        if (
+            $null -eq $signature.SignerCertificate -or
+            $signature.SignerCertificate.Thumbprint -ne $certificate.Thumbprint
+        ) {
+            throw 'The bundle test signature was not applied.'
+        }
     }
 }
 finally {

@@ -35,8 +35,8 @@ try {
     if ($exitCode -eq 0) {
         throw 'Signing unexpectedly succeeded without an architecture directory.'
     }
-    if ($message -notmatch 'No architecture directories were found') {
-        throw "Signing failure did not identify the missing architecture directories. Output: $message"
+    if ($message -notmatch 'No signable package directories were found') {
+        throw "Signing failure did not identify the missing package directories. Output: $message"
     }
     if (Test-Path -LiteralPath $outputDirectory) {
         throw 'Signing created an output directory despite finding no architecture directory.'

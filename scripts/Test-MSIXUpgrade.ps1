@@ -10,6 +10,9 @@ param(
     [string]$CandidatePackagePath,
 
     [Parameter(Mandatory)]
+    [string]$CandidateBundlePath,
+
+    [Parameter(Mandatory)]
     [string]$CandidateCertificatePath,
 
     [Parameter(Mandatory)]
@@ -35,9 +38,16 @@ function Read-MSIXIdentity {
         (Resolve-Path -LiteralPath $Path).Path
     )
     try {
-        $entry = $archive.GetEntry('AppxManifest.xml')
+        $isBundle = [IO.Path]::GetExtension($Path) -ieq '.msixbundle'
+        $manifestPath = if ($isBundle) {
+            'AppxMetadata/AppxBundleManifest.xml'
+        }
+        else {
+            'AppxManifest.xml'
+        }
+        $entry = $archive.GetEntry($manifestPath)
         if ($null -eq $entry) {
-            throw "MSIX '$Path' does not contain AppxManifest.xml."
+            throw "Package '$Path' does not contain $manifestPath."
         }
         $reader = [IO.StreamReader]::new($entry.Open())
         try {
@@ -46,12 +56,32 @@ function Read-MSIXIdentity {
         finally {
             $reader.Dispose()
         }
+        if ($isBundle) {
+            $identity = $manifest.Bundle.Identity
+            $x64Package = @($manifest.Bundle.Packages.Package) |
+                Where-Object { [string]$_.Architecture -ceq 'x64' } |
+                Select-Object -First 1
+            if ($null -eq $x64Package) {
+                throw "MSIX bundle '$Path' does not contain an x64 package."
+            }
+            return [pscustomobject]@{
+                Name = [string]$identity.Name
+                Publisher = [string]$identity.Publisher
+                Architecture = 'x64'
+                Version = [string]$x64Package.Version
+                BundleVersion = [string]$identity.Version
+                DeliveryType = 'bundle'
+            }
+        }
+
         $identity = $manifest.Package.Identity
         [pscustomobject]@{
             Name = [string]$identity.Name
             Publisher = [string]$identity.Publisher
             Architecture = [string]$identity.ProcessorArchitecture
             Version = [string]$identity.Version
+            BundleVersion = $null
+            DeliveryType = 'standalone'
         }
     }
     finally {
@@ -59,13 +89,55 @@ function Read-MSIXIdentity {
     }
 }
 
+function Get-GatewayPackages {
+    @(Get-AppxPackage -Name 'OpenClaw.Gateway' -ErrorAction SilentlyContinue)
+}
+
+$testOwnsPackage = $false
+$testPackageFamilyName = $null
+
 function Remove-TestPackage {
-    Get-AppxPackage -Name 'OpenClaw.Gateway' -ErrorAction SilentlyContinue |
-        ForEach-Object {
-            Remove-AppxPackage `
-                -Package $_.PackageFullName `
-                -ErrorAction Stop
+    if (-not $script:testOwnsPackage) {
+        return
+    }
+
+    $packages = Get-GatewayPackages
+    if ($packages.Count -gt 1) {
+        throw 'More than one OpenClaw.Gateway registration exists during cleanup.'
+    }
+    if ($packages.Count -eq 1) {
+        if (
+            $null -ne $script:testPackageFamilyName -and
+            [string]$packages[0].PackageFamilyName -cne
+                $script:testPackageFamilyName
+        ) {
+            throw 'Refusing to remove an OpenClaw package not owned by this test.'
         }
+        Remove-AppxPackage `
+            -Package $packages[0].PackageFullName `
+            -ErrorAction Stop
+    }
+
+    $script:testOwnsPackage = $false
+    $script:testPackageFamilyName = $null
+}
+
+function Install-TestPackage {
+    param([Parameter(Mandatory)][string]$Path)
+
+    if ((Get-GatewayPackages).Count -ne 0) {
+        throw 'Refusing to install over an OpenClaw package not owned by this test.'
+    }
+    # The clean-machine guard above establishes ownership before installation,
+    # allowing finally cleanup even if installation only partially succeeds.
+    $script:testOwnsPackage = $true
+    Add-AppxPackage -Path $Path -ErrorAction Stop
+    $packages = Get-GatewayPackages
+    if ($packages.Count -ne 1) {
+        throw 'Windows did not create exactly one OpenClaw.Gateway registration.'
+    }
+    $script:testPackageFamilyName = [string]$packages[0].PackageFamilyName
+    $packages[0]
 }
 
 $resolvedBaselinesPath = (Resolve-Path -LiteralPath $BaselinesPath).Path
@@ -75,16 +147,29 @@ $resolvedBaselinesDirectory = (
 $resolvedCandidatePath = (
     Resolve-Path -LiteralPath $CandidatePackagePath
 ).Path
+$resolvedCandidateBundlePath = (
+    Resolve-Path -LiteralPath $CandidateBundlePath
+).Path
 $resolvedCertificatePath = (
     Resolve-Path -LiteralPath $CandidateCertificatePath
 ).Path
 $candidateIdentity = Read-MSIXIdentity -Path $resolvedCandidatePath
+$candidateBundleIdentity = Read-MSIXIdentity -Path $resolvedCandidateBundlePath
 if (
     $candidateIdentity.Name -cne 'OpenClaw.Gateway' -or
     $candidateIdentity.Architecture -cne 'x64' -or
     $candidateIdentity.Version -cne $ExpectedCandidateVersion
 ) {
     throw 'The candidate MSIX identity is unexpected.'
+}
+if (
+    $candidateBundleIdentity.Name -cne $candidateIdentity.Name -or
+    $candidateBundleIdentity.Publisher -cne $candidateIdentity.Publisher -or
+    $candidateBundleIdentity.Architecture -cne 'x64' -or
+    $candidateBundleIdentity.Version -cne $ExpectedCandidateVersion -or
+    $candidateBundleIdentity.DeliveryType -cne 'bundle'
+) {
+    throw 'The candidate MSIX bundle identity is unexpected.'
 }
 
 $policy = Get-Content `
@@ -97,8 +182,14 @@ if ($candidateIdentity.Publisher -cne [string]$policy.publisher) {
 
 $baselineManifest = Get-Content -LiteralPath $resolvedBaselinesPath -Raw |
     ConvertFrom-Json
-if ($baselineManifest.baselines.Count -ne 2) {
-    throw 'Upgrade validation requires exactly the two published proof releases.'
+if ($baselineManifest.baselines.Count -ne 4) {
+    throw 'Upgrade validation requires standalone and bundle proof-release baselines.'
+}
+if ((Get-GatewayPackages).Count -ne 0) {
+    throw (
+        'Refusing to run MSIX upgrade validation while OpenClaw.Gateway is ' +
+        'already installed. Use an isolated clean test account.'
+    )
 }
 
 $certificate = Import-Certificate `
@@ -123,12 +214,17 @@ try {
             throw "Upgrade baseline '$($baseline.assetName)' failed hash validation."
         }
 
+        $deliveryType = [string]$baseline.deliveryType
+        if ($deliveryType -notin @('standalone', 'bundle')) {
+            throw "Unknown delivery type '$deliveryType'."
+        }
         $baselineIdentity = Read-MSIXIdentity -Path $baselinePath
         if (
             $baselineIdentity.Name -cne $candidateIdentity.Name -or
             $baselineIdentity.Publisher -cne $candidateIdentity.Publisher -or
             $baselineIdentity.Architecture -cne 'x64' -or
-            $baselineIdentity.Version -cne [string]$baseline.packageVersion
+            $baselineIdentity.Version -cne [string]$baseline.packageVersion -or
+            $baselineIdentity.DeliveryType -cne $deliveryType
         ) {
             throw "Upgrade baseline '$($baseline.assetName)' has an unexpected identity."
         }
@@ -139,8 +235,7 @@ try {
             throw 'The candidate MSIX must be newer than every upgrade baseline.'
         }
 
-        Add-AppxPackage -Path $baselinePath -ErrorAction Stop
-        $installedBaseline = Get-AppxPackage -Name $candidateIdentity.Name
+        $installedBaseline = Install-TestPackage -Path $baselinePath
         if (
             $null -eq $installedBaseline -or
             [string]$installedBaseline.Version -cne $baselineIdentity.Version -or
@@ -157,8 +252,14 @@ try {
         $marker = "upgrade-from-$($baseline.packageVersion)"
         Set-Content -LiteralPath $markerPath -Value $marker -Encoding utf8
 
+        $candidatePath = if ($deliveryType -ceq 'bundle') {
+            $resolvedCandidateBundlePath
+        }
+        else {
+            $resolvedCandidatePath
+        }
         Add-AppxPackage `
-            -Path $resolvedCandidatePath `
+            -Path $candidatePath `
             -ForceApplicationShutdown `
             -ErrorAction Stop
         $installedCandidate = Get-AppxPackage -Name $candidateIdentity.Name
@@ -186,6 +287,7 @@ try {
 
         $results.Add([pscustomobject]@{
             baselineRelease = [string]$baseline.releaseTag
+            deliveryType = $deliveryType
             baselineVersion = $baselineIdentity.Version
             candidateVersion = $candidateIdentity.Version
             packageFamilyName = [string]$installedCandidate.PackageFamilyName
@@ -194,21 +296,34 @@ try {
         })
     }
 
-    Remove-TestPackage
-    Add-AppxPackage -Path $resolvedCandidatePath -ErrorAction Stop
-    $installedFresh = Get-AppxPackage -Name $candidateIdentity.Name
-    if (
-        $null -eq $installedFresh -or
-        [string]$installedFresh.Version -cne $candidateIdentity.Version -or
-        [string]$installedFresh.Status -cne 'Ok'
-    ) {
-        throw 'Windows did not accept a fresh candidate installation.'
+    $freshInstalls = [Collections.Generic.List[object]]::new()
+    foreach ($candidate in @(
+        [pscustomobject]@{
+            deliveryType = 'standalone'
+            path = $resolvedCandidatePath
+        },
+        [pscustomobject]@{
+            deliveryType = 'bundle'
+            path = $resolvedCandidateBundlePath
+        }
+    )) {
+        Remove-TestPackage
+        $installedFresh = Install-TestPackage -Path $candidate.path
+        if (
+            $null -eq $installedFresh -or
+            [string]$installedFresh.Version -cne $candidateIdentity.Version -or
+            [string]$installedFresh.Status -cne 'Ok'
+        ) {
+            throw "Windows did not accept a fresh $($candidate.deliveryType) installation."
+        }
+        $freshInstalls.Add([pscustomobject]@{
+            deliveryType = $candidate.deliveryType
+            candidateVersion = $candidateIdentity.Version
+            packageFamilyName = [string]$installedFresh.PackageFamilyName
+            status = [string]$installedFresh.Status
+        })
     }
-    $freshInstall = [pscustomobject]@{
-        candidateVersion = $candidateIdentity.Version
-        packageFamilyName = [string]$installedFresh.PackageFamilyName
-        status = [string]$installedFresh.Status
-    }
+    $freshInstall = $freshInstalls
 }
 finally {
     Remove-TestPackage
@@ -234,4 +349,4 @@ if (-not [string]::IsNullOrWhiteSpace($evidenceDirectory)) {
     ConvertTo-Json -Depth 4 |
     Set-Content -LiteralPath $EvidencePath -Encoding utf8
 
-Write-Host "MSIX upgrade compatibility passed for $($results.Count) proof releases."
+Write-Host "MSIX upgrade compatibility passed for $($results.Count) proof-release paths."

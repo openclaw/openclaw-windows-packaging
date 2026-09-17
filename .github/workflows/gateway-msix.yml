@@ -75,7 +75,7 @@ jobs:
           $versioningPaths = @(
             'release-policy.json'
             'scripts/Get-MSIXReleaseIdentity.ps1'
-            'scripts/Get-MSIXReleaseIdentity.Tests.ps1'
+            'scripts/Test-MSIXReleaseIdentity.Tests.ps1'
             'scripts/Test-MSIXUpgrade.ps1'
             'scripts/msix-upgrade-baselines.json'
           )
@@ -604,6 +604,7 @@ jobs:
     needs:
       - changes
       - build-msix
+      - build-msix-bundle
     runs-on: windows-latest
     permissions:
       contents: read
@@ -618,6 +619,12 @@ jobs:
         with:
           name: openclaw-gateway-msix-unsigned-x64
           path: artifacts\x64
+
+      - name: Download unsigned bundle candidate
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-unsigned-bundle
+          path: artifacts\bundle
 
       - name: Apply temporary test signature
         shell: pwsh
@@ -658,6 +665,7 @@ jobs:
             -BaselinesPath .\scripts\msix-upgrade-baselines.json `
             -BaselinesDirectory baselines `
             -CandidatePackagePath test-signed\x64\OpenClawGateway-x64.msix `
+            -CandidateBundlePath test-signed\bundle\OpenClawGateway.msixbundle `
             -CandidateCertificatePath test-signed\x64\OpenClawGateway-test-signing.cer `
             -ExpectedCandidateVersion $identity.PackageVersion `
             -EvidencePath evidence\msix-upgrade-evidence.json
