@@ -40,6 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       packaging: ${{ steps.filter.outputs.packaging }}
+      versioning: ${{ steps.filter.outputs.versioning }}
     steps:
       - uses: actions/checkout@v6
 
@@ -51,6 +52,7 @@ jobs:
         run: |
           if ($env:GITHUB_EVENT_NAME -ne 'pull_request') {
             'packaging=true' >> $env:GITHUB_OUTPUT
+            'versioning=false' >> $env:GITHUB_OUTPUT
             return
           }
 
@@ -67,6 +69,25 @@ jobs:
           $packaging = .\scripts\Get-PackagingRelevance.ps1 `
             -FileListPath $fileListPath
           "packaging=$packaging" >> $env:GITHUB_OUTPUT
+
+          $pages = Get-Content -LiteralPath $fileListPath -Raw |
+            ConvertFrom-Json
+          $versioningPaths = @(
+            'release-policy.json'
+            'scripts/Get-MSIXReleaseIdentity.ps1'
+            'scripts/Get-MSIXReleaseIdentity.Tests.ps1'
+            'scripts/Test-MSIXUpgrade.ps1'
+            'scripts/msix-upgrade-baselines.json'
+          )
+          $versioning = 'false'
+          foreach ($page in @($pages)) {
+            foreach ($file in @($page)) {
+              if ([string]$file.filename -in $versioningPaths) {
+                $versioning = 'true'
+              }
+            }
+          }
+          "versioning=$versioning" >> $env:GITHUB_OUTPUT
 
   test-host:
     name: Test Gateway MSIX host
@@ -333,6 +354,7 @@ jobs:
   build-msix:
     name: Build unsigned ${{ matrix.architecture }} Gateway MSIX
     needs:
+      - changes
       - test-host
       - build-package
     runs-on: windows-latest
@@ -428,12 +450,16 @@ jobs:
         shell: pwsh
         env:
           SIGNING_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode || 'unsigned' }}
+          VERSIONING_CHANGE: ${{ needs.changes.outputs.versioning }}
         run: |
           $versionParameters = @{
             RunNumber = '${{ github.run_number }}'
             RunAttempt = '${{ github.run_attempt }}'
           }
-          if ($env:SIGNING_MODE -eq 'official') {
+          if (
+            $env:SIGNING_MODE -eq 'official' -or
+            $env:VERSIONING_CHANGE -eq 'true'
+          ) {
             $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
               ConvertFrom-Json
             $identity = .\scripts\Get-MSIXReleaseIdentity.ps1 `
@@ -512,7 +538,9 @@ jobs:
 
   build-msix-bundle:
     name: Build unsigned multi-architecture Gateway MSIX bundle
-    needs: build-msix
+    needs:
+      - changes
+      - build-msix
     runs-on: windows-latest
     steps:
       - name: Check out repository
@@ -536,12 +564,16 @@ jobs:
         shell: pwsh
         env:
           SIGNING_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode || 'unsigned' }}
+          VERSIONING_CHANGE: ${{ needs.changes.outputs.versioning }}
         run: |
           $versionParameters = @{
             RunNumber = '${{ github.run_number }}'
             RunAttempt = '${{ github.run_attempt }}'
           }
-          if ($env:SIGNING_MODE -eq 'official') {
+          if (
+            $env:SIGNING_MODE -eq 'official' -or
+            $env:VERSIONING_CHANGE -eq 'true'
+          ) {
             $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
               ConvertFrom-Json
             $identity = .\scripts\Get-MSIXReleaseIdentity.ps1 `
@@ -565,6 +597,78 @@ jobs:
           path: artifacts\bundle\OpenClawGateway.msixbundle
           if-no-files-found: error
           retention-days: 7
+
+  test-msix-upgrades:
+    name: Test proof-release MSIX upgrades
+    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.versioning == 'true' }}
+    needs:
+      - changes
+      - build-msix
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Download unsigned x64 candidate
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-unsigned-x64
+          path: artifacts\x64
+
+      - name: Apply temporary test signature
+        shell: pwsh
+        run: |
+          .\scripts\Sign-TestMSIX.ps1 `
+            -ArtifactsDirectory artifacts `
+            -OutputDirectory test-signed
+
+      - name: Download hash-pinned proof releases
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $baselines = Get-Content `
+            -LiteralPath .\scripts\msix-upgrade-baselines.json `
+            -Raw |
+            ConvertFrom-Json
+          New-Item -Path baselines -ItemType Directory -Force | Out-Null
+          foreach ($baseline in $baselines.baselines) {
+            & gh release download ([string]$baseline.releaseTag) `
+              --repo $env:GITHUB_REPOSITORY `
+              --pattern ([string]$baseline.assetName) `
+              --dir baselines
+            if ($LASTEXITCODE -ne 0) {
+              throw "Unable to download $($baseline.releaseTag) upgrade baseline."
+            }
+          }
+
+      - name: Test installed-package upgrades and retained LocalState
+        shell: pwsh
+        run: |
+          $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
+            ConvertFrom-Json
+          $identity = .\scripts\Get-MSIXReleaseIdentity.ps1 `
+            -GatewayTag ([string]$policy.gatewayTag) `
+            -MSIXRevision ([int]$policy.msixRevision)
+          .\scripts\Test-MSIXUpgrade.ps1 `
+            -BaselinesPath .\scripts\msix-upgrade-baselines.json `
+            -BaselinesDirectory baselines `
+            -CandidatePackagePath test-signed\x64\OpenClawGateway-x64.msix `
+            -CandidateCertificatePath test-signed\x64\OpenClawGateway-test-signing.cer `
+            -ExpectedCandidateVersion $identity.PackageVersion `
+            -EvidencePath evidence\msix-upgrade-evidence.json
+
+      - name: Upload upgrade evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: openclaw-gateway-msix-upgrade-evidence
+          path: evidence\msix-upgrade-evidence.json
+          if-no-files-found: error
+          retention-days: 90
 
   reject-untrusted-official-signing:
     name: Reject official signing outside main
@@ -864,6 +968,7 @@ jobs:
       - build-msix
       - test-sign-msix
       - build-msix-bundle
+      - test-msix-upgrades
       - reject-untrusted-official-signing
       - authorize-signing
       - sign-msix

@@ -190,6 +190,10 @@ bypassable, and required CI checks remain authoritative.
   `0` for the first MSIX of a Gateway tag and increment only for packaging-only
   rebuilds of that exact tag. Do not assign package versions or release tags by
   hand.
+- Treat published proof releases in `scripts/msix-upgrade-baselines.json` as
+  immutable transition fixtures. Keep their release asset names and SHA-256
+  digests pinned. Version-policy changes must pass the installed-package
+  upgrade job from both baselines and retain package LocalState.
 - Use source-generated `System.Text.Json` metadata through `OpenClawJsonContext`.
   The launcher is NativeAOT and must not introduce reflection-based
   serialization.

@@ -337,9 +337,14 @@ and diagnostic copies.
 Microsoft Store submissions reserve the fourth version component as zero, so
 Store publication will need its own version policy when it is introduced.
 
-The one-time `v0.0.0.0` signing proof predates this version policy and is not an
-upgrade-compatible production baseline. Devices used to install that proof
-should uninstall it before testing a normally versioned release.
+The signed `v0.0.0.0` and `v0.0.0.1` proof releases are not production version
+identities, but they are retained as transition baselines. Pull requests that
+change release versioning download the hash-pinned x64 packages, install each
+one on a Windows runner, upgrade it in place to the proposed package identity,
+and verify that the package family remains stable and a LocalState marker is
+retained. The resulting JSON evidence is retained as a workflow artifact for
+90 days. Future versioning schemes must keep this transition gate green or
+explicitly document and obtain approval for a breaking reset.
 
 An `.msixbundle` is a single installable container for the x64 and ARM64 MSIX
 packages; Windows selects the package appropriate for the device. An

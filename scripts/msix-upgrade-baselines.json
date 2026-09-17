@@ -1,0 +1,16 @@
+{
+  "baselines": [
+    {
+      "releaseTag": "v0.0.0.0",
+      "assetName": "OpenClawGateway-0.0.0.0-x64.msix",
+      "packageVersion": "0.0.0.0",
+      "sha256": "3f288e267de01f8f4e25897a6c5bb3db9faaa09253360fb83e2247dcfffaf76b"
+    },
+    {
+      "releaseTag": "v0.0.0.1",
+      "assetName": "OpenClawGateway-0.0.0.1-x64.msix",
+      "packageVersion": "0.0.0.1",
+      "sha256": "098eae798413f3b831126d9806c0cb47695280cc9b2b4d52696bfde075aa1747"
+    }
+  ]
+}

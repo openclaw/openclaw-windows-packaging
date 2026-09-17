@@ -43,6 +43,12 @@ $requiredFragments = @(
     'uses: azure/artifact-signing-action@v2'
     'name: Compose unsigned multi-architecture MSIX bundle'
     'name: Upload unsigned multi-architecture MSIX bundle'
+    'name: Test proof-release MSIX upgrades'
+    "needs.changes.outputs.versioning == 'true'"
+    '.\scripts\msix-upgrade-baselines.json'
+    '.\scripts\Test-MSIXUpgrade.ps1'
+    'openclaw-gateway-msix-upgrade-evidence'
+    'retention-days: 90'
     '-BundlePath artifacts\bundle\OpenClawGateway.msixbundle'
     'files-folder-recurse: true'
     'files: ${{ github.workspace }}\artifacts\bundle\OpenClawGateway.msixbundle'
