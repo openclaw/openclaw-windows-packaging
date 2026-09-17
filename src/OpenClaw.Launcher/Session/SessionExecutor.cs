@@ -80,6 +80,9 @@ internal sealed class SessionExecutor
         _isCurrentRecord = isCurrentRecord ?? (_ => true);
     }
 
+    internal SessionWorkspaceOperation CreateWorkspaceOperation(SessionRecord record) =>
+        new(record, _isCurrentRecord);
+
     public async Task<int> ExecuteAsync(
         SessionRecord record,
         SessionExecutionRequest request,

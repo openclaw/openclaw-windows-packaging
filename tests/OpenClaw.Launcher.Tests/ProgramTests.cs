@@ -10,6 +10,7 @@ public sealed class ProgramTests : IDisposable
 {
     private readonly string _testDirectory = TestDirectory.Create();
     private FakeMxcSessionClient? _lastSessionBackend;
+    private string? _sessionStatePath;
 
     [Fact]
     public async Task AgentLaunchResolvesNodeAndRunsPackagedApplication()
@@ -220,7 +221,7 @@ public sealed class ProgramTests : IDisposable
 
         SessionException failure = await Assert.ThrowsAsync<SessionException>(
             () => Program.RunAgentAsync(
-                new HostOptions(null, null, ["--version"]),
+                CreateAgentOptions(),
                 _ => { },
                 _ => throw new InvalidOperationException("Host Node must not be resolved."),
                 (_, _, _, _, _, _) =>
@@ -509,7 +510,6 @@ public sealed class ProgramTests : IDisposable
                 LauncherPath: Path.Combine(stateRoot, "gateway-launcher.cmd"),
                 StartupFolderPath: Path.Combine(stateRoot, "startup"),
                 WorkingDirectory: stateRoot,
-                AliasCommand: "openclaw.exe",
                 CommandProcessorPath: @"C:\Windows\System32\cmd.exe"),
             log);
         var controller = new GatewayController(
@@ -573,8 +573,10 @@ public sealed class ProgramTests : IDisposable
             return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
         };
         _lastSessionBackend = backend;
+        HostPaths paths = HostPaths.ForRoot(stateRoot, "OpenClaw.Gateway_test");
+        _sessionStatePath = paths.SessionStatePath;
         return SessionRuntime.Create(
-            HostPaths.ForRoot(stateRoot, "OpenClaw.Gateway_test"),
+            paths,
             () => throw new InvalidOperationException("The test supplies its backend."),
             baseDirectory,
             _ => { },
@@ -604,11 +606,9 @@ public sealed class ProgramTests : IDisposable
             createSessionRuntime: _ => runtime,
             // Setup only reaches Ready once logon recovery is configured, and
             // a test must never register a real scheduled task.
-            installRecovery: (_, _) => Task.FromResult(new GatewayPersistenceInstallResult(
-                GatewayPersistenceState.Ready,
-                GatewayPersistenceLane.TaskScheduler,
-                "Logon recovery is configured.",
-                Changed: true))).ConfigureAwait(false);
+            installRecovery: RecoveryConfigured,
+            probeReadiness: SupportedHost,
+            getPackageFamilyName: () => "OpenClaw.Gateway_test").ConfigureAwait(false);
 
         Assert.Equal(0, exitCode);
         return runtime;
@@ -630,14 +630,14 @@ public sealed class ProgramTests : IDisposable
             BackendProbe: new MxcBackendProbe(false, "base-container", []),
             BackendProbeFailureReason: null);
 
-    private static Task<int> RunAgentWithDirectLaunchProbeAsync(
+    private Task<int> RunAgentWithDirectLaunchProbeAsync(
         SessionRuntime runtime,
         List<string> directLaunches)
     {
         ArgumentNullException.ThrowIfNull(directLaunches);
 
         return Program.RunAgentAsync(
-            new HostOptions(null, null, ["--version"]),
+            CreateAgentOptions(),
             _ => { },
             _ => throw new InvalidOperationException("Host Node must not be resolved."),
             (_, _, _, _, _, _) =>
@@ -645,6 +645,18 @@ public sealed class ProgramTests : IDisposable
                 directLaunches.Add("direct");
                 return Task.FromResult(0);
             },
-            _ => runtime);
+            _ => runtime,
+            probeReadiness: _ => Task.FromResult(UnavailableReadiness()),
+            getPackageFamilyName: () => "OpenClaw.Gateway_test");
+    }
+
+    private HostOptions CreateAgentOptions()
+    {
+        string applicationDirectory = Path.Combine(_testDirectory, "agent-app");
+        Directory.CreateDirectory(applicationDirectory);
+        File.WriteAllText(
+            Path.Combine(applicationDirectory, "openclaw.mjs"),
+            "console.log('fixture');");
+        return new HostOptions(applicationDirectory, null, ["--version"]);
     }
 }

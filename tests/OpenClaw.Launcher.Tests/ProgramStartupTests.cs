@@ -161,7 +161,7 @@ public sealed class ProgramStartupTests : IDisposable
                     new Version(24, 15, 0),
                     RuntimeInformation.ProcessArchitecture);
             },
-            LaunchOpenClaw = (_, _, _, _, _) =>
+            LaunchOpenClaw = (_, _, _, _, _, _) =>
             {
                 launched = true;
                 return Task.FromResult(0);

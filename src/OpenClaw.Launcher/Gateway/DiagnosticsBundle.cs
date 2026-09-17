@@ -112,11 +112,11 @@ internal sealed partial class GatewayRuntime
         List<string> notes = [];
         List<(string Name, string Path)> hostFiles = CollectHostFiles();
         string? staged = null;
-        string? workspace;
+        SessionWorkspaceOperation? stagingOperation = null;
 
         try
         {
-            (staged, workspace, bool sessionReached) =
+            (staged, stagingOperation, bool sessionReached) =
                 await TryStageAgentFilesAsync(notes, cancellationToken).ConfigureAwait(false);
 
             if (hostFiles.Count == 0 && staged is null)
@@ -126,7 +126,7 @@ internal sealed partial class GatewayRuntime
 
             try
             {
-                WriteBundle(bundlePath, hostFiles, staged, workspace, notes);
+                WriteBundle(bundlePath, hostFiles, staged, stagingOperation, notes);
             }
             catch (IOException exception) when (File.Exists(bundlePath))
             {
@@ -139,7 +139,8 @@ internal sealed partial class GatewayRuntime
         }
         finally
         {
-            TryRemoveDirectory(staged);
+            TryDeleteStaging(stagingOperation, staged);
+            stagingOperation?.Dispose();
         }
     }
 
@@ -178,7 +179,10 @@ internal sealed partial class GatewayRuntime
         }
     }
 
-    private async Task<(string? Staged, string? Workspace, bool Reached)>
+    private async Task<(
+        string? Staged,
+        SessionWorkspaceOperation? Operation,
+        bool Reached)>
         TryStageAgentFilesAsync(
         List<string> notes,
         CancellationToken cancellationToken)
@@ -194,12 +198,14 @@ internal sealed partial class GatewayRuntime
 
         string staged = Path.Combine(
             workspace, StagingDirectoryName, Guid.NewGuid().ToString("N"));
+        SessionWorkspaceOperation? operation = null;
 
         try
         {
             string helperPath = Session.RequireStagedHelper(status.Record);
             SessionRecord record = await Session.Coordinator
                 .StartRecordedAsync(cancellationToken).ConfigureAwait(false);
+            operation = Session.Executor.CreateWorkspaceOperation(record);
 
             SessionCollectResult result = await Session.Executor
                 .CollectAsync(
@@ -219,7 +225,10 @@ internal sealed partial class GatewayRuntime
                 }
             }
 
-            return (staged, workspace, true);
+            return (
+                staged,
+                operation,
+                true);
         }
         catch (Exception exception) when (
             exception is SessionException or MxcException or SessionLaunchException or
@@ -228,8 +237,9 @@ internal sealed partial class GatewayRuntime
             notes.Add(
                 $"Agent-side logs could not be collected ({exception.Message}). " +
                 "The bundle contains host-side diagnostics only.");
-            TryRemoveDirectory(staged);
-            return (null, workspace, false);
+            TryDeleteStaging(operation, staged);
+            operation?.Dispose();
+            return (null, null, false);
         }
     }
 
@@ -261,7 +271,7 @@ internal sealed partial class GatewayRuntime
         string bundlePath,
         List<(string Name, string Path)> hostFiles,
         string? staged,
-        string? workspace,
+        SessionWorkspaceOperation? stagingOperation,
         List<string> notes)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(bundlePath)!);
@@ -275,12 +285,23 @@ internal sealed partial class GatewayRuntime
             AddEntry(archive, name, path, notes);
         }
 
-        if (staged is not null && workspace is not null && Directory.Exists(staged))
+        if (staged is not null &&
+            stagingOperation is not null &&
+            Directory.Exists(staged))
         {
-            foreach (string file in EnumerateStagedFiles(workspace, staged, notes))
+            stagingOperation.EnsureCurrent();
+            foreach (string file in EnumerateStagedFiles(
+                stagingOperation.WorkspacePath,
+                staged,
+                notes))
             {
                 string relative = Path.GetRelativePath(staged, file).Replace('\\', '/');
-                AddEntry(archive, $"agent/{relative}", file, notes, staged);
+                AddEntry(
+                    archive,
+                    $"agent/{relative}",
+                    file,
+                    notes,
+                    stagingOperation);
             }
         }
 
@@ -347,7 +368,7 @@ internal sealed partial class GatewayRuntime
         string name,
         string path,
         List<string> notes,
-        string? trustedRoot = null)
+        SessionWorkspaceOperation? operation = null)
     {
         string fileName = Path.GetFileName(path);
 
@@ -362,13 +383,13 @@ internal sealed partial class GatewayRuntime
         try
         {
             string text;
-            using FileStream input = trustedRoot is null
+            using FileStream input = operation is null
                 ? new FileStream(
                     path,
                     FileMode.Open,
                     FileAccess.Read,
                     FileShare.ReadWrite | FileShare.Delete)
-                : TrustedPath.OpenRead(trustedRoot, path);
+                : operation.OpenRead(path);
             using (StreamReader reader = new(input))
             {
                 text = reader.ReadToEnd();
@@ -385,37 +406,23 @@ internal sealed partial class GatewayRuntime
         }
     }
 
-    private static void TryRemoveDirectory(string? path)
+    private static void TryDeleteStaging(
+        SessionWorkspaceOperation? operation,
+        string? staged)
     {
-        if (path is null)
+        if (operation is null || staged is null)
         {
             return;
         }
 
         try
         {
-            if (Directory.Exists(path))
-            {
-                Directory.Delete(path, recursive: true);
-            }
-
-            // The per-run directory sits under one shared parent. Removing the
-            // parent when it is empty keeps the workspace from accumulating a
-            // directory that outlives every run that used it.
-            string? parent = Path.GetDirectoryName(path);
-            if (parent is not null &&
-                Directory.Exists(parent) &&
-                Path.GetFileName(parent) == StagingDirectoryName &&
-                !Directory.EnumerateFileSystemEntries(parent).Any())
-            {
-                Directory.Delete(parent);
-            }
+            operation.Delete(staged);
         }
         catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException)
+            exception is SessionException or IOException or UnauthorizedAccessException)
         {
-            // Staging lives in the shared workspace the user already owns;
-            // failing to clean it up must not fail the bundle.
         }
     }
+
 }
