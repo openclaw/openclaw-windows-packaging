@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/openclaw/openclaw",
   "gatewayTag": "v2026.9.4",
-  "msixRevision": 0,
+  "msixRevision": 1,
   "payloadPackageVersion": "2026.9.4",
   "approvedCommit": "3a9d69db306cd7f081e06254cb89c4bcc14a7107",
   "publisher": "CN=OpenClaw Foundation, O=OpenClaw Foundation, L=Mill Valley, S=California, C=US"
