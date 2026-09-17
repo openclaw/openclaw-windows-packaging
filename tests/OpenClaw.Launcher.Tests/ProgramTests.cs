@@ -12,55 +12,87 @@ public sealed class ProgramTests : IDisposable
     private FakeMxcSessionClient? _lastSessionBackend;
 
     [Fact]
-    public async Task AgentLaunchResolvesNodeAndRunsPackagedApplication()
+    public async Task AgentForwardsEveryArgumentIntoTheSession()
     {
-        string applicationDirectory = Path.Combine(_testDirectory, "app");
-        Directory.CreateDirectory(applicationDirectory);
-        await File.WriteAllTextAsync(
-            Path.Combine(applicationDirectory, "openclaw.mjs"),
-            "console.log('fixture');");
-        string[] arguments = ["gateway", "run", "--port", "12345"];
-        var options = new HostOptions(applicationDirectory, null, arguments);
-        var nodeRuntime = new NodeRuntime(
-            Path.Combine(_testDirectory, "node.exe"),
-            new Version(24, 15, 0),
-            System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture);
-        bool nodeResolutionAttempted = false;
-        bool launchAttempted = false;
+        string applicationDirectory = await CreateApplicationAsync().ConfigureAwait(true);
+        HostOptions setupOptions = CreateSetupOptions(applicationDirectory);
+        SessionRuntime runtime = CreateSessionRuntime();
+        int setupExitCode = await Program.RunControlAsync(
+            setupOptions,
+            ["setup"],
+            _ => { },
+            TextWriter.Null,
+            TextWriter.Null,
+            installationLifecycle: new FailingFreshLifecycle(runtime) { TeardownSucceeds = true });
+        Assert.Equal(0, setupExitCode);
+
+        string[] arguments = ["gateway", "run", "--port", "12345", "--", "a b"];
+        string[]? forwarded = null;
+        _lastSessionBackend!.AttachedBehavior = _ =>
+        {
+            string requestPath = Directory.GetFiles(
+                _lastSessionBackend.Metadata!.EphemeralWorkspacePath,
+                "launch-*.json").Single();
+            SessionLaunchRequest request = SessionLaunchProtocol.ReadRequest(
+                File.ReadAllText(requestPath));
+            forwarded = [.. request.Arguments!.Skip(1)];
+            File.WriteAllText(
+                SessionLaunchProtocol.ResultPathFor(requestPath),
+                SessionLaunchProtocol.SerializeResult(new SessionLaunchResult
+                {
+                    RequestId = request.RequestId,
+                    Launched = true,
+                    ExitCode = 7,
+                }));
+            return Task.FromResult(0);
+        };
 
         int exitCode = await Program.RunAgentAsync(
-            options,
+            new HostOptions(
+                applicationDirectory,
+                setupOptions.PackagedNodeArchivePath,
+                arguments),
             _ => { },
-            _ =>
-            {
-                nodeResolutionAttempted = true;
-                return Task.FromResult(nodeRuntime);
-            },
-            (
-                nodePath,
-                appDirectory,
-                forwardedArguments,
-                gatewayIsolationMode,
-                _,
-                _) =>
-            {
-                launchAttempted = true;
-                Assert.Equal(nodeRuntime.ExecutablePath, nodePath);
-                Assert.Equal(applicationDirectory, appDirectory);
-                Assert.Equal(arguments, forwardedArguments);
-                Assert.Equal(
-                    GatewayIsolationMode.Disabled,
-                    gatewayIsolationMode);
-                return Task.FromResult(23);
-            });
+            _ => runtime,
+            probeReadiness: SupportedHost,
+            getPackageFamilyName: () => runtime.Paths.PackageFamilyName,
+            readEnvironmentVariable: _ => null);
 
-        Assert.True(nodeResolutionAttempted);
-        Assert.True(launchAttempted);
-        Assert.Equal(23, exitCode);
+        Assert.Equal(arguments, forwarded);
+        Assert.Equal(7, exitCode);
     }
 
     [Fact]
-    public async Task SetupReportsAnUnavailableIsolatedSessionWithoutResolvingHostNode()
+    public async Task AgentFailsLoudlyWhenTheMachineCannotHostASession()
+    {
+        string applicationDirectory = await CreateApplicationAsync().ConfigureAwait(true);
+        bool runtimeCreated = false;
+
+        SessionException failure = await Assert.ThrowsAsync<SessionException>(
+            () => Program.RunAgentAsync(
+                new HostOptions(applicationDirectory, null, ["--version"]),
+                _ => { },
+                _ =>
+                {
+                    runtimeCreated = true;
+                    return CreateSessionRuntime();
+                },
+                probeReadiness: _ => Task.FromResult(new MxcReadinessReport(
+                    "runtime",
+                    null,
+                    null,
+                    MxcHostSupport.Unsupported,
+                    null,
+                    MxcSupportEvidence.HostBuild)),
+                getPackageFamilyName: () => "OpenClaw.Gateway_test",
+                readEnvironmentVariable: _ => null));
+
+        Assert.False(runtimeCreated);
+        AssertRecommendsNewerWindows(failure.Message);
+    }
+
+    [Fact]
+    public async Task SetupFailsLoudlyWhenTheMachineCannotHostASession()
     {
         string applicationDirectory = Path.Combine(_testDirectory, "app");
         Directory.CreateDirectory(applicationDirectory);
@@ -68,35 +100,24 @@ public sealed class ProgramTests : IDisposable
         await File.WriteAllTextAsync(entryPoint, "console.log('fixture');");
         DateTime lastWriteTime = File.GetLastWriteTimeUtc(entryPoint);
         var options = new HostOptions(applicationDirectory, null, []);
-        var nodeRuntime = new NodeRuntime(
-            Path.Combine(_testDirectory, "node.exe"),
-            new Version(24, 15, 0),
-            System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture);
         using var output = new StringWriter();
 
-        int exitCode = await Program.RunControlAsync(
-            options,
-            ["setup"],
-            _ => { },
-            output,
-            TextWriter.Null,
-            _ => Task.FromResult(nodeRuntime));
+        // The test host is unpackaged, so production readiness reports a
+        // machine that cannot own a session.
+        SessionException failure = await Assert.ThrowsAsync<SessionException>(
+            () => Program.RunControlAsync(
+                options,
+                ["setup"],
+                _ => { },
+                output,
+                TextWriter.Null));
 
-        Assert.Equal(1, exitCode);
+        AssertRecommendsNewerWindows(failure.Message);
         Assert.True(File.Exists(entryPoint));
         Assert.Equal(lastWriteTime, File.GetLastWriteTimeUtc(entryPoint));
-        Assert.DoesNotContain(
-            nodeRuntime.ExecutablePath,
-            output.ToString(),
-            StringComparison.Ordinal);
-        Assert.Contains(
-            applicationDirectory,
-            output.ToString(),
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "requires isolated-session support",
-            output.ToString(),
-            StringComparison.OrdinalIgnoreCase);
+
+        // Nothing is reported as ready on a machine that cannot host a session.
+        Assert.Equal(string.Empty, output.ToString());
     }
 
     [Fact]
@@ -118,7 +139,6 @@ public sealed class ProgramTests : IDisposable
 
         string expectedAgentNode = runtime.SetupState
             .Read(runtime.ApplicationId).Record!.AgentNodePath!;
-        bool directLaunchAttempted = false;
         _lastSessionBackend!.AttachedBehavior = _ =>
         {
             string requestPath = Directory.GetFiles(
@@ -139,12 +159,6 @@ public sealed class ProgramTests : IDisposable
         await Assert.ThrowsAsync<SessionException>(() => Program.RunAgentAsync(
             options,
             _ => { },
-            _ => throw new InvalidOperationException("Host Node must not be resolved."),
-            (_, _, _, _, _, _) =>
-            {
-                directLaunchAttempted = true;
-                return Task.FromResult(0);
-            },
             _ => runtime,
             _ => Task.FromResult(new MxcReadinessReport(
                 "runtime",
@@ -155,16 +169,10 @@ public sealed class ProgramTests : IDisposable
                 MxcSupportEvidence.HostBuild)),
             () => "OpenClaw.Gateway_test",
             _ => null));
-
-        Assert.False(directLaunchAttempted);
     }
 
-    [Theory]
-    [InlineData("corrupt")]
-    [InlineData("foreign")]
-    [InlineData("mismatched")]
-    public async Task AutomaticHostFallbackRefusesSavedOwnershipFailures(
-        string stateKind)
+    [Fact]
+    public async Task UnsupportedMachineFailsBeforeTouchingSavedSessionState()
     {
         SessionRuntime runtime = CreateSessionRuntime();
         string applicationDirectory = Path.Combine(_testDirectory, "fallback-app");
@@ -173,77 +181,30 @@ public sealed class ProgramTests : IDisposable
             Path.Combine(applicationDirectory, "openclaw.mjs"),
             "fixture").ConfigureAwait(true);
         Directory.CreateDirectory(Path.GetDirectoryName(runtime.Paths.SessionStatePath)!);
-        SessionRecord session = new()
-        {
-            ApplicationId = runtime.ApplicationId,
-            SandboxId = "iso:saved",
-            WorkspacePath = Path.Combine(_testDirectory, "workspace"),
-            Generation = "test-generation",
-            CreatedUtc = DateTimeOffset.UtcNow
-        };
-        Directory.CreateDirectory(session.WorkspacePath!);
+        await File.WriteAllTextAsync(
+            runtime.Paths.SessionStatePath,
+            "{ not json").ConfigureAwait(true);
 
-        switch (stateKind)
-        {
-            case "corrupt":
-                await File.WriteAllTextAsync(
-                    runtime.Paths.SessionStatePath,
-                    "{ not json").ConfigureAwait(true);
-                break;
-            case "foreign":
-                await File.WriteAllTextAsync(
-                    runtime.Paths.SessionStatePath,
-                    """
-                    {"schemaVersion":1,"sandboxId":"iso:foreign","applicationId":"PFN:Other","createdUtc":"2026-01-01T00:00:00Z"}
-                    """).ConfigureAwait(true);
-                break;
-            default:
-                new SessionStateStore(runtime.Paths.SessionStatePath).Write(session);
-                runtime.SetupState.Write(new SetupRecord
-                {
-                    ApplicationId = runtime.ApplicationId,
-                    SandboxId = "iso:different",
-                    Phase = SetupPhase.Ready
-                });
-                break;
-        }
+        SessionException failure = await Assert.ThrowsAsync<SessionException>(
+            () => Program.RunAgentAsync(
+                new HostOptions(applicationDirectory, null, ["--version"]),
+                _ => { },
+                _ => runtime,
+                _ => Task.FromResult(new MxcReadinessReport(
+                    null,
+                    null,
+                    "backend unavailable",
+                    MxcHostSupport.Unsupported,
+                    null,
+                    MxcSupportEvidence.HostBuild)),
+                () => runtime.Paths.PackageFamilyName,
+                _ => null));
 
-        bool hostPrepared = false;
-        bool hostLaunched = false;
-
-        await Assert.ThrowsAsync<SessionException>(() => Program.RunAgentAsync(
-            new HostOptions(applicationDirectory, null, ["--version"]),
-            _ => { },
-            _ =>
-            {
-                hostPrepared = true;
-                return Task.FromResult(new NodeRuntime(
-                    "node.exe",
-                    new Version(24, 0),
-                    System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture));
-            },
-            (_, _, _, _, _, _) =>
-            {
-                hostLaunched = true;
-                return Task.FromResult(0);
-            },
-            _ => runtime,
-            _ => Task.FromResult(new MxcReadinessReport(
-                null,
-                null,
-                "backend unavailable",
-                MxcHostSupport.Unsupported,
-                null,
-                MxcSupportEvidence.HostBuild)),
-            () => runtime.Paths.PackageFamilyName,
-            _ => null));
-
-        Assert.False(hostPrepared);
-        Assert.False(hostLaunched);
+        AssertRecommendsNewerWindows(failure.Message);
     }
 
     [Fact]
-    public async Task AutomaticHostFallbackDoesNotCreateASessionRuntimeWithoutPackageIdentity()
+    public async Task UnpackagedHostFailsWithoutCreatingASessionRuntime()
     {
         string applicationDirectory = Path.Combine(_testDirectory, "unpackaged-app");
         Directory.CreateDirectory(applicationDirectory);
@@ -252,158 +213,86 @@ public sealed class ProgramTests : IDisposable
             "fixture").ConfigureAwait(true);
         bool runtimeCreated = false;
 
-        int exitCode = await Program.RunAgentAsync(
-            new HostOptions(applicationDirectory, null, ["--version"]),
-            _ => { },
-            _ => Task.FromResult(new NodeRuntime(
-                "node.exe",
-                new Version(24, 0),
-                System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture)),
-            (_, _, _, _, _, _) => Task.FromResult(17),
-            createSessionRuntime: _ =>
-            {
-                runtimeCreated = true;
-                return CreateSessionRuntime();
-            },
-            probeReadiness: _ => Task.FromResult(new MxcReadinessReport(
-                null,
-                null,
-                "backend unavailable",
-                MxcHostSupport.Unsupported,
-                null,
-                MxcSupportEvidence.HostBuild)),
-            getPackageFamilyName: () => null,
-            readEnvironmentVariable: _ => null);
-
-        Assert.False(runtimeCreated);
-        Assert.Equal(17, exitCode);
-    }
-
-    [Fact]
-    public void SavedSessionWithoutSetupExplainsTheRequiredRecoveryCommand()
-    {
-        SessionRuntime runtime = CreateSessionRuntime();
-        new SessionStateStore(runtime.Paths.SessionStatePath).Write(new SessionRecord
-        {
-            ApplicationId = runtime.ApplicationId,
-            SandboxId = "iso:saved",
-            WorkspacePath = Path.Combine(_testDirectory, "workspace"),
-            Generation = "test-generation",
-            CreatedUtc = DateTimeOffset.UtcNow
-        });
-
-        SessionException exception = Assert.Throws<SessionException>(
-            runtime.ValidateSavedOwnershipForHostFallback);
-
-        Assert.Contains("clawctl setup", exception.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task AgentRefusesForeignSessionRecordWithoutHostFallback()
-    {
-        SessionRuntime runtime = await SetUpSessionAsync();
-        var directLaunches = new List<string>();
-        SessionRecord record = new SessionStateStore(runtime.Paths.SessionStatePath)
-            .Read(runtime.ApplicationId).Record!;
-        new SessionStateStore(runtime.Paths.SessionStatePath).Write(record with
-        {
-            SandboxId = SandboxIdFor("PFN:Some.Other.App_abc123")
-        });
-
-        SessionException failure = await Assert.ThrowsAsync<SessionException>(
-            () => RunAgentWithDirectLaunchProbeAsync(runtime, directLaunches));
-
-        Assert.Contains("Some.Other.App", failure.Message, StringComparison.Ordinal);
-        Assert.Empty(directLaunches);
-    }
-
-    [Fact]
-    public async Task AutomaticDirectRoutingValidatesExistingOwnershipFirst()
-    {
-        SessionRuntime runtime = await SetUpSessionAsync();
-        var directLaunches = new List<string>();
-        SessionRecord record = new SessionStateStore(runtime.Paths.SessionStatePath)
-            .Read(runtime.ApplicationId).Record!;
-        new SessionStateStore(runtime.Paths.SessionStatePath).Write(record with
-        {
-            SandboxId = SandboxIdFor("PFN:Some.Other.App_abc123")
-        });
-
         SessionException failure = await Assert.ThrowsAsync<SessionException>(
             () => Program.RunAgentAsync(
-                CreateAgentOptions(),
+                new HostOptions(applicationDirectory, null, ["--version"]),
                 _ => { },
-                _ => throw new InvalidOperationException("Host Node must not be resolved."),
-                (_, _, _, _, _, _) =>
+                createSessionRuntime: _ =>
                 {
-                    directLaunches.Add("direct");
-                    return Task.FromResult(0);
+                    runtimeCreated = true;
+                    return CreateSessionRuntime();
                 },
-                _ => runtime,
-                probeReadiness: _ => Task.FromResult(UnavailableReadiness()),
-                getPackageFamilyName: () => "OpenClaw.Gateway_test"));
+                probeReadiness: _ => Task.FromResult(new MxcReadinessReport(
+                    null,
+                    null,
+                    "backend unavailable",
+                    MxcHostSupport.Unsupported,
+                    null,
+                    MxcSupportEvidence.HostBuild)),
+                getPackageFamilyName: () => null,
+                readEnvironmentVariable: _ => null));
 
-        Assert.Contains("Some.Other.App", failure.Message, StringComparison.Ordinal);
-        Assert.Empty(directLaunches);
+        Assert.False(runtimeCreated);
+        Assert.Contains("installed package", failure.Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task AgentRefusesSetupSessionMismatchWithoutHostFallback()
+    public async Task AgentRefusesForeignSessionRecord()
     {
         SessionRuntime runtime = await SetUpSessionAsync();
-        var directLaunches = new List<string>();
+
+        SessionRecord record = new SessionStateStore(runtime.Paths.SessionStatePath)
+            .Read(runtime.ApplicationId).Record!;
+        new SessionStateStore(runtime.Paths.SessionStatePath).Write(record with
+        {
+            SandboxId = SandboxIdFor("PFN:Some.Other.App_abc123")
+        });
+
+        SessionException failure = await Assert.ThrowsAsync<SessionException>(
+            () => RunAgentOnSupportedHostAsync(runtime));
+
+        Assert.Contains("Some.Other.App", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AgentRefusesSetupSessionMismatch()
+    {
+        SessionRuntime runtime = await SetUpSessionAsync();
         SetupRecord setup = runtime.SetupState.Read(runtime.ApplicationId).Record!;
         runtime.SetupState.Write(setup with { SandboxId = "iso:different" });
 
         SessionException failure = await Assert.ThrowsAsync<SessionException>(
-            () => RunAgentWithDirectLaunchProbeAsync(runtime, directLaunches));
+            () => RunAgentOnSupportedHostAsync(runtime));
 
         Assert.Contains("different session", failure.Message, StringComparison.Ordinal);
-        Assert.Empty(directLaunches);
     }
 
     [Fact]
-    public async Task AgentRefusesUnreadableSessionRecordWithoutHostFallback()
+    public async Task AgentRefusesUnreadableSessionRecord()
     {
         SessionRuntime runtime = await SetUpSessionAsync();
-        var directLaunches = new List<string>();
         await File.WriteAllTextAsync(runtime.Paths.SessionStatePath, "{ not json");
 
         SessionException failure = await Assert.ThrowsAsync<SessionException>(
-            () => RunAgentWithDirectLaunchProbeAsync(runtime, directLaunches));
+            () => RunAgentOnSupportedHostAsync(runtime));
 
         Assert.Contains("not valid JSON", failure.Message, StringComparison.Ordinal);
         Assert.Contains("clawctl setup", failure.Message, StringComparison.Ordinal);
-        Assert.Empty(directLaunches);
     }
 
     [Fact]
-    public async Task AgentFallsBackToHostWhenSessionRuntimeIsUnavailable()
+    public async Task AgentSurfacesAnUnavailableSessionRuntimeInsteadOfRunningOnTheHost()
     {
         SessionRuntime runtime = await SetUpSessionAsync();
         _lastSessionBackend!.StartFailure = new MxcException(
             MxcErrorCode.RuntimeUnavailable,
             "The MXC runtime is not available.");
-        bool directLaunchAttempted = false;
-        string applicationDirectory = Path.Combine(_testDirectory, "app");
-        string archivePath = Path.Combine(_testDirectory, "node-v24.15.0-win-x64.zip");
 
-        int exitCode = await Program.RunAgentAsync(
-            new HostOptions(applicationDirectory, archivePath, ["--version"]),
-            _ => { },
-            _ => Task.FromResult(new NodeRuntime(
-                "node.exe",
-                new Version(24, 15, 0),
-                System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture)),
-            (_, _, _, _, _, _) =>
-            {
-                directLaunchAttempted = true;
-                return Task.FromResult(17);
-            },
-            _ => runtime);
+        SessionCapabilityUnavailableException failure =
+            await Assert.ThrowsAsync<SessionCapabilityUnavailableException>(
+                () => RunAgentOnSupportedHostAsync(runtime));
 
-        Assert.True(directLaunchAttempted);
-        Assert.Equal(17, exitCode);
+        Assert.Contains("not available", failure.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -424,33 +313,46 @@ public sealed class ProgramTests : IDisposable
         Assert.Contains("--force", error.ToString(), StringComparison.Ordinal);
     }
 
-    [Theory]
-    [InlineData("--no-isolation", null)]
-    [InlineData(null, "0")]
-    public async Task FreshSetupRejectsDisabledIsolationBeforePreparingTheHostRuntime(
-        string? option,
-        string? sessionMode)
+    [Fact]
+    public async Task SetupRejectsTheRemovedNoIsolationOption()
     {
         string applicationDirectory = await CreateApplicationAsync().ConfigureAwait(true);
         var lifecycle = new FailingFreshLifecycle(CreateSessionRuntime());
-        using var output = new StringWriter();
-        string[] arguments = option is null
-            ? ["setup", "--fresh"]
-            : ["setup", "--fresh", option];
+        using var error = new StringWriter();
 
         int exitCode = await Program.RunControlAsync(
             CreateSetupOptions(applicationDirectory),
-            arguments,
+            ["setup", "--no-isolation"],
+            _ => { },
+            TextWriter.Null,
+            error,
+            installationLifecycle: lifecycle);
+
+        Assert.Equal(1, exitCode);
+        Assert.Empty(lifecycle.Calls);
+        Assert.Contains("--no-isolation", error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SetupIgnoresTheRemovedSessionOptOutVariable()
+    {
+        string applicationDirectory = await CreateApplicationAsync().ConfigureAwait(true);
+        SessionRuntime runtime = CreateSessionRuntime();
+        var lifecycle = new FailingFreshLifecycle(runtime) { TeardownSucceeds = true };
+        using var output = new StringWriter();
+
+        int exitCode = await Program.RunControlAsync(
+            CreateSetupOptions(applicationDirectory),
+            ["setup"],
             _ => { },
             output,
             TextWriter.Null,
             installationLifecycle: lifecycle,
             readEnvironmentVariable: name =>
-                name == SessionRoutingPolicy.ModeVariable ? sessionMode : null);
+                name == "OPENCLAW_SESSION" ? "0" : null);
 
-        Assert.Equal(1, exitCode);
-        Assert.Empty(lifecycle.Calls);
-        Assert.Contains("--fresh requires isolated-session provisioning", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(0, exitCode);
+        Assert.NotNull(runtime.SetupState.Read(runtime.ApplicationId).Record);
     }
 
     [Fact]
@@ -816,115 +718,90 @@ public sealed class ProgramTests : IDisposable
     }
 
     [Fact]
-    public async Task SetupReportsMissingApplicationBeforeResolvingHostNode()
+    public async Task SetupReportsMissingApplicationBeforeProbingSupport()
     {
-        bool nodeResolutionAttempted = false;
+        bool supportProbed = false;
+        SessionRuntime runtime = CreateSessionRuntime();
+        var lifecycle = new ProbeCountingLifecycle(runtime, () => supportProbed = true);
 
         await Assert.ThrowsAsync<FileNotFoundException>(
             () => Program.RunControlAsync(
-            new HostOptions(null, null, []),
-            ["setup"],
-            _ => { },
-            TextWriter.Null,
-            TextWriter.Null,
-            _ =>
-            {
-                nodeResolutionAttempted = true;
-                return Task.FromResult(
-                    new NodeRuntime(
-                        "node.exe",
-                        new Version(24, 15, 0),
-                        System.Runtime.InteropServices.RuntimeInformation
-                            .ProcessArchitecture));
-            }));
+                new HostOptions(null, null, []),
+                ["setup"],
+                _ => { },
+                TextWriter.Null,
+                TextWriter.Null,
+                installationLifecycle: lifecycle));
 
-        Assert.False(nodeResolutionAttempted);
+        Assert.False(supportProbed);
     }
 
     [Fact]
-    public async Task AgentReportsMissingApplicationBeforeResolvingHostNode()
+    public async Task AgentReportsMissingApplicationBeforeProbingSupport()
     {
-        bool nodeResolutionAttempted = false;
+        bool supportProbed = false;
 
         await Assert.ThrowsAsync<FileNotFoundException>(
             () => Program.RunAgentAsync(
-            new HostOptions(null, null, []),
-            _ => { },
-            _ =>
-            {
-                nodeResolutionAttempted = true;
-                return Task.FromResult(
-                    new NodeRuntime(
-                        "node.exe",
-                        new Version(24, 15, 0),
-                        System.Runtime.InteropServices.RuntimeInformation
-                            .ProcessArchitecture));
-            }));
+                new HostOptions(null, null, []),
+                _ => { },
+                probeReadiness: token =>
+                {
+                    supportProbed = true;
+                    return SupportedHost(token);
+                }));
 
-        Assert.False(nodeResolutionAttempted);
+        Assert.False(supportProbed);
     }
 
     [Fact]
-    public async Task AutomaticAgentLaunchUsesHostOnlyWhenReadinessReportsIsolationUnsupported()
+    public async Task AgentFailsLoudlyOnAnUnsupportedWindowsBuild()
     {
         string applicationDirectory = Path.Combine(_testDirectory, "app");
         Directory.CreateDirectory(applicationDirectory);
         await File.WriteAllTextAsync(Path.Combine(applicationDirectory, "openclaw.mjs"), string.Empty);
-        bool resolvedHostNode = false;
-        bool launchedHost = false;
+        bool sessionRuntimeCreated = false;
 
-        int exitCode = await Program.RunAgentAsync(
-            new HostOptions(applicationDirectory, null, []),
-            _ => { },
-            _ =>
-            {
-                resolvedHostNode = true;
-                return Task.FromResult(new NodeRuntime(
-                    "node.exe",
-                    new Version(24, 0),
-                    System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture));
-            },
-            (_, _, _, _, _, _) =>
-            {
-                launchedHost = true;
-                return Task.FromResult(17);
-            },
-            probeReadiness: _ => Task.FromResult(new MxcReadinessReport(
-                "runtime",
-                null,
-                null,
-                MxcHostSupport.Unsupported,
-                null,
-                MxcSupportEvidence.HostBuild)),
-            getPackageFamilyName: () => "OpenClaw.Gateway_test",
-            readEnvironmentVariable: _ => null,
-            createSessionRuntime: _ => CreateSessionRuntime());
+        SessionException failure = await Assert.ThrowsAsync<SessionException>(
+            () => Program.RunAgentAsync(
+                new HostOptions(applicationDirectory, null, []),
+                _ => { },
+                _ =>
+                {
+                    sessionRuntimeCreated = true;
+                    return CreateSessionRuntime();
+                },
+                probeReadiness: _ => Task.FromResult(new MxcReadinessReport(
+                    "runtime",
+                    null,
+                    null,
+                    MxcHostSupport.Unsupported,
+                    null,
+                    MxcSupportEvidence.HostBuild)),
+                getPackageFamilyName: () => "OpenClaw.Gateway_test",
+                readEnvironmentVariable: _ => null));
 
-        Assert.Equal(17, exitCode);
-        Assert.True(resolvedHostNode);
-        Assert.True(launchedHost);
+        Assert.False(sessionRuntimeCreated);
+        AssertRecommendsNewerWindows(failure.Message);
     }
 
     [Fact]
-    public async Task RequiredAgentLaunchFailsWhenReadinessReportsIsolationUnsupported()
+    public async Task AgentIgnoresTheRemovedSessionOptOutVariable()
     {
         string applicationDirectory = Path.Combine(_testDirectory, "app");
         Directory.CreateDirectory(applicationDirectory);
         await File.WriteAllTextAsync(Path.Combine(applicationDirectory, "openclaw.mjs"), string.Empty);
-        bool resolvedHostNode = false;
+        bool sessionRuntimeCreated = false;
 
+        // A stale OPENCLAW_SESSION=0 must not reopen the removed host path.
         await Assert.ThrowsAsync<SessionException>(() => Program.RunAgentAsync(
             new HostOptions(applicationDirectory, null, []),
             _ => { },
             _ =>
             {
-                resolvedHostNode = true;
-                return Task.FromResult(new NodeRuntime(
-                    "node.exe",
-                    new Version(24, 0),
-                    System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture));
+                sessionRuntimeCreated = true;
+                return CreateSessionRuntime();
             },
-            (_, _, _, _, _, _) => Task.FromResult(0),
             probeReadiness: _ => Task.FromResult(new MxcReadinessReport(
                 "runtime",
                 null,
@@ -934,49 +811,65 @@ public sealed class ProgramTests : IDisposable
                 MxcSupportEvidence.HostBuild)),
             getPackageFamilyName: () => "OpenClaw.Gateway_test",
             readEnvironmentVariable: name =>
-                name == SessionRoutingPolicy.ModeVariable ? "1" : null));
+                name == "OPENCLAW_SESSION" ? "0" : null));
 
-        Assert.False(resolvedHostNode);
+        Assert.False(sessionRuntimeCreated);
     }
 
     [Fact]
-    public async Task SelectedSessionFailureDoesNotResolveOrLaunchHostNode()
+    public async Task UndeterminedSupportStillProvisionsTheSession()
     {
         string applicationDirectory = Path.Combine(_testDirectory, "app");
         Directory.CreateDirectory(applicationDirectory);
         await File.WriteAllTextAsync(Path.Combine(applicationDirectory, "openclaw.mjs"), string.Empty);
-        bool resolvedHostNode = false;
-        bool launchedHost = false;
+        bool sessionRuntimeCreated = false;
 
         await Assert.ThrowsAsync<SessionException>(() => Program.RunAgentAsync(
             new HostOptions(applicationDirectory, null, []),
             _ => { },
             _ =>
             {
-                resolvedHostNode = true;
-                return Task.FromResult(new NodeRuntime(
-                    "node.exe",
-                    new Version(24, 0),
-                    System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture));
+                sessionRuntimeCreated = true;
+                throw new SessionException("the backend decided");
             },
-            (_, _, _, _, _, _) =>
-            {
-                launchedHost = true;
-                return Task.FromResult(0);
-            },
-            _ => throw new SessionException("setup failed"),
-            _ => Task.FromResult(new MxcReadinessReport(
+            probeReadiness: _ => Task.FromResult(new MxcReadinessReport(
                 "runtime",
                 null,
                 null,
-                MxcHostSupport.Supported,
+                MxcHostSupport.Unknown,
                 null,
-                MxcSupportEvidence.HostBuild)),
-            () => "OpenClaw.Gateway_test",
-            _ => null));
+                MxcSupportEvidence.None,
+                null,
+                "the host detector could not run")),
+            getPackageFamilyName: () => "OpenClaw.Gateway_test",
+            readEnvironmentVariable: _ => null));
 
-        Assert.False(resolvedHostNode);
-        Assert.False(launchedHost);
+        Assert.True(sessionRuntimeCreated);
+    }
+
+    [Fact]
+    public async Task SessionFailureSurfacesInsteadOfFallingBack()
+    {
+        string applicationDirectory = Path.Combine(_testDirectory, "app");
+        Directory.CreateDirectory(applicationDirectory);
+        await File.WriteAllTextAsync(Path.Combine(applicationDirectory, "openclaw.mjs"), string.Empty);
+
+        SessionException failure = await Assert.ThrowsAsync<SessionException>(
+            () => Program.RunAgentAsync(
+                new HostOptions(applicationDirectory, null, []),
+                _ => { },
+                _ => throw new SessionException("setup failed"),
+                _ => Task.FromResult(new MxcReadinessReport(
+                    "runtime",
+                    null,
+                    null,
+                    MxcHostSupport.Supported,
+                    null,
+                    MxcSupportEvidence.HostBuild)),
+                () => "OpenClaw.Gateway_test",
+                _ => null));
+
+        Assert.Equal("setup failed", failure.Message);
     }
 
     public void Dispose()
@@ -1090,10 +983,6 @@ public sealed class ProgramTests : IDisposable
             _ => { },
             TextWriter.Null,
             TextWriter.Null,
-            _ => Task.FromResult(new NodeRuntime(
-                "node.exe",
-                new Version(24, 15, 0),
-                System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture)),
             new StubbedRecoveryLifecycle(runtime)).ConfigureAwait(false);
 
         Assert.Equal(0, exitCode);
@@ -1111,14 +1000,8 @@ public sealed class ProgramTests : IDisposable
 
         public SessionRuntime CreateRuntime(Action<string> log) => runtime;
 
-        public Task<SessionRoutingDecision> CheckSessionSupportAsync(
-            CancellationToken cancellationToken) =>
-            Task.FromResult(new SessionRoutingDecision(
-                SessionRouting.Session,
-                "Test session support is available."));
-
-        public NodeRuntime PrepareHostRuntime(HostOptions options, Action<string> log) =>
-            Inner.PrepareHostRuntime(options, log);
+        public Task EnsureSessionSupportedAsync(
+            CancellationToken cancellationToken) => Task.CompletedTask;
 
         public PackageRuntimeMetadata ValidatePackageRuntime(
             HostOptions options, SessionRuntime sessionRuntime) =>
@@ -1153,36 +1036,21 @@ public sealed class ProgramTests : IDisposable
             $"{{\"appId\":\"{applicationId}\"}}"))
             .TrimEnd('=').Replace('+', '-').Replace('/', '_')}";
 
-    private static MxcReadinessReport UnavailableReadiness() =>
-        new(
-            RuntimeDirectory: null,
-            Provenance: null,
-            RuntimeUnavailableReason: "The runtime is unavailable.",
-            HostSupport: MxcHostSupport.Supported,
-            HostBuild: null,
-            SupportEvidence: MxcSupportEvidence.BackendProbe,
-            BackendProbe: new MxcBackendProbe(false, "base-container", []),
-            BackendProbeFailureReason: null);
-
-    private Task<int> RunAgentWithDirectLaunchProbeAsync(
-        SessionRuntime runtime,
-        List<string> directLaunches)
+    private static void AssertRecommendsNewerWindows(string message)
     {
-        ArgumentNullException.ThrowIfNull(directLaunches);
+        Assert.Contains("newer version of Windows", message, StringComparison.Ordinal);
+        Assert.Contains("Windows Update", message, StringComparison.Ordinal);
+        Assert.Contains("#requirements", message, StringComparison.Ordinal);
+    }
 
-        return Program.RunAgentAsync(
+    private Task<int> RunAgentOnSupportedHostAsync(SessionRuntime runtime) =>
+        Program.RunAgentAsync(
             CreateAgentOptions(),
             _ => { },
-            _ => throw new InvalidOperationException("Host Node must not be resolved."),
-            (_, _, _, _, _, _) =>
-            {
-                directLaunches.Add("direct");
-                return Task.FromResult(0);
-            },
             _ => runtime,
-            probeReadiness: _ => Task.FromResult(UnavailableReadiness()),
-            getPackageFamilyName: () => "OpenClaw.Gateway_test");
-    }
+            probeReadiness: SupportedHost,
+            getPackageFamilyName: () => "OpenClaw.Gateway_test",
+            readEnvironmentVariable: _ => null);
 
     private static void WriteRuntimeInstallResult(FakeMxcSessionClient backend, int exitCode)
     {
@@ -1259,17 +1127,8 @@ public sealed class ProgramTests : IDisposable
 
         public SessionRuntime CreateRuntime(Action<string> log) => _runtime;
 
-        public Task<SessionRoutingDecision> CheckSessionSupportAsync(
-            CancellationToken cancellationToken) =>
-            Task.FromResult(new SessionRoutingDecision(
-                SessionRouting.Session,
-                "The isolated-session runtime is available."));
-
-        public NodeRuntime PrepareHostRuntime(HostOptions options, Action<string> log) =>
-            new(
-                "node.exe",
-                new Version(24, 20, 0),
-                System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture);
+        public Task EnsureSessionSupportedAsync(
+            CancellationToken cancellationToken) => Task.CompletedTask;
 
         public PackageRuntimeMetadata ValidatePackageRuntime(
             HostOptions options,
@@ -1332,6 +1191,42 @@ public sealed class ProgramTests : IDisposable
                 GatewayPersistenceLane.TaskScheduler,
                 "ready",
                 false));
+    }
+
+    private sealed class ProbeCountingLifecycle(SessionRuntime runtime, Action onProbe)
+        : IInstallationLifecycle
+    {
+        public SessionRuntime CreateRuntime(Action<string> log) => runtime;
+
+        public Task EnsureSessionSupportedAsync(CancellationToken cancellationToken)
+        {
+            onProbe();
+            return Task.CompletedTask;
+        }
+
+        public PackageRuntimeMetadata ValidatePackageRuntime(
+            HostOptions options,
+            SessionRuntime sessionRuntime) =>
+            throw new NotSupportedException();
+
+        public ISessionLockHandle AcquireLifecycleLock(SessionRuntime sessionRuntime) =>
+            throw new NotSupportedException();
+
+        public Task<TeardownResult> TeardownAsync(
+            HostOptions options,
+            SessionRuntime sessionRuntime,
+            Action<string> log,
+            bool lockAlreadyHeld,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public IInstallationStateCleaner CreateStateCleaner(SessionRuntime sessionRuntime) =>
+            throw new NotSupportedException();
+
+        public Task<GatewayPersistenceInstallResult> InstallRecoveryAsync(
+            Action<string> log,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 
     private sealed class RecordingCleaner : IInstallationStateCleaner

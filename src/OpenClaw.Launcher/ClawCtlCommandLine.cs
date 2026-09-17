@@ -16,7 +16,7 @@ internal sealed record ClawCtlHandlers
     public required Func<CancellationToken, Task<int>> GatewayStop { get; init; }
 }
 
-internal sealed record SetupOptions(bool Fresh, bool Force, bool NoIsolation = false);
+internal sealed record SetupOptions(bool Fresh, bool Force);
 
 // The clawctl command tree. Only the package-readiness surface belongs here:
 // doctor, gateway, uninstall, and every other OpenClaw command is owned by the
@@ -49,8 +49,10 @@ internal static class ClawCtlCommandLine
         "Run `openclaw <arguments>` to invoke the OpenClaw CLI.";
 
     public static string SetupDescription =>
-        "Extract or repair the bundled Node.js runtime in package LocalState " +
-        "and confirm the packaged OpenClaw application is present.";
+        "Provision or reuse the owned isolated session, extract or repair the " +
+        "bundled Node.js runtime, and confirm the packaged OpenClaw " +
+        "application is present. Requires a Windows build that supports " +
+        "isolated agent sessions.";
 
     // runSetup stays a delegate so the command tree owns parsing and help while
     // Program keeps the readiness operation and its test seams.
@@ -58,15 +60,10 @@ internal static class ClawCtlCommandLine
     {
         ArgumentNullException.ThrowIfNull(handlers);
         Command setup = new(SetupCommandName, SetupDescription);
-        Option<bool> noIsolation = new("--no-isolation")
-        {
-            Description = "Prepare the bundled runtime without provisioning an isolated session."
-        };
         Option<bool> fresh = new("--fresh")
         {
             Description = "Remove this installation's owned session and local state before setting it up again."
         };
-        setup.Options.Add(noIsolation);
         Option<bool> force = new("--force")
         {
             Description = "Continue with package-local cleanup when owned external cleanup cannot be confirmed. Requires --fresh."
@@ -84,8 +81,7 @@ internal static class ClawCtlCommandLine
             handlers.Setup(
                 new SetupOptions(
                     parsed.GetValue(fresh),
-                    parsed.GetValue(force),
-                    parsed.GetValue(noIsolation)),
+                    parsed.GetValue(force)),
                 cancellationToken));
         Command status = new(
             StatusCommandName,

@@ -41,15 +41,16 @@ the ordinary setup route. It refuses unpackaged execution, never follows
 reparse points, and stops without a wipe or replacement setup when teardown is
 incomplete. It does not onboard OpenClaw or start the gateway.
 
-`openclaw` uses `OPENCLAW_SESSION` to select a route:
-
-| Value | Result |
-|---|---|
-| Unset | Use the isolated session when the MXC backend reports support; otherwise run directly on the host. |
-| `0`, `false`, `off`, or `no` | Run directly on the host. |
-| `1`, `true`, `on`, or `yes` | Require the isolated session. A session failure is reported; the launcher does not silently fall back to the host. |
-
-Unrecognized values are rejected rather than interpreted as disabled.
+`openclaw` always runs inside the isolated session recorded by `clawctl setup`.
+There is no environment variable, option, or automatic fallback that runs
+OpenClaw on the host. Before touching any recorded state, both `clawctl setup`
+and `openclaw` require that this machine can host a session: an MXC runtime
+that is unavailable, a backend that reports no isolation-session support, a
+host build measured as unsupported, or a missing package identity all fail with
+the same message, which names Windows Update or a newer Windows version as the
+remedy and prints the diagnostic log path. Support that cannot be determined
+(the host build is unreadable and the backend probe failed) is not a refusal:
+provisioning is attempted so the backend's own error surfaces.
 `clawctl status` preserves the recorded ownership record and does not provision
 or replace a session. It is not passive: `ProbeRecordedStatusAsync` invokes the
 backend `StartAsync` operation for the recorded provision as its status probe.
@@ -57,14 +58,10 @@ backend `StartAsync` operation for the recorded provision as its status probe.
 ## Agent runtime and helper
 
 The package application tree is immutable and runs directly from the MSIX; the
-launcher does not extract, copy, hash, or repair it at runtime. Direct host
-execution installs the bundled Node.js runtime on demand in the invoking
-user's LocalState before launching; it does not require a prior `clawctl`
-setup. Isolated-session setup is a separate route:
-`RunSetupCoreAsync` asks the guest helper to install the runtime under the
-agent's own profile, without preparing the invoking user's host runtime.
-`clawctl setup --no-isolation` selects the session-free host setup on a
-session-capable build without provisioning the isolated session.
+launcher does not extract, copy, hash, or repair it at runtime. Setup is the
+only route that installs a Node.js runtime: `RunSetupCoreAsync` asks the guest
+helper to install the runtime under the agent's own profile. The invoking
+user's host runtime is never prepared, because nothing runs on the host.
 
 The agent cannot execute the package's WindowsApps helper binary directly.
 During setup, the launcher stages only `openclaw-session-host.exe` into the
@@ -130,10 +127,9 @@ setup. The collector does not enumerate arbitrary agent-profile files.
 
 ## Supported operational flow
 
-1. On a session-capable build, run `clawctl setup` after installing or updating
-   the package to prepare the isolated agent session. For host-only use,
-   `clawctl setup --no-isolation` is optional because direct host execution
-   installs its runtime on demand.
+1. Run `clawctl setup` after installing or updating the package to prepare the
+   isolated agent session. It fails on a machine that cannot host a session,
+   naming Windows Update or a newer Windows version as the remedy.
 2. Run `openclaw <arguments>` for the upstream OpenClaw CLI, or
    `clawctl pwsh` for an interactive agent shell.
 3. Use `clawctl gateway-service start`, `status`, and `stop` for the managed

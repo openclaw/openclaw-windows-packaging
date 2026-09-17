@@ -109,16 +109,11 @@ internal static class Program
                     WriteDiagnostic,
                     startup.Output,
                     startup.Error,
-                    startup.ResolveNode,
-                    startup.InstallationLifecycle).ConfigureAwait(false)
+                    startup.InstallationLifecycle,
+                    startup.ReadEnvironmentVariable).ConfigureAwait(false)
                 : await RunAgentAsync(
                     options,
                     WriteDiagnostic,
-                    startup.ResolveNode ?? (_ => Task.FromResult(
-                        (startup.InstallNodeRuntime ?? NodeRuntimeInstaller.EnsureInstalled)(
-                            GetPackagedNodeArchivePath(options),
-                            WriteDiagnostic))),
-                    startup.LaunchOpenClaw ?? GatewayLauncher.RunAsync,
                     startup.InstallationLifecycle is null
                         ? null
                         : startup.InstallationLifecycle.CreateRuntime,
@@ -143,26 +138,12 @@ internal static class Program
         }
     }
 
+    // Every collaborator after the readiness probe is a test seam: tests
+    // substitute fakes so they can assert launch behavior without provisioning
+    // a real isolated session.
     internal static async Task<int> RunAgentAsync(
         HostOptions options,
         Action<string> log,
-        Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null) =>
-        await RunAgentAsync(
-            options,
-            log,
-            resolveNode ?? (_ => Task.FromResult(NodeRuntimeInstaller.EnsureInstalled(
-                GetPackagedNodeArchivePath(options),
-                log))),
-            GatewayLauncher.RunAsync).ConfigureAwait(false);
-
-    // launchOpenClaw is a test seam: tests substitute a fake in place of
-    // GatewayLauncher.RunAsync so they can assert launch behavior without
-    // starting a real Node child process or Windows job object.
-    internal static async Task<int> RunAgentAsync(
-        HostOptions options,
-        Action<string> log,
-        Func<CancellationToken, Task<NodeRuntime>> resolveNode,
-        LaunchOpenClawAsync launchOpenClaw,
         Func<Action<string>, Session.SessionRuntime>? createSessionRuntime = null,
         Func<CancellationToken, Task<Mxc.MxcReadinessReport>>? probeReadiness = null,
         Func<string?>? getPackageFamilyName = null,
@@ -172,76 +153,34 @@ internal static class Program
         string applicationDirectory = GetPackagedApplicationDirectory(options);
         log("Using the OpenClaw application directly from the package.");
 
-        Session.SessionMode mode = Session.SessionRoutingPolicy.ReadMode(
-            readEnvironmentVariable ?? Environment.GetEnvironmentVariable);
-        Session.SessionRoutingDecision routing;
-        string? packageFamilyName = null;
-        if (mode == Session.SessionMode.Disabled)
-        {
-            routing = new Session.SessionRoutingDecision(
-                Session.SessionRouting.Direct,
-                $"{Session.SessionRoutingPolicy.ModeVariable} is set to 0.");
-        }
-        else
-        {
-            Mxc.MxcReadinessReport readiness = await (probeReadiness ??
-                Mxc.MxcReadiness.ProbeAsync)(CancellationToken.None).ConfigureAwait(false);
-            packageFamilyName =
-                (getPackageFamilyName ?? (() => HostPaths.Create().PackageFamilyName))();
-            routing = Session.SessionRoutingPolicy.Decide(
-                mode,
-                packageFamilyName,
-                readiness);
-        }
+        Mxc.MxcReadinessReport readiness = await (probeReadiness ??
+            Mxc.MxcReadiness.ProbeAsync)(CancellationToken.None).ConfigureAwait(false);
+        Session.SessionSupportPolicy.EnsureSupported(
+            (getPackageFamilyName ?? (() => HostPaths.Create().PackageFamilyName))(),
+            readiness);
+        log("The isolated-session backend is available.");
 
-        log(routing.Reason);
-        if (routing.Routing == Session.SessionRouting.Session)
-        {
-            Session.SessionRuntime runtime = (createSessionRuntime ??
-                Session.SessionRuntime.Create)(log);
-            Session.SessionRecord record =
-                await runtime.StartForExecutionAsync(CancellationToken.None)
-                    .ConfigureAwait(false);
-            string agentNodePath = runtime.RequireAgentNodePath(
-                GetPackagedNodeArchivePath(options));
-            return await runtime.Executor.ExecuteAsync(
-                record,
-                new Session.SessionExecutionRequest(
-                    runtime.RequireStagedHelper(record),
-                    agentNodePath,
-                    applicationDirectory,
-                    options.OpenClawArguments,
-                    record.WorkspacePath!)
-                {
-                    AdditionalEnvironment = OpenClawRuntimeEnvironment.Build(
-                        (isInteractive ?? (() => WindowsHostConsole.Instance.IsInteractive))(),
-                        readEnvironmentVariable ?? Environment.GetEnvironmentVariable,
-                        GatewayIsolationMode.Enabled)
-                },
-                CancellationToken.None).ConfigureAwait(false);
-        }
-
-        if (mode == Session.SessionMode.Automatic &&
-            routing.Routing == Session.SessionRouting.Direct &&
-            packageFamilyName is not null)
-        {
-            Session.SessionRuntime runtime = (createSessionRuntime ??
-                Session.SessionRuntime.Create)(log);
-            runtime.ValidateSavedOwnershipForHostFallback();
-        }
-
-        NodeRuntime nodeRuntime = await resolveNode(CancellationToken.None)
-            .ConfigureAwait(false);
-        log(
-            $"Using Node.js {nodeRuntime.Version} from " +
-            $"{nodeRuntime.ExecutablePath}.");
-        return await launchOpenClaw(
-            nodeRuntime.ExecutablePath,
-            applicationDirectory,
-            options.OpenClawArguments,
-            GatewayIsolationMode.Disabled,
-            CancellationToken.None,
-            log).ConfigureAwait(false);
+        Session.SessionRuntime runtime = (createSessionRuntime ??
+            Session.SessionRuntime.Create)(log);
+        Session.SessionRecord record =
+            await runtime.StartForExecutionAsync(CancellationToken.None)
+                .ConfigureAwait(false);
+        string agentNodePath = runtime.RequireAgentNodePath(
+            GetPackagedNodeArchivePath(options));
+        return await runtime.Executor.ExecuteAsync(
+            record,
+            new Session.SessionExecutionRequest(
+                runtime.RequireStagedHelper(record),
+                agentNodePath,
+                applicationDirectory,
+                options.OpenClawArguments,
+                record.WorkspacePath!)
+            {
+                AdditionalEnvironment = OpenClawRuntimeEnvironment.Build(
+                    (isInteractive ?? (() => WindowsHostConsole.Instance.IsInteractive))(),
+                    readEnvironmentVariable ?? Environment.GetEnvironmentVariable)
+            },
+            CancellationToken.None).ConfigureAwait(false);
     }
 
     // output and error are required parameters (not Console defaults) so tests
@@ -253,11 +192,9 @@ internal static class Program
         Action<string> log,
         TextWriter output,
         TextWriter error,
-        Func<CancellationToken, Task<NodeRuntime>>? resolveNode = null,
         Session.IInstallationLifecycle? installationLifecycle = null,
         Func<string, string?>? readEnvironmentVariable = null)
     {
-        _ = resolveNode;
         Session.IInstallationLifecycle lifecycle =
             installationLifecycle ?? Session.InstallationLifecycle.Production;
         Session.SessionRuntime? sessionRuntime = null;
@@ -274,7 +211,6 @@ internal static class Program
                     lifecycle,
                     log,
                     output,
-                    readEnvironmentVariable ?? Environment.GetEnvironmentVariable,
                     cancellationToken),
                 Status = async cancellationToken =>
                 {
@@ -392,7 +328,7 @@ internal static class Program
             // losing the diagnostic log entry and the log path Main reports.
             EnableDefaultExceptionHandler = false,
 
-            // Node lifetime is owned by the job object in GatewayLauncher. The
+            // Node lifetime is owned by the job object in the session host. The
             // library's termination timeout would add a second, conflicting
             // forced-exit policy and process-wide signal handlers.
             ProcessTerminationTimeout = null
@@ -411,42 +347,18 @@ internal static class Program
         Session.IInstallationLifecycle lifecycle,
         Action<string> log,
         TextWriter output,
-        Func<string, string?> readEnvironmentVariable,
         CancellationToken cancellationToken)
     {
         string applicationDirectory = GetPackagedApplicationDirectory(options);
         log("Confirmed the packaged OpenClaw application is present.");
+
+        // Throws with the reason and its remediation when this machine cannot
+        // host a session. There is no session-free setup to fall back to, so
+        // nothing is reported as ready before this succeeds.
+        await lifecycle.EnsureSessionSupportedAsync(cancellationToken)
+            .ConfigureAwait(false);
+
         ClawCtlConsole.WriteReadinessSummary(output, applicationDirectory);
-
-        Session.SessionRoutingDecision routing = await lifecycle.CheckSessionSupportAsync(
-            cancellationToken).ConfigureAwait(false);
-        if (routing.Routing != Session.SessionRouting.Session)
-        {
-            await output.WriteLineAsync(
-                $"OpenClaw setup requires isolated-session support. {routing.Reason}")
-                .ConfigureAwait(false);
-            return 1;
-        }
-
-        if (setupOptions.NoIsolation ||
-            Session.SessionRoutingPolicy.ReadMode(
-                readEnvironmentVariable) == Session.SessionMode.Disabled)
-        {
-            if (setupOptions.Fresh)
-            {
-                await output.WriteLineAsync(
-                    "OpenClaw setup --fresh requires isolated-session provisioning. Remove --fresh or enable isolation before retrying.")
-                    .ConfigureAwait(false);
-                return 1;
-            }
-
-            NodeRuntime nodeRuntime = lifecycle.PrepareHostRuntime(options, log);
-            ClawCtlConsole.WriteNodeRuntimeSummary(output, nodeRuntime);
-            await output.WriteLineAsync(
-                "OpenClaw setup completed without isolated-session provisioning.")
-                .ConfigureAwait(false);
-            return 0;
-        }
 
         try
         {
@@ -710,8 +622,7 @@ internal static class Program
                 AdditionalEnvironment = Session.SessionExecutor.MergeEnvironment(
                     OpenClawRuntimeEnvironment.Build(
                         WindowsHostConsole.Instance.IsInteractive,
-                        Environment.GetEnvironmentVariable,
-                        GatewayIsolationMode.Enabled),
+                        Environment.GetEnvironmentVariable),
                     Session.AgentToolShim.BuildEnvironment(agentNodePath, applicationDirectory))
             },
             $"Opening {shell.DisplayName} in the isolated session.",
@@ -736,14 +647,6 @@ internal static class Program
                 $"The isolated-session record is unusable: {status.Detail}",
             _ => $"Isolated session is recorded: {status.Record!.SandboxId}."
         };
-
-    internal delegate Task<int> LaunchOpenClawAsync(
-        string nodePath,
-        string applicationDirectory,
-        IReadOnlyList<string> openClawArguments,
-        GatewayIsolationMode gatewayIsolationMode,
-        CancellationToken cancellationToken,
-        Action<string>? log);
 
     private static string GetPackagedApplicationDirectory(HostOptions options)
     {

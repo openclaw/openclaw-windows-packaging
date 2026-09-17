@@ -320,8 +320,7 @@ public sealed class SessionExecutorTests : IDisposable
             SessionExecutor.MergeEnvironment(
                 OpenClawRuntimeEnvironment.Build(
                     isInteractive: true,
-                    _ => null,
-                    GatewayIsolationMode.Enabled),
+                    _ => null),
                 AgentToolShim.BuildEnvironment(
                     @"C:\Users\agent\AppData\Local\OpenClaw\NodeJS\node.exe",
                     @"C:\Package\app"));
@@ -687,32 +686,6 @@ public sealed class OpenClawRuntimeEnvironmentTests
         Assert.Equal("external", environment["OPENCLAW_SUPERVISOR_MODE"]);
         Assert.Equal("external", environment["OPENCLAW_SERVICE_REPAIR_POLICY"]);
         Assert.Equal("1", environment["OPENCLAW_NO_AUTO_UPDATE"]);
-    }
-
-    [Fact]
-    public void ForegroundLaunchUsesTheSameVariables()
-    {
-        // Both launch paths must agree; a path that supervises or updates
-        // itself would be a silent behavior difference.
-        string application = TestDirectory.Create();
-        try
-        {
-            File.WriteAllText(Path.Combine(application, "openclaw.mjs"), "// test");
-            System.Diagnostics.ProcessStartInfo startInfo =
-                GatewayLauncher.CreateStartInfo(
-                    @"C:\node.exe",
-                    application,
-                    []);
-
-            foreach ((string name, string value) in OpenClawRuntimeEnvironment.Build())
-            {
-                Assert.Equal(value, startInfo.Environment[name]);
-            }
-        }
-        finally
-        {
-            Directory.Delete(application, recursive: true);
-        }
     }
 
     [Fact]

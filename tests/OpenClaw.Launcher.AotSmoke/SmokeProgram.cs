@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
-using System.Runtime.InteropServices;
+using OpenClaw.Launcher.Gateway;
+using OpenClaw.Launcher.Session;
 using LauncherProgram = OpenClaw.Launcher.Program;
 
 namespace OpenClaw.Launcher.AotSmoke;
@@ -43,7 +44,7 @@ internal static class SmokeProgram
             ("completion directive suggests commands", CompletionDirectiveSuggestsAsync),
             ("unpackaged setup reports identity failure", SetupReportsReadinessAsync),
             ("missing application reports diagnostics", MissingApplicationReportsAsync),
-            ("openclaw forwards arguments verbatim", AgentForwardsArgumentsAsync)
+            ("openclaw never parses its arguments", AgentNeverParsesItsArgumentsAsync)
         ];
 
         int failures = 0;
@@ -104,7 +105,7 @@ internal static class SmokeProgram
         AssertContains(fixture.Output.ToString(), "clawctl", fixture);
         AssertContains(fixture.Output.ToString(), "setup", fixture);
         AssertContains(fixture.Output.ToString(), "Node.js", fixture);
-        fixture.AssertNodeWasNotResolved();
+        fixture.AssertNoInstallationWorkStarted();
         fixture.AssertLogRecordsStartupAndExit();
     }
 
@@ -117,7 +118,7 @@ internal static class SmokeProgram
         AssertExitCode(0, exitCode, fixture);
         AssertContains(fixture.Output.ToString(), "setup", fixture);
         AssertContains(fixture.Output.ToString(), "--version", fixture);
-        fixture.AssertNodeWasNotResolved();
+        fixture.AssertNoInstallationWorkStarted();
     }
 
     private static async Task SetupHelpPrintsCommandHelpAsync()
@@ -128,7 +129,7 @@ internal static class SmokeProgram
 
         AssertExitCode(0, exitCode, fixture);
         AssertContains(fixture.Output.ToString(), "clawctl setup", fixture);
-        fixture.AssertNodeWasNotResolved();
+        fixture.AssertNoInstallationWorkStarted();
     }
 
     // This driver's assembly version is 9.9.9.9. The library's built-in action
@@ -175,7 +176,7 @@ internal static class SmokeProgram
 
         AssertExitCode(1, exitCode, fixture);
         AssertContains(fixture.Error.ToString(), "bogus", fixture);
-        fixture.AssertNodeWasNotResolved();
+        fixture.AssertNoInstallationWorkStarted();
     }
 
     private static async Task SetupForceRequiresFreshAsync()
@@ -186,7 +187,7 @@ internal static class SmokeProgram
 
         AssertExitCode(1, exitCode, fixture);
         AssertContains(fixture.Error.ToString(), "requires option '--fresh'", fixture);
-        fixture.AssertNodeWasNotResolved();
+        fixture.AssertNoInstallationWorkStarted();
     }
 
     // Response-file expansion is disabled, so a readable file behind an `@`
@@ -200,7 +201,7 @@ internal static class SmokeProgram
         int exitCode = await fixture.RunAsync([$"@{responseFile}"]).ConfigureAwait(false);
 
         AssertExitCode(1, exitCode, fixture);
-        fixture.AssertNodeWasNotResolved();
+        fixture.AssertNoInstallationWorkStarted();
     }
 
     private static async Task CompletionDirectiveSuggestsAsync()
@@ -211,21 +212,29 @@ internal static class SmokeProgram
 
         AssertExitCode(0, exitCode, fixture);
         AssertContains(fixture.Output.ToString(), "setup", fixture);
-        fixture.AssertNodeWasNotResolved();
+        fixture.AssertNoInstallationWorkStarted();
     }
 
     private static async Task SetupReportsReadinessAsync()
     {
-        using Fixture fixture = await Fixture.CreateWithApplicationAsync().ConfigureAwait(false);
+        using Fixture fixture = await Fixture
+            .CreateWithApplicationAsync(allowInstallationWork: true)
+            .ConfigureAwait(false);
 
         int exitCode = await fixture.RunAsync(["setup"]).ConfigureAwait(false);
 
         AssertExitCode(1, exitCode, fixture);
-        AssertContains(fixture.Output.ToString(), fixture.ApplicationDirectory, fixture);
         AssertContains(
-            fixture.Output.ToString(),
+            fixture.Error.ToString(),
             "not running from its installed package",
             fixture);
+        AssertContains(fixture.Error.ToString(), "newer version of Windows", fixture);
+        AssertContains(fixture.Error.ToString(), fixture.LogPath, fixture);
+
+        // Nothing is reported as ready when the support check refuses.
+        Assert(
+            fixture.Output.ToString().Length == 0,
+            "A failed support check still reported readiness on standard output.");
         fixture.AssertLogRecordsStartupAndExit();
         Assert(
             File.Exists(fixture.EntryPoint),
@@ -249,30 +258,22 @@ internal static class SmokeProgram
     }
 
     // The agent entrypoint must never consult System.CommandLine. These tokens
-    // are all meaningful to the clawctl parser and must survive untouched.
-    private static async Task AgentForwardsArgumentsAsync()
+    // are all meaningful to the clawctl parser, so if the parser ever saw them
+    // this scenario would render help and exit zero.
+    private static async Task AgentNeverParsesItsArgumentsAsync()
     {
         string[] arguments =
             ["--help", "--version", "--", "@response.rsp", "[suggest:1]", "", "a b"];
-        using Fixture fixture = await Fixture
-            .CreateWithApplicationAsync(HostEntrypoint.Agent)
-            .ConfigureAwait(false);
+        using Fixture fixture = Fixture.CreateWithoutApplication(HostEntrypoint.Agent);
 
         int exitCode = await fixture.RunAsync(arguments).ConfigureAwait(false);
 
-        AssertExitCode(23, exitCode, fixture);
-        string[]? forwarded = fixture.ForwardedArguments;
-        Assert(forwarded is not null, "The agent path never reached the launch delegate.");
+        AssertExitCode(1, exitCode, fixture);
         Assert(
-            forwarded!.Length == arguments.Length,
-            $"Expected {arguments.Length} forwarded arguments but got {forwarded.Length}.");
-        for (int index = 0; index < arguments.Length; index++)
-        {
-            Assert(
-                string.Equals(forwarded[index], arguments[index], StringComparison.Ordinal),
-                $"Argument {index} was rewritten from '{arguments[index]}' to " +
-                $"'{forwarded[index]}'.");
-        }
+            fixture.Output.ToString().Length == 0,
+            "The agent entrypoint rendered clawctl output for forwarded arguments.");
+        AssertContains(fixture.Error.ToString(), fixture.LogPath, fixture);
+        fixture.AssertLogRecordsStartupAndExit();
     }
 
     private static string LauncherVersion() =>
@@ -309,15 +310,14 @@ internal static class SmokeProgram
 
     private sealed class Fixture : IDisposable
     {
-        public const string NodePath = @"C:\fixture\node.exe";
-
         private readonly HostEntrypoint _entrypoint;
-        private bool _nodeResolved;
+        private readonly WorkTrackingLifecycle? _lifecycle;
 
-        private Fixture(string root, HostEntrypoint entrypoint)
+        private Fixture(string root, HostEntrypoint entrypoint, bool allowInstallationWork)
         {
             Root = root;
             _entrypoint = entrypoint;
+            _lifecycle = allowInstallationWork ? null : new WorkTrackingLifecycle();
             LogPath = Path.Combine(root, "diagnostics", "openclaw.log");
             ApplicationDirectory = Path.Combine(root, "app");
             EntryPoint = Path.Combine(ApplicationDirectory, "openclaw.mjs");
@@ -335,16 +335,17 @@ internal static class SmokeProgram
 
         public StringWriter Error { get; } = new();
 
-        public string[]? ForwardedArguments { get; private set; }
-
         public static Fixture CreateWithoutApplication(
             HostEntrypoint entrypoint = HostEntrypoint.Control) =>
-            new(CreateRoot(), entrypoint);
+            new(CreateRoot(), entrypoint, allowInstallationWork: false);
 
+        // Scenarios that must reach the production support check opt in; every
+        // other scenario gets a lifecycle that refuses to do real work.
         public static async Task<Fixture> CreateWithApplicationAsync(
-            HostEntrypoint entrypoint = HostEntrypoint.Control)
+            HostEntrypoint entrypoint = HostEntrypoint.Control,
+            bool allowInstallationWork = false)
         {
-            Fixture fixture = new(CreateRoot(), entrypoint);
+            Fixture fixture = new(CreateRoot(), entrypoint, allowInstallationWork);
             Directory.CreateDirectory(fixture.ApplicationDirectory);
             await File.WriteAllTextAsync(fixture.EntryPoint, "console.log('fixture');")
                 .ConfigureAwait(false);
@@ -360,29 +361,17 @@ internal static class SmokeProgram
                 BaseDirectory = Root,
                 Output = Output,
                 Error = Error,
-                ResolveNode = _ =>
-                {
-                    _nodeResolved = true;
-                    return Task.FromResult(
-                        new NodeRuntime(
-                            NodePath,
-                            new Version(24, 15, 0),
-                            RuntimeInformation.ProcessArchitecture));
-                },
-                LaunchOpenClaw = (_, _, forwarded, _, _, _) =>
-                {
-                    ForwardedArguments = [.. forwarded];
-                    return Task.FromResult(23);
-                }
+                InstallationLifecycle =
+                    _lifecycle ?? (IInstallationLifecycle)InstallationLifecycle.Production
             };
 
             return await LauncherProgram.RunAsync(args, startup).ConfigureAwait(false);
         }
 
-        public void AssertNodeWasNotResolved() =>
+        public void AssertNoInstallationWorkStarted() =>
             Assert(
-                !_nodeResolved,
-                "Node resolution ran for an invocation that must not need a runtime.");
+                _lifecycle is not null && !_lifecycle.WorkStarted,
+                "Installation work ran for an invocation that must not start it.");
 
         public void AssertLogRecordsStartupAndExit()
         {
@@ -404,6 +393,47 @@ internal static class SmokeProgram
             {
                 Directory.Delete(Root, recursive: true);
             }
+        }
+
+        // Records whether the command reached real installation work, and
+        // refuses to perform any. Help, version, rejected input, and a missing
+        // application must all fail or finish before touching this.
+        private sealed class WorkTrackingLifecycle : IInstallationLifecycle
+        {
+            public bool WorkStarted { get; private set; }
+
+            private InvalidOperationException Started()
+            {
+                WorkStarted = true;
+                return new InvalidOperationException(
+                    "The scenario driver never performs installation work.");
+            }
+
+            public SessionRuntime CreateRuntime(Action<string> log) => throw Started();
+
+            public Task EnsureSessionSupportedAsync(CancellationToken cancellationToken) =>
+                throw Started();
+
+            public PackageRuntimeMetadata ValidatePackageRuntime(
+                HostOptions options,
+                SessionRuntime sessionRuntime) => throw Started();
+
+            public ISessionLockHandle AcquireLifecycleLock(SessionRuntime sessionRuntime) =>
+                throw Started();
+
+            public Task<TeardownResult> TeardownAsync(
+                HostOptions options,
+                SessionRuntime sessionRuntime,
+                Action<string> log,
+                bool lockAlreadyHeld,
+                CancellationToken cancellationToken) => throw Started();
+
+            public IInstallationStateCleaner CreateStateCleaner(
+                SessionRuntime sessionRuntime) => throw Started();
+
+            public Task<GatewayPersistenceInstallResult> InstallRecoveryAsync(
+                Action<string> log,
+                CancellationToken cancellationToken) => throw Started();
         }
 
         private static string CreateRoot()

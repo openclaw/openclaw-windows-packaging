@@ -15,6 +15,17 @@ and uses a separate `OpenClaw.Gateway` package identity. Both packages use the
 OpenClaw Foundation publisher metadata established for OpenClaw's Windows
 packages.
 
+## Requirements
+
+- Windows 11 on a build that supports isolated agent sessions, on x64 or ARM64.
+  OpenClaw always runs inside an isolated session, so a machine that cannot host
+  one is not supported: `clawctl setup` and `openclaw` both fail with a message
+  naming this requirement and the diagnostic log path. Install the latest
+  Windows updates (Settings > Windows Update), or install a newer Windows
+  version, and run `clawctl setup` again.
+- Developer Mode is required only for the local loose-layout development loop,
+  not for the signed MSIX.
+
 ## Command model
 
 Both application identities activate the same packaged `openclaw.exe`. The
@@ -28,6 +39,11 @@ deliberately separate surfaces.
 own package-management commands. Every argument, including an empty argument
 list, is forwarded unchanged to `node openclaw.mjs`, and the launcher returns
 the exact child exit code.
+
+`openclaw` runs only inside the isolated agent session recorded by
+`clawctl setup`. It does not run OpenClaw on the host, and it fails rather than
+falling back when the recorded session is missing, owned by another
+installation, or unavailable.
 
 Before launching, the host resolves the bundled Node.js executable previously
 prepared by `clawctl setup` and checks its PE product version and executable
@@ -44,11 +60,10 @@ copy, repair, or otherwise change package files at runtime.
 Every OpenClaw child process runs with
 `OPENCLAW_SUPERVISOR_MODE=external`,
 `OPENCLAW_SERVICE_REPAIR_POLICY=external`, and
-`OPENCLAW_NO_AUTO_UPDATE=1`. It also reports the selected Windows Gateway
-session mode through the process-stable
-`CLAWCTL_GATEWAY_ISOLATION=enabled|disabled` environment variable. The current
-direct host launch path reports `disabled`; the isolated-session launch path
-reports `enabled`.
+`OPENCLAW_NO_AUTO_UPDATE=1`. It also reports the Windows Gateway session mode
+through the process-stable `CLAWCTL_GATEWAY_ISOLATION=enabled` environment
+variable. OpenClaw always runs inside the isolated session, so this value is
+always `enabled`.
 These values declare external lifecycle ownership, prevent doctor-owned service
 repair, disable configured background auto-updates, and expose diagnostic
 isolation status without claiming independent attestation. The selected OpenClaw runtime honors external supervisor mode by refusing native service
@@ -64,8 +79,7 @@ the read-only application directory the workspace.
 
 | Command | Behavior |
 |---|---|
-| `clawctl setup` | On a session-capable Windows build, confirm packaged `app\openclaw.mjs` exists, provision or reuse the owned isolated session, and install the bundled Node.js runtime in the agent profile. It does not prepare the invoking user's host runtime. It also configures gateway sign-in recovery without starting a gateway. |
-| `clawctl setup --no-isolation` | On a session-capable Windows build, prepare the invoking user's host runtime without provisioning the isolated session. Direct host execution also installs that runtime on demand, so it does not require prior setup. |
+| `clawctl setup` | Confirm packaged `app\openclaw.mjs` exists, provision or reuse the owned isolated session, and install the bundled Node.js runtime in the agent profile. It also configures gateway sign-in recovery without starting a gateway. On a machine that cannot host a session it fails with the Windows requirement described under [Requirements](#requirements). |
 | `clawctl setup --fresh [--force]` | Remove this installation's owned session and package-local state, then run setup again. Without `--force`, incomplete external cleanup stops before local state is erased. `--force` is valid only with `--fresh`; it preserves an explicit warning when cleanup of owned external resources cannot be confirmed, but still stops if bounded local deletion fails. |
 | `clawctl status` | Report the recorded isolated-session state without provisioning or replacing it. It asks the backend to start the recorded provision as its status probe, so it is not a passive diagnostic. Use `clawctl gateway-service status` to inspect the gateway. |
 | `clawctl teardown --force` | Confirm deletion, then stop and deprovision the owned session and remove its data and setup state. The MSIX remains installed. |
@@ -100,23 +114,22 @@ token reaches that CLI uninterpreted.
 Commands such as `doctor`, `gateway`, and `uninstall` belong to the OpenClaw
 CLI and must be invoked through `openclaw`.
 
-Host-mode setup (`clawctl setup --no-isolation`) and direct host execution
-extract the architecture-specific runtime archive from the immutable MSIX into
-the invoking user's writable LocalState:
+`clawctl setup` provisions an explicitly owned agent session and extracts the
+architecture-specific runtime archive from the immutable MSIX into that agent's
+writable LocalState:
 `%LOCALAPPDATA%\Packages\<package-family>\LocalState\OpenClaw\NodeJS\node-v<version>-win-<architecture>`.
 Extraction is idempotent, versioned, and serialized across concurrent setup
 processes, including different Windows sessions. Setup validates existing
 runtimes before reuse, replaces invalid runtimes, and validates extraction
-before publishing it.
+before publishing it. It does not prepare the invoking user's host runtime,
+because nothing runs on the host.
 
-On a session-capable machine, ordinary `clawctl setup` instead provisions an
-explicitly owned agent session. Its separate profile receives the bundled
-Node.js runtime and command environment; it does not prepare the invoking
-user's host runtime. Run setup before using `clawctl pwsh` or gateway-service
-start; `openclaw` installs the host runtime on demand when it runs directly.
-See
+Run setup before using `openclaw`, `clawctl pwsh`, or gateway-service start.
+There is no session-free mode: `openclaw` runs inside the session recorded by
+setup, and both entry points fail with the same message on a machine that
+cannot host one. See
 [MXC compatibility evidence](docs/mxc-compatibility-evidence.md) for the
-session model, routing, gateway health criteria, and diagnostics limits.
+session model, gateway health criteria, and diagnostics limits.
 
 The launcher places Node.js in a Windows job configured with
 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. The launcher remains alive while Node.js

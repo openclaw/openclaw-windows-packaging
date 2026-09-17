@@ -18,6 +18,13 @@ internal static class OpenClawRuntimeEnvironment
 
     public const string ExternalValue = "external";
     public const string NoAutoUpdateValue = "1";
+
+    /// <summary>
+    /// Every OpenClaw process this package starts runs inside the isolated
+    /// session, so the reported isolation state is constant.
+    /// </summary>
+    public const string GatewayIsolationValue = "enabled";
+
     private const string ForceColorVariable = "FORCE_COLOR";
     private const string WindowsTerminalSessionVariable = "WT_SESSION";
     private const string NoColorVariable = "NO_COLOR";
@@ -31,25 +38,23 @@ internal static class OpenClawRuntimeEnvironment
     /// <summary>
     /// The variables to apply, as an ordinary dictionary.
     /// </summary>
-    public static IReadOnlyDictionary<string, string> Build(
-        GatewayIsolationMode gatewayIsolationMode = GatewayIsolationMode.Disabled) =>
+    public static IReadOnlyDictionary<string, string> Build() =>
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             [SupervisorModeVariable] = ExternalValue,
             [ServiceRepairPolicyVariable] = ExternalValue,
             [NoAutoUpdateVariable] = NoAutoUpdateValue,
-            [GatewayIsolationVariable] = gatewayIsolationMode.ToEnvironmentValue(),
+            [GatewayIsolationVariable] = GatewayIsolationValue,
         };
 
     public static IReadOnlyDictionary<string, string> Build(
         bool isInteractive,
-        Func<string, string?> readEnvironmentVariable,
-        GatewayIsolationMode gatewayIsolationMode = GatewayIsolationMode.Disabled)
+        Func<string, string?> readEnvironmentVariable)
     {
         ArgumentNullException.ThrowIfNull(readEnvironmentVariable);
 
         Dictionary<string, string> result = new(
-            Build(gatewayIsolationMode),
+            Build(),
             StringComparer.OrdinalIgnoreCase);
         string? forceColor = readEnvironmentVariable(ForceColorVariable);
         string? wtSession = readEnvironmentVariable(WindowsTerminalSessionVariable);

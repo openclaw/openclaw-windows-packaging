@@ -19,12 +19,6 @@ internal sealed class HostStartup
 
     public required TextWriter Error { get; init; }
 
-    public Func<CancellationToken, Task<NodeRuntime>>? ResolveNode { get; init; }
-
-    public Func<string, Action<string>, NodeRuntime>? InstallNodeRuntime { get; init; }
-
-    public Program.LaunchOpenClawAsync? LaunchOpenClaw { get; init; }
-
     public Session.IInstallationLifecycle? InstallationLifecycle { get; init; }
 
     public Func<string, string?>? ReadEnvironmentVariable { get; init; }
@@ -36,7 +30,6 @@ internal sealed class HostStartup
         BaseDirectory = AppContext.BaseDirectory,
         Output = Console.Out,
         Error = Console.Error,
-        InstallNodeRuntime = NodeRuntimeInstaller.EnsureInstalled,
         InstallationLifecycle = Session.InstallationLifecycle.Production
     };
 }

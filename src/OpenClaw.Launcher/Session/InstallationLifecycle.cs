@@ -11,10 +11,8 @@ internal interface IInstallationLifecycle
 {
     SessionRuntime CreateRuntime(Action<string> log);
 
-    Task<SessionRoutingDecision> CheckSessionSupportAsync(
+    Task EnsureSessionSupportedAsync(
         CancellationToken cancellationToken);
-
-    NodeRuntime PrepareHostRuntime(HostOptions options, Action<string> log);
 
     PackageRuntimeMetadata ValidatePackageRuntime(HostOptions options, SessionRuntime runtime);
 
@@ -40,22 +38,15 @@ internal sealed class InstallationLifecycle : IInstallationLifecycle
 
     public SessionRuntime CreateRuntime(Action<string> log) => SessionRuntime.Create(log);
 
-    public async Task<SessionRoutingDecision> CheckSessionSupportAsync(
+    public async Task EnsureSessionSupportedAsync(
         CancellationToken cancellationToken)
     {
         MxcReadinessReport readiness = await MxcReadiness.ProbeAsync(cancellationToken)
             .ConfigureAwait(false);
-        return SessionRoutingPolicy.Decide(
-            SessionMode.Automatic,
+        SessionSupportPolicy.EnsureSupported(
             HostPaths.Create().PackageFamilyName,
             readiness);
     }
-
-    public NodeRuntime PrepareHostRuntime(HostOptions options, Action<string> log) =>
-        NodeRuntimeInstaller.EnsureInstalled(
-            options.PackagedNodeArchivePath
-            ?? throw new FileNotFoundException("The packaged Node.js runtime archive was not found."),
-            log);
 
     public PackageRuntimeMetadata ValidatePackageRuntime(HostOptions options, SessionRuntime runtime)
     {

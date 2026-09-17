@@ -5,12 +5,6 @@ namespace OpenClaw.Launcher.Tests;
 
 public sealed class ClawCtlCommandLineTests
 {
-    // Any invocation that reaches this resolver has started the readiness
-    // operation, which help, version, and rejected input must never do.
-    private static Task<NodeRuntime> FailIfSetupRuns(CancellationToken _) =>
-        throw new InvalidOperationException(
-            "Setup ran for an invocation that should not have started it.");
-
     private static async Task<(int ExitCode, string Output, string Error)> RunAsync(
         params string[] args)
     {
@@ -23,7 +17,7 @@ public sealed class ClawCtlCommandLineTests
             _ => { },
             output,
             error,
-            FailIfSetupRuns).ConfigureAwait(false);
+            new FailIfWorkStartsLifecycle()).ConfigureAwait(false);
 
         return (exitCode, output.ToString(), error.ToString());
     }

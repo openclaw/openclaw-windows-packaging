@@ -80,7 +80,7 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
         _backend = backend;
         _log = log;
         _buildEnvironment = buildEnvironment ??
-            (() => OpenClawRuntimeEnvironment.Build(GatewayIsolationMode.Enabled));
+            OpenClawRuntimeEnvironment.Build;
         _isCurrentRecord = isCurrentRecord ?? (_ => true);
     }
 

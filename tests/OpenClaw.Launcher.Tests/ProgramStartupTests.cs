@@ -1,5 +1,3 @@
-using System.Runtime.InteropServices;
-
 namespace OpenClaw.Launcher.Tests;
 
 // Startup is the part of the host that owns diagnostics, argument routing, the
@@ -85,104 +83,40 @@ public sealed class ProgramStartupTests : IDisposable
     }
 
     // Startup routes the agent alias without letting the clawctl parser see
-    // the arguments, and the child's exit code is the host's exit code.
+    // the arguments. On a machine that cannot host a session it fails loudly,
+    // and the failure is the host's, not the parser's.
     [Fact]
-    public async Task AgentStartupForwardsArgumentsAndChildExitCode()
+    public async Task AgentStartupFailsLoudlyWithoutParsingItsArguments()
     {
         string applicationDirectory = Path.Combine(_testDirectory, "app");
         Directory.CreateDirectory(applicationDirectory);
         await File.WriteAllTextAsync(
             Path.Combine(applicationDirectory, "openclaw.mjs"),
             "console.log('fixture');");
+        string logPath = Path.Combine(_testDirectory, "logs", "openclaw.log");
         string[] arguments = ["--help", "--", "@file.rsp", "[suggest:1]", "", "a b"];
-        string[]? forwarded = null;
         using var output = new StringWriter();
         using var error = new StringWriter();
 
         HostStartup startup = new()
         {
             Entrypoint = HostEntrypoint.Agent,
-            CreateDiagnostics = () => HostDiagnosticLog.Create(
-                Path.Combine(_testDirectory, "logs", "openclaw.log")),
+            CreateDiagnostics = () => HostDiagnosticLog.Create(logPath),
             BaseDirectory = _testDirectory,
             Output = output,
-            Error = error,
-            ResolveNode = _ => Task.FromResult(
-                new NodeRuntime(
-                    Path.Combine(_testDirectory, "node.exe"),
-                    new Version(24, 15, 0),
-                    RuntimeInformation.ProcessArchitecture)),
-            LaunchOpenClaw = (_, _, launchArguments, _, _, _) =>
-            {
-                forwarded = [.. launchArguments];
-                return Task.FromResult(23);
-            }
+            Error = error
         };
 
         int exitCode = await Program.RunAsync(arguments, startup);
 
-        Assert.Equal(23, exitCode);
-        Assert.Equal(arguments, forwarded);
+        Assert.Equal(1, exitCode);
         Assert.Empty(output.ToString());
+        Assert.Contains(logPath, error.ToString(), StringComparison.Ordinal);
+        Assert.Contains(
+            "newer version of Windows",
+            error.ToString(),
+            StringComparison.Ordinal);
     }
-
-    // This catches production startup bypassing the installer after setup put
-    // Node.js only in the agent profile.
-    [Fact]
-    public async Task AgentStartupInstallsTheHostRuntimeBeforeLaunching()
-    {
-        string applicationDirectory = Path.Combine(_testDirectory, "app");
-        string runtimeDirectory = Path.Combine(_testDirectory, "runtime");
-        Directory.CreateDirectory(applicationDirectory);
-        Directory.CreateDirectory(runtimeDirectory);
-        await File.WriteAllTextAsync(
-            Path.Combine(applicationDirectory, "openclaw.mjs"),
-            "console.log('fixture');");
-        string archivePath = Path.Combine(
-            runtimeDirectory,
-            $"node-v24.15.0-win-{GetArchitectureName()}.zip");
-        await File.WriteAllTextAsync(archivePath, "fixture");
-        string? installedArchive = null;
-        bool launched = false;
-        using var output = new StringWriter();
-        using var error = new StringWriter();
-
-        HostStartup startup = new()
-        {
-            Entrypoint = HostEntrypoint.Agent,
-            CreateDiagnostics = () => HostDiagnosticLog.Create(
-                Path.Combine(_testDirectory, "logs", "openclaw.log")),
-            BaseDirectory = _testDirectory,
-            Output = output,
-            Error = error,
-            ReadEnvironmentVariable = name =>
-                name == OpenClaw.Launcher.Session.SessionRoutingPolicy.ModeVariable
-                    ? "0"
-                    : null,
-            InstallNodeRuntime = (archive, _) =>
-            {
-                installedArchive = archive;
-                return new NodeRuntime(
-                    Path.Combine(_testDirectory, "node.exe"),
-                    new Version(24, 15, 0),
-                    RuntimeInformation.ProcessArchitecture);
-            },
-            LaunchOpenClaw = (_, _, _, _, _, _) =>
-            {
-                launched = true;
-                return Task.FromResult(0);
-            }
-        };
-
-        int exitCode = await Program.RunAsync(["--help"], startup);
-
-        Assert.Equal(0, exitCode);
-        Assert.Equal(archivePath, installedArchive);
-        Assert.True(launched);
-    }
-
-    private static string GetArchitectureName() =>
-        RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? "arm64" : "x64";
 
     private HostStartup CreateStartup(
         string logPath,
@@ -193,12 +127,7 @@ public sealed class ProgramStartupTests : IDisposable
             CreateDiagnostics = () => HostDiagnosticLog.Create(logPath),
             BaseDirectory = _testDirectory,
             Output = output,
-            Error = error,
-            ResolveNode = _ => Task.FromResult(
-                new NodeRuntime(
-                    Path.Combine(_testDirectory, "node.exe"),
-                    new Version(24, 15, 0),
-                    RuntimeInformation.ProcessArchitecture))
+            Error = error
         };
 
     public void Dispose()

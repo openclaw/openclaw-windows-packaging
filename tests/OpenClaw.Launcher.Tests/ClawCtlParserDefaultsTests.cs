@@ -10,10 +10,6 @@ public sealed class ClawCtlParserDefaultsTests : IDisposable
 {
     private readonly string _testDirectory = TestDirectory.Create();
 
-    private static Task<NodeRuntime> FailIfSetupRuns(CancellationToken _) =>
-        throw new InvalidOperationException(
-            "Setup ran for an invocation that should not have started it.");
-
     private static async Task<(int ExitCode, string Output)> RunAsync(
         params string[] args)
     {
@@ -25,7 +21,7 @@ public sealed class ClawCtlParserDefaultsTests : IDisposable
             _ => { },
             output,
             TextWriter.Null,
-            FailIfSetupRuns).ConfigureAwait(false);
+            new FailIfWorkStartsLifecycle()).ConfigureAwait(false);
 
         return (exitCode, output.ToString());
     }
