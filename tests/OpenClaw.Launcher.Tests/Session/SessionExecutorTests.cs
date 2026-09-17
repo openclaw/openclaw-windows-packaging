@@ -37,7 +37,8 @@ public sealed class SessionExecutorTests : IDisposable
             arguments,
             @"C:\work");
 
-    private SessionExecutor Create() => new(_backend, _log.Add);
+    private SessionExecutor Create(Func<string>? createRequestId = null) =>
+        new(_backend, _log.Add, createRequestId: createRequestId);
 
     [Fact]
     public async Task IsolatedLaunchRetainsTheHostInteractiveEnvironment()
@@ -168,37 +169,36 @@ public sealed class SessionExecutorTests : IDisposable
     [Fact]
     public async Task CollectionRefusesAReparsePointResultOutsideTheWorkspace()
     {
-        string outside = TestDirectory.Create();
-        try
+        string collectionRoot = Path.Combine(Workspace, "collection");
+        string nestedWorkspace = Path.Combine(collectionRoot, "workspace");
+        string outsideTarget = Path.Combine(collectionRoot, "outside", "result.json");
+        Directory.CreateDirectory(nestedWorkspace);
+        Directory.CreateDirectory(Path.GetDirectoryName(outsideTarget)!);
+        await File.WriteAllTextAsync(outsideTarget, """{"requestId":"other"}""");
+        _backend.ExecuteBehavior = _ =>
         {
-            string target = Path.Combine(outside, "result.json");
-            await File.WriteAllTextAsync(target, """{"requestId":"other"}""");
-            _backend.ExecuteBehavior = _ =>
-            {
-                string requestPath = Directory.GetFiles(Workspace, "collect-*.json")
-                    .Single(path => !path.EndsWith(".result.json", StringComparison.Ordinal));
-                File.CreateSymbolicLink(
-                    SessionLaunchProtocol.ResultPathFor(requestPath),
-                    target);
-                return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
-            };
+            string requestPath = Path.Combine(
+                nestedWorkspace,
+                "collect-test-generation-reparse-test.json");
+            File.CreateSymbolicLink(
+                SessionLaunchProtocol.ResultPathFor(requestPath),
+                outsideTarget);
+            return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
+        };
 
-            SessionException exception = await Assert.ThrowsAsync<SessionException>(
-                () => Create().CollectAsync(
-                    Record(),
-                    @"C:\Package\session-host\x64\openclaw-session-host.exe",
-                    Path.Combine(Workspace, "staged"),
-                    [],
-                    [],
-                    CancellationToken.None));
+        SessionException exception = await Assert.ThrowsAsync<SessionException>(
+            () => Create(() => "reparse-test").CollectAsync(
+                Record(nestedWorkspace),
+                @"C:\Package\session-host\x64\openclaw-session-host.exe",
+                Path.Combine(nestedWorkspace, "staged"),
+                [],
+                [],
+                CancellationToken.None));
 
-            Assert.Contains("reparse", exception.Message, StringComparison.OrdinalIgnoreCase);
-        }
-        finally
-        {
-            Directory.Delete(outside, recursive: true);
-        }
-        Assert.Empty(Directory.GetFiles(Workspace));
+        Assert.Contains("reparse", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(Directory.GetFiles(nestedWorkspace));
+        Assert.Empty(Directory.GetFiles(nestedWorkspace, "*.result.json"));
+        Assert.True(File.Exists(outsideTarget));
     }
 
     [Fact]
