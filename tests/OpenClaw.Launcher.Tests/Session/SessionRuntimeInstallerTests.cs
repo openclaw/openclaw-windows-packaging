@@ -44,7 +44,11 @@ public sealed class SessionRuntimeInstallerTests : IDisposable
             }));
 
         int exitCode = SessionRuntimeInstaller.Run(
-            RequestPath, File.ReadAllText, File.WriteAllText, () => _root);
+            RequestPath,
+            File.ReadAllText,
+            File.WriteAllText,
+            () => _root,
+            getRuntimeVersion: ReadFixtureVersion);
         Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode, exitCode);
 
         return SessionRuntimeProtocol.ReadResult(
@@ -66,7 +70,8 @@ public sealed class SessionRuntimeInstallerTests : IDisposable
             RequestPath,
             File.ReadAllText,
             File.WriteAllText,
-            () => _root);
+            () => _root,
+            getRuntimeVersion: ReadFixtureVersion);
         Assert.Equal(0, exitCode);
 
         return SessionRuntimeProtocol.ReadResult(
@@ -83,6 +88,9 @@ public sealed class SessionRuntimeInstallerTests : IDisposable
         writer.Write(version);
         return archivePath;
     }
+
+    private static string? ReadFixtureVersion(string executablePath) =>
+        File.Exists(executablePath) ? File.ReadAllText(executablePath) : null;
 
     [Fact]
     public void ReinstallingIntoAnExistingAgentProfileReportsTheCurrentArchiveVersion()
@@ -126,7 +134,8 @@ public sealed class SessionRuntimeInstallerTests : IDisposable
             {
                 persistedDirectory = directory;
                 return true;
-            });
+            },
+            ReadFixtureVersion);
 
         Assert.Equal(0, exitCode);
         Assert.Equal(
@@ -153,6 +162,44 @@ public sealed class SessionRuntimeInstallerTests : IDisposable
 
         Assert.Equal(first.ExecutablePath, second.ExecutablePath);
         Assert.Equal("24.20.0", second.Version);
+    }
+
+    [Fact]
+    public void SameVersionInstallRepairsAnInvalidExistingNode()
+    {
+        string archivePath = CreateArchive("24.20.0");
+        SessionRuntimeInstallResult first = Install(archivePath);
+        File.WriteAllText(first.ExecutablePath!, "broken");
+
+        SessionRuntimeInstallResult second = Install(archivePath);
+
+        Assert.Equal(first.ExecutablePath, second.ExecutablePath);
+        Assert.Equal("24.20.0", File.ReadAllText(second.ExecutablePath!));
+    }
+
+    [Fact]
+    public void ProductionProbeRepairsAnUnlaunchableExistingNode()
+    {
+        string archivePath = CreateArchive("24.20.0");
+        SessionRuntimeInstallResult first = Install(archivePath);
+        File.WriteAllText(first.ExecutablePath!, "not an executable");
+        File.WriteAllText(
+            RequestPath,
+            SessionRuntimeProtocol.SerializeRequest(new SessionRuntimeInstallRequest
+            {
+                RequestId = "r1",
+                ArchivePath = archivePath,
+                UpdateUserPath = false
+            }));
+
+        int exitCode = SessionRuntimeInstaller.Run(
+            RequestPath,
+            File.ReadAllText,
+            File.WriteAllText,
+            () => _root);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("24.20.0", File.ReadAllText(first.ExecutablePath!));
     }
 
     // A truncated or corrupt archive is a real packaging failure. Left

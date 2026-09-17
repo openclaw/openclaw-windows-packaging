@@ -81,4 +81,34 @@ public sealed class SessionHelperStagerTests : IDisposable
             failure.Message,
             StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void CreatedFileRetainsDirectoryAuthorityUntilTheWriteCompletes()
+    {
+        string workspace = Path.Combine(_root, "workspace");
+        string stagingDirectory = Path.Combine(workspace, "staging");
+        string relocatedDirectory = Path.Combine(_root, "outside", "staging");
+        string destination = Path.Combine(stagingDirectory, "helper.exe");
+        Directory.CreateDirectory(workspace);
+        Directory.CreateDirectory(Path.GetDirectoryName(relocatedDirectory)!);
+        var record = new SessionRecord
+        {
+            SandboxId = "iso:test",
+            ApplicationId = "test",
+            WorkspacePath = workspace,
+            Generation = "generation"
+        };
+        using var operation = new SessionWorkspaceOperation(record, _ => true);
+        operation.EnsureDirectory(stagingDirectory);
+
+        using (Stream output = operation.CreateNew(destination))
+        {
+            _ = Assert.ThrowsAny<IOException>(
+                () => Directory.Move(stagingDirectory, relocatedDirectory));
+            output.Write("helper bytes"u8);
+        }
+
+        Assert.False(File.Exists(Path.Combine(relocatedDirectory, "helper.exe")));
+        Assert.Equal("helper bytes", File.ReadAllText(destination));
+    }
 }

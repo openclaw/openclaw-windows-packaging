@@ -190,6 +190,36 @@ public sealed class ProgramTests : IDisposable
     }
 
     [Fact]
+    public async Task AutomaticDirectRoutingValidatesExistingOwnershipFirst()
+    {
+        SessionRuntime runtime = await SetUpSessionAsync();
+        var directLaunches = new List<string>();
+        SessionRecord record = new SessionStateStore(_sessionStatePath!)
+            .Read(runtime.ApplicationId).Record!;
+        new SessionStateStore(_sessionStatePath!).Write(record with
+        {
+            SandboxId = SandboxIdFor("PFN:Some.Other.App_abc123")
+        });
+
+        SessionException failure = await Assert.ThrowsAsync<SessionException>(
+            () => Program.RunAgentAsync(
+                new HostOptions(null, null, ["--version"]),
+                _ => { },
+                _ => throw new InvalidOperationException("Host Node must not be resolved."),
+                (_, _, _, _, _, _) =>
+                {
+                    directLaunches.Add("direct");
+                    return Task.FromResult(0);
+                },
+                _ => runtime,
+                probeReadiness: _ => Task.FromResult(UnavailableReadiness()),
+                getPackageFamilyName: () => "OpenClaw.Gateway_test"));
+
+        Assert.Contains("Some.Other.App", failure.Message, StringComparison.Ordinal);
+        Assert.Empty(directLaunches);
+    }
+
+    [Fact]
     public async Task AgentRefusesSetupSessionMismatchWithoutHostFallback()
     {
         SessionRuntime runtime = await SetUpSessionAsync();
@@ -406,6 +436,17 @@ public sealed class ProgramTests : IDisposable
             $"{{\"appId\":\"{applicationId}\"}}"))
             .TrimEnd('=').Replace('+', '-').Replace('/', '_')}";
 
+    private static MxcReadinessReport UnavailableReadiness() =>
+        new(
+            RuntimeDirectory: null,
+            Provenance: null,
+            RuntimeUnavailableReason: "The runtime is unavailable.",
+            HostSupport: MxcHostSupport.Supported,
+            HostBuild: null,
+            SupportEvidence: MxcSupportEvidence.BackendProbe,
+            BackendProbe: new MxcBackendProbe(false, "base-container", []),
+            BackendProbeFailureReason: null);
+
     private static Task<int> RunAgentWithDirectLaunchProbeAsync(
         SessionRuntime runtime,
         List<string> directLaunches)
@@ -416,7 +457,7 @@ public sealed class ProgramTests : IDisposable
             new HostOptions(null, null, ["--version"]),
             _ => { },
             _ => throw new InvalidOperationException("Host Node must not be resolved."),
-            (_, _, _, _, _) =>
+            (_, _, _, _, _, _) =>
             {
                 directLaunches.Add("direct");
                 return Task.FromResult(0);

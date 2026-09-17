@@ -18,24 +18,16 @@ internal static class SessionHelperStager
     public static string Stage(string packagedHelperPath, string workspacePath)
     {
         string source = RequirePackagedHelper(packagedHelperPath);
-        var stagingRecord = new SessionRecord
-        {
-            SandboxId = "iso:helper-staging",
-            ApplicationId = "helper-staging",
-            WorkspacePath = workspacePath,
-            Generation = typeof(SessionHelperStager).Assembly
-                .GetName()
-                .Version?
-                .ToString() ?? "unknown"
-        };
-        using var operation = new SessionWorkspaceOperation(stagingRecord, _ => true);
+        using SessionWorkspaceOperation operation = CreateOperation(workspacePath);
         string destination = ResolveStagedPath(operation.WorkspacePath);
-        var sourceInfo = new FileInfo(source);
 
-        if (File.Exists(destination) &&
-            FilesMatch(source, destination, sourceInfo.Length))
+        if (File.Exists(destination))
         {
-            return destination;
+            using FileStream existing = operation.OpenRead(destination);
+            if (FilesMatch(source, existing))
+            {
+                return destination;
+            }
         }
 
         string? destinationDirectory = Path.GetDirectoryName(destination);
@@ -46,11 +38,12 @@ internal static class SessionHelperStager
         }
 
         operation.EnsureDirectory(destinationDirectory);
-        string temporaryPath = destination + $".{Guid.NewGuid():N}.tmp";
         try
         {
-            File.Copy(source, temporaryPath, overwrite: false);
-            File.Move(temporaryPath, destination, overwrite: true);
+            operation.Delete(destination);
+            using FileStream input = File.OpenRead(source);
+            using Stream output = operation.CreateNew(destination);
+            input.CopyTo(output);
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException)
@@ -60,10 +53,6 @@ internal static class SessionHelperStager
                 $"shared workspace: {exception.Message}",
                 exception);
         }
-        finally
-        {
-            TryDelete(temporaryPath);
-        }
 
         return destination;
     }
@@ -72,13 +61,26 @@ internal static class SessionHelperStager
         string packagedHelperPath,
         string workspacePath)
     {
-        _ = RequirePackagedHelper(packagedHelperPath);
-        string path = ResolveStagedPath(workspacePath);
-        return File.Exists(path)
-            ? path
-            : throw new SessionException(
+        string source = RequirePackagedHelper(packagedHelperPath);
+        try
+        {
+            using SessionWorkspaceOperation operation = CreateOperation(workspacePath);
+            string path = ResolveStagedPath(operation.WorkspacePath);
+            using FileStream staged = operation.OpenRead(path);
+            return FilesMatch(source, staged)
+                ? path
+                : throw new SessionException(
+                    "The isolated-session helper does not match this package version. " +
+                    "Run `clawctl setup` again.");
+        }
+        catch (Exception exception) when (
+            exception is FileNotFoundException or SessionException)
+        {
+            throw new SessionException(
                 "The isolated-session helper has not been staged for this " +
-                "package version. Run `clawctl setup` again.");
+                "package version. Run `clawctl setup` again.",
+                exception);
+        }
     }
 
     internal static string ResolveStagedPath(string workspacePath)
@@ -108,21 +110,24 @@ internal static class SessionHelperStager
                 $"The packaged session helper is missing: {path}");
     }
 
-    private static bool FilesMatch(string source, string destination, long sourceLength) =>
-        new FileInfo(destination).Length == sourceLength &&
+    private static SessionWorkspaceOperation CreateOperation(string workspacePath)
+    {
+        var stagingRecord = new SessionRecord
+        {
+            SandboxId = "iso:helper-staging",
+            ApplicationId = "helper-staging",
+            WorkspacePath = workspacePath,
+            Generation = typeof(SessionHelperStager).Assembly
+                .GetName()
+                .Version?
+                .ToString() ?? "unknown"
+        };
+        return new SessionWorkspaceOperation(stagingRecord, _ => true);
+    }
+
+    private static bool FilesMatch(string source, Stream destination) =>
+        new FileInfo(source).Length == destination.Length &&
         CryptographicOperations.FixedTimeEquals(
             SHA256.HashData(File.ReadAllBytes(source)),
-            SHA256.HashData(File.ReadAllBytes(destination)));
-
-    private static void TryDelete(string path)
-    {
-        try
-        {
-            File.Delete(path);
-        }
-        catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException)
-        {
-        }
-    }
+            SHA256.HashData(destination));
 }

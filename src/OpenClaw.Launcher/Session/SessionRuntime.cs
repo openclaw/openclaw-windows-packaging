@@ -191,6 +191,19 @@ internal sealed class SessionRuntime
         return session.Record;
     }
 
+    public void ValidateSavedOwnershipForHostFallback()
+    {
+        SetupStateResult setup = SetupState.Read(ApplicationId);
+        SessionStatus session = Coordinator.GetRecordedStatus();
+        if (setup.Fault == SetupStateFault.Missing &&
+            session.Availability == SessionAvailability.None)
+        {
+            return;
+        }
+
+        RequireSetup();
+    }
+
     /// <summary>
     /// Returns the Node.js executable extracted by the agent for the currently
     /// packaged runtime.

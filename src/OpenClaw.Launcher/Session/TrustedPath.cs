@@ -33,6 +33,77 @@ internal static partial class TrustedPath
         public void Dispose() => Handle.Dispose();
     }
 
+    private sealed class ProtectedDirectoryChain : IDisposable
+    {
+        private readonly List<ValidatedDirectory> _directories = [];
+
+        public ValidatedDirectory Leaf => _directories[^1];
+
+        public void Add(ValidatedDirectory directory) => _directories.Add(directory);
+
+        public void Dispose()
+        {
+            for (int index = _directories.Count - 1; index >= 0; index--)
+            {
+                _directories[index].Dispose();
+            }
+        }
+    }
+
+    private sealed class ProtectedStream(
+        FileStream stream,
+        ProtectedDirectoryChain directories) : Stream
+    {
+        public override bool CanRead => stream.CanRead;
+
+        public override bool CanSeek => stream.CanSeek;
+
+        public override bool CanWrite => stream.CanWrite;
+
+        public override long Length => stream.Length;
+
+        public override long Position
+        {
+            get => stream.Position;
+            set => stream.Position = value;
+        }
+
+        public override void Flush() => stream.Flush();
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            stream.Read(buffer, offset, count);
+
+        public override long Seek(long offset, SeekOrigin origin) =>
+            stream.Seek(offset, origin);
+
+        public override void SetLength(long value) => stream.SetLength(value);
+
+        public override void Write(byte[] buffer, int offset, int count) =>
+            stream.Write(buffer, offset, count);
+
+        public override ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default) =>
+            stream.WriteAsync(buffer, cancellationToken);
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                stream.Dispose();
+                directories.Dispose();
+            }
+
+            base.Dispose(disposing);
+        }
+
+        public override async ValueTask DisposeAsync()
+        {
+            await stream.DisposeAsync().ConfigureAwait(false);
+            directories.Dispose();
+            await base.DisposeAsync().ConfigureAwait(false);
+        }
+    }
     public static void EnsureNoReparsePoints(string trustedRoot, string candidatePath) =>
         EnsureNoReparsePoints(trustedRoot, candidatePath, File.GetAttributes);
 
@@ -114,10 +185,18 @@ internal static partial class TrustedPath
             IntPtr.Zero);
         if (handle.IsInvalid)
         {
+            int error = Marshal.GetLastWin32Error();
             handle.Dispose();
+            if (error is ErrorFileNotFound or ErrorPathNotFound)
+            {
+                throw new FileNotFoundException(
+                    $"The trusted file does not exist: {candidatePath}",
+                    candidatePath);
+            }
+
             throw new IOException(
                 $"The trusted file could not be opened: {candidatePath}",
-                new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()));
+                new System.ComponentModel.Win32Exception(error));
         }
 
         try
@@ -153,41 +232,66 @@ internal static partial class TrustedPath
         "Reliability",
         "CA2000:Dispose objects before losing scope",
         Justification = "The FileStream constructor takes ownership of the SafeFileHandle.")]
-    internal static FileStream CreateNew(ValidatedDirectory root, string candidatePath)
+    [SuppressMessage(
+        "Reliability",
+        "CA2000:Dispose objects before losing scope",
+        Justification = "The returned protected stream owns both the file and directory-chain handles.")]
+    internal static Stream CreateNew(ValidatedDirectory root, string candidatePath)
     {
         ArgumentNullException.ThrowIfNull(root);
-        ValidateParent(root, candidatePath);
-
-        SafeFileHandle handle = CreateFile(
-            candidatePath,
-            GenericWrite | FileReadAttributes,
-            0,
-            IntPtr.Zero,
-            CreateNewDisposition,
-            FileFlagOpenReparsePoint | FileFlagOverlapped,
-            IntPtr.Zero);
-        if (handle.IsInvalid)
+        string? parent = Path.GetDirectoryName(Path.GetFullPath(candidatePath));
+        if (string.IsNullOrWhiteSpace(parent))
         {
-            handle.Dispose();
-            throw new IOException(
-                $"The trusted file could not be created: {candidatePath}",
-                new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()));
+            throw new SessionException(
+                $"The trusted file path has no parent directory: {candidatePath}");
         }
+
+        ProtectedDirectoryChain protectedParent = ProtectDirectoryChain(
+            root,
+            parent,
+            createMissing: false);
 
         try
         {
-            if ((File.GetAttributes(handle) & FileAttributes.ReparsePoint) != 0 ||
-                !IsBelowRoot(root.FinalPath, NormalizePath(GetFinalPath(handle))))
-            {
-                throw new SessionException(
-                    $"The created file resolves outside its trusted root: {candidatePath}");
-            }
+            SafeFileHandle handle = CreateRelative(
+                protectedParent.Leaf.Handle,
+                Path.GetFileName(candidatePath),
+                GenericWrite | FileReadAttributes,
+                shareAccess: 0,
+                FileCreate,
+                FileNonDirectoryFile | FileOpenReparsePoint);
 
-            return new FileStream(handle, FileAccess.Write, bufferSize: 4096, isAsync: true);
+            FileStream? stream = null;
+            try
+            {
+                if ((File.GetAttributes(handle) & FileAttributes.ReparsePoint) != 0 ||
+                    !IsBelowRoot(root.FinalPath, NormalizePath(GetFinalPath(handle))))
+                {
+                    throw new SessionException(
+                        $"The created file resolves outside its trusted root: {candidatePath}");
+                }
+
+                stream = new FileStream(
+                    handle,
+                    FileAccess.Write,
+                    bufferSize: 4096,
+                    isAsync: true);
+                return new ProtectedStream(stream, protectedParent);
+            }
+            catch
+            {
+                stream?.Dispose();
+                if (stream is null)
+                {
+                    handle.Dispose();
+                }
+
+                throw;
+            }
         }
         catch
         {
-            handle.Dispose();
+            protectedParent.Dispose();
             throw;
         }
     }
@@ -209,23 +313,10 @@ internal static partial class TrustedPath
                 $"The directory resolves outside its trusted root: {target}");
         }
 
-        string current = root.FinalPath;
-        foreach (string segment in relative.Split(
-            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-            StringSplitOptions.RemoveEmptyEntries))
-        {
-            current = Path.Combine(current, segment);
-            Directory.CreateDirectory(current);
-            using ValidatedDirectory directory = TryOpenValidatedDirectory(
-                current,
-                expectedIdentity: null) ?? throw new SessionException(
-                    $"The directory resolves outside its trusted root: {current}");
-            if (!IsBelowOrEqualRoot(root.FinalPath, directory.FinalPath))
-            {
-                throw new SessionException(
-                    $"The directory resolves outside its trusted root: {current}");
-            }
-        }
+        using ProtectedDirectoryChain protectedDirectories = ProtectDirectoryChain(
+            root,
+            target,
+            createMissing: true);
     }
 
     internal static FileIdentity? TryGetDirectoryIdentity(string path)
@@ -240,8 +331,8 @@ internal static partial class TrustedPath
     {
         SafeFileHandle handle = CreateFile(
             path,
-            Delete | FileReadAttributes,
-            FileShareRead | FileShareWrite | FileShareDelete,
+            GenericRead | FileReadAttributes,
+            FileShareRead | FileShareWrite,
             IntPtr.Zero,
             OpenExisting,
             FileFlagBackupSemantics | FileFlagOpenReparsePoint,
@@ -276,17 +367,164 @@ internal static partial class TrustedPath
         }
     }
 
+    [SuppressMessage(
+        "Reliability",
+        "CA2000:Dispose objects before losing scope",
+        Justification = "The relative handle is immediately owned by the using statement below.")]
     internal static bool TryDeleteOwnedEntry(
         ValidatedDirectory root,
         string candidatePath,
         bool deleteReparsePointLeaf = false)
     {
-        ValidateParent(root, candidatePath);
+        string? parent = Path.GetDirectoryName(Path.GetFullPath(candidatePath));
+        if (string.IsNullOrWhiteSpace(parent))
+        {
+            return false;
+        }
 
+        using ProtectedDirectoryChain protectedParent = ProtectDirectoryChain(
+            root,
+            parent,
+            createMissing: false);
+
+        string name = Path.GetFileName(candidatePath);
+        SafeFileHandle handle;
+        try
+        {
+            handle = CreateRelative(
+                protectedParent.Leaf.Handle,
+                name,
+                GenericRead | FileReadAttributes,
+                FileShareRead | FileShareWrite,
+                FileOpen,
+                FileOpenReparsePoint);
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+
+        FileAttributes attributes;
+        using (handle)
+        {
+            attributes = File.GetAttributes(handle);
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                if (!deleteReparsePointLeaf)
+                {
+                    return false;
+                }
+            }
+            else if (!IsBelowRoot(root.FinalPath, NormalizePath(GetFinalPath(handle))))
+            {
+                return false;
+            }
+
+            if ((attributes & FileAttributes.Directory) != 0 &&
+                (attributes & FileAttributes.ReparsePoint) == 0)
+            {
+                foreach (string child in Directory.EnumerateFileSystemEntries(candidatePath))
+                {
+                    TryDeleteOwnedEntry(root, child, deleteReparsePointLeaf);
+                }
+            }
+        }
+
+        try
+        {
+            using SafeFileHandle deleteHandle = CreateRelative(
+                protectedParent.Leaf.Handle,
+                name,
+                Delete | FileReadAttributes,
+                FileShareRead | FileShareWrite | FileShareDelete,
+                FileOpen,
+                FileOpenReparsePoint);
+            return MarkForDeletion(deleteHandle);
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
+    [SuppressMessage(
+        "Reliability",
+        "CA2000:Dispose objects before losing scope",
+        Justification = "Each validated directory is transferred to the returned chain.")]
+    private static ProtectedDirectoryChain ProtectDirectoryChain(
+        ValidatedDirectory root,
+        string directoryPath,
+        bool createMissing)
+    {
+        string target = Path.GetFullPath(directoryPath);
+        string relative = Path.GetRelativePath(root.FinalPath, target);
+        if (relative.StartsWith("..", StringComparison.Ordinal) ||
+            Path.IsPathRooted(relative))
+        {
+            throw new SessionException(
+                $"The directory resolves outside its trusted root: {target}");
+        }
+
+        ProtectedDirectoryChain chain = ProtectRoot(root);
+        try
+        {
+            if (relative == ".")
+            {
+                return chain;
+            }
+
+            string current = root.FinalPath;
+            foreach (string segment in relative.Split(
+                [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                StringSplitOptions.RemoveEmptyEntries))
+            {
+                current = Path.Combine(current, segment);
+                ValidatedDirectory directory = OpenRelativeDirectory(
+                    chain.Leaf.Handle,
+                    segment,
+                    createMissing);
+                if (!IsBelowOrEqualRoot(root.FinalPath, directory.FinalPath))
+                {
+                    directory.Dispose();
+                    throw new SessionException(
+                        $"The directory resolves outside its trusted root: {current}");
+                }
+
+                chain.Add(directory);
+            }
+
+            return chain;
+        }
+        catch
+        {
+            chain.Dispose();
+            throw;
+        }
+    }
+
+    [SuppressMessage(
+        "Reliability",
+        "CA2000:Dispose objects before losing scope",
+        Justification = "The returned chain owns the validated root directory.")]
+    private static ProtectedDirectoryChain ProtectRoot(ValidatedDirectory root)
+    {
+        var chain = new ProtectedDirectoryChain();
+        ValidatedDirectory protectedRoot = TryOpenProtectedDirectory(
+            root.FinalPath,
+            root.Identity) ?? throw new SessionException(
+                $"The trusted root changed before the host operation: {root.FinalPath}");
+        chain.Add(protectedRoot);
+        return chain;
+    }
+
+    private static ValidatedDirectory? TryOpenProtectedDirectory(
+        string path,
+        FileIdentity? expectedIdentity)
+    {
         SafeFileHandle handle = CreateFile(
-            candidatePath,
-            Delete | FileReadAttributes,
-            FileShareRead | FileShareWrite | FileShareDelete,
+            path,
+            GenericRead | FileReadAttributes,
+            FileShareRead | FileShareWrite,
             IntPtr.Zero,
             OpenExisting,
             FileFlagBackupSemantics | FileFlagOpenReparsePoint,
@@ -294,50 +532,126 @@ internal static partial class TrustedPath
         if (handle.IsInvalid)
         {
             handle.Dispose();
-            return false;
+            return null;
         }
 
-        using (handle)
+        try
         {
-            FileAttributes attributes = File.GetAttributes(handle);
-            if ((attributes & FileAttributes.ReparsePoint) != 0)
+            if ((File.GetAttributes(handle) & FileAttributes.ReparsePoint) != 0)
             {
-                return deleteReparsePointLeaf && MarkForDeletion(handle);
+                handle.Dispose();
+                return null;
             }
 
-            if (!IsBelowRoot(root.FinalPath, NormalizePath(GetFinalPath(handle))))
+            FileIdentity identity = GetIdentity(handle);
+            if (expectedIdentity is not null && identity != expectedIdentity)
             {
-                return false;
+                handle.Dispose();
+                return null;
             }
 
-            if ((attributes & FileAttributes.Directory) != 0)
-            {
-                foreach (string child in Directory.EnumerateFileSystemEntries(candidatePath))
-                {
-                    TryDeleteOwnedEntry(root, child, deleteReparsePointLeaf);
-                }
-            }
-
-            return MarkForDeletion(handle);
+            return new ValidatedDirectory(handle, identity, NormalizePath(GetFinalPath(handle)));
+        }
+        catch
+        {
+            handle.Dispose();
+            throw;
         }
     }
 
-    private static void ValidateParent(ValidatedDirectory root, string candidatePath)
+    private static ValidatedDirectory OpenRelativeDirectory(
+        SafeFileHandle parent,
+        string name,
+        bool createMissing)
     {
-        string? parent = Path.GetDirectoryName(Path.GetFullPath(candidatePath));
-        if (string.IsNullOrWhiteSpace(parent))
+        SafeFileHandle handle = CreateRelative(
+            parent,
+            name,
+            GenericRead | FileReadAttributes,
+            FileShareRead | FileShareWrite,
+            createMissing ? FileOpenIf : FileOpen,
+            FileDirectoryFile | FileOpenReparsePoint);
+        try
         {
-            throw new SessionException(
-                $"The trusted file path has no parent directory: {candidatePath}");
-        }
+            if ((File.GetAttributes(handle) & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new SessionException(
+                    $"The directory contains a reparse point: {name}");
+            }
 
-        using ValidatedDirectory directory = TryOpenValidatedDirectory(parent, expectedIdentity: null)
-            ?? throw new SessionException(
-                $"The trusted file parent resolves outside its trusted root: {parent}");
-        if (!IsBelowOrEqualRoot(root.FinalPath, directory.FinalPath))
+            return new ValidatedDirectory(
+                handle,
+                GetIdentity(handle),
+                NormalizePath(GetFinalPath(handle)));
+        }
+        catch
         {
-            throw new SessionException(
-                $"The trusted file parent resolves outside its trusted root: {parent}");
+            handle.Dispose();
+            throw;
+        }
+    }
+
+    private static SafeFileHandle CreateRelative(
+        SafeFileHandle parent,
+        string name,
+        uint desiredAccess,
+        uint shareAccess,
+        uint createDisposition,
+        uint createOptions)
+    {
+        IntPtr nameBuffer = Marshal.StringToHGlobalUni(name);
+        try
+        {
+            var unicodeName = new UnicodeString
+            {
+                Length = checked((ushort)(name.Length * sizeof(char))),
+                MaximumLength = checked((ushort)((name.Length + 1) * sizeof(char))),
+                Buffer = nameBuffer
+            };
+            IntPtr unicodeNamePointer = Marshal.AllocHGlobal(
+                Marshal.SizeOf<UnicodeString>());
+            try
+            {
+                Marshal.StructureToPtr(unicodeName, unicodeNamePointer, fDeleteOld: false);
+                var attributes = new ObjectAttributes
+                {
+                    Length = Marshal.SizeOf<ObjectAttributes>(),
+                    RootDirectory = parent.DangerousGetHandle(),
+                    ObjectName = unicodeNamePointer,
+                    Attributes = ObjectCaseInsensitive
+                };
+                uint status = NtCreateFile(
+                    out SafeFileHandle handle,
+                    desiredAccess,
+                    ref attributes,
+                    out _,
+                    IntPtr.Zero,
+                    FileAttributeNormal,
+                    shareAccess,
+                    createDisposition,
+                    createOptions,
+                    IntPtr.Zero,
+                    0);
+                GC.KeepAlive(parent);
+                if (unchecked((int)status) < 0)
+                {
+                    handle.Dispose();
+                    int error = checked((int)RtlNtStatusToDosError(status));
+                    throw new IOException(
+                        $"The trusted relative path could not be opened: {name}",
+                        new System.ComponentModel.Win32Exception(error));
+                }
+
+                return handle;
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(unicodeNamePointer);
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(nameBuffer);
         }
     }
 
@@ -410,11 +724,19 @@ internal static partial class TrustedPath
     private const uint FileShareRead = 0x00000001;
     private const uint FileShareWrite = 0x00000002;
     private const uint FileShareDelete = 0x00000004;
+    private const int ErrorFileNotFound = 2;
+    private const int ErrorPathNotFound = 3;
     private const uint OpenExisting = 3;
-    private const uint CreateNewDisposition = 1;
+    private const uint FileAttributeNormal = 0x00000080;
+    private const uint FileOpen = 1;
+    private const uint FileCreate = 2;
+    private const uint FileOpenIf = 3;
+    private const uint FileDirectoryFile = 0x00000001;
+    private const uint FileNonDirectoryFile = 0x00000040;
+    private const uint FileOpenReparsePoint = 0x00200000;
+    private const uint ObjectCaseInsensitive = 0x00000040;
     private const uint FileFlagBackupSemantics = 0x02000000;
     private const uint FileFlagOpenReparsePoint = 0x00200000;
-    private const uint FileFlagOverlapped = 0x40000000;
     private const int FileDispositionInfo = 4;
 
     [StructLayout(LayoutKind.Sequential)]
@@ -442,6 +764,32 @@ internal static partial class TrustedPath
         public uint FileIndexLow;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct UnicodeString
+    {
+        public ushort Length;
+        public ushort MaximumLength;
+        public IntPtr Buffer;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ObjectAttributes
+    {
+        public int Length;
+        public IntPtr RootDirectory;
+        public IntPtr ObjectName;
+        public uint Attributes;
+        public IntPtr SecurityDescriptor;
+        public IntPtr SecurityQualityOfService;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IoStatusBlock
+    {
+        public IntPtr Status;
+        public nuint Information;
+    }
+
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern SafeFileHandle CreateFile(
         string fileName,
@@ -451,6 +799,23 @@ internal static partial class TrustedPath
         uint creationDisposition,
         uint flagsAndAttributes,
         IntPtr templateFile);
+
+    [DllImport("ntdll.dll")]
+    private static extern uint NtCreateFile(
+        out SafeFileHandle fileHandle,
+        uint desiredAccess,
+        ref ObjectAttributes objectAttributes,
+        out IoStatusBlock ioStatusBlock,
+        IntPtr allocationSize,
+        uint fileAttributes,
+        uint shareAccess,
+        uint createDisposition,
+        uint createOptions,
+        IntPtr eaBuffer,
+        uint eaLength);
+
+    [DllImport("ntdll.dll")]
+    private static extern uint RtlNtStatusToDosError(uint status);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern uint GetFinalPathNameByHandle(

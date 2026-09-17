@@ -157,7 +157,9 @@ internal static class Program
         Func<CancellationToken, Task<NodeRuntime>> resolveNode,
         LaunchOpenClawAsync launchOpenClaw,
         Func<Action<string>, Session.SessionRuntime>? createSessionRuntime = null,
-        Func<bool>? isInteractive = null)
+        Func<bool>? isInteractive = null,
+        Func<CancellationToken, Task<Mxc.MxcReadinessReport>>? probeReadiness = null,
+        Func<string?>? getPackageFamilyName = null)
     {
         Session.SessionMode mode = Session.SessionRoutingPolicy.ReadMode(
             Environment.GetEnvironmentVariable);
@@ -166,11 +168,34 @@ internal static class Program
             return await RunDirectAsync().ConfigureAwait(false);
         }
 
-        Session.SessionRuntime runtime;
+        Session.SessionRuntime? runtime = null;
+        if (createSessionRuntime is null || probeReadiness is not null)
+        {
+            Mxc.MxcReadinessReport readiness = await (probeReadiness ??
+                Mxc.MxcReadiness.ProbeAsync)(CancellationToken.None).ConfigureAwait(false);
+            string? packageFamilyName =
+                (getPackageFamilyName ?? (() => HostPaths.Create().PackageFamilyName))();
+            Session.SessionRoutingDecision routing = Session.SessionRoutingPolicy.Decide(
+                mode,
+                packageFamilyName,
+                readiness);
+            log(routing.Reason);
+            if (routing.Routing == Session.SessionRouting.Direct)
+            {
+                if (packageFamilyName is not null)
+                {
+                    runtime = (createSessionRuntime ?? Session.SessionRuntime.Create)(log);
+                    runtime.ValidateSavedOwnershipForHostFallback();
+                }
+
+                return await RunDirectAsync().ConfigureAwait(false);
+            }
+        }
+
         Session.SessionRecord record;
         try
         {
-            runtime = (createSessionRuntime ?? Session.SessionRuntime.Create)(log);
+            runtime ??= (createSessionRuntime ?? Session.SessionRuntime.Create)(log);
             record = await runtime.StartForExecutionAsync(CancellationToken.None)
                 .ConfigureAwait(false);
         }
@@ -303,6 +328,11 @@ internal static class Program
                         .Coordinator.GetRecordedStatus();
                     await output.WriteLineAsync(status.Availability.ToString())
                         .ConfigureAwait(false);
+                    if (!string.IsNullOrWhiteSpace(status.Detail))
+                    {
+                        await output.WriteLineAsync(status.Detail)
+                            .ConfigureAwait(false);
+                    }
                     return 0;
                 },
                 Teardown = async (force, cancellationToken) =>

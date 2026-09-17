@@ -1,4 +1,6 @@
 using System.IO.Compression;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using Microsoft.Win32;
 using OpenClaw.SessionProtocol;
 
@@ -22,12 +24,16 @@ namespace OpenClaw.SessionHost;
 /// </remarks>
 internal static class SessionRuntimeInstaller
 {
+    private static readonly Guid LocalApplicationDataFolderId =
+        new("F1B32785-6FBA-4FCF-9D55-7B8E7F157091");
+
     public static int Run(
         string requestPath,
         Func<string, string> readFile,
         Action<string, string> writeFile,
         Func<string>? getLocalApplicationData = null,
-        Func<string, bool>? tryPrependUserPath = null)
+        Func<string, bool>? tryPrependUserPath = null,
+        Func<string, string?>? getRuntimeVersion = null)
     {
         string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
         string? requestId = null;
@@ -40,8 +46,7 @@ internal static class SessionRuntimeInstaller
 
             string directory = Path.Combine(
                 (getLocalApplicationData ??
-                    (() => Environment.GetFolderPath(
-                        Environment.SpecialFolder.LocalApplicationData)))(),
+                    GetLocalApplicationData)(),
                 "OpenClawGatewayMSIX",
                 "agent-node");
             string archiveRoot = Path.GetFileNameWithoutExtension(request.ArchivePath!);
@@ -49,7 +54,12 @@ internal static class SessionRuntimeInstaller
                 directory,
                 archiveRoot,
                 "node.exe");
-            if (!File.Exists(executablePath))
+            string expectedVersion = GetArchiveVersion(request.ArchivePath!);
+            if (!File.Exists(executablePath) ||
+                !string.Equals(
+                    (getRuntimeVersion ?? ReadRuntimeVersion)(executablePath),
+                    expectedVersion,
+                    StringComparison.Ordinal))
             {
                 string stagingDirectory = Path.Combine(
                     directory,
@@ -100,7 +110,7 @@ internal static class SessionRuntimeInstaller
                 {
                     RequestId = requestId,
                     ExecutablePath = executablePath,
-                    Version = GetArchiveVersion(request.ArchivePath!),
+                    Version = expectedVersion,
                     ArchiveName = Path.GetFileName(request.ArchivePath!),
                     UserPathUpdated = pathUpdated
                 }));
@@ -138,6 +148,64 @@ internal static class SessionRuntimeInstaller
             ? parsed.ToString()
             : throw new SessionLaunchException(
                 $"The packaged Node.js runtime archive has an invalid version: {archiveName}");
+    }
+
+    private static string GetLocalApplicationData()
+    {
+        int result = SHGetKnownFolderPath(
+            LocalApplicationDataFolderId,
+            flags: 0,
+            token: IntPtr.Zero,
+            out IntPtr path);
+        if (result < 0)
+        {
+            throw new SessionLaunchException(
+                $"Windows could not resolve the local application data directory " +
+                $"(HRESULT 0x{result:X8}).");
+        }
+
+        try
+        {
+            return Marshal.PtrToStringUni(path)
+                ?? throw new SessionLaunchException(
+                    "Windows returned an empty local application data directory.");
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(path);
+        }
+    }
+
+    private static string? ReadRuntimeVersion(string executablePath)
+    {
+        try
+        {
+            using Process? process = Process.Start(new ProcessStartInfo
+            {
+                FileName = executablePath,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                ArgumentList = { "--version" }
+            });
+            if (process is null || !process.WaitForExit(TimeSpan.FromSeconds(10)))
+            {
+                process?.Kill(entireProcessTree: true);
+                return null;
+            }
+
+            string output = process.StandardOutput.ReadToEnd().Trim();
+            return process.ExitCode == 0
+                ? output.TrimStart('v')
+                : null;
+        }
+        catch (Exception exception) when (
+            exception is System.ComponentModel.Win32Exception or
+            InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -262,4 +330,11 @@ internal static class SessionRuntimeInstaller
         {
         }
     }
+
+    [DllImport("shell32.dll")]
+    private static extern int SHGetKnownFolderPath(
+        in Guid folderId,
+        uint flags,
+        IntPtr token,
+        out IntPtr path);
 }

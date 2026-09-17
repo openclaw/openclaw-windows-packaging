@@ -43,7 +43,15 @@ internal sealed class SessionWorkspaceOperation : IDisposable
         _workspace = TrustedPath.TryOpenValidatedDirectory(record.WorkspacePath, expectedIdentity: null)
             ?? throw new SessionException(
                 $"The recorded shared workspace could not be opened safely: {record.WorkspacePath}");
-        EnsureCurrent();
+        try
+        {
+            EnsureCurrent();
+        }
+        catch
+        {
+            _workspace.Dispose();
+            throw;
+        }
     }
 
     public string WorkspacePath => _workspace.FinalPath;
@@ -69,7 +77,7 @@ internal sealed class SessionWorkspaceOperation : IDisposable
         CancellationToken cancellationToken)
     {
         EnsureCurrent();
-        using FileStream stream = TrustedPath.CreateNew(_workspace, path);
+        using Stream stream = TrustedPath.CreateNew(_workspace, path);
         byte[] bytes = Encoding.UTF8.GetBytes(text);
         await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
     }
@@ -78,10 +86,21 @@ internal sealed class SessionWorkspaceOperation : IDisposable
         string path,
         CancellationToken cancellationToken)
     {
-        EnsureCurrent();
-        using FileStream stream = TrustedPath.OpenRead(WorkspacePath, path);
+        using FileStream stream = OpenRead(path);
         using var reader = new StreamReader(stream, Encoding.UTF8);
         return await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public FileStream OpenRead(string path)
+    {
+        EnsureCurrent();
+        return TrustedPath.OpenRead(WorkspacePath, path);
+    }
+
+    public Stream CreateNew(string path)
+    {
+        EnsureCurrent();
+        return TrustedPath.CreateNew(_workspace, path);
     }
 
     public void EnsureDirectory(string path)
@@ -92,6 +111,7 @@ internal sealed class SessionWorkspaceOperation : IDisposable
 
     public void Delete(string path)
     {
+        EnsureCurrent();
         try
         {
             _ = TrustedPath.TryDeleteOwnedEntry(
