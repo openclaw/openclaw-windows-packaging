@@ -247,13 +247,22 @@ try {
             -LiteralPath $validationConfigPath `
             -Raw |
             ConvertFrom-Json
-        $validationEntryNames = @(
-            $validationConfig.plugins.entries.PSObject.Properties.Name
+        $explicitlyEnabledEntryNames = @(
+            foreach (
+                $entry in
+                $validationConfig.plugins.entries.PSObject.Properties
+            ) {
+                if (
+                    $entry.Value.PSObject.Properties.Name -contains 'enabled' -and
+                    $entry.Value.enabled -eq $true
+                ) {
+                    $entry.Name
+                }
+            }
         )
         if (
-            $validationEntryNames.Count -ne 1 -or
-            $validationEntryNames[0] -ne 'gateway-isolation' -or
-            $validationConfig.plugins.entries.'gateway-isolation'.enabled -ne $true
+            $explicitlyEnabledEntryNames.Count -ne 1 -or
+            $explicitlyEnabledEntryNames[0] -ne 'gateway-isolation'
         ) {
             throw (
                 'The isolated validation configuration must explicitly enable ' +

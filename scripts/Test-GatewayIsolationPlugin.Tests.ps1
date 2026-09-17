@@ -89,6 +89,20 @@ if (args[0] === "plugins" && args[1] === "enable") {
         entries: {
           "gateway-isolation": {
             enabled: true
+          },
+          anthropic: {
+            config: {
+              sessionCatalog: {
+                enabled: false
+              }
+            }
+          },
+          codex: {
+            config: {
+              sessionCatalog: {
+                enabled: false
+              }
+            }
           }
         }
       }
