@@ -421,7 +421,7 @@ try {
     New-TestArtifact `
         -Root $testRoot `
         -Architecture x64 `
-        -PayloadPackageVersion '2026.9.4'
+        -PayloadPackageVersion '2026.9.3'
     New-TestArtifact -Root $testRoot -Architecture arm64
     Assert-Fails `
         -MessagePattern 'metadata is not eligible' `
