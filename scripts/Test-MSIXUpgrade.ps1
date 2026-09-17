@@ -194,7 +194,7 @@ if (@(Get-GatewayPackages).Count -ne 0) {
 
 $certificate = Import-Certificate `
     -FilePath $resolvedCertificatePath `
-    -CertStoreLocation 'Cert:\CurrentUser\TrustedPeople'
+    -CertStoreLocation 'Cert:\LocalMachine\TrustedPeople'
 $results = [Collections.Generic.List[object]]::new()
 $freshInstall = $null
 
@@ -329,7 +329,7 @@ finally {
     Remove-TestPackage
     if ($null -ne $certificate) {
         Remove-Item `
-            -LiteralPath "Cert:\CurrentUser\TrustedPeople\$($certificate.Thumbprint)" `
+            -LiteralPath "Cert:\LocalMachine\TrustedPeople\$($certificate.Thumbprint)" `
             -Force `
             -ErrorAction SilentlyContinue
     }

@@ -346,9 +346,12 @@ verify that the package family remains stable and a LocalState marker is
 retained. The gate also proves fresh installation of both the standalone and
 bundle candidates. It refuses to run when an OpenClaw Gateway package is
 already registered and removes only packages installed by that test
-invocation. The resulting JSON evidence is retained as a workflow artifact for
-90 days. Future versioning schemes must keep this transition gate green or
-explicitly document and obtain approval for a breaking reset.
+invocation. It temporarily trusts the ephemeral test-signing certificate in
+the local-machine Trusted People store, as required by Windows deployment, and
+removes that certificate in `finally`. The resulting JSON evidence is retained
+as a workflow artifact for 90 days. Future versioning schemes must keep this
+transition gate green or explicitly document and obtain approval for a
+breaking reset.
 
 An `.msixbundle` is a single installable container for the x64 and ARM64 MSIX
 packages; Windows selects the package appropriate for the device. An
