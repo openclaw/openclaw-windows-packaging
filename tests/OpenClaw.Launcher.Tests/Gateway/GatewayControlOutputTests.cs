@@ -45,6 +45,8 @@ public sealed class GatewayControlOutputTests : IDisposable
         Assert.DoesNotContain($"line 1{Environment.NewLine}", rendered, StringComparison.Ordinal);
         Assert.Contains("line 3", rendered, StringComparison.Ordinal);
         Assert.Contains("final line", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("31m", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("0m", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain('\u001b', rendered);
         Assert.DoesNotContain('\u0001', rendered);
     }

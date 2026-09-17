@@ -243,6 +243,43 @@ public sealed class ProgramTests : IDisposable
     }
 
     [Fact]
+    public async Task AutomaticHostFallbackDoesNotCreateASessionRuntimeWithoutPackageIdentity()
+    {
+        string applicationDirectory = Path.Combine(_testDirectory, "unpackaged-app");
+        Directory.CreateDirectory(applicationDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(applicationDirectory, "openclaw.mjs"),
+            "fixture").ConfigureAwait(true);
+        bool runtimeCreated = false;
+
+        int exitCode = await Program.RunAgentAsync(
+            new HostOptions(applicationDirectory, null, ["--version"]),
+            _ => { },
+            _ => Task.FromResult(new NodeRuntime(
+                "node.exe",
+                new Version(24, 0),
+                System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture)),
+            (_, _, _, _, _, _) => Task.FromResult(17),
+            createSessionRuntime: _ =>
+            {
+                runtimeCreated = true;
+                return CreateSessionRuntime();
+            },
+            probeReadiness: _ => Task.FromResult(new MxcReadinessReport(
+                null,
+                null,
+                "backend unavailable",
+                MxcHostSupport.Unsupported,
+                null,
+                MxcSupportEvidence.HostBuild)),
+            getPackageFamilyName: () => null,
+            readEnvironmentVariable: _ => null);
+
+        Assert.False(runtimeCreated);
+        Assert.Equal(17, exitCode);
+    }
+
+    [Fact]
     public void SavedSessionWithoutSetupExplainsTheRequiredRecoveryCommand()
     {
         SessionRuntime runtime = CreateSessionRuntime();
@@ -847,7 +884,7 @@ public sealed class ProgramTests : IDisposable
                     new Version(24, 0),
                     System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture));
             },
-            (_, _, _, _, _) =>
+            (_, _, _, _, _, _) =>
             {
                 launchedHost = true;
                 return Task.FromResult(17);
@@ -887,7 +924,7 @@ public sealed class ProgramTests : IDisposable
                     new Version(24, 0),
                     System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture));
             },
-            (_, _, _, _, _) => Task.FromResult(0),
+            (_, _, _, _, _, _) => Task.FromResult(0),
             probeReadiness: _ => Task.FromResult(new MxcReadinessReport(
                 "runtime",
                 null,
@@ -922,7 +959,7 @@ public sealed class ProgramTests : IDisposable
                     new Version(24, 0),
                     System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture));
             },
-            (_, _, _, _, _) =>
+            (_, _, _, _, _, _) =>
             {
                 launchedHost = true;
                 return Task.FromResult(0);
@@ -1147,16 +1184,6 @@ public sealed class ProgramTests : IDisposable
             getPackageFamilyName: () => "OpenClaw.Gateway_test");
     }
 
-    private HostOptions CreateAgentOptions()
-    {
-        string applicationDirectory = Path.Combine(_testDirectory, "agent-app");
-        Directory.CreateDirectory(applicationDirectory);
-        File.WriteAllText(
-            Path.Combine(applicationDirectory, "openclaw.mjs"),
-            "console.log('fixture');");
-        return new HostOptions(applicationDirectory, null, ["--version"]);
-    }
-
     private static void WriteRuntimeInstallResult(FakeMxcSessionClient backend, int exitCode)
     {
         string requestPath = Directory.GetFiles(backend.Metadata!.EphemeralWorkspacePath, "runtime-*.json")
@@ -1173,6 +1200,16 @@ public sealed class ProgramTests : IDisposable
                 ArchiveName = "node-v24.20.0-win-x64.zip",
                 Error = exitCode == 0 ? null : "installer failed"
             }));
+    }
+
+    private HostOptions CreateAgentOptions()
+    {
+        string applicationDirectory = Path.Combine(_testDirectory, "agent-app");
+        Directory.CreateDirectory(applicationDirectory);
+        File.WriteAllText(
+            Path.Combine(applicationDirectory, "openclaw.mjs"),
+            "console.log('fixture');");
+        return new HostOptions(applicationDirectory, null, ["--version"]);
     }
 
     private async Task<string> CreateApplicationAsync()
@@ -1315,6 +1352,7 @@ public sealed class ProgramTests : IDisposable
             Cleared = true;
             Cleanup?.Invoke();
         }
+
     }
 
     private sealed class RecordingLockHandle : ISessionLockHandle

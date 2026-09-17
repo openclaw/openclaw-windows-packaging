@@ -109,14 +109,22 @@ internal static class GatewayControlOutput
     private static string Sanitize(string value)
     {
         StringBuilder builder = new(value.Length);
-        bool inEscapeSequence = false;
+        bool afterEscape = false;
+        bool inControlSequence = false;
         foreach (char character in value)
         {
-            if (inEscapeSequence)
+            if (afterEscape)
+            {
+                inControlSequence = character == '[';
+                afterEscape = false;
+                continue;
+            }
+
+            if (inControlSequence)
             {
                 if (character is >= '@' and <= '~')
                 {
-                    inEscapeSequence = false;
+                    inControlSequence = false;
                 }
 
                 continue;
@@ -124,7 +132,7 @@ internal static class GatewayControlOutput
 
             if (character == '\x1b')
             {
-                inEscapeSequence = true;
+                afterEscape = true;
             }
             else if (!char.IsControl(character))
             {

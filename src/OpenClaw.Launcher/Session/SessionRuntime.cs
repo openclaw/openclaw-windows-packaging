@@ -202,19 +202,6 @@ internal sealed class SessionRuntime
         return session.Record;
     }
 
-    public void ValidateSavedOwnershipForHostFallback()
-    {
-        SetupStateResult setup = SetupState.Read(ApplicationId);
-        SessionStatus session = Coordinator.GetRecordedStatus();
-        if (setup.Fault == SetupStateFault.Missing &&
-            session.Availability == SessionAvailability.None)
-        {
-            return;
-        }
-
-        RequireSetup();
-    }
-
     /// <summary>
     /// Validates local ownership before automatic host fallback.
     /// </summary>
@@ -238,7 +225,8 @@ internal sealed class SessionRuntime
         if (session.Record is null)
         {
             throw new SessionException(
-                session.Detail ?? "The saved isolated-session record could not be used.");
+                $"{session.Detail ?? "The saved isolated-session record could not be used."} " +
+                "Run `clawctl setup` to repair it.");
         }
 
         if (setup.Record is null)
