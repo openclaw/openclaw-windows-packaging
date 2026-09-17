@@ -57,6 +57,7 @@ try {
     & $scriptPath `
         -PackageDirectory $testRoot `
         -ExpectedCommit $commit `
+        -ExpectedVersion '1.2.3' `
         -RequestedRef 'current-ref'
     $verified = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
     if ($verified.requestedRef -cne 'current-ref') {
@@ -68,6 +69,7 @@ try {
         & $scriptPath `
             -PackageDirectory $testRoot `
             -ExpectedCommit $commit `
+            -ExpectedVersion '1.2.3' `
             -RequestedRef 'current-ref'
     }
 
@@ -82,6 +84,14 @@ try {
         & $scriptPath `
             -PackageDirectory $testRoot `
             -ExpectedCommit '2222222222222222222222222222222222222222' `
+            -ExpectedVersion '1.2.3' `
+            -RequestedRef 'current-ref'
+    }
+    Assert-Fails -MessagePattern 'version does not match' -Action {
+        & $scriptPath `
+            -PackageDirectory $testRoot `
+            -ExpectedCommit $commit `
+            -ExpectedVersion '1.2.4' `
             -RequestedRef 'current-ref'
     }
 }

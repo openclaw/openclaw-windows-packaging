@@ -123,20 +123,4 @@ if ($secondBoundaryVersion -le $firstBoundaryVersion) {
     throw 'The package version did not increase across the rollover boundary.'
 }
 
-$officialVersionScript = Join-Path $PSScriptRoot 'Test-OfficialReleaseVersion.ps1'
-& $officialVersionScript -PackageVersion '2026.6.35.0' -ExistingTags @()
-& $officialVersionScript -PackageVersion '2026.6.35.1' -ExistingTags @(
-    'refs/tags/v0.0.0.0', 'refs/tags/v2026.6.35.0', 'refs/tags/unrelated'
-)
-& $officialVersionScript -PackageVersion '2026.7.33.0' -ExistingTags @(
-    'refs/tags/v2026.6.35.9'
-)
-foreach ($version in @('2026.6.35.0', '2026.6.34.9')) {
-    Assert-Fails -MessagePattern 'not newer than existing official tag' -Action {
-        & $officialVersionScript -PackageVersion $version -ExistingTags @(
-            'refs/tags/v2026.6.35.0'
-        )
-    }
-}
-
 Write-Host 'Workflow package-version tests passed.'

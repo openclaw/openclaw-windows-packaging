@@ -100,12 +100,14 @@ package.
 - Diagnostics are written to packaged LocalState (or
   `%LOCALAPPDATA%\OpenClawGatewayMSIX` outside an MSIX context) with a named
   mutex so concurrent processes append complete records.
-- The GitHub workflow first builds and packs a pinned `openclaw/openclaw`
-  revision on Linux using that revision's `setup-node-env` action. Non-official
-  runs cache that tarball by resolved upstream commit and verify its recorded
-  commit and SHA-256 on every use. They also cache each architecture's Windows
-  dependency tree by commit, Node.js version, and payload script hash while
-  rerunning all payload validation; official signing bypasses both caches. The
+- The GitHub workflow selects stable through public npm `latest` and verifies
+  its exact version and signed upstream tag/commit. There is no cross-channel
+  fallback; a reviewed `stableVersion` may select an older known-good stable.
+  One source-selection artifact is reused across retries. Builds use that
+  revision's `setup-node-env` action. Existing cache helpers remain unchanged,
+  but native `cache-mode: none` denies cache access for all jobs executing
+  selected upstream code. Package verification checks source version, commit
+  and SHA-256; official signing bypasses the cache steps. The
   resolved Node.js version flows through `source.json` and `payload-metadata.json`;
   each architecture-specific Windows job uses that same version to build the
   expanded payload, validates the installed Gateway and Control UI build identities,
@@ -115,18 +117,8 @@ package.
   and emits MSIX metadata including the runtime hash.
 - Unsigned artifacts are the normal PR/push output. Test signing uses a
   temporary runner-local certificate. Official signing is gated to `main` and
-  the policy-approved channel snapshot, not a per-release commit allowlist.
-  Stable-source overrides are allowed only for unsigned/test builds. Snapshot hashes,
-  workflow identity and signing inputs are validated before Azure credentials
-  are requested. Preserve the protected signing environment and all artifact
-  inventory/hash checks.
-- All workflow jobs deny GitHub Actions cache access with native
-  `cache-mode: none`, including Windows npm lifecycle execution. Do not pass
-  version-specific upstream cache switches or add job-level cache overrides. Current
-  CodeQL cache-poisoning analysis does not model this native permission;
-  document/review the false positives without suppressing the query or hiding
-  the checkout. Build identity validation must cover modern explicit build IDs
-  and legacy version/commit-derived UI IDs, both bound to resolved provenance.
+  the immutable upstream commit in `release-policy.json`; signing inputs are
+  validated before Azure credentials are requested.
 
 ## Repository conventions
 
@@ -174,18 +166,11 @@ package.
 - Metadata files are part of the release trust chain, not incidental build
   output. Changes to their fields must be coordinated across payload creation,
   MSIX creation, signing validation, workflow artifacts, and tests.
-- The empty manual `openclaw_ref` default follows the same channel policy as
-  automatic builds; never add a second default pin. `release-policy.json`
-  selects the repository/channel, optional reviewed stable-version pin, and
-  packaging revision. Official upstream
-  `YYYY.M.P` maps to MSIX `YYYY.M.P.<packageRevision>` and release tag
-  `vYYYY.M.P.<packageRevision>`. For upstream `YYYY.M.P-C` corrections, add `C`
-  to the packaging revision for the fourth component and reject overflow.
-  Published and source package versions must match; do not relabel rebuilt
-  source to bypass a same-source correction mismatch. Packaging-only corrections
-  require a reviewed
-  revision increase. Keep duplicate/downgrade rejection, exact bundle/package
-  version equality, and immutable source snapshots across workflow retries.
+- Keep the manual `openclaw_ref` default empty to follow stable. Source
+  selection does not grant signing approval: official releases still require
+  the reviewed commit/version/tag in `release-policy.json`. Reuse
+  `Get-MSIXReleaseIdentity.ps1` for the four-part MSIX identity and permanent
+  release tag; do not add another versioning or release-authorization scheme.
 - The launcher is NativeAOT. `dotnet build` and the xUnit suite exercise a JIT
   build, so run the NativeAOT publish path when changing reflection, interop,
   or trimming-sensitive code.

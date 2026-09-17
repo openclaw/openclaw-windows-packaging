@@ -27,15 +27,6 @@ if (-not (Test-Path $sourceMetadataPath -PathType Leaf)) {
 }
 
 $sourceMetadata = Get-Content $sourceMetadataPath -Raw | ConvertFrom-Json
-$sourceSelection = $sourceMetadata |
-    Select-Object channel, releaseTag, tagObject, resolvedAt, registryIntegrity
-. (Join-Path $PSScriptRoot 'OpenClawSource.ps1')
-Assert-OpenClawSourceVersion -Version $sourceMetadata.packageVersion -Final
-if ($null -ne $sourceMetadata.PSObject.Properties['channel']) {
-    $policy = Read-OpenClawReleasePolicy -Path (
-        Join-Path (Split-Path $PSScriptRoot -Parent) 'release-policy.json')
-    Assert-OpenClawSource -Source $sourceMetadata -Policy $policy
-}
 $nodeVersion = & node -p 'process.versions.node'
 if ($LASTEXITCODE -ne 0 -or $nodeVersion -notmatch '^\d+\.\d+\.\d+$') {
     throw 'Unable to determine the payload build Node.js version.'
@@ -371,11 +362,6 @@ if ($Architecture -eq 'x64') {
     requestedRef     = $sourceMetadata.requestedRef
     resolvedCommit   = $sourceMetadata.resolvedCommit
     packageVersion   = $sourceMetadata.packageVersion
-    channel          = $sourceSelection.channel
-    releaseTag       = $sourceSelection.releaseTag
-    tagObject        = $sourceSelection.tagObject
-    resolvedAt       = $sourceSelection.resolvedAt
-    registryIntegrity = $sourceSelection.registryIntegrity
     architecture     = $Architecture
     layout           = 'expanded-directory'
     nodeVersion      = $nodeVersion

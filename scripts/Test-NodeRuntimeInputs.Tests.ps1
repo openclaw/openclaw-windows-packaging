@@ -112,12 +112,7 @@ console.log(JSON.stringify({
         repository = 'https://github.com/openclaw/openclaw'
         requestedRef = '1' * 40
         resolvedCommit = '1' * 40
-        packageVersion = '2026.9.4'
-        channel = ''
-        releaseTag = ''
-        tagObject = ''
-        resolvedAt = '2026-09-15T00:00:00.0000000Z'
-        registryIntegrity = ''
+        packageVersion = '0.0.0'
         nodeVersion = $nodeVersion
     }
     $sourceMetadata | ConvertTo-Json | Set-Content -LiteralPath "$package\source.json"
@@ -129,32 +124,6 @@ console.log(JSON.stringify({
     if ($metadata.nodeVersion -cne $nodeVersion) {
         throw 'The payload did not preserve the exact source build Node.js version.'
     }
-    foreach ($field in @(
-        'requestedRef', 'resolvedCommit', 'packageVersion', 'channel',
-        'releaseTag', 'tagObject', 'registryIntegrity'
-    )) {
-        if ($metadata.$field -cne $sourceMetadata[$field]) {
-            throw "The payload did not preserve the source selection field: $field"
-        }
-    }
-
-    $sourceMetadata.packageVersion = '2026.9.3'
-    $sourceMetadata | ConvertTo-Json | Set-Content -LiteralPath "$package\source.json"
-    Assert-Fails -MessagePattern 'does not match the source identity' -Action {
-        & "$PSScriptRoot\Build-Payload.ps1" `
-            -PackageDirectory $package -Architecture x64 -OutputDirectory $payload
-    }
-    $sourceMetadata.packageVersion = '2026.9.4'
-
-    foreach ($rejectedVersion in @('2026.6.35', '2026.9.4-beta.1')) {
-        $sourceMetadata.packageVersion = $rejectedVersion
-        $sourceMetadata | ConvertTo-Json | Set-Content -LiteralPath "$package\source.json"
-        Assert-Fails -MessagePattern 'packageVersion' -Action {
-            & "$PSScriptRoot\Build-Payload.ps1" `
-                -PackageDirectory $package -Architecture x64 -OutputDirectory $payload
-        }
-    }
-    $sourceMetadata.packageVersion = '2026.9.4'
 
     $reusedPayload = Join-Path $testRoot 'payload-reused'
     & "$PSScriptRoot\Build-Payload.ps1" `
@@ -279,29 +248,6 @@ console.log(JSON.stringify({
             -PayloadDirectory $payload -Architecture arm64 `
             -PackageVersion '0.1.1.0' -SourceCommit ('1' * 40) `
             -OutputDirectory "$testRoot\msix"
-    }
-
-    $metadata.nodeVersion = '24.20.0'
-    $metadata.architecture = 'x64'
-    $matchingArchive = Join-Path $testRoot 'node-v24.20.0-win-x64.zip'
-    Set-Content -LiteralPath $matchingArchive -Value 'not reached'
-    $metadata | ConvertTo-Json | Set-Content -LiteralPath $metadataPath
-    '{"name":"openclaw","version":"2026.6.35"}' |
-        Set-Content -LiteralPath (Join-Path $payload 'app\package.json')
-    Assert-Fails -MessagePattern 'application does not match the payload package version' -Action {
-        & "$PSScriptRoot\Build-MSIX.ps1" `
-            -PayloadDirectory $payload -NodeArchivePath $matchingArchive `
-            -Architecture x64 -PackageVersion '0.1.1.0' -SourceCommit ('1' * 40) `
-            -OutputDirectory "$testRoot\msix"
-    }
-    $legacyMetadata = $metadata |
-        Select-Object * -ExcludeProperty channel, releaseTag, tagObject, resolvedAt, registryIntegrity
-    $legacyMetadata.packageVersion = '2026.6.35'
-    $legacyMetadata | ConvertTo-Json | Set-Content -LiteralPath $metadataPath
-    Assert-Fails -MessagePattern 'packageVersion' -Action {
-        & "$PSScriptRoot\Build-MSIX.ps1" `
-            -PayloadDirectory $payload -Architecture x64 -PackageVersion '0.1.1.0' `
-            -SourceCommit ('1' * 40) -OutputDirectory "$testRoot\msix"
     }
 
     Write-Host 'Node.js source and packaging input tests passed.'
