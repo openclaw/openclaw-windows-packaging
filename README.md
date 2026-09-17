@@ -295,34 +295,47 @@ key is stored in the repository.
 Official releases derive their GitHub tag and four-part numeric MSIX identity
 from `gatewayTag` and `msixRevision` in `release-policy.json`. The GitHub tag is
 `<gateway-tag>-msix.<revision>`. The MSIX identity is
-`year.month.patch.(gateway-release-sequence * 1000 + msix-revision)`. The
-unsuffixed Gateway tag is release sequence 1; a correction suffix such as `-2`
-is release sequence 2. Each Gateway release gets 1,000 deterministic MSIX-only
-rebuild slots, so rebuilding one
-Gateway release cannot shift the version assigned to a later correction. For
-example:
+`year.month.patch.(gateway-release-sequence * 1000 + msix-revision)`.
 
-- Gateway `v2026.9.4`, MSIX revision `0` becomes release tag
-  `v2026.9.4-msix.0` and MSIX version `2026.9.4.1000`;
-- Gateway `v2026.7.1`, MSIX revision `1` becomes release tag
-  `v2026.7.1-msix.1` and MSIX version `2026.7.1.1001`;
-- Gateway correction `v2026.7.1-2`, MSIX revision `0` becomes release tag
-  `v2026.7.1-2-msix.0` and MSIX version `2026.7.1.2000`;
-- rebuilding that correction at MSIX revision `1` becomes release tag
-  `v2026.7.1-2-msix.1` and MSIX version `2026.7.1.2001`.
+| Gateway tag | MSIX revision | GitHub release tag | MSIX version |
+|---|---:|---|---|
+| `v2026.7.1` | `0` | `v2026.7.1-msix.0` | `2026.7.1.1000` |
+| `v2026.7.1-2` | `0` | `v2026.7.1-2-msix.0` | `2026.7.1.2000` |
+| `v2026.7.1-2` | `1` | `v2026.7.1-2-msix.1` | `2026.7.1.2001` |
+| `v2026.7.2` | `0` | `v2026.7.2-msix.0` | `2026.7.2.1000` |
 
-Set `msixRevision` from `0` through `999`, incrementing it only when the same
-Gateway tag is repackaged. The Gateway correction suffix is encoded separately,
-so later Gateway corrections keep their deterministic version. Microsoft Store
-submissions reserve the fourth component as zero, so Store publication will
-need its own version policy when it is introduced. The workflow creates the
-derived tag in this repository and a GitHub Release with generated release
-notes. Each release contains a signed, multi-architecture
+The unsuffixed Gateway tag is release sequence `1`; correction suffixes `-2`
+through `-64` use their numeric suffix as the sequence. A `-1` suffix is
+rejected because it would collide with the unsuffixed tag. Set `msixRevision`
+from `0` through `999`, starting at `0` for each Gateway tag and incrementing it
+only when that exact Gateway tag is repackaged. Each Gateway release therefore
+owns a deterministic 1,000-number block, and an MSIX-only rebuild cannot shift
+the version assigned to a later Gateway correction or patch.
+
+To prepare an official release, update these policy inputs together in a
+reviewed pull request:
+
+1. `gatewayTag` to the stable upstream Gateway tag;
+2. `approvedCommit` to the immutable commit resolved from that tag;
+3. `payloadPackageVersion` to the version reported by the pinned payload;
+4. `msixRevision` to `0`, or increment it for a packaging-only rebuild of the
+   same Gateway tag;
+5. the workflow's `openclaw_ref` default and non-manual fallback to the same
+   `approvedCommit`.
+
+After that pull request merges, manually run **Build OpenClaw Gateway MSIX** on
+`main` with `openclaw_ref` set to the approved commit and `signing_mode` set to
+`official`. The workflow derives the package version and release tag, creates
+the tag in this repository, and publishes a GitHub Release with generated
+release notes. Each release contains a signed, multi-architecture
 `OpenClawGateway-<version>.msixbundle` as the recommended download, plus signed
 `OpenClawGateway-<version>-x64.msix` and
 `OpenClawGateway-<version>-arm64.msix` packages for architecture-specific
 deployment. The duplicate GitHub Actions artifacts remain short-lived transport
 and diagnostic copies.
+
+Microsoft Store submissions reserve the fourth version component as zero, so
+Store publication will need its own version policy when it is introduced.
 
 The one-time `v0.0.0.0` signing proof predates this version policy and is not an
 upgrade-compatible production baseline. Devices used to install that proof
