@@ -100,18 +100,21 @@ token reaches that CLI uninterpreted.
 Commands such as `doctor`, `gateway`, and `uninstall` belong to the OpenClaw
 CLI and must be invoked through `openclaw`.
 
-`setup` extracts the architecture-specific runtime archive from the immutable
-MSIX into the invoking user's writable LocalState:
+Host-mode setup (`clawctl setup --no-isolation`) and direct host execution
+extract the architecture-specific runtime archive from the immutable MSIX into
+the invoking user's writable LocalState:
 `%LOCALAPPDATA%\Packages\<package-family>\LocalState\OpenClaw\NodeJS\node-v<version>-win-<architecture>`.
 Extraction is idempotent, versioned, and serialized across concurrent setup
 processes, including different Windows sessions. Setup validates existing
 runtimes before reuse, replaces invalid runtimes, and validates extraction
 before publishing it.
 
-On a session-capable machine, setup also provisions an explicitly owned agent
-session. The agent has a separate profile, so setup prepares that profile's
-bundled Node.js runtime and command environment as well. Run setup before
-using `openclaw`, `clawctl pwsh`, or gateway-service start. See
+On a session-capable machine, ordinary `clawctl setup` instead provisions an
+explicitly owned agent session. Its separate profile receives the bundled
+Node.js runtime and command environment; it does not prepare the invoking
+user's host runtime. Run setup before using `clawctl pwsh` or gateway-service
+start; `openclaw` installs the host runtime on demand when it runs directly.
+See
 [MXC compatibility evidence](docs/mxc-compatibility-evidence.md) for the
 session model, routing, gateway health criteria, and diagnostics limits.
 
