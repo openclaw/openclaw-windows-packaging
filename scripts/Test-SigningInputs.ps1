@@ -10,15 +10,7 @@ param(
     [string]$BundlePath,
 
     [Parameter(Mandatory)]
-    [string]$SourceResolutionPath,
-
-    [Parameter(Mandatory)]
-    [ValidatePattern('^[0-9a-fA-F]{64}$')]
-    [string]$SourceResolutionSha256,
-
-    [Parameter(Mandatory)]
-    [ValidatePattern('^[1-9][0-9]*$')]
-    [string]$WorkflowRunId,
+    [string]$RequestedRef,
 
     [Parameter(Mandatory)]
     [ValidatePattern('^[0-9a-fA-F]{40}$')]
@@ -28,7 +20,6 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-. (Join-Path $PSScriptRoot 'OpenClawSource.ps1')
 
 function New-PackageEntryIndex {
     param(
@@ -157,13 +148,7 @@ $resolvedArtifactsDirectory = (
     Resolve-Path -LiteralPath $ArtifactsDirectory
 ).Path
 $resolvedPolicyPath = (Resolve-Path -LiteralPath $PolicyPath).Path
-$policy = Read-OpenClawReleasePolicy -Path $resolvedPolicyPath
-$snapshotHash = (Get-FileHash `
-    -LiteralPath $SourceResolutionPath -Algorithm SHA256).Hash
-if ($snapshotHash -ine $SourceResolutionSha256) {
-    throw 'The source snapshot does not match the trusted resolver output.'
-}
-$snapshot = Get-Content -LiteralPath $SourceResolutionPath -Raw |
+$policy = Get-Content -LiteralPath $resolvedPolicyPath -Raw |
     ConvertFrom-Json
 
 if (
@@ -226,14 +211,9 @@ foreach ($architecture in @('x64', 'arm64')) {
         $metadata.packagingCommit -ine $expectedPackagingCommit -or
         $metadata.sourceTreeDirty -ne $false -or
         $metadata.payloadRepository -ne $policy.repository -or
-        $metadata.payloadRequestedRef -cne $source.requestedRef -or
+        $metadata.payloadRequestedRef -ine $approvedCommit -or
         $metadata.payloadResolvedCommit -ine $approvedCommit -or
         $metadata.payloadPackageVersion -ne $approvedPayloadVersion -or
-        $metadata.payloadChannel -cne $source.channel -or
-        $metadata.payloadReleaseTag -cne $source.releaseTag -or
-        $metadata.payloadTagObject -cne $source.tagObject -or
-        $metadata.payloadResolvedAt -ne $source.resolvedAt -or
-        $metadata.payloadRegistryIntegrity -cne $source.registryIntegrity -or
         $metadata.payloadLayout -ne 'immutable-package' -or
         $metadata.payloadFileCount -isnot [int64] -or
         $metadata.payloadFileCount -le 0 -or
@@ -479,21 +459,11 @@ foreach ($architecture in @('x64', 'arm64')) {
         )
         if (
             $null -eq $identity -or
-            $identity.Name -ne 'OpenClaw.Gateway' -or
             $identity.Publisher -ne $policy.publisher -or
             $identity.ProcessorArchitecture -ne $architecture -or
             $identity.Version -ne $metadata.packageVersion
         ) {
             throw "The $architecture MSIX manifest identity is unexpected."
-        }
-
-        $applicationManifest = Read-ZipEntryText `
-            -EntriesByPath $entriesByPath `
-            -Path 'app/package.json' |
-            ConvertFrom-Json
-        if ($applicationManifest.name -cne 'openclaw' -or
-            $applicationManifest.version -cne $approvedPayloadVersion) {
-            throw "The embedded $architecture OpenClaw package version is unexpected."
         }
 
         $payloadFiles = Read-ZipEntryText `

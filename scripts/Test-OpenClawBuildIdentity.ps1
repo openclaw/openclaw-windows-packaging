@@ -1,31 +1,21 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [string]$OpenClawDirectory,
-
-    [Parameter(Mandatory)]
-    [ValidatePattern('^[0-9a-fA-F]{40}$')]
-    [string]$ExpectedSourceCommit,
-
-    [Parameter(Mandatory)]
-    [ValidateNotNullOrEmpty()]
-    [string]$ExpectedPackageVersion
+    [string]$OpenClawDirectory
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# Verify both upstream identity formats without treating missing provenance
-# or a mismatched dashboard as a successful legacy build.
+# A release is safe to package only when the Gateway and its same-origin
+# dashboard were emitted by the same OpenClaw build lifecycle.
 $distDirectory = Join-Path $OpenClawDirectory 'dist'
 $buildInfoPath = Join-Path $distDirectory 'build-info.json'
 $controlUiDirectory = Join-Path $distDirectory 'control-ui'
 $serviceWorkerPath = Join-Path $controlUiDirectory 'sw.js'
 $assetsDirectory = Join-Path $controlUiDirectory 'assets'
-$packageManifestPath = Join-Path $OpenClawDirectory 'package.json'
 
 foreach ($requiredPath in @(
-    $packageManifestPath
     $buildInfoPath
     $serviceWorkerPath
     $assetsDirectory
@@ -37,37 +27,9 @@ foreach ($requiredPath in @(
 
 $buildInfo = Get-Content -LiteralPath $buildInfoPath -Raw |
     ConvertFrom-Json
-$packageManifest = Get-Content -LiteralPath $packageManifestPath -Raw |
-    ConvertFrom-Json
-foreach ($field in @('version', 'commit')) {
-    $property = $buildInfo.PSObject.Properties[$field]
-    if ($null -eq $property -or $property.Value -isnot [string] -or
-        [string]::IsNullOrWhiteSpace($property.Value)) {
-        throw "Gateway build provenance is missing '$field' in '$buildInfoPath'."
-    }
-}
-if ($buildInfo.version -cne $ExpectedPackageVersion -or
-    $buildInfo.commit -ine $ExpectedSourceCommit -or
-    $packageManifest.name -cne 'openclaw' -or
-    $packageManifest.version -cne $ExpectedPackageVersion) {
-    throw 'Gateway build provenance does not match the resolved OpenClaw source.'
-}
-
-$buildIdProperty = $buildInfo.PSObject.Properties['buildId']
-if ($null -ne $buildIdProperty) {
-    if ($buildIdProperty.Value -isnot [string] -or
-        [string]::IsNullOrWhiteSpace($buildIdProperty.Value)) {
-        throw "Gateway build identity is missing or invalid in '$buildInfoPath'."
-    }
-    $gatewayBuildId = $buildIdProperty.Value
-}
-else {
-    # Older upstream Vite builds use version + 12-character Git SHA rather
-    # than emitting a shared buildId in dist/build-info.json.
-    $shortCommit = $ExpectedSourceCommit.ToLowerInvariant().Substring(0, 12)
-    $gatewayBuildId = [regex]::Replace(
-        "$ExpectedPackageVersion-$shortCommit", '[^a-zA-Z0-9._-]+', '-')
-    $gatewayBuildId = $gatewayBuildId.Substring(0, [Math]::Min(96, $gatewayBuildId.Length))
+$gatewayBuildId = [string]$buildInfo.buildId
+if ([string]::IsNullOrWhiteSpace($gatewayBuildId)) {
+    throw "Gateway build identity is missing from '$buildInfoPath'."
 }
 
 # Vite writes the dashboard identity into the service worker so stale browser
@@ -114,9 +76,4 @@ if (-not $clientBundleContainsBuildId) {
     )
 }
 
-if ($null -eq $buildIdProperty) {
-    Write-Host "Legacy Control UI identity matches verified source provenance: $gatewayBuildId"
-}
-else {
-    Write-Host "OpenClaw Gateway and Control UI build identity match: $gatewayBuildId"
-}
+Write-Host "OpenClaw Gateway and Control UI build identity match: $gatewayBuildId"

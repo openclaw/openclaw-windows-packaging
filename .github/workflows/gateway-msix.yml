@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       openclaw_ref:
-        description: openclaw/openclaw tag, branch, or commit to package
-        required: true
-        default: 3a9d69db306cd7f081e06254cb89c4bcc14a7107
+        description: Optional stable-source ref; empty follows npm latest (official signing still requires policy approval)
+        required: false
+        default: ''
         type: string
       signing_mode:
         description: Package signing mode
@@ -30,16 +30,9 @@ permissions:
   contents: read
   pull-requests: read
 
-# Upstream build/install scripts must never receive cache read/write authority,
-# including manually selected refs running in the default-branch context.
 cache-mode: none
 
-concurrency:
-  group: gateway-msix-${{ inputs.signing_mode == 'official' && 'official' || github.run_id }}
-  cancel-in-progress: false
-
 env:
-  OPENCLAW_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.openclaw_ref || '3a9d69db306cd7f081e06254cb89c4bcc14a7107' }}
   PACKAGING_ROOT: .
 
 jobs:
@@ -82,6 +75,9 @@ jobs:
             ConvertFrom-Json
           $versioningPaths = @(
             'release-policy.json'
+            'scripts/OpenClawSource.ps1'
+            'scripts/Get-WorkflowSource.ps1'
+            'scripts/Test-OpenClawSource.Tests.ps1'
             'scripts/Get-MSIXReleaseIdentity.ps1'
             'scripts/Test-MSIXReleaseIdentity.Tests.ps1'
             'scripts/Test-MSIXUpgrade.ps1'
@@ -127,6 +123,8 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           global-json-file: global.json
+          cache: true
+          cache-dependency-path: Directory.Packages.props
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -207,6 +205,10 @@ jobs:
         run: >
           .\scripts\Test-OpenClawPackage.Tests.ps1
 
+      - name: Test stable source selection
+        shell: pwsh
+        run: .\scripts\Test-OpenClawSource.Tests.ps1
+
       - name: Test local package deployment
         shell: pwsh
         run: >
@@ -239,6 +241,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       source_sha: ${{ steps.resolve.outputs.sha }}
+      source_tag: ${{ steps.resolve.outputs.tag }}
       package_cache_key: ${{ steps.resolve.outputs.package_cache_key }}
       package_version: ${{ steps.package.outputs.version }}
       node_version: ${{ steps.package.outputs.node_version }}
@@ -249,29 +252,47 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Restore source selection for a retry
+        if: ${{ github.run_attempt != 1 }}
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-source-resolution
+          path: ${{ runner.temp }}/openclaw-source
+
       - name: Resolve immutable OpenClaw source
         id: resolve
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          SOURCE_REF: ${{ inputs.openclaw_ref }}
+          SIGNING_MODE: ${{ inputs.signing_mode || 'unsigned' }}
         run: |
-          $shaLines = @(
-            gh api `
-              "repos/openclaw/openclaw/commits/$env:OPENCLAW_REF" `
-              --jq .sha
-          )
-          if ($LASTEXITCODE -ne 0) {
-            throw "Unable to resolve OpenClaw ref '$env:OPENCLAW_REF'."
-          }
-          $sha = [string]::Join('', [string[]]$shaLines).Trim().ToLowerInvariant()
-          if ($sha -notmatch '^[0-9a-f]{40}$') {
-            throw "OpenClaw ref resolved to an invalid commit SHA: '$sha'."
-          }
+          $snapshotPath = Join-Path $env:RUNNER_TEMP 'openclaw-source/source-resolution.json'
+          $source = ./scripts/Get-WorkflowSource.ps1 `
+            -PolicyPath ./release-policy.json `
+            -OutputPath $snapshotPath `
+            -Ref $env:SOURCE_REF `
+            -SigningMode $env:SIGNING_MODE `
+            -WorkflowRunId $env:GITHUB_RUN_ID `
+            -PackagingCommit $env:GITHUB_SHA `
+            -ReuseSnapshot:($env:GITHUB_RUN_ATTEMPT -ne '1')
           $cacheKey = .\scripts\Get-OpenClawCacheKey.ps1 `
             -Layer package `
-            -Commit $sha
-          "sha=$sha" >> $env:GITHUB_OUTPUT
+            -Commit $source.resolvedCommit
+          "sha=$($source.resolvedCommit)" >> $env:GITHUB_OUTPUT
+          "tag=v$($source.packageVersion)" >> $env:GITHUB_OUTPUT
+          "version=$($source.packageVersion)" >> $env:GITHUB_OUTPUT
           "package_cache_key=$cacheKey" >> $env:GITHUB_OUTPUT
+          "OpenClaw $($source.packageVersion) ($($source.resolvedCommit)), selected by $($source.requestedRef)." >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Save immutable source selection
+        if: ${{ github.run_attempt == 1 }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: openclaw-source-resolution
+          path: ${{ runner.temp }}/openclaw-source/source-resolution.json
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Restore cached OpenClaw package
         id: package-cache
@@ -291,12 +312,6 @@ jobs:
           Copy-Item `
             ./scripts/Test-OpenClawPackage.ps1 `
             $env:RUNNER_TEMP/Test-OpenClawPackage.ps1
-
-      - name: Download immutable source snapshot
-        uses: actions/download-artifact@v8
-        with:
-          name: openclaw-source-resolution
-          path: ${{ runner.temp }}/openclaw-source
 
       - name: Check out OpenClaw source
         if: ${{ steps.package-cache.outputs.cache-hit != 'true' }}
@@ -326,12 +341,16 @@ jobs:
 
       - name: Pack npm package
         if: ${{ steps.package-cache.outputs.cache-hit != 'true' }}
+        env:
+          OPENCLAW_REF: ${{ steps.resolve.outputs.sha }}
         run: |
           set -euo pipefail
           artifact_dir="${RUNNER_TEMP}/openclaw-package"
           mkdir -p "${artifact_dir}"
           node scripts/package-openclaw-for-docker.mjs \
+            --allow-unreleased-changelog \
             --skip-build \
+            --pnpm-pack \
             --output-dir "${artifact_dir}" \
             --output-name openclaw.tgz
 
@@ -349,15 +368,7 @@ jobs:
             "nodeVersion": "${node_version}",
             "packageSha256": "${package_sha256}"
           }
-          $source = Get-Content -LiteralPath $snapshotPath -Raw | ConvertFrom-Json
-          if ($source.resolvedCommit -cne $env:BUILT_SHA -or
-              $source.packageVersion -cne $env:BUILT_VERSION -or
-              $env:NODE_VERSION -notmatch '^\d+\.\d+\.\d+$') {
-            throw 'The source build does not match the resolved OpenClaw identity.'
-          }
-          $source | Add-Member -NotePropertyName nodeVersion -NotePropertyValue $env:NODE_VERSION
-          $source | ConvertTo-Json -Depth 4 |
-            Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'openclaw-package/source.json') -Encoding utf8
+          EOF
 
       - name: Verify OpenClaw package
         id: package
@@ -368,7 +379,8 @@ jobs:
           & "$env:RUNNER_TEMP/Test-OpenClawPackage.ps1" `
             -PackageDirectory $packageDirectory `
             -ExpectedCommit '${{ steps.resolve.outputs.sha }}' `
-            -RequestedRef $env:OPENCLAW_REF
+            -ExpectedVersion '${{ steps.resolve.outputs.version }}' `
+            -RequestedRef '${{ steps.resolve.outputs.sha }}'
           $metadata = Get-Content -LiteralPath $metadataPath -Raw |
             ConvertFrom-Json
           "version=$([string]$metadata.packageVersion)" >> $env:GITHUB_OUTPUT
@@ -387,7 +399,6 @@ jobs:
         with:
           name: openclaw-gateway-npm-package
           path: ${{ runner.temp }}/openclaw-package/
-          overwrite: true
           if-no-files-found: error
           retention-days: 7
 
@@ -466,7 +477,6 @@ jobs:
         with:
           name: openclaw-gateway-payload-${{ matrix.architecture }}
           path: ${{ runner.temp }}\openclaw-payload\
-          overwrite: true
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 1 || 7 }}
 
@@ -474,6 +484,8 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           global-json-file: global.json
+          cache: true
+          cache-dependency-path: Directory.Packages.props
 
       - name: Restore NativeAOT and MSIX dependencies
         shell: pwsh
@@ -495,6 +507,7 @@ jobs:
         env:
           SIGNING_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode || 'unsigned' }}
           VERSIONING_CHANGE: ${{ needs.changes.outputs.versioning }}
+          GATEWAY_TAG: ${{ needs.build-package.outputs.source_tag }}
         run: |
           $versionParameters = @{
             RunNumber = '${{ github.run_number }}'
@@ -507,7 +520,7 @@ jobs:
             $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
               ConvertFrom-Json
             $identity = .\scripts\Get-MSIXReleaseIdentity.ps1 `
-              -GatewayTag ([string]$policy.gatewayTag) `
+              -GatewayTag $env:GATEWAY_TAG `
               -MSIXRevision ([int]$policy.msixRevision)
             $versionParameters.ReleaseVersion = $identity.PackageVersion
           }
@@ -517,7 +530,7 @@ jobs:
           .\scripts\Build-MSIX.ps1 `
             -PayloadDirectory '${{ runner.temp }}\openclaw-payload' `
             -Architecture '${{ matrix.architecture }}' `
-            -PackageVersion $env:PACKAGE_VERSION `
+            -PackageVersion $packageVersion `
             -SourceCommit '${{ github.sha }}' `
             -OutputDirectory '${{ runner.temp }}\openclaw-msix'
 
@@ -525,7 +538,6 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: openclaw-gateway-msix-unsigned-${{ matrix.architecture }}
-          overwrite: true
           path: |
             ${{ runner.temp }}\openclaw-msix\OpenClawGateway-${{ matrix.architecture }}.msix
             ${{ runner.temp }}\openclaw-msix\msix-metadata.json
@@ -570,7 +582,6 @@ jobs:
         with:
           name: openclaw-gateway-msix-test-signed-x64
           path: test-signed\x64\
-          overwrite: true
           if-no-files-found: error
           retention-days: 7
 
@@ -579,7 +590,6 @@ jobs:
         with:
           name: openclaw-gateway-msix-test-signed-arm64
           path: test-signed\arm64\
-          overwrite: true
           if-no-files-found: error
           retention-days: 7
 
@@ -587,6 +597,7 @@ jobs:
     name: Build unsigned multi-architecture Gateway MSIX bundle
     needs:
       - changes
+      - build-package
       - build-msix
     runs-on: windows-latest
     steps:
@@ -612,6 +623,7 @@ jobs:
         env:
           SIGNING_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode || 'unsigned' }}
           VERSIONING_CHANGE: ${{ needs.changes.outputs.versioning }}
+          GATEWAY_TAG: ${{ needs.build-package.outputs.source_tag }}
         run: |
           $versionParameters = @{
             RunNumber = '${{ github.run_number }}'
@@ -624,7 +636,7 @@ jobs:
             $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
               ConvertFrom-Json
             $identity = .\scripts\Get-MSIXReleaseIdentity.ps1 `
-              -GatewayTag ([string]$policy.gatewayTag) `
+              -GatewayTag $env:GATEWAY_TAG `
               -MSIXRevision ([int]$policy.msixRevision)
             $versionParameters.ReleaseVersion = $identity.PackageVersion
           }
@@ -634,7 +646,7 @@ jobs:
           .\scripts\Build-MSIXBundle.ps1 `
             -X64Package artifacts\x64\OpenClawGateway-x64.msix `
             -Arm64Package artifacts\arm64\OpenClawGateway-arm64.msix `
-            -PackageVersion $env:PACKAGE_VERSION `
+            -PackageVersion $packageVersion `
             -OutputPath artifacts\bundle\OpenClawGateway.msixbundle
 
       - name: Upload unsigned multi-architecture MSIX bundle
@@ -642,7 +654,6 @@ jobs:
         with:
           name: openclaw-gateway-msix-unsigned-bundle
           path: artifacts\bundle\OpenClawGateway.msixbundle
-          overwrite: true
           if-no-files-found: error
           retention-days: 7
 
@@ -651,6 +662,7 @@ jobs:
     if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.versioning == 'true' }}
     needs:
       - changes
+      - build-package
       - build-msix
       - build-msix-bundle
     runs-on: windows-latest
@@ -703,11 +715,13 @@ jobs:
 
       - name: Test installed-package upgrades and retained LocalState
         shell: pwsh
+        env:
+          GATEWAY_TAG: ${{ needs.build-package.outputs.source_tag }}
         run: |
           $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
             ConvertFrom-Json
           $identity = .\scripts\Get-MSIXReleaseIdentity.ps1 `
-            -GatewayTag ([string]$policy.gatewayTag) `
+            -GatewayTag $env:GATEWAY_TAG `
             -MSIXRevision ([int]$policy.msixRevision)
           .\scripts\Test-MSIXUpgrade.ps1 `
             -BaselinesPath .\scripts\msix-upgrade-baselines.json `
@@ -743,7 +757,7 @@ jobs:
     name: Authorize official Gateway MSIX signing
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode == 'official' && github.ref == 'refs/heads/main' }}
     needs:
-      - resolve-source
+      - build-package
       - build-msix
       - build-msix-bundle
     runs-on: windows-latest
@@ -778,18 +792,9 @@ jobs:
           name: openclaw-gateway-msix-unsigned-bundle
           path: artifacts\bundle
 
-      - name: Download immutable source snapshot
-        uses: actions/download-artifact@v8
-        with:
-          name: openclaw-source-resolution
-          path: artifacts\source
-
       - name: Resolve official release metadata
         id: release
         shell: pwsh
-        env:
-          PACKAGE_VERSION: ${{ needs.resolve-source.outputs.package_version }}
-          RELEASE_TAG: ${{ needs.resolve-source.outputs.release_tag }}
         run: |
           $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
             ConvertFrom-Json
@@ -808,26 +813,15 @@ jobs:
       - name: Enforce official signing policy
         shell: pwsh
         env:
+          OPENCLAW_REF: ${{ inputs.openclaw_ref || needs.build-package.outputs.source_sha }}
           PACKAGING_COMMIT: ${{ github.sha }}
-          SNAPSHOT_SHA256: ${{ needs.resolve-source.outputs.snapshot_sha256 }}
         run: |
           .\scripts\Test-SigningInputs.ps1 `
             -ArtifactsDirectory artifacts `
             -PolicyPath .\release-policy.json `
             -BundlePath artifacts\bundle\OpenClawGateway.msixbundle `
-            -SourceResolutionPath artifacts\source\source-resolution.json `
-            -SourceResolutionSha256 $env:SNAPSHOT_SHA256 `
-            -WorkflowRunId $env:GITHUB_RUN_ID `
+            -RequestedRef $env:OPENCLAW_REF `
             -PackagingCommit $env:PACKAGING_COMMIT
-
-      - name: Reject duplicate or older official releases
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PACKAGE_VERSION: ${{ needs.resolve-source.outputs.package_version }}
-        run: |
-          .\scripts\Test-OfficialReleaseVersion.ps1 `
-            -PackageVersion $env:PACKAGE_VERSION
 
   sign-msix:
     name: Officially sign Gateway MSIX packages
@@ -843,11 +837,6 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
       - name: Download unsigned x64 package
         uses: actions/download-artifact@v8
         with:
@@ -865,15 +854,6 @@ jobs:
         with:
           name: openclaw-gateway-msix-unsigned-bundle
           path: artifacts\bundle
-
-      - name: Recheck official release version before signing
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PACKAGE_VERSION: ${{ needs.authorize-signing.outputs.package_version }}
-        run: |
-          .\scripts\Test-OfficialReleaseVersion.ps1 `
-            -PackageVersion $env:PACKAGE_VERSION
 
       - name: Azure login
         uses: azure/login@v3
@@ -963,7 +943,6 @@ jobs:
         with:
           name: openclaw-gateway-msix-x64
           path: artifacts\x64\
-          overwrite: true
           if-no-files-found: error
           retention-days: 7
 
@@ -972,7 +951,6 @@ jobs:
         with:
           name: openclaw-gateway-msix-arm64
           path: artifacts\arm64\
-          overwrite: true
           if-no-files-found: error
           retention-days: 7
 
@@ -981,7 +959,6 @@ jobs:
         with:
           name: openclaw-gateway-msix-bundle
           path: artifacts\bundle\OpenClawGateway.msixbundle
-          overwrite: true
           if-no-files-found: error
           retention-days: 7
 
@@ -989,18 +966,13 @@ jobs:
     name: Publish signed Gateway MSIX release
     if: ${{ needs.sign-msix.result == 'success' }}
     needs:
-      - resolve-source
+      - build-package
       - authorize-signing
       - sign-msix
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
       - name: Download signed x64 package
         uses: actions/download-artifact@v8
         with:
@@ -1019,12 +991,6 @@ jobs:
           name: openclaw-gateway-msix-bundle
           path: signed/bundle
 
-      - name: Download immutable source snapshot
-        uses: actions/download-artifact@v8
-        with:
-          name: openclaw-source-resolution
-          path: signed/source
-
       - name: Stage versioned release assets
         shell: bash
         env:
@@ -1038,18 +1004,6 @@ jobs:
             "release-assets/OpenClawGateway-${RELEASE_VERSION}-arm64.msix"
           cp signed/bundle/OpenClawGateway.msixbundle \
             "release-assets/OpenClawGateway-${RELEASE_VERSION}.msixbundle"
-          cp signed/source/source-resolution.json release-assets/source-resolution.json
-          cp signed/x64/msix-metadata.json release-assets/msix-metadata-x64.json
-          cp signed/arm64/msix-metadata.json release-assets/msix-metadata-arm64.json
-
-      - name: Recheck official release version before publication
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PACKAGE_VERSION: ${{ needs.authorize-signing.outputs.package_version }}
-        run: |
-          ./scripts/Test-OfficialReleaseVersion.ps1 `
-            -PackageVersion $env:PACKAGE_VERSION
 
       - name: Create permanent GitHub release
         uses: softprops/action-gh-release@v3
@@ -1065,12 +1019,9 @@ jobs:
           files: |
             release-assets/*.msix
             release-assets/*.msixbundle
-            release-assets/*.json
           body: |
-            Packages OpenClaw `${{ needs.resolve-source.outputs.source_version }}` selected
-            by the `stable` release policy for this workflow run,
-            from [`openclaw/openclaw@${{ needs.resolve-source.outputs.source_sha }}`](https://github.com/openclaw/openclaw/commit/${{ needs.resolve-source.outputs.source_sha }}).
-            The source snapshot and architecture metadata are included as release assets.
+            Packages OpenClaw `${{ needs.build-package.outputs.package_version }}`
+            from [`openclaw/openclaw@${{ needs.build-package.outputs.source_sha }}`](https://github.com/openclaw/openclaw/commit/${{ needs.build-package.outputs.source_sha }}).
 
             ### Downloads
             - **Recommended:** `OpenClawGateway-${{ needs.authorize-signing.outputs.release_version }}.msixbundle`

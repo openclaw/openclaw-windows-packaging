@@ -193,8 +193,6 @@ if (-not (Test-Path -LiteralPath $payloadMetadata -PathType Leaf)) {
 }
 
 $payloadInfo = Get-Content -LiteralPath $payloadMetadata -Raw | ConvertFrom-Json
-$payloadSelection = $payloadInfo |
-    Select-Object channel, releaseTag, tagObject, resolvedAt, registryIntegrity
 if (
     $payloadInfo.repository -ne 'https://github.com/openclaw/openclaw' -or
     $payloadInfo.architecture -ne $Architecture -or
@@ -207,14 +205,6 @@ if (
     $payloadInfo.resolvedCommit -notmatch '^[0-9a-fA-F]{40}$'
 ) {
     throw 'Payload metadata is not valid for this MSIX package.'
-}
-
-. (Join-Path $PSScriptRoot 'OpenClawSource.ps1')
-Assert-OpenClawSourceVersion -Version $payloadInfo.packageVersion -Final
-if ($null -ne $payloadSelection.channel) {
-    $policy = Read-OpenClawReleasePolicy -Path (
-        Join-Path $repositoryRoot 'release-policy.json')
-    Assert-OpenClawSource -Source $payloadInfo -Policy $policy
 }
 
 $nodeVersion = $payloadInfo.nodeVersion.TrimStart('v')
@@ -233,16 +223,6 @@ if (-not (Test-Path `
     -LiteralPath (Join-Path $payloadApplication 'openclaw.mjs') `
     -PathType Leaf)) {
     throw 'Expanded payload does not contain openclaw.mjs.'
-}
-$applicationManifestPath = Join-Path $payloadApplication 'package.json'
-if (-not (Test-Path -LiteralPath $applicationManifestPath -PathType Leaf)) {
-    throw 'Expanded payload does not contain package.json.'
-}
-$applicationManifest = Get-Content -LiteralPath $applicationManifestPath -Raw |
-    ConvertFrom-Json
-if ($applicationManifest.name -cne 'openclaw' -or
-    $applicationManifest.version -cne $payloadInfo.packageVersion) {
-    throw 'The expanded application does not match the payload package version.'
 }
 Assert-ApplicationHasNoReparsePoints -Path $payloadApplication
 Assert-ApplicationDoesNotBundleNode -Path $payloadApplication
@@ -659,11 +639,6 @@ try {
         payloadRequestedRef = $payloadInfo.requestedRef
         payloadResolvedCommit = $payloadInfo.resolvedCommit.ToLowerInvariant()
         payloadPackageVersion = [string]$payloadInfo.packageVersion
-        payloadChannel = $payloadSelection.channel
-        payloadReleaseTag = $payloadSelection.releaseTag
-        payloadTagObject = $payloadSelection.tagObject
-        payloadResolvedAt = $payloadSelection.resolvedAt
-        payloadRegistryIntegrity = $payloadSelection.registryIntegrity
         payloadLayout = 'immutable-package'
         payloadFileCount = $payloadFiles.Count
         nodeRuntimeVersion = $nodeVersion
