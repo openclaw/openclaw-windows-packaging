@@ -30,9 +30,9 @@ unrelated agent accounts may exist, and teardown must remain safe and
 idempotent. When MXC reports that this recorded provision is missing, setup
 reprovisions a replacement for this installation and removes only a gateway
 record that names that explicitly stale session; it neither adopts unrelated
-machine agents nor disturbs a gateway record for any other session. `clawctl teardown [--force]` removes
-only the recorded owned session and local setup state; it does not uninstall
-the package.
+machine agents nor disturbs a gateway record for any other session.
+`clawctl teardown --force` explicitly confirms deletion of the recorded owned
+session, its data, and local setup state; it does not uninstall the package.
 
 `clawctl setup --fresh` explicitly authorizes a reset of this installation.
 It captures a redacted pre-reset report, performs the normal owned teardown,
@@ -58,13 +58,13 @@ backend `StartAsync` operation for the recorded provision as its status probe.
 
 The package application tree is immutable and runs directly from the MSIX; the
 launcher does not extract, copy, hash, or repair it at runtime. Direct host
-execution calls `NodeRuntimeResolver.Resolve` and requires the bundled Node.js
-runtime to have already been extracted into the invoking user's LocalState.
-Normal isolated-session setup does not prepare that host runtime:
+execution installs the bundled Node.js runtime on demand in the invoking
+user's LocalState before launching; it does not require a prior `clawctl`
+setup. Isolated-session setup is a separate route:
 `RunSetupCoreAsync` asks the guest helper to install the runtime under the
-agent's own profile. To prepare the host runtime, use
-`clawctl setup --no-isolation`; it first requires the isolated-session support
-check and then runs the session-free host setup.
+agent's own profile, without preparing the invoking user's host runtime.
+`clawctl setup --no-isolation` selects the session-free host setup on a
+session-capable build without provisioning the isolated session.
 
 The agent cannot execute the package's WindowsApps helper binary directly.
 During setup, the launcher stages only `openclaw-session-host.exe` into the
@@ -130,15 +130,18 @@ setup. The collector does not enumerate arbitrary agent-profile files.
 
 ## Supported operational flow
 
-1. Run `clawctl setup` after installing or updating the package.
+1. On a session-capable build, run `clawctl setup` after installing or updating
+   the package to prepare the isolated agent session. For host-only use,
+   `clawctl setup --no-isolation` is optional because direct host execution
+   installs its runtime on demand.
 2. Run `openclaw <arguments>` for the upstream OpenClaw CLI, or
    `clawctl pwsh` for an interactive agent shell.
 3. Use `clawctl gateway-service start`, `status`, and `stop` for the managed
    gateway. Use `clawctl status` to inspect session ownership and state.
 4. Run `clawctl collect-logs` when reporting a problem, then review the
    resulting ZIP before sharing it.
-5. Run `clawctl teardown` to remove the owned isolated session while retaining
-   the installed package.
+5. Run `clawctl teardown --force` to confirm removal of the owned isolated
+   session and its data while retaining the installed package.
 
 The `clawctl` command tree intentionally owns only these package-management
 operations. Upstream commands such as `doctor`, `gateway`, and `uninstall`

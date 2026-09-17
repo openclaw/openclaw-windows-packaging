@@ -47,8 +47,8 @@ Every OpenClaw child process runs with
 `OPENCLAW_NO_AUTO_UPDATE=1`. It also reports the selected Windows Gateway
 session mode through the process-stable
 `CLAWCTL_GATEWAY_ISOLATION=enabled|disabled` environment variable. The current
-interactive-session launch path reports `disabled`; the future isolated-session
-launch path will select `enabled` when that session switch is implemented.
+direct host launch path reports `disabled`; the isolated-session launch path
+reports `enabled`.
 These values declare external lifecycle ownership, prevent doctor-owned service
 repair, disable configured background auto-updates, and expose diagnostic
 isolation status without claiming independent attestation. The selected OpenClaw runtime honors external supervisor mode by refusing native service
@@ -65,10 +65,10 @@ the read-only application directory the workspace.
 | Command | Behavior |
 |---|---|
 | `clawctl setup` | On a session-capable Windows build, confirm packaged `app\openclaw.mjs` exists, provision or reuse the owned isolated session, and install the bundled Node.js runtime in the agent profile. It does not prepare the invoking user's host runtime. It also configures gateway sign-in recovery without starting a gateway. |
-| `clawctl setup --no-isolation` | After the isolated-session support check, prepare the invoking user's host runtime without provisioning the isolated session. |
+| `clawctl setup --no-isolation` | On a session-capable Windows build, prepare the invoking user's host runtime without provisioning the isolated session. Direct host execution also installs that runtime on demand, so it does not require prior setup. |
 | `clawctl setup --fresh [--force]` | Remove this installation's owned session and package-local state, then run setup again. Without `--force`, incomplete external cleanup stops before local state is erased. `--force` is valid only with `--fresh`; it preserves an explicit warning when cleanup of owned external resources cannot be confirmed, but still stops if bounded local deletion fails. |
 | `clawctl status` | Report the recorded isolated-session state without provisioning or replacing it. It asks the backend to start the recorded provision as its status probe, so it is not a passive diagnostic. Use `clawctl gateway-service status` to inspect the gateway. |
-| `clawctl teardown [--force]` | Stop and deprovision the owned session and remove its setup state. The MSIX remains installed. |
+| `clawctl teardown --force` | Confirm deletion, then stop and deprovision the owned session and remove its data and setup state. The MSIX remains installed. |
 | `clawctl pwsh` | Open an interactive PowerShell session inside the agent session. |
 | `clawctl collect-logs [--output <path>]` | Create a redacted host-and-agent diagnostics ZIP. |
 | `clawctl gateway-service start` | Start the OpenClaw gateway in the isolated session. Requires setup. |
