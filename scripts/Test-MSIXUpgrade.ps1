@@ -101,7 +101,7 @@ function Remove-TestPackage {
         return
     }
 
-    $packages = Get-GatewayPackages
+    $packages = @(Get-GatewayPackages)
     if ($packages.Count -gt 1) {
         throw 'More than one OpenClaw.Gateway registration exists during cleanup.'
     }
@@ -125,14 +125,14 @@ function Remove-TestPackage {
 function Install-TestPackage {
     param([Parameter(Mandatory)][string]$Path)
 
-    if ((Get-GatewayPackages).Count -ne 0) {
+    if (@(Get-GatewayPackages).Count -ne 0) {
         throw 'Refusing to install over an OpenClaw package not owned by this test.'
     }
     # The clean-machine guard above establishes ownership before installation,
     # allowing finally cleanup even if installation only partially succeeds.
     $script:testOwnsPackage = $true
     Add-AppxPackage -Path $Path -ErrorAction Stop
-    $packages = Get-GatewayPackages
+    $packages = @(Get-GatewayPackages)
     if ($packages.Count -ne 1) {
         throw 'Windows did not create exactly one OpenClaw.Gateway registration.'
     }
@@ -185,7 +185,7 @@ $baselineManifest = Get-Content -LiteralPath $resolvedBaselinesPath -Raw |
 if ($baselineManifest.baselines.Count -ne 4) {
     throw 'Upgrade validation requires standalone and bundle proof-release baselines.'
 }
-if ((Get-GatewayPackages).Count -ne 0) {
+if (@(Get-GatewayPackages).Count -ne 0) {
     throw (
         'Refusing to run MSIX upgrade validation while OpenClaw.Gateway is ' +
         'already installed. Use an isolated clean test account.'
