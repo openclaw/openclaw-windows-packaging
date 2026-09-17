@@ -104,10 +104,11 @@ package.
   its exact version and signed upstream tag/commit. There is no cross-channel
   fallback; a reviewed `stableVersion` may select an older known-good stable.
   One source-selection artifact is reused across retries. Builds use that
-  revision's `setup-node-env` action. Existing cache helpers remain unchanged,
-  but native `cache-mode: none` denies cache access for all jobs executing
-  selected upstream code. Package verification checks source version, commit
-  and SHA-256; official signing bypasses the cache steps. The
+  revision's `setup-node-env` action. Non-official runs cache the packed tarball by
+  resolved upstream commit and verify its recorded version, commit and SHA-256
+  on every use. They also cache each architecture's Windows dependency tree by
+  commit, Node.js version, and payload script hash while rerunning all payload
+  validation; official signing bypasses both caches. The
   resolved Node.js version flows through `source.json` and `payload-metadata.json`;
   each architecture-specific Windows job uses that same version to build the
   expanded payload, validates the installed Gateway and Control UI build identities,
@@ -167,10 +168,8 @@ package.
   output. Changes to their fields must be coordinated across payload creation,
   MSIX creation, signing validation, workflow artifacts, and tests.
 - Keep the manual `openclaw_ref` default empty to follow stable. Source
-  selection does not grant signing approval: official releases still require
-  the reviewed commit/version/tag in `release-policy.json`. Reuse
-  `Get-MSIXReleaseIdentity.ps1` for the four-part MSIX identity and permanent
-  release tag; do not add another versioning or release-authorization scheme.
+  selection must match the reviewed commit/version/tag in `release-policy.json`
+  for official signing.
 - The launcher is NativeAOT. `dotnet build` and the xUnit suite exercise a JIT
   build, so run the NativeAOT publish path when changing reflection, interop,
   or trimming-sensitive code.

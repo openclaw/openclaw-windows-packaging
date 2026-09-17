@@ -114,10 +114,6 @@ if (-not $dispatchDefaultMatch.Success -or
     throw 'An empty source input must follow stable; do not add a second source pin.'
 }
 
-if ($workflow -notmatch '(?m)^cache-mode: none$' -or
-    [regex]::Matches($workflow, '(?m)^\s*cache-mode:').Count -ne 1) {
-    throw 'All jobs must retain native cache denial when running selected upstream source.'
-}
 $identityCalls = [regex]::Matches($workflow, '-GatewayTag \$env:GATEWAY_TAG')
 if ($identityCalls.Count -ne 3) {
     throw 'MSIX, bundle and upgrade verification must use the same resolved Gateway tag.'

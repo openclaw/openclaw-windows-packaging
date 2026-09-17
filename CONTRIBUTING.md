@@ -52,10 +52,7 @@ or package version logic:
 .\scripts\Test-GitHooks.Tests.ps1
 ```
 
-Source-selection changes must keep `Get-MSIXReleaseIdentity.ps1` and the
-reviewed official-signing policy as the authority for releases. The resolver
-tests use offline registry/GitHub fixtures; source-selection changes also run
-the existing hosted Windows install/upgrade gate against the selected tag.
+The source-selection tests use offline npm and GitHub fixtures.
 
 The Node.js input suite requires Node.js and npm. It builds a dependency-free
 local fixture; it does not download or build OpenClaw.

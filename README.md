@@ -125,8 +125,7 @@ version or channel; extended-stable and named prereleases are rejected.
 The `openclaw-source-resolution` artifact records this choice once per run.
 Retries reuse it without querying the moving channel again. If the snapshot
 is missing or expired (90-day retention), start a new run instead of retrying.
-The existing package and payload metadata continue to record the resolved
-source commit and version.
+Package and payload metadata record the resolved source commit and version.
 
 For a one-time unsigned/test override, provide a stable-source tag, branch, or
 full commit SHA in the manual `openclaw_ref` input. Empty means follow stable.
@@ -135,11 +134,10 @@ If compatibility requires an older known-good stable release, a reviewed
 example `"stableVersion": "2026.9.4"`. A pin is not automatic fallback and does
 not grant official-signing approval.
 
-**Official signing still requires the separately reviewed `approvedCommit`,
-`gatewayTag`, and `payloadPackageVersion` in `release-policy.json`.** Advancing
-stable does not automatically approve that source for release. An empty
-official input succeeds only when the selected stable release matches the
-approved source; alternatively, provide the exact approved commit.
+For official signing, the selected source must match `approvedCommit`,
+`gatewayTag`, and `payloadPackageVersion` in `release-policy.json`. An empty
+input selects stable and checks that approval; an explicit input must be the
+full approved commit SHA.
 
 Payload composition validates that the selected OpenClaw
 runtime discovers the packaging-owned Windows Launcher plugin in its
@@ -157,11 +155,13 @@ the launcher derives its runtime version and LocalState path from the bundled
 archive name. There is no separate packaging-side Node.js version pin or
 runtime-support policy.
 
-The existing cache keys and verification helpers are unchanged, but this
-workflow denies cache access with native `cache-mode: none` when executing
-selected upstream source. Package verification checks the resolved version,
-commit and tarball SHA-256. Each architecture still runs all payload validation
-and smoke tests; official signing continues to bypass the cache steps.
+Non-official workflows cache the packed OpenClaw tarball by its resolved
+upstream commit. They also cache each architecture's Windows dependency tree by
+the resolved commit, tarball SHA-256, Node.js version, and payload-build script.
+A tarball cache hit still verifies the recorded version, commit and SHA-256; a
+dependency-tree hit still runs every payload validation and smoke test.
+Official-signing workflows bypass
+both caches and always rebuild upstream source and Windows dependencies.
 
 The payload artifact records the requested ref and resolved upstream commit in
 `payload-metadata.json`. That build-only file is not embedded in the MSIX.
@@ -354,10 +354,9 @@ change release versioning download the hash-pinned standalone x64 and
 recommended `.msixbundle` assets, install each one on a clean GitHub-hosted
 Windows runner, upgrade it in place through the same delivery format, and
 verify that the package family remains stable and a LocalState marker is
-retained. Source-selection changes run this same gate using the resolved
-Gateway tag and the existing release-identity helper, not a separate version
-scheme. The gate also proves fresh installation of both the standalone and
-bundle candidates. It refuses to run when an OpenClaw Gateway package is
+retained. Changes to source-selection scripts also trigger this check against
+the selected release. The gate also proves fresh installation of both the
+standalone and bundle candidates. It refuses to run when an OpenClaw Gateway package is
 already registered and removes only packages installed by that test
 invocation. It temporarily trusts the ephemeral test-signing certificate in
 the local-machine Trusted People store, as required by Windows deployment, and
