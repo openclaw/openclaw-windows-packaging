@@ -200,8 +200,8 @@ they do not represent the default-disabled state of a normal install.
 Full selected-theme cohesion requires the generic plugin-frame theme forwarding
 merged by
 [`openclaw/openclaw#145409`](https://github.com/openclaw/openclaw/pull/145409).
-The current workflow remains on the release-approved OpenClaw baseline
-`0965053fe6b9341776df147a6934b7485c60b5ca` while this plugin is disabled by
+The current workflow remains on the release-approved OpenClaw `v2026.9.4`
+baseline (`3a9d69db306cd7f081e06254cb89c4bcc14a7107`) while this plugin is disabled by
 default. That baseline packages and inspects the plugin safely but does not
 forward selected Control UI themes into plugin frames. The future launcher
 enablement change must also advance and qualify the runtime to the merged theme

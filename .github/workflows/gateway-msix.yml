@@ -10,7 +10,7 @@ on:
       openclaw_ref:
         description: openclaw/openclaw tag, branch, or commit to package
         required: true
-        default: 0965053fe6b9341776df147a6934b7485c60b5ca
+        default: 3a9d69db306cd7f081e06254cb89c4bcc14a7107
         type: string
       signing_mode:
         description: Package signing mode
@@ -31,7 +31,7 @@ permissions:
   pull-requests: read
 
 env:
-  OPENCLAW_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.openclaw_ref || '0965053fe6b9341776df147a6934b7485c60b5ca' }}
+  OPENCLAW_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.openclaw_ref || '3a9d69db306cd7f081e06254cb89c4bcc14a7107' }}
   PACKAGING_ROOT: .
 
 jobs:
