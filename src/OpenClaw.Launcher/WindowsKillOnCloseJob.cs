@@ -4,7 +4,11 @@ using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
 
+#if OPENCLAW_SESSION_HOST
+namespace OpenClaw.SessionHost;
+#else
 namespace OpenClaw.Launcher;
+#endif
 
 internal sealed class WindowsKillOnCloseJob : IDisposable
 {

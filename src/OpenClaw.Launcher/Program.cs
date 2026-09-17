@@ -358,7 +358,6 @@ internal static class Program
                     options,
                     GetSessionRuntime(),
                     output,
-                    resolveNode,
                     cancellationToken)
             });
 
@@ -388,7 +387,6 @@ internal static class Program
         HostOptions options,
         Session.SessionRuntime runtime,
         TextWriter output,
-        Func<CancellationToken, Task<NodeRuntime>>? resolveNode,
         CancellationToken cancellationToken)
     {
         Session.SessionRecord record = runtime.RequireSetup();
@@ -396,10 +394,8 @@ internal static class Program
             .ConfigureAwait(false);
         string helperPath = runtime.RequireStagedHelper(record);
         string applicationDirectory = GetPackagedApplicationDirectory(options);
-        NodeRuntime packagedNode = resolveNode is null
-            ? NodeRuntimeResolver.Resolve(GetPackagedNodeArchivePath(options))
-            : await resolveNode(cancellationToken).ConfigureAwait(false);
-        string agentNodePath = runtime.RequireAgentNodePath(packagedNode.Version);
+        string agentNodePath = runtime.RequireAgentNodePath(
+            GetPackagedNodeArchivePath(options));
         string nodeDirectory = Path.GetDirectoryName(agentNodePath)
             ?? throw new Session.SessionException(
                 "The agent's Node.js runtime has no parent directory.");
