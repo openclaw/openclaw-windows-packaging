@@ -71,6 +71,30 @@ Never take the command name from `RootCommand.Name`. It defaults to the entry
 assembly, which is the test host under `dotnet test` and the scenario driver
 under the NativeAOT suite. Use the known control command name instead.
 
+## Progress
+
+A lifecycle command that waits should say what it is waiting for. Report
+progress as semantic stages from the operation and let the renderer present
+them; an operation that writes to a console cannot also run from a logon task,
+where nothing is watching.
+
+Use a spinner only on an interactive console that has already been cleared for
+color, and plain stage lines everywhere else, so redirected output and log files
+stay readable. Spectre serializes live displays: finish the status before
+rendering the result, and never open a second live surface inside the first.
+Narration and a JSON document share standard output, so narration is off
+entirely under `--json`.
+
+## Addresses
+
+Report a gateway port only when it can be identified unambiguously from the
+configured port and observed listeners. Never use the upstream default as an
+observation, and report no port when multiple unclassified listeners remain.
+
+Do not construct a Control UI or WebSocket URL. OpenClaw owns TLS and Control UI
+base-path configuration, so a locally assembled URL can point to the wrong
+scheme or path. Human and JSON output follow the same port-only contract.
+
 ## Color
 
 Output is composed from Spectre.Console renderables — a `Grid` for

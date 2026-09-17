@@ -78,7 +78,8 @@ internal sealed record GatewayCommandResult(
     string Message,
     string? Detail,
     int ExitCode,
-    int? Port = null) : IClawCtlResult
+    int? Port = null,
+    string? Url = null) : IClawCtlResult
 {
     public string Command => $"gateway-service {Action}";
 }

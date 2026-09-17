@@ -58,6 +58,19 @@ internal sealed record GatewayStopResult(
 /// </remarks>
 internal sealed class GatewayController
 {
+    /// <summary>
+    /// How long a start waits for the gateway to bind before reporting that it
+    /// is still coming up. Long enough for a cold Node.js start inside the
+    /// sandbox, short enough that a wedged launch does not hold the terminal.
+    /// </summary>
+    internal static readonly TimeSpan ListenerWaitBudget = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Gap between listener checks. Each check is an IPC round trip into the
+    /// session, so this trades responsiveness against load on the helper.
+    /// </summary>
+    internal static readonly TimeSpan ListenerPollInterval = TimeSpan.FromMilliseconds(500);
+
     private readonly SessionCoordinator _sessions;
     private readonly ISessionGatewayClient _client;
     private readonly GatewayStateStore _store;
@@ -151,9 +164,16 @@ internal sealed class GatewayController
     /// <summary>
     /// Starts the gateway only in a previously configured session.
     /// </summary>
+    /// <remarks>
+    /// Waits for the listener rather than returning the moment the process
+    /// exists. A process without a listener is not a usable gateway, and
+    /// telling the user to go and run the status command themselves is the
+    /// tool asking them to finish its job.
+    /// </remarks>
     public async Task<GatewayStartResult> StartAsync(
         string helperPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IProgress<GatewayStartProgress>? progress = null)
     {
         using ISessionLockHandle handle = AcquireLock();
         SessionRecord configured = _requireSetup();
@@ -175,6 +195,7 @@ internal sealed class GatewayController
                 "to recover the owned session.");
         }
 
+        Report(progress, GatewayStartStage.PreparingSession, "Preparing the isolated session.");
         SessionRecord session = await _sessions
             .StartRecordedAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -191,6 +212,10 @@ internal sealed class GatewayController
             {
                 GatewayRecord confirmedRecord = existing.Record;
                 _log("The gateway is already running.");
+                Report(
+                    progress,
+                    GatewayStartStage.AlreadyRunning,
+                    "The gateway is already running.");
                 return new GatewayStartResult(
                     GatewayState.Running,
                     confirmedRecord,
@@ -238,6 +263,7 @@ internal sealed class GatewayController
             ProcessStartTimeUtc = _clock.GetUtcNow(),
             StartedUtc = _clock.GetUtcNow()
         });
+        Report(progress, GatewayStartStage.Launching, "Launching the gateway.");
         GatewayStartOutcome started = await _client
             .StartAsync(session, request, cancellationToken)
             .ConfigureAwait(false);
@@ -260,8 +286,8 @@ internal sealed class GatewayController
 
         _store.Write(record);
 
-        SessionInspectResult observed = await InspectAsync(
-            session, record, helperPath, cancellationToken).ConfigureAwait(false);
+        SessionInspectResult observed = await WaitForListenerAsync(
+            session, record, helperPath, progress, cancellationToken).ConfigureAwait(false);
         GatewayState resultState = observed.IsOwnedAndHealthy ? GatewayState.Running
             : observed.Error is not null ? GatewayState.Unknown
             : observed.ProcessFound && observed.StartTimeMatches ? GatewayState.Starting
@@ -273,6 +299,18 @@ internal sealed class GatewayController
             _store.Write(record);
         }
 
+        Report(
+            progress,
+            resultState switch
+            {
+                GatewayState.Running => GatewayStartStage.Listening,
+                GatewayState.Starting => GatewayStartStage.GaveUpWaiting,
+                _ => GatewayStartStage.GaveUpWaiting
+            },
+            resultState == GatewayState.Running
+                ? $"The gateway is listening on {DescribePorts(record)}."
+                : "The gateway is not listening yet.");
+
         return new GatewayStartResult(
             resultState,
             record,
@@ -280,11 +318,68 @@ internal sealed class GatewayController
             resultState switch
             {
                 GatewayState.Running => $"The gateway is running on {DescribePorts(record)}.",
-                GatewayState.Starting => "The gateway process started but is not listening yet. Run `clawctl gateway-service status`.",
+                GatewayState.Starting =>
+                    "The gateway process started but is not listening yet. It may still be " +
+                    "coming up; run `clawctl gateway-service status` to check again.",
                 GatewayState.Unknown => $"The gateway launch could not be verified: {observed.Error}",
                 _ => DescribeExitedDuringStartup(record, observed)
             });
     }
+
+    /// <summary>
+    /// Polls until a listener the gateway owns appears, or the budget is spent.
+    /// </summary>
+    /// <remarks>
+    /// Every delay goes through the injected <see cref="TimeProvider"/>, so a
+    /// test drives the whole budget without waiting for real time.
+    ///
+    /// Only the "process is alive but has not bound yet" case is worth waiting
+    /// on. An inspection error or a process that has already gone means waiting
+    /// longer changes nothing, so the loop stops immediately rather than
+    /// spending the budget on a decided outcome.
+    /// </remarks>
+    private async Task<SessionInspectResult> WaitForListenerAsync(
+        SessionRecord session,
+        GatewayRecord record,
+        string helperPath,
+        IProgress<GatewayStartProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        DateTimeOffset deadline = _clock.GetUtcNow() + ListenerWaitBudget;
+        bool reportedWaiting = false;
+
+        while (true)
+        {
+            SessionInspectResult observed = await InspectAsync(
+                session, record, helperPath, cancellationToken).ConfigureAwait(false);
+
+            if (observed.IsOwnedAndHealthy ||
+                observed.Error is not null ||
+                !(observed.ProcessFound && observed.StartTimeMatches) ||
+                _clock.GetUtcNow() >= deadline)
+            {
+                return observed;
+            }
+
+            if (!reportedWaiting)
+            {
+                reportedWaiting = true;
+                Report(
+                    progress,
+                    GatewayStartStage.WaitingForListener,
+                    "Waiting for the gateway to start listening.");
+            }
+
+            await Task.Delay(ListenerPollInterval, _clock, cancellationToken)
+                .ConfigureAwait(false);
+        }
+    }
+
+    private static void Report(
+        IProgress<GatewayStartProgress>? progress,
+        GatewayStartStage stage,
+        string message) =>
+        progress?.Report(new GatewayStartProgress(stage, message));
 
     /// <summary>
     /// Names the port a user should actually connect to.
@@ -481,19 +576,27 @@ internal sealed class GatewayController
             DescribeUnhealthy(record, inspection));
     }
 
+    /// <summary>
+    /// Explains a gateway that is no longer running, in the supervisor's words.
+    /// </summary>
+    /// <remarks>
+    /// The log lives on a path inside the session that the user cannot open
+    /// from the host, so the bundle is named instead. `clawctl collect-logs`
+    /// collects that same log along with everything needed to read it in
+    /// context.
+    /// </remarks>
     private static string? DescribeStoppedGateway(
         GatewayRecord record,
         SessionInspectResult inspection)
     {
+        _ = record;
         if (string.IsNullOrWhiteSpace(inspection.SupervisorDetail))
         {
             return null;
         }
 
-        return string.IsNullOrWhiteSpace(record.LogPath)
-            ? $"The supervisor reported: {inspection.SupervisorDetail}"
-            : $"The supervisor reported: {inspection.SupervisorDetail} " +
-              $"Inspect the gateway log at '{record.LogPath}'.";
+        return $"The supervisor reported: {inspection.SupervisorDetail} " +
+            "Run `clawctl collect-logs` to capture the gateway log.";
     }
 
     private static string DescribeExitedDuringStartup(
@@ -501,7 +604,8 @@ internal sealed class GatewayController
         SessionInspectResult inspection) =>
         DescribeStoppedGateway(record, inspection) is string detail
             ? $"The gateway process exited during startup. {detail}"
-            : "The gateway process exited during startup. Inspect its log.";
+            : "The gateway process exited during startup. " +
+              "Run `clawctl collect-logs` to capture the gateway log.";
 
     /// <summary>
     /// Explains an unhealthy gateway in terms of what was observed.

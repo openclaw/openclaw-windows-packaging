@@ -17,6 +17,13 @@ internal sealed class FakeSessionGatewayClient : ISessionGatewayClient
 
     public SessionInspectResult Inspection { get; set; } = new();
 
+    /// <summary>
+    /// Observations to return in order, one per inspection, before falling back
+    /// to <see cref="Inspection"/>. Lets a test drive a gateway that binds only
+    /// after several checks.
+    /// </summary>
+    public Queue<SessionInspectResult> InspectionSequence { get; } = new();
+
     public SessionInspectResult? StopResult { get; set; }
 
     public GatewayStartOutcome StartOutcome { get; set; } = new(
@@ -48,7 +55,8 @@ internal sealed class FakeSessionGatewayClient : ISessionGatewayClient
         CancellationToken cancellationToken)
     {
         Calls.Add($"inspect:{gateway.ProcessId}");
-        return Task.FromResult(Inspection);
+        return Task.FromResult(
+            InspectionSequence.Count > 0 ? InspectionSequence.Dequeue() : Inspection);
     }
 
     public Task<SessionInspectResult> StopAsync(
@@ -142,7 +150,8 @@ public sealed class GatewayControllerTests : IDisposable
             _ => { });
 
     private GatewayController CreateController(
-        GatewayStateStore? store = null)
+        GatewayStateStore? store = null,
+        TimeProvider? clock = null)
     {
         var sessionStore = new SessionStateStore(Path.Combine(_root, "session.json"));
         if (sessionStore.Read(ApplicationId).Fault == SessionStateFault.Missing)
@@ -168,7 +177,8 @@ public sealed class GatewayControllerTests : IDisposable
                 Port: null)),
             _ => { },
             () => sessions.GetRecordedStatus().Record ?? throw new SessionException("Run setup."),
-            new AlwaysFreeLock());
+            new AlwaysFreeLock(),
+            clock);
     }
 
     private static SessionInspectResult Healthy() => new()
@@ -310,11 +320,14 @@ public sealed class GatewayControllerTests : IDisposable
         Assert.Equal(GatewayState.Stopped, report.State);
     }
 
+    // The gateway log lives inside the session, on a path the user cannot open
+    // from the host, so the reason has to travel with a route to the evidence
+    // rather than with an address that leads nowhere.
     [Fact]
-    public async Task AStoppedGatewayReportsTheSupervisorReasonAndLogPath()
+    public async Task AStoppedGatewayReportsTheSupervisorReasonAndHowToGetTheLog()
     {
         RecordGateway();
-        Store.Write(Store.Read().Record! with { LogPath = "gateway.log" });
+        Store.Write(Store.Read().Record! with { LogPath = @"C:\Users\guest\gateway.log" });
         _client.Inspection = new SessionInspectResult
         {
             SupervisorDetail = "the application exited with code 78"
@@ -325,11 +338,12 @@ public sealed class GatewayControllerTests : IDisposable
 
         Assert.Equal(GatewayState.Stopped, report.State);
         Assert.Contains("the application exited with code 78", report.Detail!, StringComparison.Ordinal);
-        Assert.Contains("gateway.log", report.Detail!, StringComparison.Ordinal);
+        Assert.Contains("clawctl collect-logs", report.Detail!, StringComparison.Ordinal);
+        Assert.DoesNotContain(@"C:\Users\guest", report.Detail!, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task AStartupExitReportsTheSupervisorReasonAndLogPath()
+    public async Task AStartupExitReportsTheSupervisorReasonAndHowToGetTheLog()
     {
         _client.Inspection = new SessionInspectResult
         {
@@ -341,7 +355,7 @@ public sealed class GatewayControllerTests : IDisposable
 
         Assert.Equal(GatewayState.Stopped, result.State);
         Assert.Contains("the application exited with code 78", result.Message, StringComparison.Ordinal);
-        Assert.Contains("gateway.log", result.Message, StringComparison.Ordinal);
+        Assert.Contains("clawctl collect-logs", result.Message, StringComparison.Ordinal);
     }
 
     [Fact]

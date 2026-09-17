@@ -85,7 +85,7 @@ the read-only application directory the workspace.
 | `clawctl teardown --force` | Confirm deletion, then stop and deprovision the owned session and remove its data and setup state. The MSIX remains installed. |
 | `clawctl pwsh` | Open an interactive PowerShell session inside the agent session. |
 | `clawctl collect-logs [--output <path>]` | Create a redacted host-and-agent diagnostics ZIP. |
-| `clawctl gateway-service start` | Start the OpenClaw gateway in the isolated session. Requires setup. |
+| `clawctl gateway-service start` | Start the OpenClaw gateway in the isolated session and wait for it to listen. Requires setup. |
 | `clawctl gateway-service status` | Inspect the gateway without starting it. |
 | `clawctl gateway-service stop` | Stop the gateway while retaining the session and its data. |
 | `clawctl --version` | Print the packaged launcher version. |
@@ -108,6 +108,40 @@ Interactive terminals use color for headings and status marks. `--no-color`,
 the `NO_COLOR` environment variable, redirected output, and CI disable color;
 `FORCE_COLOR` enables it for redirected output or CI unless color was
 explicitly disabled. JSON output never contains terminal escape sequences.
+
+### Starting the gateway
+
+`clawctl gateway-service start` waits for the gateway to bind rather than
+returning as soon as the process exists, because a process without a listener
+is not a usable gateway. It reports each stage as it happens — a spinner on an
+interactive terminal, one line per stage anywhere else — and narrates nothing
+at all under `--json`, so standard output carries exactly one document.
+
+The wait has a fixed budget. A gateway still coming up when the budget is spent
+is reported as starting rather than failed, and `clawctl gateway-service status`
+will show it once it binds.
+
+`clawctl` reports the gateway port only when it can identify that listener
+unambiguously:
+
+```text
+clawctl gateway-service start
+
+  Gateway:    ✓ listening
+  Port:       18789
+
+  Token:      openclaw gateway auth-token --show
+```
+
+OpenClaw owns the endpoint configuration, including TLS and a custom Control UI
+base path. The Windows package therefore does not construct an HTTP URL that
+might contradict that configuration. It reports no port when multiple
+unclassified listeners remain. JSON follows the same rule: `gateway.port` is
+present only when identified, and no URL is promised.
+Reaching the Control UI needs the shared gateway token, which
+`openclaw gateway auth-token --show` reveals. `--json` carries the identified
+port but not that command: a script should run it rather than parse a
+suggestion.
 
 Help and version requests take precedence over the rest of the command line.
 `clawctl --version bogus` reports the build identity and exits `0` rather than

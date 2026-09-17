@@ -378,6 +378,14 @@ internal static class ClawCtlConsole
         }
 
         view.Row("Gateway", DescribeGateway(view, result.Gateway));
+        if (Gateway.GatewayAddress.ResolvePort(result.Gateway.Record) is int statusPort &&
+            result.Gateway.State == Gateway.GatewayState.Running)
+        {
+            view.Row(
+                "Port",
+                new Text(statusPort.ToString(CultureInfo.InvariantCulture)));
+        }
+
         if (!string.IsNullOrWhiteSpace(result.Gateway.Detail))
         {
             view.Detail(result.Gateway.Detail);
@@ -467,27 +475,51 @@ internal static class ClawCtlConsole
     {
         view.Row("Gateway", result.State switch
         {
-            Gateway.GatewayState.Running => Status(view, StatusKind.Success, "running"),
+            Gateway.GatewayState.Running => Status(view, StatusKind.Success, "listening"),
             Gateway.GatewayState.NotStarted => Status(view, StatusKind.Neutral, "not started"),
-            Gateway.GatewayState.Stopped => Status(view, StatusKind.Success, "stopped"),
+
+            // Stopping on purpose is a success; a start that ends stopped means
+            // the gateway exited while coming up, which is a failure wearing
+            // the same state.
+            Gateway.GatewayState.Stopped => result.Action switch
+            {
+                "stop" => Status(view, StatusKind.Success, "stopped"),
+                "start" => Status(view, StatusKind.Failure, "exited during startup"),
+                _ => Status(view, StatusKind.Neutral, "stopped")
+            },
             Gateway.GatewayState.Starting => Status(view, StatusKind.Warning, "starting"),
             Gateway.GatewayState.Unhealthy => Status(view, StatusKind.Failure, "unhealthy"),
             _ => Status(view, StatusKind.Warning, "unknown")
         });
 
-        if (result.Port is not null)
+        if (result.Url is not null)
+        {
+            view.Row("URL", new Text(result.Url));
+        }
+        else if (result.Port is not null)
         {
             view.Row(
                 "Port",
                 new Text(result.Port.Value.ToString(CultureInfo.InvariantCulture)));
         }
 
+        // The message explains an outcome the state word cannot. It is
+        // redundant once the gateway is listening, because the row already
+        // says so, but it is the only account of why a start did not succeed.
         string? explanation = string.IsNullOrWhiteSpace(result.Detail)
             ? result.State == Gateway.GatewayState.Running ? null : result.Message
             : result.Detail;
         if (!string.IsNullOrWhiteSpace(explanation))
         {
             view.Detail(explanation);
+        }
+
+        // Reaching the Control UI needs the shared token, and the command that
+        // reveals it belongs to OpenClaw rather than to this package.
+        if (result.State == Gateway.GatewayState.Running && result.Port is not null)
+        {
+            view.Blank();
+            view.Command("Token", "openclaw gateway auth-token --show");
         }
 
         if (result.State == Gateway.GatewayState.NotStarted &&

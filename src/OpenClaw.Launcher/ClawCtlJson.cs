@@ -30,7 +30,14 @@ internal sealed record ClawCtlJsonSession(
 
 internal sealed record ClawCtlJsonRuntime(string NodeVersion);
 
-internal sealed record ClawCtlJsonGateway(string State, int? Port = null);
+// The url is the Control UI address, which is what a caller would open or
+// hand to a browser. The token command is deliberately absent: it is human
+// guidance, and a script that wants the token should run that command itself
+// rather than parse a suggestion out of a document.
+internal sealed record ClawCtlJsonGateway(
+    string State,
+    int? Port = null,
+    string? Url = null);
 
 internal sealed record ClawCtlJsonRecovery(string State);
 
@@ -156,7 +163,7 @@ internal static class ClawCtlJson
                 result.NodeVersion),
             Gateway: new ClawCtlJsonGateway(
                 DescribeGateway(result.Gateway.State),
-                GetSinglePort(result.Gateway.Record)),
+                GatewayAddress.ResolvePort(result.Gateway.Record)),
             Recovery: new ClawCtlJsonRecovery(DescribeRecovery(result.Recovery.State)),
             Error: result.ExitCode == 0
                 ? null
@@ -197,7 +204,10 @@ internal static class ClawCtlJson
                 true,
                 SchemaVersion,
                 result.Command,
-                Gateway: new ClawCtlJsonGateway(DescribeGateway(result.State), result.Port))
+                Gateway: new ClawCtlJsonGateway(
+                    DescribeGateway(result.State),
+                    result.Port,
+                    result.Url))
             : new ClawCtlJsonDocument(
                 false,
                 SchemaVersion,

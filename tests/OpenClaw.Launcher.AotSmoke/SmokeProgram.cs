@@ -47,6 +47,7 @@ internal static class SmokeProgram
             ("JSON failures survive NativeAOT", JsonFailureIsStructuredAsync),
             ("version JSON survives NativeAOT", VersionJsonIsStructuredAsync),
             ("Spectre renders clawctl output under NativeAOT", SpectreOutputRenders),
+            ("gateway narration survives NativeAOT", GatewayNarrationRenders),
             ("missing application reports diagnostics", MissingApplicationReportsAsync),
             ("openclaw never parses its arguments", AgentNeverParsesItsArgumentsAsync)
         ];
@@ -341,6 +342,62 @@ internal static class SmokeProgram
             failure.ToString().Contains("no package identity.", StringComparison.Ordinal),
             "The note callout did not render its message.");
         return Task.CompletedTask;
+    }
+
+    // Spectre's live displays and the generic progress plumbing are the parts
+    // most likely to depend on something trimming removes, and narration only
+    // ever runs on a real start, which no unit test performs end to end.
+    private static async Task GatewayNarrationRenders()
+    {
+        using var narrated = new StringWriter();
+        int value = await ClawCtlConsole.NarrateAsync(
+            narrated,
+            useColor: false,
+            narrate: true,
+            GatewayStartProgress.Initial,
+            progress =>
+            {
+                progress.Report(new GatewayStartProgress(
+                    GatewayStartStage.WaitingForListener,
+                    "Waiting for the gateway to start listening."));
+                return Task.FromResult(42);
+            }).ConfigureAwait(false);
+
+        Assert(value == 42, "Narration did not return the operation's result.");
+        Assert(
+            narrated.ToString().Contains("start listening", StringComparison.Ordinal),
+            "Narration did not report its stage.");
+
+        using var silent = new StringWriter();
+        await ClawCtlConsole.NarrateAsync(
+            silent,
+            useColor: false,
+            narrate: false,
+            GatewayStartProgress.Initial,
+            progress =>
+            {
+                progress.Report(new GatewayStartProgress(
+                    GatewayStartStage.Launching,
+                    "Launching the gateway."));
+                return Task.FromResult(0);
+            }).ConfigureAwait(false);
+
+        Assert(
+            silent.ToString().Length == 0,
+            "Narration wrote output when it was turned off.");
+
+        using var result = new StringWriter();
+        ClawCtlConsole.WriteResult(result, new GatewayCommandResult(
+            "start",
+            GatewayState.Running,
+            "The gateway is running on port 18789.",
+            null,
+            0,
+            18789,
+            "http://127.0.0.1:18789/"));
+        Assert(
+            result.ToString().Contains("http://127.0.0.1:18789/", StringComparison.Ordinal),
+            "The gateway result did not report its URL.");
     }
 
     private static string StripAnsi(string value)

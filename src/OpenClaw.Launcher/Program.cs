@@ -333,18 +333,19 @@ internal static class Program
         Session.SessionRuntime? sessionRuntime = null;
         Session.SessionRuntime GetSessionRuntime() =>
             sessionRuntime ??= lifecycle.CreateRuntime(log);
+
+        // Colour is decided the same way for narration and for the result that
+        // follows it, so a run cannot narrate in colour and then render plain.
+        // The returned scope restores the console mode and must be held for as
+        // long as anything is being written.
         (bool UseColor, IDisposable? Restore) PrepareColor()
         {
-            bool outputIsProcessConsoleWriter =
-                ReferenceEquals(output, Console.Out);
-            bool consoleIsInteractive =
-                WindowsHostConsole.Instance.IsInteractive;
             IDisposable? restore = null;
             bool useColor = ClawCtlColorPolicy.PrepareOutput(
                 outputOptions.NoColor,
                 outputOptions.Json,
-                outputIsProcessConsoleWriter,
-                consoleIsInteractive,
+                ReferenceEquals(output, Console.Out),
+                WindowsHostConsole.Instance.IsInteractive,
                 Environment.GetEnvironmentVariable,
                 () => WindowsHostConsole.Instance
                     .TryEnableVirtualTerminalProcessing(output, log, out restore));
@@ -480,14 +481,28 @@ internal static class Program
                 GatewayStart = async cancellationToken =>
                 {
                     Session.SessionRuntime runtime = GetSessionRuntime();
-                    Gateway.GatewayStartResult result = await Gateway.GatewayRuntime
+                    Gateway.GatewayController controller = Gateway.GatewayRuntime
                         .Create(options, runtime.Paths, runtime, log)
-                        .Controller
-                        .StartAsync(runtime.HelperPath, cancellationToken)
-                        .ConfigureAwait(false);
-                    int? port = result.Record.ObservedPorts is { Count: 1 }
-                        ? result.Record.ObservedPorts[0]
-                        : null;
+                        .Controller;
+
+                    // Narration is human guidance, so it is off whenever the
+                    // caller asked for a document: stdout carries exactly one
+                    // JSON object.
+                    (bool useColor, IDisposable? restore) = PrepareColor();
+                    Gateway.GatewayStartResult result;
+                    using (restore)
+                    {
+                        result = await ClawCtlConsole.NarrateAsync(
+                            output,
+                            useColor,
+                            narrate: !outputOptions.Json,
+                            Gateway.GatewayStartProgress.Initial,
+                            progress => controller.StartAsync(
+                                runtime.HelperPath, cancellationToken, progress))
+                            .ConfigureAwait(false);
+                    }
+
+                    int? port = Gateway.GatewayAddress.ResolvePort(result.Record);
                     return WriteResult(new GatewayCommandResult(
                         "start",
                         result.State,
