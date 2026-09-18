@@ -19,6 +19,8 @@ internal sealed class HostStartup
 
     public required TextWriter Error { get; init; }
 
+    public bool UsesProcessConsoleWriters { get; init; }
+
     public Session.IInstallationLifecycle? InstallationLifecycle { get; init; }
 
     public Func<string, string?>? ReadEnvironmentVariable { get; init; }
@@ -30,6 +32,7 @@ internal sealed class HostStartup
         BaseDirectory = AppContext.BaseDirectory,
         Output = Console.Out,
         Error = Console.Error,
+        UsesProcessConsoleWriters = true,
         InstallationLifecycle = Session.InstallationLifecycle.Production
     };
 }

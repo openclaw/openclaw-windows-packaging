@@ -123,7 +123,7 @@ internal static class Program
         try
         {
             WriteDiagnostic($"Host started through the {commandName} entrypoint.");
-            if (ReferenceEquals(startup.Output, Console.Out) &&
+            if (startup.UsesProcessConsoleWriters &&
                 WindowsHostConsole.Instance.IsInteractive)
             {
                 consoleRestore = WindowsHostConsole.Instance.Capture(WriteDiagnostic);
@@ -149,7 +149,9 @@ internal static class Program
                         ? null
                         : startup.InstallationLifecycle.CreateRuntime,
                     readEnvironmentVariable: startup.ReadEnvironmentVariable,
-                    error: error)
+                    error: error,
+                    errorIsProcessConsoleWriter:
+                        startup.UsesProcessConsoleWriters ? () => true : null)
                     .ConfigureAwait(false);
         }
         catch (Exception exception)
@@ -363,6 +365,7 @@ internal static class Program
                     (interactive && Console.OutputEncoding.CodePage == 65001);
                 log(
                     $"Gateway hint capabilities: interactive={interactive}, " +
+                    $"processStderr={processConsoleWriter}, " +
                     $"stderrConsole={selectedStreamIsInteractive}, " +
                     $"color={useColor}, unicode={useUnicode}.");
                 using (restore)

@@ -17,6 +17,12 @@ public sealed class ProgramStartupTests : IDisposable
     }
 
     [Fact]
+    public void ProductionStartupIdentifiesItsProcessConsoleWriters()
+    {
+        Assert.True(HostStartup.CreateProduction().UsesProcessConsoleWriters);
+    }
+
+    [Fact]
     public async Task StartupWritesRecordsToTheSuppliedDiagnosticLog()
     {
         using var output = new StringWriter();
