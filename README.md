@@ -80,7 +80,9 @@ gateway has never started or has stopped, it suggests
 `clawctl gateway-service start` on standard error. It does not suggest a second
 start when gateway status is starting, unhealthy, or unknown. The check stops
 for the current Windows logon after that start command is invoked or a running
-gateway is observed; a new Windows logon enables it again.
+gateway is observed; a new Windows logon enables it again. On an interactive
+terminal the hint uses the crab identity and the same warning/accent palette as
+`clawctl`; redirected and explicitly color-disabled output remains plain.
 
 ### `clawctl`
 
@@ -90,12 +92,12 @@ gateway is observed; a new Windows logon enables it again.
 |---|---|
 | `clawctl setup` | Confirm packaged `app\openclaw.mjs` exists, provision or reuse the owned isolated session, and install the bundled Node.js runtime in the agent profile. It also configures gateway sign-in recovery without starting a gateway. On a machine that cannot host a session it fails with the Windows requirement described under [Requirements](#requirements). |
 | `clawctl setup --fresh [--force]` | Remove this installation's owned session and package-local state, then run setup again. Without `--force`, incomplete external cleanup stops before local state is erased. `--force` is valid only with `--fresh`; it preserves an explicit warning when cleanup of owned external resources cannot be confirmed, but still stops if bounded local deletion fails. |
-| `clawctl status` | Report the recorded isolated session, installed Node.js runtime, gateway, and sign-in recovery state without provisioning or replacing the session. It asks the backend to start the recorded provision as its status probe, so it is not a passive diagnostic. Use `clawctl gateway-service status` to inspect the gateway alone. |
+| `clawctl status` | Report the recorded isolated session, installed Node.js runtime, gateway, sign-in recovery, and file-only config readiness when the gateway is not running. It asks the backend to start the recorded provision as its status probe, so it is not a passive diagnostic, but it does not provision a replacement or start the gateway. Use `clawctl gateway-service status` to inspect the gateway alone. |
 | `clawctl teardown --force` | Confirm deletion, then stop and deprovision the owned session and remove its data and setup state. The MSIX remains installed. |
 | `clawctl pwsh` | Open an interactive PowerShell session inside the agent session. |
 | `clawctl collect-logs [--output <path>]` | Create a redacted host-and-agent diagnostics ZIP. |
 | `clawctl gateway-service start` | Start the OpenClaw gateway in the isolated session and wait for it to listen. Requires setup. |
-| `clawctl gateway-service status` | Inspect the gateway without starting it. |
+| `clawctl gateway-service status` | Inspect the gateway without starting it. When the gateway is not running, it may start/probe only the already-recorded isolated session to report file-only config readiness; it never provisions a replacement or starts the gateway. |
 | `clawctl gateway-service stop` | Stop the gateway while retaining the session and its data. |
 | `clawctl --version` | Print the packaged launcher version. |
 
@@ -112,6 +114,12 @@ All non-interactive commands accept `--json` and emit a versioned JSON document
 on standard output. Human diagnostics remain on standard error, and command
 exit codes do not change. `clawctl pwsh --json` is rejected because the command
 hands the terminal to an interactive shell.
+
+When the gateway is not confirmed running, status JSON includes an optional
+`gateway.readiness` object with `state`, stable `reason`, and failure `detail`
+where applicable. The readiness states are `absent`, `not-ready`,
+`startup-eligible`, `unavailable`, and `unknown`. A running gateway omits this
+object and incurs no config-readiness probe.
 
 Interactive terminals use color for headings and status marks. `--no-color`,
 the `NO_COLOR` environment variable, redirected output, and CI disable color;

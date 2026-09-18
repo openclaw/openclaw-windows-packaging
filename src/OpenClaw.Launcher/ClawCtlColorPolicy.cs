@@ -25,6 +25,30 @@ internal static class ClawCtlColorPolicy
              enableVirtualTerminalProcessing());
     }
 
+    internal static bool PrepareForegroundOutput(
+        bool noColor,
+        bool json,
+        bool outputIsProcessConsoleWriter,
+        bool invocationIsInteractive,
+        bool selectedStreamIsInteractive,
+        Func<string, string?> readEnvironmentVariable,
+        Func<bool> enableVirtualTerminalProcessing)
+    {
+        ArgumentNullException.ThrowIfNull(enableVirtualTerminalProcessing);
+
+        bool useColor = ShouldUseColor(
+            noColor,
+            json,
+            outputIsProcessConsoleWriter,
+            invocationIsInteractive,
+            readEnvironmentVariable);
+
+        return useColor &&
+            (!outputIsProcessConsoleWriter ||
+             !selectedStreamIsInteractive ||
+             enableVirtualTerminalProcessing());
+    }
+
     internal static bool ShouldUseColor(
         bool noColor,
         bool json,

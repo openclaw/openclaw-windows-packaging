@@ -123,8 +123,7 @@ internal static class Program
         try
         {
             WriteDiagnostic($"Host started through the {commandName} entrypoint.");
-            if (startup.Entrypoint == HostEntrypoint.Control &&
-                ReferenceEquals(startup.Output, Console.Out) &&
+            if (ReferenceEquals(startup.Output, Console.Out) &&
                 WindowsHostConsole.Instance.IsInteractive)
             {
                 consoleRestore = WindowsHostConsole.Instance.Capture(WriteDiagnostic);
@@ -282,7 +281,10 @@ internal static class Program
         Func<bool>? isInteractive = null,
         TextWriter? error = null,
         Func<string>? getLogonSessionId = null,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null,
+        Func<bool>? errorIsProcessConsoleWriter = null,
+        Func<bool>? errorIsInteractive = null,
+        Func<bool>? supportsUnicode = null)
     {
         string applicationDirectory = GetPackagedApplicationDirectory(options);
         log("Using the OpenClaw application directly from the package.");
@@ -339,20 +341,36 @@ internal static class Program
             clock,
             target =>
             {
+                bool selectedStreamIsInteractive =
+                    errorIsInteractive?.Invoke() ??
+                    WindowsHostConsole.Instance.IsInteractiveOutput(target);
+                bool processConsoleWriter =
+                    errorIsProcessConsoleWriter?.Invoke() ??
+                    ReferenceEquals(target, Console.Error);
                 IDisposable? restore = null;
-                bool useColor = ClawCtlColorPolicy.PrepareOutput(
+                bool useColor = ClawCtlColorPolicy.PrepareForegroundOutput(
                     noColor: false,
                     json: false,
-                    ReferenceEquals(target, Console.Error),
+                    processConsoleWriter,
                     interactive,
+                    selectedStreamIsInteractive,
                     environmentReader,
                     () => WindowsHostConsole.Instance.TryEnableVirtualTerminalProcessing(
                         target,
                         log,
                         out restore));
+                bool useUnicode = supportsUnicode?.Invoke() ??
+                    (interactive && Console.OutputEncoding.CodePage == 65001);
+                log(
+                    $"Gateway hint capabilities: interactive={interactive}, " +
+                    $"stderrConsole={selectedStreamIsInteractive}, " +
+                    $"color={useColor}, unicode={useUnicode}.");
                 using (restore)
                 {
-                    ClawCtlConsole.WriteGatewayHint(target, useColor);
+                    ClawCtlConsole.WriteGatewayHint(
+                        target,
+                        useColor,
+                        useUnicode);
                 }
             });
         await guidance.EvaluateAsync(
@@ -481,13 +499,21 @@ internal static class Program
                     Gateway.GatewayPersistenceStatus recovery = await lifecycle
                         .GetRecoveryStatusAsync(log, cancellationToken)
                         .ConfigureAwait(false);
+                    Session.AgentConfigReadinessStatus? configReadiness =
+                        gateway.State == Gateway.GatewayState.Running
+                            ? null
+                            : await Session.AgentConfigReadinessProbe.CheckAsync(
+                                runtime,
+                                status,
+                                cancellationToken).ConfigureAwait(false);
                     Session.SetupStateResult setup =
                         runtime.SetupState.Read(runtime.ApplicationId);
                     return WriteResult(new StatusCommandResult(
                         status,
                         gateway,
                         recovery,
-                        setup.Record?.AgentNodeVersion));
+                        setup.Record?.AgentNodeVersion,
+                        configReadiness));
                 },
                 CollectLogs = async (requestedPath, cancellationToken) =>
                 {
@@ -579,10 +605,28 @@ internal static class Program
                 },
                 GatewayStatus = async cancellationToken =>
                 {
-                    Gateway.GatewayRuntime runtime = Gateway.GatewayRuntime.Create(options, log);
+                    Session.SessionRuntime sessionRuntime = GetSessionRuntime();
+                    Gateway.GatewayRuntime runtime = Gateway.GatewayRuntime.Create(
+                        options,
+                        sessionRuntime.Paths,
+                        sessionRuntime,
+                        log);
                     Gateway.GatewayStatusReport result = await runtime.Controller
-                        .GetStatusAsync(GetSessionRuntime().HelperPath, cancellationToken)
+                        .GetStatusAsync(sessionRuntime.HelperPath, cancellationToken)
                         .ConfigureAwait(false);
+                    Session.AgentConfigReadinessStatus? configReadiness = null;
+                    if (result.State != Gateway.GatewayState.Running)
+                    {
+                        Session.SessionStatus session = await sessionRuntime.Coordinator
+                            .ProbeRecordedStatusAsync(cancellationToken)
+                            .ConfigureAwait(false);
+                        configReadiness =
+                            await Session.AgentConfigReadinessProbe.CheckAsync(
+                                sessionRuntime,
+                                session,
+                                cancellationToken).ConfigureAwait(false);
+                    }
+
                     int? port = result.Record?.ObservedPorts is { Count: 1 }
                         ? result.Record.ObservedPorts[0]
                         : null;
@@ -593,9 +637,10 @@ internal static class Program
                         result.Detail,
                         result.State is Gateway.GatewayState.Running or
                             Gateway.GatewayState.NotStarted
-                            ? 0
+                            ? configReadiness?.ProbeFailed == true ? 1 : 0
                             : 1,
-                        port));
+                        port,
+                        Readiness: configReadiness));
                 },
                 GatewayStop = async cancellationToken =>
                 {

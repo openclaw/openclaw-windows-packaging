@@ -21,6 +21,10 @@ should describe that environment in terms an operator can act on, while
   presents onboarding as mandatory nor launches it automatically.
 - End neutral states with the command that moves the user forward, such as
   `Run: clawctl setup`.
+- When a gateway is not running, show the file-only agent config readiness
+  immediately after the gateway row. Suggest `clawctl gateway-service start`
+  only when readiness is `startup eligible`; absent, incomplete, unavailable,
+  and unknown config states need diagnosis or configuration instead.
 - Keep a successful `clawctl pwsh` launch silent so the user reaches the shell
   prompt directly. Its help text explains which commands are available inside
   the session.
@@ -31,6 +35,14 @@ Prefer keeping package paths, sandbox identifiers, process identifiers, and
 other non-actionable implementation details out of human output. Preserve them
 in structured output and diagnostics when they are useful for automation or
 support.
+
+The post-OpenClaw gateway hint is a package-owned status surface even though it
+is written after upstream output. On an interactive invocation it uses the crab
+mark, warning-colored `Hint:`, and an accent-colored unquoted command. Resolve
+foreground eligibility separately from the selected stderr handle: an
+app-execution-alias proxy can carry ANSI without supporting console-mode
+changes, while a native console handle still requires VT setup. Whole-command
+redirection, CI, and `NO_COLOR` remain plain; `FORCE_COLOR` remains authoritative.
 
 ## Failures and diagnostics
 

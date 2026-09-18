@@ -119,6 +119,15 @@ owned by that process or one of its descendants. A missing record is
 process is `Unhealthy`; and failed inspection is `Unknown` to avoid starting a
 second gateway beside one that could still be healthy.
 
+Both `clawctl status` and `clawctl gateway-service status` add the helper's
+file-only config readiness whenever the managed gateway is not confirmed
+running. The gateway-only command first observes gateway state, then starts
+only an already-recorded session when necessary to reach the helper; it never
+provisions a replacement or starts the gateway. Human output reports
+`not configured`, `not ready`, `startup eligible`, `unavailable`, or `unknown`.
+Structured output carries the same state under `gateway.readiness` with the
+stable reason. A running gateway omits readiness and avoids the helper call.
+
 After an `openclaw` child exits, the launcher uses the helper's file-only
 readiness result before checking the managed gateway record and liveness. A
 successful interactive call gets a start suggestion only for `NotStarted` or
@@ -133,6 +142,13 @@ ID, so it suppresses later checks only for the current Windows logon. The
 sign-in recovery command carries a hidden provenance marker and does not count
 as a manual acknowledgement; a later OpenClaw invocation that observes its
 running gateway does.
+
+Agent entrypoint startup captures and restores console state and initializes
+UTF-8 just as the control entrypoint does. Postflight rendering treats
+foreground interactivity and stderr's native console capability separately:
+the app-alias stderr proxy can receive ANSI and the crab glyph without
+supporting `GetConsoleMode`, while a native console still requires successful
+VT enablement.
 
 ## Diagnostics and safe collection
 

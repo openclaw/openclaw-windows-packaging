@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using OpenClaw.Launcher.Gateway;
 using OpenClaw.Launcher.Session;
+using OpenClaw.SessionProtocol;
 
 namespace OpenClaw.Launcher;
 
@@ -37,7 +38,13 @@ internal sealed record ClawCtlJsonRuntime(string NodeVersion);
 internal sealed record ClawCtlJsonGateway(
     string State,
     int? Port = null,
-    string? Url = null);
+    string? Url = null,
+    ClawCtlJsonReadiness? Readiness = null);
+
+internal sealed record ClawCtlJsonReadiness(
+    string State,
+    string? Reason = null,
+    string? Detail = null);
 
 internal sealed record ClawCtlJsonRecovery(string State);
 
@@ -163,7 +170,8 @@ internal static class ClawCtlJson
                 result.NodeVersion),
             Gateway: new ClawCtlJsonGateway(
                 DescribeGateway(result.Gateway.State),
-                GatewayAddress.ResolvePort(result.Gateway.Record)),
+                GatewayAddress.ResolvePort(result.Gateway.Record),
+                Readiness: FromReadiness(result.Readiness)),
             Recovery: new ClawCtlJsonRecovery(DescribeRecovery(result.Recovery.State)),
             Error: result.ExitCode == 0
                 ? null
@@ -207,11 +215,19 @@ internal static class ClawCtlJson
                 Gateway: new ClawCtlJsonGateway(
                     DescribeGateway(result.State),
                     result.Port,
-                    result.Url))
+                    result.Url,
+                    FromReadiness(result.Readiness)))
             : new ClawCtlJsonDocument(
                 false,
                 SchemaVersion,
                 result.Command,
+                Gateway: result.Readiness is null
+                    ? null
+                    : new ClawCtlJsonGateway(
+                        DescribeGateway(result.State),
+                        result.Port,
+                        result.Url,
+                        FromReadiness(result.Readiness)),
                 Error: new ClawCtlJsonError(
                     "cli_error",
                     NormalizeMessage(result.Detail ?? result.Message)));
@@ -246,6 +262,41 @@ internal static class ClawCtlJson
             GatewayState.Starting => "starting",
             _ => "unknown"
         };
+
+    private static ClawCtlJsonReadiness? FromReadiness(
+        AgentConfigReadinessStatus? readiness) =>
+        readiness is null
+            ? null
+            : new ClawCtlJsonReadiness(
+                readiness.State switch
+                {
+                    AgentConfigReadinessState.Absent => "absent",
+                    AgentConfigReadinessState.NotReady => "not-ready",
+                    AgentConfigReadinessState.StartupEligible => "startup-eligible",
+                    AgentConfigReadinessState.Unavailable => "unavailable",
+                    _ => "unknown"
+                },
+                readiness.Reason is null
+                    ? null
+                    : readiness.Reason.Value switch
+                    {
+                        SessionConfigReadinessReason.ConfigFileMissing =>
+                            "config-file-missing",
+                        SessionConfigReadinessReason.ConfigFileUnreadable =>
+                            "config-file-unreadable",
+                        SessionConfigReadinessReason.ConfigFileInvalid =>
+                            "config-file-invalid",
+                        SessionConfigReadinessReason.GatewayMissing =>
+                            "gateway-missing",
+                        SessionConfigReadinessReason.GatewayModeMissing =>
+                            "gateway-mode-missing",
+                        SessionConfigReadinessReason.GatewayModeNotLocal =>
+                            "gateway-mode-not-local",
+                        SessionConfigReadinessReason.GatewayModeLocal =>
+                            "gateway-mode-local",
+                        _ => "unknown"
+                    },
+                NormalizeOptionalMessage(readiness.Detail));
 
     private static string DescribeRecovery(GatewayPersistenceState state) =>
         state switch

@@ -102,4 +102,55 @@ public sealed class ClawCtlColorPolicyTests
         Assert.False(enabled);
         Assert.True(enableCalled);
     }
+
+    [Fact]
+    public void InteractiveForegroundProxyUsesColorWithoutVirtualTerminalSetup()
+    {
+        bool enableCalled = false;
+
+        bool enabled = ClawCtlColorPolicy.PrepareForegroundOutput(
+            noColor: false,
+            json: false,
+            outputIsProcessConsoleWriter: true,
+            invocationIsInteractive: true,
+            selectedStreamIsInteractive: false,
+            _ => null,
+            () =>
+            {
+                enableCalled = true;
+                return false;
+            });
+
+        Assert.True(enabled);
+        Assert.False(enableCalled);
+    }
+
+    [Theory]
+    [InlineData(false, null, null)]
+    [InlineData(true, "1", null)]
+    [InlineData(true, null, "true")]
+    public void NoninteractiveAndExplicitPlainForegroundOutputStayPlain(
+        bool invocationIsInteractive,
+        string? noColor,
+        string? continuousIntegration)
+    {
+        string? ReadEnvironment(string name) => name switch
+        {
+            "NO_COLOR" => noColor,
+            "CI" => continuousIntegration,
+            _ => null
+        };
+
+        bool enabled = ClawCtlColorPolicy.PrepareForegroundOutput(
+            noColor: false,
+            json: false,
+            outputIsProcessConsoleWriter: true,
+            invocationIsInteractive,
+            selectedStreamIsInteractive: false,
+            ReadEnvironment,
+            () => throw new InvalidOperationException(
+                "A proxy stream must not require console mode changes."));
+
+        Assert.False(enabled);
+    }
 }

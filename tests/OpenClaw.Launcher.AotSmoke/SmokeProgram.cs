@@ -369,6 +369,27 @@ internal static class SmokeProgram
                 "'clawctl gateway-service start'",
                 StringComparison.Ordinal),
             "The colored gateway hint lost its branding or command formatting.");
+
+        using var readinessJson = new StringWriter();
+        ClawCtlJson.WriteResult(
+            readinessJson,
+            new GatewayCommandResult(
+                "status",
+                GatewayState.NotStarted,
+                "No gateway has been started.",
+                null,
+                0,
+                Readiness: new AgentConfigReadinessStatus(
+                    AgentConfigReadinessState.StartupEligible)));
+        using JsonDocument readinessDocument =
+            JsonDocument.Parse(readinessJson.ToString());
+        Assert(
+            readinessDocument.RootElement
+                .GetProperty("gateway")
+                .GetProperty("readiness")
+                .GetProperty("state")
+                .GetString() == "startup-eligible",
+            "The readiness JSON projection did not survive NativeAOT.");
         return Task.CompletedTask;
     }
 
