@@ -353,6 +353,22 @@ internal static class SmokeProgram
         Assert(
             failure.ToString().Contains("no package identity.", StringComparison.Ordinal),
             "The note callout did not render its message.");
+
+        using var hint = new StringWriter();
+        ClawCtlConsole.WriteGatewayHint(
+            hint,
+            useColor: true,
+            useUnicode: true);
+        string visibleHint = StripAnsi(hint.ToString());
+        Assert(
+            visibleHint.Contains("\U0001f980 Hint:", StringComparison.Ordinal) &&
+            visibleHint.Contains(
+                "Run clawctl gateway-service start",
+                StringComparison.Ordinal) &&
+            !visibleHint.Contains(
+                "'clawctl gateway-service start'",
+                StringComparison.Ordinal),
+            "The colored gateway hint lost its branding or command formatting.");
         return Task.CompletedTask;
     }
 

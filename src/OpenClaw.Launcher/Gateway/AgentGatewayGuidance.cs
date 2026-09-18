@@ -8,7 +8,7 @@ internal sealed class AgentGatewayGuidance
 {
     internal const string Hint =
         "Hint: The OpenClaw gateway is not running. " +
-        "Run 'clawctl gateway-service start' to start it.";
+        "Run clawctl gateway-service start to start it.";
     internal static readonly TimeSpan AdvisoryTimeout = TimeSpan.FromSeconds(5);
 
     private readonly ISessionLock _lifecycleLock;
@@ -18,6 +18,7 @@ internal sealed class AgentGatewayGuidance
     private readonly Func<string> _getLogonSessionId;
     private readonly Action<string> _log;
     private readonly TimeProvider _clock;
+    private readonly Action<TextWriter> _writeHint;
 
     public AgentGatewayGuidance(
         ISessionLock lifecycleLock,
@@ -26,7 +27,8 @@ internal sealed class AgentGatewayGuidance
         GatewayGuidanceStateStore state,
         Func<string> getLogonSessionId,
         Action<string> log,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null,
+        Action<TextWriter>? writeHint = null)
     {
         _lifecycleLock = lifecycleLock;
         _checkReadiness = checkReadiness;
@@ -35,6 +37,7 @@ internal sealed class AgentGatewayGuidance
         _getLogonSessionId = getLogonSessionId;
         _log = log;
         _clock = clock ?? TimeProvider.System;
+        _writeHint = writeHint ?? (writer => writer.WriteLine(Hint));
     }
 
     public async Task EvaluateAsync(
@@ -76,7 +79,7 @@ internal sealed class AgentGatewayGuidance
                 interactive &&
                 openClawExitCode == 0)
             {
-                await error.WriteLineAsync(Hint).ConfigureAwait(false);
+                _writeHint(error);
             }
         }
         catch (Exception exception) when (

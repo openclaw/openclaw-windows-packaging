@@ -16,6 +16,47 @@ public sealed class ClawCtlConsoleTests
         Assert.Equal(expected, ClawCtlConsole.FormatHeading("status", useUnicode));
     }
 
+    [Theory]
+    [InlineData(true, "\U0001f980 Hint:")]
+    [InlineData(false, "Hint:")]
+    public void GatewayHintUsesAvailableCrabBranding(
+        bool useUnicode,
+        string expectedPrefix)
+    {
+        using var output = new StringWriter();
+
+        ClawCtlConsole.WriteGatewayHint(output, useUnicode: useUnicode);
+
+        string rendered = output.ToString();
+        Assert.StartsWith(expectedPrefix, rendered, StringComparison.Ordinal);
+        Assert.Contains(
+            "Run clawctl gateway-service start to start it.",
+            rendered,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "'clawctl gateway-service start'",
+            rendered,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GatewayHintColorChangesOnlyTerminalFormatting()
+    {
+        using var plain = new StringWriter();
+        using var colored = new StringWriter();
+
+        ClawCtlConsole.WriteGatewayHint(plain, useUnicode: true);
+        ClawCtlConsole.WriteGatewayHint(
+            colored,
+            useColor: true,
+            useUnicode: true);
+
+        Assert.Contains("\u001b[", colored.ToString(), StringComparison.Ordinal);
+        Assert.Equal(
+            plain.ToString(),
+            Regex.Replace(colored.ToString(), "\u001b\\[[0-9;]*m", string.Empty));
+    }
+
     [Fact]
     public void WriteSetupResultShowsReadyStateAndNextAction()
     {

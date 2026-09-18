@@ -77,6 +77,27 @@ internal static class ClawCtlConsole
         }
     }
 
+    internal static void WriteGatewayHint(
+        TextWriter output,
+        bool useColor = false,
+        bool? useUnicode = null)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+
+        bool unicode = useUnicode ?? SupportsUnicode(output);
+        var paragraph = new Paragraph();
+        if (unicode)
+        {
+            paragraph.Append($"{IdentityMark} ", WarningStyle);
+        }
+
+        paragraph.Append("Hint:", WarningStyle);
+        paragraph.Append(" The OpenClaw gateway is not running. Run ");
+        paragraph.Append("clawctl gateway-service start", AccentStyle);
+        paragraph.Append(" to start it.");
+        Render(output, paragraph, useColor, unicode);
+    }
+
     internal static void WriteVersion(TextWriter output, bool useColor = false)
     {
         ArgumentNullException.ThrowIfNull(output);

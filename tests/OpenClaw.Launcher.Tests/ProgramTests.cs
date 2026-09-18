@@ -150,13 +150,21 @@ public sealed class ProgramTests : IDisposable
             _ => runtime,
             probeReadiness: SupportedHost,
             getPackageFamilyName: () => runtime.Paths.PackageFamilyName,
-            readEnvironmentVariable: _ => null,
+            readEnvironmentVariable: name =>
+                name == "FORCE_COLOR" ? "1" : null,
             isInteractive: () => true,
             error: error,
             getLogonSessionId: () => "logon-a");
 
         Assert.Equal(0, exitCode);
-        Assert.Contains(AgentGatewayGuidance.Hint, error.ToString(), StringComparison.Ordinal);
+        Assert.Contains("\u001b[", error.ToString(), StringComparison.Ordinal);
+        Assert.Contains(
+            AgentGatewayGuidance.Hint,
+            System.Text.RegularExpressions.Regex.Replace(
+                error.ToString(),
+                "\u001b\\[[0-9;]*m",
+                string.Empty),
+            StringComparison.Ordinal);
     }
 
     [Fact]

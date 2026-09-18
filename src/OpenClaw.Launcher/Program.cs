@@ -301,6 +301,11 @@ internal static class Program
                 .ConfigureAwait(false);
         string agentNodePath = runtime.RequireAgentNodePath(
             GetPackagedNodeArchivePath(options));
+        bool interactive =
+            (isInteractive ?? (() => WindowsHostConsole.Instance.IsInteractive))();
+        TextWriter errorWriter = error ?? Console.Error;
+        Func<string, string?> environmentReader =
+            readEnvironmentVariable ?? Environment.GetEnvironmentVariable;
         int exitCode = await runtime.Executor.ExecuteAsync(
             record,
             new Session.SessionExecutionRequest(
@@ -311,8 +316,8 @@ internal static class Program
                 record.WorkspacePath!)
             {
                 AdditionalEnvironment = OpenClawRuntimeEnvironment.Build(
-                    (isInteractive ?? (() => WindowsHostConsole.Instance.IsInteractive))(),
-                    readEnvironmentVariable ?? Environment.GetEnvironmentVariable)
+                    interactive,
+                    environmentReader)
             },
             CancellationToken.None).ConfigureAwait(false);
         Gateway.GatewayController gateway = Gateway.GatewayRuntime
@@ -331,11 +336,29 @@ internal static class Program
                 runtime.Paths.GatewayGuidanceStatePath),
             getLogonSessionId ?? Gateway.WindowsLogonSession.GetCurrentId,
             log,
-            clock);
+            clock,
+            target =>
+            {
+                IDisposable? restore = null;
+                bool useColor = ClawCtlColorPolicy.PrepareOutput(
+                    noColor: false,
+                    json: false,
+                    ReferenceEquals(target, Console.Error),
+                    interactive,
+                    environmentReader,
+                    () => WindowsHostConsole.Instance.TryEnableVirtualTerminalProcessing(
+                        target,
+                        log,
+                        out restore));
+                using (restore)
+                {
+                    ClawCtlConsole.WriteGatewayHint(target, useColor);
+                }
+            });
         await guidance.EvaluateAsync(
             exitCode,
-            (isInteractive ?? (() => WindowsHostConsole.Instance.IsInteractive))(),
-            error ?? Console.Error).ConfigureAwait(false);
+            interactive,
+            errorWriter).ConfigureAwait(false);
         return exitCode;
     }
 
