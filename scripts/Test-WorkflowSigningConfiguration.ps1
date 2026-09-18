@@ -22,6 +22,20 @@ $requiredFragments = @(
     "contains(needs.*.result, 'failure')"
     "contains(needs.*.result, 'cancelled')"
     'name: Upload payload'
+    'name: Test stable source selection'
+    'name: Restore source selection for a retry'
+    'name: Save immutable source selection'
+    'name: openclaw-source-resolution'
+    './scripts/Get-WorkflowSource.ps1'
+    "'scripts/OpenClawSource.ps1'"
+    "'scripts/Get-WorkflowSource.ps1'"
+    "'scripts/Test-OpenClawSource.Tests.ps1'"
+    '-ReuseSnapshot:($env:GITHUB_RUN_ATTEMPT -ne ''1'')'
+    'ref: ${{ steps.resolve.outputs.sha }}'
+    '-ExpectedVersion ''${{ steps.resolve.outputs.version }}'''
+    'GATEWAY_TAG: ${{ needs.build-package.outputs.source_tag }}'
+    '-GatewayTag $env:GATEWAY_TAG'
+    'OPENCLAW_REF: ${{ inputs.openclaw_ref || needs.build-package.outputs.source_sha }}'
     "retention-days: `${{ github.event_name == 'pull_request' && 1 || 7 }}"
     'name: Restore cached OpenClaw package'
     "if: `${{ github.event_name != 'workflow_dispatch' || inputs.signing_mode != 'official' }}"
@@ -93,32 +107,16 @@ if ($buildMsixJob.Contains(
 
 $dispatchDefaultMatch = [regex]::Match(
     $workflow,
-    '(?ms)openclaw_ref:\s+description:.*?default:\s*(?<sha>[0-9a-f]{40})'
+    '(?ms)openclaw_ref:\s+description:.*?required:\s*false\s+default:\s*''''\s+type:\s*string'
 )
-$automaticFallbackMatch = [regex]::Match(
-    $workflow,
-    "OPENCLAW_REF:.*?\|\|\s*'(?<sha>[0-9a-f]{40})'"
-)
-if (-not $dispatchDefaultMatch.Success -or -not $automaticFallbackMatch.Success) {
-    throw 'Unable to locate both pinned OpenClaw workflow revisions.'
+if (-not $dispatchDefaultMatch.Success -or
+    $workflow -match "(?m)^\s*OPENCLAW_REF:.*\|\|\s*'[0-9a-f]{40}'") {
+    throw 'An empty source input must follow stable; do not add a second source pin.'
 }
 
-$releasePolicy = Get-Content `
-    -LiteralPath (Join-Path $repositoryRoot 'release-policy.json') `
-    -Raw |
-    ConvertFrom-Json
-$pinnedRevisions = @(
-    @(
-        $dispatchDefaultMatch.Groups['sha'].Value
-        $automaticFallbackMatch.Groups['sha'].Value
-        [string]$releasePolicy.approvedCommit
-    ) | Select-Object -Unique
-)
-if ($pinnedRevisions.Count -ne 1) {
-    throw (
-        'The workflow defaults and official release policy must pin the same ' +
-        "OpenClaw commit; found: $($pinnedRevisions -join ', ')."
-    )
+$identityCalls = [regex]::Matches($workflow, '-GatewayTag \$env:GATEWAY_TAG')
+if ($identityCalls.Count -ne 3) {
+    throw 'MSIX, bundle and upgrade verification must use the same resolved Gateway tag.'
 }
 
 if ($workflow.Contains('AZURE_CLIENT_SECRET', [StringComparison]::Ordinal)) {

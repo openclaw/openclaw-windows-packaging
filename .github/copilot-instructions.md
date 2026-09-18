@@ -100,12 +100,15 @@ package.
 - Diagnostics are written to packaged LocalState (or
   `%LOCALAPPDATA%\OpenClawGatewayMSIX` outside an MSIX context) with a named
   mutex so concurrent processes append complete records.
-- The GitHub workflow first builds and packs a pinned `openclaw/openclaw`
-  revision on Linux using that revision's `setup-node-env` action. Non-official
-  runs cache that tarball by resolved upstream commit and verify its recorded
-  commit and SHA-256 on every use. They also cache each architecture's Windows
-  dependency tree by commit, Node.js version, and payload script hash while
-  rerunning all payload validation; official signing bypasses both caches. The
+- The GitHub workflow selects stable through public npm `latest` and verifies
+  its exact version and signed upstream tag/commit. There is no cross-channel
+  fallback; a reviewed `stableVersion` may select an older known-good stable.
+  One source-selection artifact is reused across retries. Builds use that
+  revision's `setup-node-env` action. Non-official runs cache the packed tarball by
+  resolved upstream commit and verify its recorded version, commit and SHA-256
+  on every use. They also cache each architecture's Windows dependency tree by
+  commit, Node.js version, and payload script hash while rerunning all payload
+  validation; official signing bypasses both caches. The
   resolved Node.js version flows through `source.json` and `payload-metadata.json`;
   each architecture-specific Windows job uses that same version to build the
   expanded payload, validates the installed Gateway and Control UI build identities,
@@ -164,11 +167,9 @@ package.
 - Metadata files are part of the release trust chain, not incidental build
   output. Changes to their fields must be coordinated across payload creation,
   MSIX creation, signing validation, workflow artifacts, and tests.
-- Keep the workflow's manual `openclaw_ref` default and automatic
-  `env.OPENCLAW_REF` fallback identical. Official-release changes also update
-  the reviewed immutable commit and stable or correction tag in
-  `release-policy.json`. The tag determines the four-part MSIX identity
-  version and the permanent GitHub Release tag.
+- Keep the manual `openclaw_ref` default empty to follow stable. Source
+  selection must match the reviewed commit/version/tag in `release-policy.json`
+  for official signing.
 - The launcher is NativeAOT. `dotnet build` and the xUnit suite exercise a JIT
   build, so run the NativeAOT publish path when changing reflection, interop,
   or trimming-sensitive code.

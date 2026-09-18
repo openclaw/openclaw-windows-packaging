@@ -7,6 +7,9 @@ param(
     [string]$ExpectedCommit,
 
     [Parameter(Mandatory)]
+    [string]$ExpectedVersion,
+
+    [Parameter(Mandatory)]
     [string]$RequestedRef
 )
 
@@ -31,6 +34,9 @@ if ([string]$metadata.resolvedCommit -cne $normalizedCommit) {
         "Cached package commit '$($metadata.resolvedCommit)' does not " +
         "match '$normalizedCommit'."
     )
+}
+if ([string]$metadata.packageVersion -cne $ExpectedVersion) {
+    throw 'The OpenClaw package version does not match the resolved stable source.'
 }
 
 $actualHash = (

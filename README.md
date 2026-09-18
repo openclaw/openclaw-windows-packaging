@@ -244,17 +244,30 @@ place so an update does not remove a running process's runtime.
 
 ## Selecting the OpenClaw revision
 
-`.github\workflows\gateway-msix.yml` resolves an explicit OpenClaw ref before
-building. Pull-request and `main` push runs use the pinned commit configured in
-both:
+`.github\workflows\gateway-msix.yml` selects **stable** through public npm
+`openclaw@latest` whenever a new packaging run starts. The resolver checks the
+exact published version, its signed upstream tag and commit, and the source
+package version before building. There is no automatic fallback to another
+version or channel; extended-stable and named prereleases are rejected.
 
-- `workflow_dispatch.inputs.openclaw_ref.default`;
-- the non-manual fallback in `env.OPENCLAW_REF`.
+The `openclaw-source-resolution` artifact records this choice once per run.
+Retries reuse it without querying the moving channel again. If the snapshot
+is missing or expired (90-day retention), start a new run instead of retrying.
+Package and payload metadata record the resolved source commit and version.
 
-Changing only the workflow-dispatch default does not change automatic builds.
-For a one-time override, run **Build OpenClaw Gateway MSIX** manually and
-provide a tag, branch, or preferably a full 40-character commit SHA in
-`openclaw_ref`. Payload composition validates that the selected OpenClaw
+For a one-time unsigned/test override, provide a stable-source tag, branch, or
+full commit SHA in the manual `openclaw_ref` input. Empty means follow stable.
+If compatibility requires an older known-good stable release, a reviewed
+`stableVersion` field in `release-policy.json` can pin its exact version, for
+example `"stableVersion": "2026.9.4"`. A pin is not automatic fallback and does
+not grant official-signing approval.
+
+For official signing, the selected source must match `approvedCommit`,
+`gatewayTag`, and `payloadPackageVersion` in `release-policy.json`. An empty
+input selects stable and checks that approval; an explicit input must be the
+full approved commit SHA.
+
+Payload composition validates that the selected OpenClaw
 runtime discovers the packaging-owned Windows Launcher plugin in its
 default-disabled state, then explicitly enables only that plugin in an isolated
 temporary validation profile before using OpenClaw's runtime inspection pass to
@@ -273,7 +286,7 @@ runtime-support policy.
 Non-official workflows cache the packed OpenClaw tarball by its resolved
 upstream commit. They also cache each architecture's Windows dependency tree by
 the resolved commit, tarball SHA-256, Node.js version, and payload-build script.
-A tarball cache hit still verifies the recorded commit and SHA-256; a
+A tarball cache hit still verifies the recorded version, commit and SHA-256; a
 dependency-tree hit still runs every payload validation and smoke test.
 Official-signing workflows bypass
 both caches and always rebuild upstream source and Windows dependencies.
@@ -328,7 +341,7 @@ they do not represent the default-disabled state of a normal install.
 Full selected-theme cohesion requires the generic plugin-frame theme forwarding
 merged by
 [`openclaw/openclaw#145409`](https://github.com/openclaw/openclaw/pull/145409).
-The current workflow remains on the release-approved OpenClaw `v2026.9.4`
+The official-signing policy remains on the release-approved OpenClaw `v2026.9.4`
 baseline (`3a9d69db306cd7f081e06254cb89c4bcc14a7107`) while this plugin is disabled by
 default. That baseline packages and inspects the plugin safely but does not
 forward selected Control UI themes into plugin frames. The future launcher
@@ -405,9 +418,9 @@ never official-signing inputs.
 Normal pull-request and push workflows publish unsigned packages for
 validation. Manual runs support three signing modes:
 
-- `unsigned` accepts any OpenClaw branch, tag, or commit and publishes unsigned
+- `unsigned` follows stable or a stable-source override and publishes unsigned
   MSIX packages;
-- `test` accepts any OpenClaw ref and publishes MSIX packages signed with a
+- `test` uses the same source-selection rules and publishes MSIX packages signed with a
   temporary self-signed certificate plus the public `.cer` needed for local
   installation;
 - `official` requires the approved immutable commit from
@@ -452,9 +465,7 @@ reviewed pull request:
 2. `approvedCommit` to the immutable commit resolved from that tag;
 3. `payloadPackageVersion` to the version reported by the pinned payload;
 4. `msixRevision` to `0`, or increment it for a packaging-only rebuild of the
-   same Gateway tag;
-5. the workflow's `openclaw_ref` default and non-manual fallback to the same
-   `approvedCommit`.
+   same Gateway tag.
 
 After that pull request merges, manually run **Build OpenClaw Gateway MSIX** on
 `main` with `openclaw_ref` set to the approved commit and `signing_mode` set to
@@ -477,8 +488,9 @@ release versioning download the hash-pinned standalone x64 and recommended
 `.msixbundle` assets, install each one on a clean GitHub-hosted Windows runner,
 upgrade it in place through the same delivery format, and
 verify that the package family remains stable and a LocalState marker is
-retained. The gate also proves fresh installation of both the standalone and
-bundle candidates. It refuses to run when an OpenClaw Gateway package is
+retained. Changes to source-selection scripts also trigger this check against
+the selected release. The gate also proves fresh installation of both the
+standalone and bundle candidates. It refuses to run when an OpenClaw Gateway package is
 already registered and removes only packages installed by that test
 invocation. It temporarily trusts the ephemeral test-signing certificate in
 the local-machine Trusted People store, as required by Windows deployment, and

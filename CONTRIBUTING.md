@@ -47,9 +47,12 @@ or package version logic:
 .\scripts\Test-OpenClawCacheKey.Tests.ps1
 .\scripts\Test-OpenClawPackage.Tests.ps1
 .\scripts\Test-MSIXReleaseIdentity.Tests.ps1
+.\scripts\Test-OpenClawSource.Tests.ps1
 .\scripts\Test-WorkflowPackageVersion.Tests.ps1
 .\scripts\Test-GitHooks.Tests.ps1
 ```
+
+The source-selection tests use offline npm and GitHub fixtures.
 
 The Node.js input suite requires Node.js and npm. It builds a dependency-free
 local fixture; it does not download or build OpenClaw.
