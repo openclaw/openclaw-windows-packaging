@@ -48,6 +48,7 @@ internal static class SmokeProgram
             ("version JSON survives NativeAOT", VersionJsonIsStructuredAsync),
             ("Spectre renders clawctl output under NativeAOT", SpectreOutputRenders),
             ("gateway narration survives NativeAOT", GatewayNarrationRenders),
+            ("Windows logon identity survives NativeAOT", WindowsLogonIdentityWorks),
             ("missing application reports diagnostics", MissingApplicationReportsAsync),
             ("openclaw never parses its arguments", AgentNeverParsesItsArgumentsAsync)
         ];
@@ -66,6 +67,7 @@ internal static class SmokeProgram
                 await runAsync().ConfigureAwait(false);
                 WriteLine($"  ok    {name}");
             }
+
             catch (Exception exception)
             {
                 failures++;
@@ -82,6 +84,16 @@ internal static class SmokeProgram
 
         WriteLine($"{scenarios.Length} NativeAOT scenarios passed.");
         return 0;
+    }
+
+    private static Task WindowsLogonIdentityWorks()
+    {
+        string id = WindowsLogonSession.GetCurrentId();
+        Assert(
+            id.Length == 17 && id[8] == ':' &&
+            id.Where(character => character != ':').All(Uri.IsHexDigit),
+            $"Unexpected Windows logon identity '{id}'.");
+        return Task.CompletedTask;
     }
 
     // The management entrypoint is selected from the native command line. This

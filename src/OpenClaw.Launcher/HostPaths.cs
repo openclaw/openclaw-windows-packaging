@@ -152,6 +152,9 @@ internal sealed class HostPaths
     /// </summary>
     public string GatewayStatePath => Path.Combine(StateRoot, "gateway.json");
 
+    public string GatewayGuidanceStatePath =>
+        Path.Combine(StateRoot, "gateway-guidance.json");
+
     /// <summary>
     /// The gateway's launch configuration, kept separate from its recorded
     /// process so that stopping the gateway never discards the user's port.

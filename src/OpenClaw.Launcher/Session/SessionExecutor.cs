@@ -262,6 +262,66 @@ internal sealed class SessionExecutor
         }
     }
 
+    public async Task<SessionConfigReadinessResult> CheckConfigReadinessAsync(
+        SessionRecord record,
+        string helperPath,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        ArgumentException.ThrowIfNullOrWhiteSpace(helperPath);
+
+        string requestId = _createRequestId();
+        using var operation = new SessionWorkspaceOperation(record, _isCurrentRecord);
+        string requestPath = operation.FilePath("config-readiness", requestId);
+        string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
+
+        try
+        {
+            await operation.WriteTextNewAsync(
+                requestPath,
+                SessionConfigReadinessProtocol.SerializeRequest(
+                    new SessionConfigReadinessRequest { RequestId = requestId }),
+                cancellationToken).ConfigureAwait(false);
+
+            _log("Checking agent-side OpenClaw config readiness.");
+            MxcExecutionResult execution = await _backend.ExecuteAsync(
+                record.ToSandboxIdOrThrow(),
+                new MxcExecutionRequest(
+                    BuildGuestCommandLine(helperPath, requestPath, "--check-config")),
+                null,
+                cancellationToken).ConfigureAwait(false);
+
+            string resultText;
+            try
+            {
+                resultText = await operation.ReadTextAsync(resultPath, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (
+                exception is FileNotFoundException or DirectoryNotFoundException or IOException)
+            {
+                throw new SessionException(
+                    "The isolated session did not report config readiness " +
+                    DescribeMissingResult(execution));
+            }
+
+            SessionConfigReadinessResult result =
+                SessionConfigReadinessProtocol.ReadResult(resultText, requestId);
+            if (result.Error is { Length: > 0 } error)
+            {
+                throw new SessionException(
+                    $"The isolated session could not check config readiness: {error}");
+            }
+
+            return result;
+        }
+        finally
+        {
+            operation.Delete(requestPath);
+            operation.Delete(resultPath);
+        }
+    }
+
     /// <summary>
     /// Installs the packaged Node.js runtime into the agent's profile.
     /// </summary>

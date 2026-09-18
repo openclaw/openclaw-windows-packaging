@@ -15,7 +15,7 @@ internal static class GatewayLauncherScript
 
     public const string ControlApplicationId = "Control";
 
-    public const string ControlArguments = "gateway-service start";
+    public const string ControlArguments = "gateway-service start --recovery";
 
     public static string Create(string workingDirectory, string activationScriptPath)
     {

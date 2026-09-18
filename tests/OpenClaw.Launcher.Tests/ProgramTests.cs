@@ -48,6 +48,26 @@ public sealed class ProgramTests : IDisposable
                 }));
             return Task.FromResult(0);
         };
+        _lastSessionBackend.ExecuteBehavior = _ =>
+        {
+            string requestPath = Directory.GetFiles(
+                _lastSessionBackend.Metadata!.EphemeralWorkspacePath,
+                "config-readiness-*.json").Single();
+            SessionConfigReadinessRequest request =
+                SessionConfigReadinessProtocol.ReadRequest(
+                    File.ReadAllText(requestPath));
+            File.WriteAllText(
+                SessionLaunchProtocol.ResultPathFor(requestPath),
+                SessionConfigReadinessProtocol.SerializeResult(
+                    new SessionConfigReadinessResult
+                    {
+                        RequestId = request.RequestId,
+                        State = SessionConfigReadinessState.StartupEligible,
+                        Reason = SessionConfigReadinessReason.GatewayModeLocal
+                    }));
+            return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
+        };
+        var error = new StringWriter();
 
         int exitCode = await Program.RunAgentAsync(
             new HostOptions(
@@ -58,10 +78,107 @@ public sealed class ProgramTests : IDisposable
             _ => runtime,
             probeReadiness: SupportedHost,
             getPackageFamilyName: () => runtime.Paths.PackageFamilyName,
-            readEnvironmentVariable: _ => null);
+            readEnvironmentVariable: _ => null,
+            isInteractive: () => true,
+            error: error,
+            getLogonSessionId: () => "logon-a");
 
         Assert.Equal(arguments, forwarded);
         Assert.Equal(7, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+    }
+
+    [Fact]
+    public async Task SuccessfulInteractiveAgentHintsWhenEligibleGatewayWasNeverStarted()
+    {
+        string applicationDirectory = await CreateApplicationAsync().ConfigureAwait(true);
+        HostOptions setupOptions = CreateSetupOptions(applicationDirectory);
+        SessionRuntime runtime = CreateSessionRuntime();
+        int setupExitCode = await Program.RunControlAsync(
+            setupOptions,
+            ["setup"],
+            _ => { },
+            TextWriter.Null,
+            TextWriter.Null,
+            installationLifecycle: new FailingFreshLifecycle(runtime) { TeardownSucceeds = true });
+        Assert.Equal(0, setupExitCode);
+
+        _lastSessionBackend!.AttachedBehavior = _ =>
+        {
+            string requestPath = Directory.GetFiles(
+                _lastSessionBackend.Metadata!.EphemeralWorkspacePath,
+                "launch-*.json").Single();
+            SessionLaunchRequest request = SessionLaunchProtocol.ReadRequest(
+                File.ReadAllText(requestPath));
+            File.WriteAllText(
+                SessionLaunchProtocol.ResultPathFor(requestPath),
+                SessionLaunchProtocol.SerializeResult(new SessionLaunchResult
+                {
+                    RequestId = request.RequestId,
+                    Launched = true,
+                    ExitCode = 0,
+                }));
+            return Task.FromResult(0);
+        };
+        _lastSessionBackend.ExecuteBehavior = _ =>
+        {
+            string requestPath = Directory.GetFiles(
+                _lastSessionBackend.Metadata!.EphemeralWorkspacePath,
+                "config-readiness-*.json").Single();
+            SessionConfigReadinessRequest request =
+                SessionConfigReadinessProtocol.ReadRequest(
+                    File.ReadAllText(requestPath));
+            File.WriteAllText(
+                SessionLaunchProtocol.ResultPathFor(requestPath),
+                SessionConfigReadinessProtocol.SerializeResult(
+                    new SessionConfigReadinessResult
+                    {
+                        RequestId = request.RequestId,
+                        State = SessionConfigReadinessState.StartupEligible,
+                        Reason = SessionConfigReadinessReason.GatewayModeLocal
+                    }));
+            return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
+        };
+        var error = new StringWriter();
+
+        int exitCode = await Program.RunAgentAsync(
+            new HostOptions(
+                applicationDirectory,
+                setupOptions.PackagedNodeArchivePath,
+                ["status"]),
+            _ => { },
+            _ => runtime,
+            probeReadiness: SupportedHost,
+            getPackageFamilyName: () => runtime.Paths.PackageFamilyName,
+            readEnvironmentVariable: _ => null,
+            isInteractive: () => true,
+            error: error,
+            getLogonSessionId: () => "logon-a");
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains(AgentGatewayGuidance.Hint, error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ManualGatewayStartAcknowledgesBeforeAStartFailure()
+    {
+        SessionRuntime runtime = await SetUpSessionAsync().ConfigureAwait(true);
+        ((FakeMxcSessionClient)runtime.Backend).ExecuteFailure =
+            new SessionException("gateway start failed");
+
+        await Assert.ThrowsAsync<SessionException>(
+            () => Program.RunControlAsync(
+                CreateSetupOptions(Path.Combine(_testDirectory, "app")),
+                ["gateway-service", "start"],
+                _ => { },
+                TextWriter.Null,
+                TextWriter.Null,
+                installationLifecycle: new FailingFreshLifecycle(runtime),
+                getLogonSessionId: () => "logon-manual"));
+
+        var store = new GatewayGuidanceStateStore(
+            runtime.Paths.GatewayGuidanceStatePath);
+        Assert.True(store.IsAcknowledged("logon-manual"));
     }
 
     [Fact]

@@ -11,7 +11,7 @@ internal sealed record ClawCtlHandlers
     public required Func<string?, CancellationToken, Task<int>> CollectLogs { get; init; }
     public required Func<bool, CancellationToken, Task<int>> Teardown { get; init; }
     public required Func<CancellationToken, Task<int>> PowerShell { get; init; }
-    public required Func<CancellationToken, Task<int>> GatewayStart { get; init; }
+    public required Func<bool, CancellationToken, Task<int>> GatewayStart { get; init; }
     public required Func<CancellationToken, Task<int>> GatewayStatus { get; init; }
     public required Func<CancellationToken, Task<int>> GatewayStop { get; init; }
 }
@@ -163,11 +163,13 @@ internal static class ClawCtlCommandLine
             "gateway-service",
             "Manage the background OpenClaw gateway inside the isolated session.");
         Command gatewayStart = new("start", "Start the gateway if needed.");
+        Option<bool> recovery = new("--recovery") { Hidden = true };
+        gatewayStart.Options.Add(recovery);
         gatewayStart.SetAction((parsed, token) =>
         {
             outputOptions.Json = parsed.GetValue(json);
             outputOptions.NoColor = parsed.GetValue(noColor);
-            return handlers.GatewayStart(token);
+            return handlers.GatewayStart(parsed.GetValue(recovery), token);
         });
         Command gatewayStatus = new("status", "Show whether the gateway is running.");
         gatewayStatus.SetAction((parsed, token) =>

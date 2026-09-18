@@ -149,7 +149,8 @@ internal static class Program
                     startup.InstallationLifecycle is null
                         ? null
                         : startup.InstallationLifecycle.CreateRuntime,
-                    readEnvironmentVariable: startup.ReadEnvironmentVariable)
+                    readEnvironmentVariable: startup.ReadEnvironmentVariable,
+                    error: error)
                     .ConfigureAwait(false);
         }
         catch (Exception exception)
@@ -278,7 +279,10 @@ internal static class Program
         Func<CancellationToken, Task<Mxc.MxcReadinessReport>>? probeReadiness = null,
         Func<string?>? getPackageFamilyName = null,
         Func<string, string?>? readEnvironmentVariable = null,
-        Func<bool>? isInteractive = null)
+        Func<bool>? isInteractive = null,
+        TextWriter? error = null,
+        Func<string>? getLogonSessionId = null,
+        TimeProvider? clock = null)
     {
         string applicationDirectory = GetPackagedApplicationDirectory(options);
         log("Using the OpenClaw application directly from the package.");
@@ -297,7 +301,7 @@ internal static class Program
                 .ConfigureAwait(false);
         string agentNodePath = runtime.RequireAgentNodePath(
             GetPackagedNodeArchivePath(options));
-        return await runtime.Executor.ExecuteAsync(
+        int exitCode = await runtime.Executor.ExecuteAsync(
             record,
             new Session.SessionExecutionRequest(
                 runtime.RequireStagedHelper(record),
@@ -311,6 +315,28 @@ internal static class Program
                     readEnvironmentVariable ?? Environment.GetEnvironmentVariable)
             },
             CancellationToken.None).ConfigureAwait(false);
+        Gateway.GatewayController gateway = Gateway.GatewayRuntime
+            .Create(options, runtime.Paths, runtime, log, clock)
+            .Controller;
+        var guidance = new Gateway.AgentGatewayGuidance(
+            runtime.LifecycleLock,
+            cancellationToken => runtime.Executor.CheckConfigReadinessAsync(
+                record,
+                runtime.RequireStagedHelper(record),
+                cancellationToken),
+            cancellationToken => gateway.GetStatusAsync(
+                runtime.HelperPath,
+                cancellationToken),
+            new Gateway.GatewayGuidanceStateStore(
+                runtime.Paths.GatewayGuidanceStatePath),
+            getLogonSessionId ?? Gateway.WindowsLogonSession.GetCurrentId,
+            log,
+            clock);
+        await guidance.EvaluateAsync(
+            exitCode,
+            (isInteractive ?? (() => WindowsHostConsole.Instance.IsInteractive))(),
+            error ?? Console.Error).ConfigureAwait(false);
+        return exitCode;
     }
 
     // output and error are required parameters (not Console defaults) so tests
@@ -324,7 +350,9 @@ internal static class Program
         TextWriter error,
         Session.IInstallationLifecycle? installationLifecycle = null,
         Func<string, string?>? readEnvironmentVariable = null,
-        ClawCtlOutputOptions? controlOutputOptions = null)
+        ClawCtlOutputOptions? controlOutputOptions = null,
+        Func<string>? getLogonSessionId = null,
+        TimeProvider? clock = null)
     {
         Session.IInstallationLifecycle lifecycle =
             installationLifecycle ?? Session.InstallationLifecycle.Production;
@@ -478,12 +506,27 @@ internal static class Program
                     options,
                     GetSessionRuntime(),
                     cancellationToken),
-                GatewayStart = async cancellationToken =>
+                GatewayStart = async (recovery, cancellationToken) =>
                 {
                     Session.SessionRuntime runtime = GetSessionRuntime();
                     Gateway.GatewayController controller = Gateway.GatewayRuntime
-                        .Create(options, runtime.Paths, runtime, log)
+                        .Create(options, runtime.Paths, runtime, log, clock)
                         .Controller;
+                    if (!recovery)
+                    {
+                        new Gateway.AgentGatewayGuidance(
+                            runtime.LifecycleLock,
+                            _ => throw new InvalidOperationException(
+                                "Manual acknowledgement must not check config readiness."),
+                            _ => throw new InvalidOperationException(
+                                "Manual acknowledgement must not inspect the gateway."),
+                            new Gateway.GatewayGuidanceStateStore(
+                                runtime.Paths.GatewayGuidanceStatePath),
+                            getLogonSessionId ?? Gateway.WindowsLogonSession.GetCurrentId,
+                            log,
+                            clock)
+                            .AcknowledgeManualStart();
+                    }
 
                     // Narration is human guidance, so it is off whenever the
                     // caller asked for a document: stdout carries exactly one

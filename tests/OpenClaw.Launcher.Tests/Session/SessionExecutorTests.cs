@@ -530,6 +530,42 @@ public sealed class SessionExecutorTests : IDisposable
     }
 
     [Fact]
+    public async Task ConfigReadinessUsesTheDedicatedHelperModeAndCleansUp()
+    {
+        _backend.ExecuteBehavior = request =>
+        {
+            string requestPath = Directory.GetFiles(
+                Workspace,
+                "config-readiness-*.json")
+                .Single(path => !path.EndsWith(".result.json", StringComparison.Ordinal));
+            SessionConfigReadinessRequest readiness =
+                SessionConfigReadinessProtocol.ReadRequest(
+                    File.ReadAllText(requestPath));
+            File.WriteAllText(
+                SessionLaunchProtocol.ResultPathFor(requestPath),
+                SessionConfigReadinessProtocol.SerializeResult(
+                    new SessionConfigReadinessResult
+                    {
+                        RequestId = readiness.RequestId,
+                        State = SessionConfigReadinessState.StartupEligible,
+                        Reason = SessionConfigReadinessReason.GatewayModeLocal
+                    }));
+            return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
+        };
+
+        SessionConfigReadinessResult result =
+            await Create(createRequestId: () => "readiness1")
+                .CheckConfigReadinessAsync(
+                    Record(),
+                    @"C:\Package\session-host\openclaw-session-host.exe",
+                    CancellationToken.None);
+
+        Assert.Equal(SessionConfigReadinessState.StartupEligible, result.State);
+        Assert.Contains("--check-config", _backend.ExecutedCommandLines.Single(), StringComparison.Ordinal);
+        Assert.Empty(Directory.GetFiles(Workspace));
+    }
+
+    [Fact]
     public async Task HelperFailureIsDistinguishedFromAnApplicationExit()
     {
         // Exit code 64 is both the helper's failure code and a value OpenClaw

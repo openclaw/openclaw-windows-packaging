@@ -44,6 +44,10 @@ public sealed class HostPathsTests
 
         Assert.StartsWith(paths.StateRoot, paths.LogPath, StringComparison.Ordinal);
         Assert.StartsWith(paths.StateRoot, paths.SessionStatePath, StringComparison.Ordinal);
+        Assert.StartsWith(
+            paths.StateRoot,
+            paths.GatewayGuidanceStatePath,
+            StringComparison.Ordinal);
         Assert.NotEqual(paths.LogPath, paths.SessionStatePath);
     }
 

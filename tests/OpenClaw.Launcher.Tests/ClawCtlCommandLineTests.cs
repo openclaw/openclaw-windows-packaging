@@ -86,7 +86,7 @@ public sealed class ClawCtlCommandLineTests
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
             PowerShell = _ => Task.FromResult(0),
-            GatewayStart = _ => Task.FromResult(0),
+            GatewayStart = (_, _) => Task.FromResult(0),
             GatewayStatus = _ => Task.FromResult(0),
             GatewayStop = _ => Task.FromResult(0)
         });
@@ -114,7 +114,7 @@ public sealed class ClawCtlCommandLineTests
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
             PowerShell = _ => Task.FromResult(0),
-            GatewayStart = _ =>
+            GatewayStart = (_, _) =>
             {
                 starts++;
                 return Task.FromResult(0);
@@ -127,6 +127,36 @@ public sealed class ClawCtlCommandLineTests
 
         Assert.Equal(0, exitCode);
         Assert.Equal(1, starts);
+    }
+
+    [Theory]
+    [InlineData("gateway-service start", false)]
+    [InlineData("gateway-service start --recovery", true)]
+    public async Task GatewayServiceStartReportsRecoveryProvenance(
+        string commandLine,
+        bool expectedRecovery)
+    {
+        bool? recovery = null;
+        RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
+        {
+            Setup = (_, _) => Task.FromResult(0),
+            Status = _ => Task.FromResult(0),
+            CollectLogs = (_, _) => Task.FromResult(0),
+            Teardown = (_, _) => Task.FromResult(0),
+            PowerShell = _ => Task.FromResult(0),
+            GatewayStart = (value, _) =>
+            {
+                recovery = value;
+                return Task.FromResult(0);
+            },
+            GatewayStatus = _ => Task.FromResult(0),
+            GatewayStop = _ => Task.FromResult(0)
+        });
+
+        int exitCode = await root.Parse(commandLine).InvokeAsync();
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(expectedRecovery, recovery);
     }
 
     [Theory]
@@ -148,7 +178,7 @@ public sealed class ClawCtlCommandLineTests
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
             PowerShell = _ => Task.FromResult(0),
-            GatewayStart = _ => Task.FromResult(0),
+            GatewayStart = (_, _) => Task.FromResult(0),
             GatewayStatus = _ => Task.FromResult(0),
             GatewayStop = _ => Task.FromResult(0)
         }, outputOptions);
@@ -192,7 +222,7 @@ public sealed class ClawCtlCommandLineTests
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
             PowerShell = _ => Task.FromResult(0),
-            GatewayStart = _ => Task.FromResult(0),
+            GatewayStart = (_, _) => Task.FromResult(0),
             GatewayStatus = _ => Task.FromResult(0),
             GatewayStop = _ => Task.FromResult(0)
         }, outputOptions);
@@ -236,7 +266,7 @@ public sealed class ClawCtlCommandLineTests
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
             PowerShell = _ => Task.FromResult(0),
-            GatewayStart = _ => Task.FromResult(0),
+            GatewayStart = (_, _) => Task.FromResult(0),
             GatewayStatus = _ => Task.FromResult(0),
             GatewayStop = _ => Task.FromResult(0)
         });
@@ -262,7 +292,7 @@ public sealed class ClawCtlCommandLineTests
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
             PowerShell = _ => Task.FromResult(0),
-            GatewayStart = _ => Task.FromResult(0),
+            GatewayStart = (_, _) => Task.FromResult(0),
             GatewayStatus = _ => Task.FromResult(0),
             GatewayStop = _ => Task.FromResult(0)
         });

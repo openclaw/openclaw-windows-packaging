@@ -13,7 +13,7 @@ public sealed class ClawCtlHelpTests
         CollectLogs = (_, _) => Task.FromResult(0),
         Teardown = (_, _) => Task.FromResult(0),
         PowerShell = _ => Task.FromResult(0),
-        GatewayStart = _ => Task.FromResult(0),
+        GatewayStart = (_, _) => Task.FromResult(0),
         GatewayStatus = _ => Task.FromResult(0),
         GatewayStop = _ => Task.FromResult(0)
     };
@@ -48,6 +48,16 @@ public sealed class ClawCtlHelpTests
         ClawCtlHelpModel model = ClawCtlHelp.Describe(root);
 
         Assert.DoesNotContain(model.Commands, c => c.Term == "secret");
+    }
+
+    [Fact]
+    public void GatewayRecoveryMarkerIsHiddenFromHelp()
+    {
+        ClawCtlHelpModel model = Describe("gateway-service start");
+
+        Assert.DoesNotContain(
+            model.Options,
+            option => option.Term.Contains("--recovery", StringComparison.Ordinal));
     }
 
     // RootCommand names itself after the entry assembly, so an unguarded

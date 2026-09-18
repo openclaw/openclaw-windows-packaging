@@ -73,6 +73,15 @@ reserve, reject, or rewrite upstream command arguments.
 OpenClaw inherits the terminal's working directory; the launcher does not make
 the read-only application directory the workspace.
 
+After each successful interactive `openclaw` invocation, the launcher performs
+a file-only readiness check inside the isolated session. If the default
+`.openclaw\openclaw.json` has `gateway.mode` set to `local` but the managed
+gateway has never started or has stopped, it suggests
+`clawctl gateway-service start` on standard error. It does not suggest a second
+start when gateway status is starting, unhealthy, or unknown. The check stops
+for the current Windows logon after that start command is invoked or a running
+gateway is observed; a new Windows logon enables it again.
+
 ### `clawctl`
 
 `clawctl` owns setup and the isolated-session operations:
