@@ -79,7 +79,7 @@ internal sealed class AgentGatewayGuidance
                 interactive &&
                 openClawExitCode == 0)
             {
-                _writeHint(error);
+                WriteHintIfUnacknowledged(logonSessionId, error);
             }
         }
         catch (Exception exception) when (
@@ -101,13 +101,35 @@ internal sealed class AgentGatewayGuidance
                 GatewayGuidanceAcknowledgement.ManualStartInvoked);
         }
         catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException or
+            exception is SessionException or
+            IOException or UnauthorizedAccessException or
             InvalidOperationException or Win32Exception)
         {
             _log(
                 $"Gateway guidance acknowledgement failed: " +
                 $"{exception.GetType().Name}: {exception.Message}");
         }
+    }
+
+    private void WriteHintIfUnacknowledged(
+        string logonSessionId,
+        TextWriter error)
+    {
+        using ISessionLockHandle? handle =
+            _lifecycleLock.TryAcquire(AdvisoryTimeout);
+        if (handle is null)
+        {
+            _log("Gateway guidance hint was skipped because lifecycle state is busy.");
+            return;
+        }
+
+        if (_state.IsAcknowledged(logonSessionId))
+        {
+            _log("Gateway guidance was acknowledged while postflight checks were running.");
+            return;
+        }
+
+        _writeHint(error);
     }
 
     private void Acknowledge(

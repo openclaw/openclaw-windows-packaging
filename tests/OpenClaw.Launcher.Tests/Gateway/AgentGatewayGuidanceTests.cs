@@ -178,6 +178,109 @@ public sealed class AgentGatewayGuidanceTests : IDisposable
     }
 
     [Fact]
+    public void BusyManualAcknowledgementDoesNotAbortGatewayStart()
+    {
+        var store = new GatewayGuidanceStateStore(
+            Path.Combine(_root, "gateway-guidance.json"));
+        var guidance = new AgentGatewayGuidance(
+            new NeverFreeLock(),
+            _ => throw new InvalidOperationException("not used"),
+            _ => throw new InvalidOperationException("not used"),
+            store,
+            () => "logon-a",
+            _log.Add);
+
+        guidance.AcknowledgeManualStart();
+
+        Assert.False(store.IsAcknowledged("logon-a"));
+        Assert.Contains(
+            _log,
+            message => message.Contains(
+                "acknowledgement failed",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AcknowledgementDuringPostflightSuppressesThePendingHint()
+    {
+        var store = new GatewayGuidanceStateStore(
+            Path.Combine(_root, "gateway-guidance.json"));
+        var readinessStarted =
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseReadiness =
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var guidance = new AgentGatewayGuidance(
+            new AlwaysFreeLock(),
+            async _ =>
+            {
+                readinessStarted.SetResult();
+                await releaseReadiness.Task.ConfigureAwait(false);
+                return new SessionConfigReadinessResult
+                {
+                    RequestId = "r1",
+                    State = SessionConfigReadinessState.StartupEligible,
+                    Reason = SessionConfigReadinessReason.GatewayModeLocal
+                };
+            },
+            _ => Task.FromResult(new GatewayStatusReport(
+                GatewayState.NotStarted,
+                null,
+                "not started")),
+            store,
+            () => "logon-a",
+            _log.Add);
+        var error = new StringWriter();
+
+        Task evaluation = guidance.EvaluateAsync(0, interactive: true, error);
+        await readinessStarted.Task.ConfigureAwait(true);
+        store.Write(
+            "logon-a",
+            GatewayGuidanceAcknowledgement.ManualStartInvoked,
+            DateTimeOffset.UtcNow);
+        releaseReadiness.SetResult();
+        await evaluation.ConfigureAwait(true);
+
+        Assert.Equal(string.Empty, error.ToString());
+        Assert.Contains(
+            _log,
+            message => message.Contains(
+                "acknowledged while postflight",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task BusyFinalAcknowledgementCheckSkipsTheAdvisoryHint()
+    {
+        var store = new GatewayGuidanceStateStore(
+            Path.Combine(_root, "gateway-guidance.json"));
+        var guidance = new AgentGatewayGuidance(
+            new NeverFreeLock(),
+            _ => Task.FromResult(new SessionConfigReadinessResult
+            {
+                RequestId = "r1",
+                State = SessionConfigReadinessState.StartupEligible,
+                Reason = SessionConfigReadinessReason.GatewayModeLocal
+            }),
+            _ => Task.FromResult(new GatewayStatusReport(
+                GatewayState.NotStarted,
+                null,
+                "not started")),
+            store,
+            () => "logon-a",
+            _log.Add);
+        var error = new StringWriter();
+
+        await guidance.EvaluateAsync(0, interactive: true, error);
+
+        Assert.Equal(string.Empty, error.ToString());
+        Assert.Contains(
+            _log,
+            message => message.Contains(
+                "lifecycle state is busy",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task AdvisoryFailureIsLoggedWithoutOutput()
     {
         var store = new GatewayGuidanceStateStore(
