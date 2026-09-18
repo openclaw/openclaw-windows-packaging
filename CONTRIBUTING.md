@@ -5,6 +5,14 @@ This repository builds the `OpenClaw.Gateway` MSIX package and the
 .NET SDK through `global.json`. Run every command below from the repository
 root in PowerShell 7 (`pwsh`).
 
+The contributor guides cover the workflows and architecture behind the command
+summary below:
+
+- [Architecture](docs/architecture.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Local development](docs/local-development.md)
+- [Official release process](docs/release-process.md)
+
 ## Prerequisites
 
 - PowerShell 7

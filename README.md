@@ -15,6 +15,17 @@ and uses a separate `OpenClaw.Gateway` package identity. Both packages use the
 OpenClaw Foundation publisher metadata established for OpenClaw's Windows
 packages.
 
+## Contributor guides
+
+- [Architecture](docs/architecture.md) explains the host, isolated session,
+  MXC, agent runtime, and gateway boundaries.
+- [Troubleshooting](docs/troubleshooting.md) maps observable failures to checks
+  and recovery steps.
+- [Local development](docs/local-development.md) covers loose registration,
+  local MSIX composition, test signing, and the NativeAOT validation lanes.
+- [Official release process](docs/release-process.md) covers the reviewed
+  policy change, signing workflow, upgrade evidence, and publication checks.
+
 ## Requirements
 
 - Windows 11 on a build that supports isolated agent sessions, on x64 or ARM64.
