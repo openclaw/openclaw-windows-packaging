@@ -1,3 +1,4 @@
+using OpenClaw.Launcher.Mxc;
 using OpenClaw.SessionProtocol;
 
 namespace OpenClaw.Launcher.Session;
@@ -64,7 +65,7 @@ internal static class AgentConfigReadinessProbe
                 result.Reason);
         }
         catch (Exception exception) when (
-            exception is SessionException or
+            exception is MxcException or SessionException or SessionLaunchException or
             IOException or UnauthorizedAccessException or
             InvalidOperationException or ObjectDisposedException)
         {

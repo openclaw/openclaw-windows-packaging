@@ -1,4 +1,5 @@
 using OpenClaw.Launcher.Gateway;
+using OpenClaw.Launcher.Mxc;
 using OpenClaw.Launcher.Tests.Session;
 using OpenClaw.SessionProtocol;
 
@@ -280,14 +281,19 @@ public sealed class AgentGatewayGuidanceTests : IDisposable
                 StringComparison.Ordinal));
     }
 
-    [Fact]
-    public async Task AdvisoryFailureIsLoggedWithoutOutput()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AdvisoryFailureIsLoggedWithoutOutput(bool backendFailure)
     {
         var store = new GatewayGuidanceStateStore(
             Path.Combine(_root, "gateway-guidance.json"));
+        Exception failure = backendFailure
+            ? new MxcException(MxcErrorCode.BackendError, "backend rejected dispatch")
+            : new SessionLaunchException("bad helper result");
         var guidance = new AgentGatewayGuidance(
             new AlwaysFreeLock(),
-            _ => throw new SessionLaunchException("bad helper result"),
+            _ => throw failure,
             _ => throw new InvalidOperationException("must not inspect"),
             store,
             () => "logon-a",
@@ -299,6 +305,6 @@ public sealed class AgentGatewayGuidanceTests : IDisposable
         Assert.Equal(string.Empty, error.ToString());
         Assert.Contains(
             _log,
-            line => line.Contains("bad helper result", StringComparison.Ordinal));
+            line => line.Contains(failure.Message, StringComparison.Ordinal));
     }
 }

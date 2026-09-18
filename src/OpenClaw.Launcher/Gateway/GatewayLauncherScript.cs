@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace OpenClaw.Launcher.Gateway;
 
 /// <summary>
@@ -16,6 +18,8 @@ internal static class GatewayLauncherScript
     public const string ControlApplicationId = "Control";
 
     public const string ControlArguments = "gateway-service start --recovery";
+
+    private const string LegacyControlArguments = "gateway-service start";
 
     public static string Create(string workingDirectory, string activationScriptPath)
     {
@@ -40,7 +44,87 @@ internal static class GatewayLauncherScript
 
     public static string CreateActivationScript(string packageFamilyName)
     {
+        return CreateActivationScript(packageFamilyName, ControlArguments);
+    }
+
+    public static bool UpgradeLegacyActivationScript(
+        string activationScriptPath,
+        string packageFamilyName,
+        Action<string> log)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(activationScriptPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(packageFamilyName);
+        ArgumentNullException.ThrowIfNull(log);
+
+        string existing;
+        try
+        {
+            existing = File.ReadAllText(activationScriptPath);
+        }
+        catch (Exception exception) when (
+            exception is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return false;
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            log(
+                "The retained gateway recovery script could not be inspected; " +
+                $"this invocation will be treated as recovery: {exception.Message}");
+            return true;
+        }
+
+        if (!string.Equals(
+                existing,
+                CreateActivationScript(packageFamilyName, LegacyControlArguments),
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        string temporaryPath =
+            $"{activationScriptPath}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllText(
+                temporaryPath,
+                CreateActivationScript(packageFamilyName),
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            File.Move(temporaryPath, activationScriptPath, overwrite: true);
+            log("Upgraded the retained gateway recovery script.");
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            log(
+                "The retained gateway recovery script could not be upgraded; " +
+                $"this invocation will still be treated as recovery: {exception.Message}");
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(temporaryPath);
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException)
+            {
+                log(
+                    "The temporary gateway recovery script could not be removed: " +
+                    exception.Message);
+            }
+        }
+
+        return true;
+    }
+
+    private static string CreateActivationScript(
+        string packageFamilyName,
+        string controlArguments)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(packageFamilyName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(controlArguments);
 
         string applicationUserModelId =
             $"{packageFamilyName}!{ControlApplicationId}";
@@ -50,7 +134,7 @@ internal static class GatewayLauncherScript
             "$ErrorActionPreference = 'Stop'",
             $"$packageFamilyName = '{QuotePowerShell(packageFamilyName)}'",
             $"$applicationId = '{ControlApplicationId}'",
-            $"$arguments = '{ControlArguments}'",
+            $"$arguments = '{controlArguments}'",
             $"$applicationUserModelId = '{QuotePowerShell(applicationUserModelId)}'",
             "$package = Get-AppxPackage -Name 'OpenClaw.Gateway' | " +
             "Where-Object { $_.PackageFamilyName -eq $packageFamilyName } | " +

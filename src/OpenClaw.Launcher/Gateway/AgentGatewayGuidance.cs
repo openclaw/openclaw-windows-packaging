@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using OpenClaw.Launcher.Mxc;
 using OpenClaw.Launcher.Session;
 using OpenClaw.SessionProtocol;
 
@@ -83,7 +84,7 @@ internal sealed class AgentGatewayGuidance
             }
         }
         catch (Exception exception) when (
-            exception is SessionException or SessionLaunchException or
+            exception is MxcException or SessionException or SessionLaunchException or
             OperationCanceledException or
             IOException or UnauthorizedAccessException or InvalidOperationException or
             ObjectDisposedException or Win32Exception)

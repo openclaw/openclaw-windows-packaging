@@ -561,10 +561,19 @@ internal static class Program
                 GatewayStart = async (recovery, cancellationToken) =>
                 {
                     Session.SessionRuntime runtime = GetSessionRuntime();
+                    bool retainedRecoveryInvocation =
+                        !recovery &&
+                        runtime.Paths.PackageFamilyName is string packageFamilyName &&
+                        Gateway.GatewayLauncherScript.UpgradeLegacyActivationScript(
+                            Path.ChangeExtension(
+                                runtime.Paths.GatewayLauncherPath,
+                                ".ps1"),
+                            packageFamilyName,
+                            log);
                     Gateway.GatewayController controller = Gateway.GatewayRuntime
                         .Create(options, runtime.Paths, runtime, log, clock)
                         .Controller;
-                    if (!recovery)
+                    if (!recovery && !retainedRecoveryInvocation)
                     {
                         new Gateway.AgentGatewayGuidance(
                             runtime.LifecycleLock,

@@ -118,6 +118,38 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task LegacyActivationUpgradeDoesNotOverwriteModifiedContent()
+    {
+        await CreateManager().InstallAsync(CancellationToken.None);
+        string modified =
+            (await File.ReadAllTextAsync(
+                ActivationScriptPath,
+                CancellationToken.None))
+            .Replace(
+                GatewayLauncherScript.ControlArguments,
+                "gateway-service start",
+                StringComparison.Ordinal) +
+            "# user edit";
+        await File.WriteAllTextAsync(
+            ActivationScriptPath,
+            modified,
+            CancellationToken.None);
+
+        bool legacyInvocation =
+            GatewayLauncherScript.UpgradeLegacyActivationScript(
+                ActivationScriptPath,
+                "OpenClaw.Gateway_test",
+                _ => { });
+
+        Assert.False(legacyInvocation);
+        Assert.Equal(
+            modified,
+            await File.ReadAllTextAsync(
+                ActivationScriptPath,
+                CancellationToken.None));
+    }
+
+    [Fact]
     public async Task TheControlActivationScriptFailsClosedOnMissingOrMismatchedTargets()
     {
         await CreateManager().InstallAsync(CancellationToken.None);
