@@ -21,7 +21,8 @@ internal static class Program
         ISessionProcessLauncher launcher,
         TextWriter errorOutput,
         Func<string, string> readFile,
-        Action<string, SessionLaunchResult> writeResult)
+        Action<string, SessionLaunchResult> writeResult,
+        Func<string, int>? checkConfig = null)
     {
         if (!TryGetMode(args, out string? mode, out string? requestPath))
         {
@@ -29,7 +30,8 @@ internal static class Program
             // is the one failure that can only surface on stderr.
             errorOutput.WriteLine(
                 "openclaw-session-host: usage: openclaw-session-host " +
-                "--request|--supervise|--inspect|--stop|--collect|--install-runtime|--install-tools <path>");
+                "--request|--supervise|--inspect|--stop|--collect|--install-runtime|" +
+                "--install-tools|--check-config <path>");
             return SessionLaunchProtocol.HelperFailureExitCode;
         }
 
@@ -45,6 +47,12 @@ internal static class Program
                 return SessionRuntimeInstaller.Run(requestPath, readFile, File.WriteAllText);
             case "--install-tools":
                 return SessionToolInstaller.Run(requestPath, readFile, File.WriteAllText);
+            case "--check-config":
+                return checkConfig?.Invoke(requestPath) ??
+                    SessionConfigReadinessChecker.Run(
+                        requestPath,
+                        readFile,
+                        File.WriteAllText);
         }
 
         if (args[0] == "--collect")
@@ -125,7 +133,7 @@ internal static class Program
         }
 
         if (args[0] is not ("--request" or "--supervise" or "--inspect" or "--stop" or
-            "--collect" or "--install-runtime" or "--install-tools"))
+            "--collect" or "--install-runtime" or "--install-tools" or "--check-config"))
         {
             return false;
         }

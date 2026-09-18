@@ -69,6 +69,17 @@ shared session workspace. It does not stage the application tree. The helper
 has distinct modes for launching a request, inspecting processes/listeners,
 installing the agent runtime, and collecting requested diagnostics.
 
+The helper also exposes an internal `--check-config <request-path>` mode for a
+future host-side caller. It resolves the agent account's default
+`.openclaw\openclaw.json` and classifies the file as `Absent`, `NotReady`, or
+`StartupEligible` without starting Node.js or OpenClaw. This is deliberately a
+file-only heuristic for the default OpenClaw-generated config:
+`StartupEligible` means only that the file can be parsed and contains
+`gateway.mode` set exactly to `local`. It does not resolve alternate profiles,
+includes, environment substitution, secrets, plugins, bind/auth policy, ports,
+or any other runtime dependency, and therefore does not claim that a gateway
+will start or remain healthy.
+
 Opening the agent shell with `clawctl pwsh` installs an ASCII `openclaw.cmd`
 shim in the shared workspace: `RunPowerShellAsync` calls `InstallToolsAsync`.
 Setup alone does not guarantee that shim exists. The shim reads its Node.js and

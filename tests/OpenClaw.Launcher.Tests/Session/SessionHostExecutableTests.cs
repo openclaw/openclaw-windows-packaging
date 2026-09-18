@@ -43,7 +43,10 @@ public sealed class SessionHostExecutableTests : IDisposable
         return path;
     }
 
-    private static int RunHelper(string requestPath, string workingDirectory)
+    private static int RunHelper(
+        string requestPath,
+        string workingDirectory,
+        string mode = "--request")
     {
         ProcessStartInfo startInfo = new()
         {
@@ -52,7 +55,7 @@ public sealed class SessionHostExecutableTests : IDisposable
             RedirectStandardError = true,
             WorkingDirectory = workingDirectory
         };
-        startInfo.ArgumentList.Add("--request");
+        startInfo.ArgumentList.Add(mode);
         startInfo.ArgumentList.Add(requestPath);
 
         using Process process = Process.Start(startInfo)!;
@@ -66,6 +69,23 @@ public sealed class SessionHostExecutableTests : IDisposable
     private static SessionLaunchResult ReadResult(string requestPath) =>
         SessionLaunchProtocol.ReadResult(
             File.ReadAllText(SessionLaunchProtocol.ResultPathFor(requestPath)));
+
+    [Fact]
+    public void ThePublishedHelperDispatchesConfigReadinessWithoutStartingAChild()
+    {
+        string requestPath = Path.Combine(_testDirectory, "readiness.json");
+        File.WriteAllText(requestPath, "{ not a request");
+
+        int exitCode = RunHelper(
+            requestPath,
+            AppContext.BaseDirectory,
+            "--check-config");
+
+        Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode, exitCode);
+        string result = File.ReadAllText(
+            SessionLaunchProtocol.ResultPathFor(requestPath));
+        Assert.Contains("\"error\":", result, StringComparison.Ordinal);
+    }
 
     [Fact]
     public void TheHelperStartsARealProcessAndDistinguishesItsFailureFromTheChildExitCode()

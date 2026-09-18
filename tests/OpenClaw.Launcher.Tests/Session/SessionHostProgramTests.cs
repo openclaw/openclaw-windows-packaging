@@ -101,6 +101,30 @@ public sealed class SessionHostProgramTests : IDisposable
     }
 
     [Fact]
+    public void ConfigReadinessModeUsesItsDedicatedCheckerWithoutLaunchingAProcess()
+    {
+        var launcher = new RecordingLauncher(0);
+        string? deliveredPath = null;
+
+        int exitCode = SessionHostProgram.Run(
+            ["--check-config", @"C:\shared\readiness.json"],
+            launcher,
+            new StringWriter(),
+            _ => throw new InvalidOperationException("The checker owns its request."),
+            (_, _) => throw new InvalidOperationException("The checker owns its result."),
+            path =>
+            {
+                deliveredPath = path;
+                return 17;
+            });
+
+        Assert.Equal(17, exitCode);
+        Assert.Equal(@"C:\shared\readiness.json", deliveredPath);
+        Assert.Null(launcher.Request);
+        Assert.Null(launcher.DetachedRequest);
+    }
+
+    [Fact]
     public void TheArgumentVectorReachesTheLauncherUnchanged()
     {
         string[] arguments = [@"C:\app\openclaw.mjs", "%USERPROFILE%", "q\"x", string.Empty];

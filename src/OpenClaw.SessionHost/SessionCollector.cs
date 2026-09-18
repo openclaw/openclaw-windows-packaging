@@ -23,9 +23,6 @@ namespace OpenClaw.SessionHost;
 /// </remarks>
 internal static class SessionCollector
 {
-    private static readonly Guid ProfileFolderId =
-        new("5E6C858F-0E22-4760-9AFE-EA3317B67173");
-
     public static int Run(
         string requestPath,
         Func<string, string> readFile,
@@ -36,7 +33,7 @@ internal static class SessionCollector
     {
         string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
         string? requestId = null;
-        string profile = profileRoot ?? GetProfilePath();
+        string profile = profileRoot ?? AgentProfile.GetPath();
 
         try
         {
@@ -233,32 +230,6 @@ internal static class SessionCollector
             ? resolved
             : throw new SessionLaunchException(
                 "resolves outside the agent profile");
-    }
-
-    private static string GetProfilePath()
-    {
-        int result = SHGetKnownFolderPath(
-            ProfileFolderId,
-            flags: 0,
-            token: IntPtr.Zero,
-            out IntPtr path);
-        if (result < 0)
-        {
-            throw new SessionLaunchException(
-                $"Windows could not resolve the user profile directory " +
-                $"(HRESULT 0x{result:X8}).");
-        }
-
-        try
-        {
-            return Marshal.PtrToStringUni(path)
-                ?? throw new SessionLaunchException(
-                    "Windows returned an empty user profile directory.");
-        }
-        finally
-        {
-            Marshal.FreeCoTaskMem(path);
-        }
     }
 
     private static string ResolveInWorkspace(string workspace, string destination)
@@ -820,10 +791,4 @@ internal static class SessionCollector
         uint pathLength,
         uint flags);
 
-    [DllImport("shell32.dll")]
-    private static extern int SHGetKnownFolderPath(
-        in Guid folderId,
-        uint flags,
-        IntPtr token,
-        out IntPtr path);
 }
