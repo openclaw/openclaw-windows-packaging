@@ -245,6 +245,13 @@ validate its required read-only route shape. The temporary profile is removed
 after inspection and does not modify user configuration. Incompatible older
 refs fail instead of producing a package with an unvalidated plugin.
 
+Gateway and Control UI build identities must also agree in the emitted service
+worker and client JavaScript. For older upstream builds that omit `buildId` from
+`dist\build-info.json`, validation derives the legacy UI identity from the
+recorded version and the first 12 characters of its full commit SHA, using
+upstream's normalization. An explicitly present but empty or mismatched
+`buildId` is never replaced by the legacy identity.
+
 The source build uses that revision's `.github/actions/setup-node-env` action
 to select Node.js and pnpm. Its resolved Node.js version is recorded in
 `source.json`, reused for both Windows payload builds, and carried in

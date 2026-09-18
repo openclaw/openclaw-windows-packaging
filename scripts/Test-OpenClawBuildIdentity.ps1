@@ -7,8 +7,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# A release is safe to package only when the Gateway and its same-origin
-# dashboard were emitted by the same OpenClaw build lifecycle.
+# The Gateway and its same-origin dashboard must carry the same upstream
+# build identity, including the version/commit identity used by older builds.
 $distDirectory = Join-Path $OpenClawDirectory 'dist'
 $buildInfoPath = Join-Path $distDirectory 'build-info.json'
 $controlUiDirectory = Join-Path $distDirectory 'control-ui'
@@ -27,7 +27,37 @@ foreach ($requiredPath in @(
 
 $buildInfo = Get-Content -LiteralPath $buildInfoPath -Raw |
     ConvertFrom-Json
-$gatewayBuildId = [string]$buildInfo.buildId
+$buildIdProperty = $buildInfo.PSObject.Properties['buildId']
+if ($null -ne $buildIdProperty) {
+    $gatewayBuildId = [string]$buildIdProperty.Value
+}
+else {
+    $versionProperty = $buildInfo.PSObject.Properties['version']
+    $commitProperty = $buildInfo.PSObject.Properties['commit']
+    if (
+        $null -eq $versionProperty -or
+        $versionProperty.Value -isnot [string] -or
+        $versionProperty.Value -cnotmatch
+            '^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$' -or
+        $null -eq $commitProperty -or
+        $commitProperty.Value -isnot [string] -or
+        $commitProperty.Value -cnotmatch '^[0-9a-f]{40}$'
+    ) {
+        throw (
+            "Gateway build identity is missing from '$buildInfoPath'. " +
+            'Legacy metadata requires a version and a full commit SHA.'
+        )
+    }
+
+    # Older upstream Vite builds normalize <version>-<git rev-parse --short=12 HEAD>.
+    $gatewayBuildId = (
+        "$($versionProperty.Value)-$($commitProperty.Value.Substring(0, 12))" `
+            -creplace '[^a-zA-Z0-9._-]+', '-'
+    )
+    $gatewayBuildId = $gatewayBuildId.Substring(
+        0,
+        [Math]::Min(96, $gatewayBuildId.Length))
+}
 if ([string]::IsNullOrWhiteSpace($gatewayBuildId)) {
     throw "Gateway build identity is missing from '$buildInfoPath'."
 }
@@ -64,7 +94,7 @@ if (-not [string]::Equals(
 $clientBundleContainsBuildId = @(
     Get-ChildItem -LiteralPath $assetsDirectory -Filter '*.js' -File -Recurse |
         Where-Object {
-            (Get-Content -LiteralPath $_.FullName -Raw).Contains(
+            ([IO.File]::ReadAllText($_.FullName)).Contains(
                 $gatewayBuildId,
                 [StringComparison]::Ordinal)
         }
