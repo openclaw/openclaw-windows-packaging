@@ -8,6 +8,10 @@ $testRoot = Join-Path ([IO.Path]::GetTempPath()) (
 )
 $previousRunnerTemp = $env:RUNNER_TEMP
 $previousNpmCache = $env:npm_config_cache
+$fixtureArchitecture = & node -p 'process.arch'
+if ($LASTEXITCODE -ne 0 -or $fixtureArchitecture -notin @('x64', 'arm64')) {
+    throw 'The payload input fixture requires x64 or ARM64 Node.js.'
+}
 
 function Assert-Fails {
     param([scriptblock]$Action, [string]$MessagePattern)
@@ -117,8 +121,54 @@ console.log(JSON.stringify({
     }
     $sourceMetadata | ConvertTo-Json | Set-Content -LiteralPath "$package\source.json"
 
+    $otherArchitecture = if ($fixtureArchitecture -eq 'x64') { 'arm64' } else { 'x64' }
+    $incompatiblePayload = Join-Path $testRoot 'incompatible-payload'
+    Assert-Fails -MessagePattern "requires win32/$otherArchitecture Node.js" -Action {
+        & "$PSScriptRoot\Build-Payload.ps1" `
+            -PackageDirectory $package -Architecture $otherArchitecture `
+            -OutputDirectory $incompatiblePayload
+    }
+    if ((Test-Path $incompatiblePayload) -or
+        (Test-Path (Join-Path $testRoot "openclaw-stage-$otherArchitecture"))) {
+        throw 'Incompatible runtime inspection must fail before staging or installation.'
+    }
+
+    $nodeExecutable = @(Get-Command node -CommandType Application)[0].Source
+    $probeExitCode = 0
+    function node {
+        if ($args.Count -eq 2 -and
+            $args[0] -ceq '-p' -and
+            $args[1] -ceq 'process.platform + "/" + process.arch') {
+            $global:LASTEXITCODE = $probeExitCode
+            $probeTarget
+            return
+        }
+        & $nodeExecutable @args
+    }
+    try {
+        foreach ($probeTarget in @("linux/$fixtureArchitecture", 'unknown')) {
+            Assert-Fails -MessagePattern "requires win32/$fixtureArchitecture Node.js" -Action {
+                & "$PSScriptRoot\Build-Payload.ps1" `
+                    -PackageDirectory $package -Architecture $fixtureArchitecture `
+                    -OutputDirectory $incompatiblePayload
+            }
+        }
+        $probeExitCode = 1
+        Assert-Fails -MessagePattern 'Unable to determine.*platform and architecture' -Action {
+            & "$PSScriptRoot\Build-Payload.ps1" `
+                -PackageDirectory $package -Architecture $fixtureArchitecture `
+                -OutputDirectory $incompatiblePayload
+        }
+        if (Test-Path $incompatiblePayload) {
+            throw 'An invalid or failed Node target probe must not produce a payload.'
+        }
+    }
+    finally {
+        Remove-Item Function:\node
+    }
+
     & "$PSScriptRoot\Build-Payload.ps1" `
-        -PackageDirectory $package -Architecture x64 -OutputDirectory $payload
+        -PackageDirectory $package -Architecture $fixtureArchitecture -OutputDirectory $payload
     $metadataPath = Join-Path $payload 'payload-metadata.json'
     $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
     if ($metadata.nodeVersion -cne $nodeVersion) {
@@ -128,7 +178,7 @@ console.log(JSON.stringify({
     $reusedPayload = Join-Path $testRoot 'payload-reused'
     & "$PSScriptRoot\Build-Payload.ps1" `
         -PackageDirectory $package `
-        -Architecture x64 `
+        -Architecture $fixtureArchitecture `
         -OutputDirectory $reusedPayload `
         -ReuseStagedInstall
     if (-not (Test-Path -LiteralPath "$reusedPayload\app\openclaw.mjs")) {
@@ -143,7 +193,7 @@ console.log(JSON.stringify({
     Assert-Fails -MessagePattern 'does not match the requested packageSha256' -Action {
         & "$PSScriptRoot\Build-Payload.ps1" `
             -PackageDirectory $package `
-            -Architecture x64 `
+            -Architecture $fixtureArchitecture `
             -OutputDirectory (Join-Path $testRoot 'wrong-package-reuse') `
             -ReuseStagedInstall
     }
@@ -154,7 +204,7 @@ console.log(JSON.stringify({
     Assert-Fails -MessagePattern 'does not match the requested resolvedCommit' -Action {
         & "$PSScriptRoot\Build-Payload.ps1" `
             -PackageDirectory $package `
-            -Architecture x64 `
+            -Architecture $fixtureArchitecture `
             -OutputDirectory (Join-Path $testRoot 'wrong-source-reuse') `
             -ReuseStagedInstall
     }
@@ -162,14 +212,14 @@ console.log(JSON.stringify({
     $sourceMetadata | ConvertTo-Json | Set-Content -LiteralPath "$package\source.json"
 
     $stagingMetadataPath = Join-Path (
-        Join-Path $testRoot 'openclaw-stage-x64'
+        Join-Path $testRoot "openclaw-stage-$fixtureArchitecture"
     ) '.openclaw-install.json'
     $stagingMetadata = Get-Content -LiteralPath $stagingMetadataPath -Raw
     Remove-Item -LiteralPath $stagingMetadataPath -Force
     Assert-Fails -MessagePattern 'missing provenance' -Action {
         & "$PSScriptRoot\Build-Payload.ps1" `
             -PackageDirectory $package `
-            -Architecture x64 `
+            -Architecture $fixtureArchitecture `
             -OutputDirectory (Join-Path $testRoot 'missing-provenance-reuse') `
             -ReuseStagedInstall
     }
@@ -177,7 +227,7 @@ console.log(JSON.stringify({
     Assert-Fails -MessagePattern 'provenance is invalid' -Action {
         & "$PSScriptRoot\Build-Payload.ps1" `
             -PackageDirectory $package `
-            -Architecture x64 `
+            -Architecture $fixtureArchitecture `
             -OutputDirectory (Join-Path $testRoot 'invalid-provenance-reuse') `
             -ReuseStagedInstall
     }
@@ -187,20 +237,26 @@ console.log(JSON.stringify({
         [Text.UTF8Encoding]::new($false)
     )
 
-    Assert-Fails -MessagePattern 'staged OpenClaw install does not exist' -Action {
-        & "$PSScriptRoot\Build-Payload.ps1" `
-            -PackageDirectory $package `
-            -Architecture arm64 `
-            -OutputDirectory (Join-Path $testRoot 'missing-reuse') `
-            -ReuseStagedInstall
+    try {
+        $env:RUNNER_TEMP = Join-Path $testRoot 'empty-stage'
+        Assert-Fails -MessagePattern 'staged OpenClaw install does not exist' -Action {
+            & "$PSScriptRoot\Build-Payload.ps1" `
+                -PackageDirectory $package `
+                -Architecture $fixtureArchitecture `
+                -OutputDirectory (Join-Path $testRoot 'missing-reuse') `
+                -ReuseStagedInstall
+        }
+    }
+    finally {
+        $env:RUNNER_TEMP = $testRoot
     }
 
-    $stagedPackage = Join-Path $testRoot 'openclaw-stage-x64\node_modules\openclaw'
+    $stagedPackage = Join-Path $testRoot "openclaw-stage-$fixtureArchitecture\node_modules\openclaw"
     Set-Content -LiteralPath (Join-Path $stagedPackage 'node.exe') -Value 'unsafe'
     Assert-Fails -MessagePattern 'must not bundle Node.js' -Action {
         & "$PSScriptRoot\Build-Payload.ps1" `
             -PackageDirectory $package `
-            -Architecture x64 `
+            -Architecture $fixtureArchitecture `
             -OutputDirectory (Join-Path $testRoot 'unsafe-reuse') `
             -ReuseStagedInstall
     }
@@ -213,7 +269,7 @@ console.log(JSON.stringify({
     Assert-Fails -MessagePattern 'build identity mismatch' -Action {
         & "$PSScriptRoot\Build-Payload.ps1" `
             -PackageDirectory $package `
-            -Architecture x64 `
+            -Architecture $fixtureArchitecture `
             -OutputDirectory (Join-Path $testRoot 'identity-reuse') `
             -ReuseStagedInstall
     }
@@ -222,7 +278,7 @@ console.log(JSON.stringify({
     $sourceMetadata | ConvertTo-Json | Set-Content -LiteralPath "$package\source.json"
     Assert-Fails -MessagePattern 'does not match the source build' -Action {
         & "$PSScriptRoot\Build-Payload.ps1" `
-            -PackageDirectory $package -Architecture x64 -OutputDirectory $payload
+            -PackageDirectory $package -Architecture $fixtureArchitecture -OutputDirectory $payload
     }
 
     foreach ($architecture in @('x64', 'arm64')) {

@@ -12,6 +12,10 @@ $testRoot = Join-Path $env:TEMP (
 $packageSource = Join-Path $testRoot 'package-source'
 $packageDirectory = Join-Path $testRoot 'package'
 $payloadDirectory = Join-Path $testRoot 'payload'
+$fixtureArchitecture = & node -p 'process.arch'
+if ($LASTEXITCODE -ne 0 -or $fixtureArchitecture -notin @('x64', 'arm64')) {
+    throw 'The plugin payload fixture requires x64 or ARM64 Node.js.'
+}
 
 function Assert-Path {
     param(
@@ -72,6 +76,11 @@ try {
 const args = process.argv.slice(2);
 const fs = await import("node:fs");
 const path = await import("node:path");
+if (process.env.XDG_CACHE_HOME !== path.join(process.env.OPENCLAW_STATE_DIR, "cache")) {
+  throw new Error("Expected an isolated plugin snapshot cache.");
+}
+fs.mkdirSync(process.env.XDG_CACHE_HOME, { recursive: true });
+fs.writeFileSync(path.join(process.env.XDG_CACHE_HOME, "fixture-cache"), "owned");
 const configPath =
   process.env.OPENCLAW_CONFIG_PATH ??
   (process.env.OPENCLAW_STATE_DIR
@@ -115,6 +124,9 @@ const enabled = Boolean(configPath) && fs.existsSync(configPath) &&
   JSON.parse(fs.readFileSync(configPath, "utf8"))
     .plugins?.entries?.["gateway-isolation"]?.enabled === true;
 const runtime = args.includes("--runtime");
+if (runtime && process.env.OPENCLAW_FIXTURE_FAIL_RUNTIME === "1") {
+  throw new Error("Requested runtime inspection fixture failure.");
+}
 console.log(JSON.stringify({
   plugin: {
     id: "gateway-isolation",
@@ -191,15 +203,46 @@ console.log(JSON.stringify({
             -Encoding utf8
 
     $previousRunnerTemp = $env:RUNNER_TEMP
+    $previousCacheHome = $env:XDG_CACHE_HOME
+    $previousFailureFixture = $env:OPENCLAW_FIXTURE_FAIL_RUNTIME
     try {
         $env:RUNNER_TEMP = $testRoot
+        $env:XDG_CACHE_HOME = Join-Path $testRoot 'caller-cache'
+        $env:OPENCLAW_FIXTURE_FAIL_RUNTIME = $null
         & (Join-Path $PSScriptRoot 'Build-Payload.ps1') `
             -PackageDirectory $packageDirectory `
-            -Architecture arm64 `
+            -Architecture $fixtureArchitecture `
             -OutputDirectory $payloadDirectory
+        if ($env:XDG_CACHE_HOME -cne (Join-Path $testRoot 'caller-cache') -or
+            (Test-Path (Join-Path $testRoot 'caller-cache')) -or
+            (Test-Path (Join-Path $testRoot "openclaw-stage-$fixtureArchitecture\gateway-isolation-validation"))) {
+            throw 'Successful payload inspection did not isolate, restore and clean its cache.'
+        }
+        $env:OPENCLAW_FIXTURE_FAIL_RUNTIME = '1'
+        $inspectionFailed = $false
+        try {
+            & (Join-Path $PSScriptRoot 'Build-Payload.ps1') `
+                -PackageDirectory $packageDirectory `
+                -Architecture $fixtureArchitecture `
+                -OutputDirectory (Join-Path $testRoot 'failed-payload') `
+                -ReuseStagedInstall
+        }
+        catch {
+            if ($_.Exception.Message -notmatch 'cannot load the Gateway isolation plugin') {
+                throw
+            }
+            $inspectionFailed = $true
+        }
+        if (-not $inspectionFailed -or
+            $env:XDG_CACHE_HOME -cne (Join-Path $testRoot 'caller-cache') -or
+            (Test-Path (Join-Path $testRoot "openclaw-stage-$fixtureArchitecture\gateway-isolation-validation"))) {
+            throw 'Failed payload inspection must restore and remove only its isolated cache.'
+        }
     }
     finally {
         $env:RUNNER_TEMP = $previousRunnerTemp
+        $env:XDG_CACHE_HOME = $previousCacheHome
+        $env:OPENCLAW_FIXTURE_FAIL_RUNTIME = $previousFailureFixture
     }
 
     $packagedPlugin = Join-Path `
@@ -213,7 +256,7 @@ console.log(JSON.stringify({
     }
     $stagedPlugin = Join-Path `
         $testRoot `
-        'openclaw-stage-arm64\node_modules\openclaw\dist\extensions\gateway-isolation'
+        "openclaw-stage-$fixtureArchitecture\node_modules\openclaw\dist\extensions\gateway-isolation"
     if (Test-Path -LiteralPath $stagedPlugin) {
         throw 'Plugin provisioning must not mutate the reusable staged install.'
     }

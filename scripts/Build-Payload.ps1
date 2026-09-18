@@ -37,6 +37,19 @@ if ($sourceMetadata.nodeVersion -cne $nodeVersion) {
         "version '$($sourceMetadata.nodeVersion)'."
     )
 }
+$nodeTarget = & node -p 'process.platform + "/" + process.arch'
+if ($LASTEXITCODE -ne 0) {
+    throw 'Unable to determine the payload inspection Node.js platform and architecture.'
+}
+if (-not $IsWindows -or $nodeTarget -cne "win32/$Architecture") {
+    throw (
+        "Payload runtime inspection requires win32/$Architecture Node.js; " +
+        "found '$nodeTarget'. Build and inspect on the matching Windows " +
+        'architecture (windows-11-vs2026-arm for ARM64). To cross-compose, ' +
+        'supply an already-qualified payload to Build-MSIX.ps1 or ' +
+        'Build-LocalMSIX.ps1 -PayloadDirectory instead.'
+    )
+}
 $npmVersion = & npm --version
 if ($LASTEXITCODE -ne 0) {
     throw 'Unable to determine the payload build npm version.'
@@ -185,6 +198,7 @@ foreach ($pluginFile in $pluginFiles) {
 $previousStateDirectory = $env:OPENCLAW_STATE_DIR
 $previousConfigPath = $env:OPENCLAW_CONFIG_PATH
 $previousIsolationMode = $env:CLAWCTL_GATEWAY_ISOLATION
+$previousCacheHome = $env:XDG_CACHE_HOME
 $validationStateDirectory = Join-Path `
     $stagingDirectory `
     'gateway-isolation-validation'
@@ -195,6 +209,7 @@ try {
     $env:OPENCLAW_STATE_DIR = $validationStateDirectory
     $env:OPENCLAW_CONFIG_PATH = $validationConfigPath
     $env:CLAWCTL_GATEWAY_ISOLATION = 'disabled'
+    $env:XDG_CACHE_HOME = Join-Path $validationStateDirectory 'cache'
     Push-Location $installedPackage
     try {
         $defaultInspectionOutput = (
@@ -283,6 +298,11 @@ try {
                 "isolation plugin. Exit code: $LASTEXITCODE."
             )
         }
+
+        & node .\openclaw.mjs --version
+        if ($LASTEXITCODE -ne 0) {
+            throw "OpenClaw payload smoke test failed with exit code $LASTEXITCODE."
+        }
     }
     finally {
         Pop-Location
@@ -314,6 +334,7 @@ finally {
     $env:OPENCLAW_STATE_DIR = $previousStateDirectory
     $env:OPENCLAW_CONFIG_PATH = $previousConfigPath
     $env:CLAWCTL_GATEWAY_ISOLATION = $previousIsolationMode
+    $env:XDG_CACHE_HOME = $previousCacheHome
     if (Test-Path -LiteralPath $validationStateDirectory) {
         Remove-Item `
             -LiteralPath $validationStateDirectory `
@@ -342,19 +363,6 @@ if ($bundledNodeFiles.Count -ne 0) {
                 Sort-Object
         ) -join ', '
     )
-}
-
-if ($Architecture -eq 'x64') {
-    Push-Location $installedPackage
-    try {
-        & node .\openclaw.mjs --version
-        if ($LASTEXITCODE -ne 0) {
-            throw "OpenClaw payload smoke test failed with exit code $LASTEXITCODE."
-        }
-    }
-    finally {
-        Pop-Location
-    }
 }
 
 [ordered]@{

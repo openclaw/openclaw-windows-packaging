@@ -69,6 +69,7 @@ $requiredFragments = @(
     'overwrite_files: false'
     'fail_on_unmatched_files: true'
     'release-assets/*.msixbundle'
+    '.\scripts\Test-OpenClawWorkflowInputs.Tests.ps1'
 )
 
 foreach ($fragment in $requiredFragments) {
@@ -85,10 +86,49 @@ if (-not $buildMsixJobMatch.Success) {
     throw 'Unable to locate the build-msix workflow job.'
 }
 $buildMsixJob = $buildMsixJobMatch.Groups['job'].Value
+foreach ($fragment in @(
+    'runs-on: ${{ matrix.runner }}'
+    'architecture: ${{ matrix.architecture }}'
+)) {
+    if (-not $buildMsixJob.Contains($fragment, [StringComparison]::Ordinal)) {
+        throw "Payload activation must use the matching runtime architecture: $fragment"
+    }
+}
+foreach ($entry in @(
+    @{ Architecture = 'x64'; Runner = 'windows-latest' }
+    @{ Architecture = 'arm64'; Runner = 'windows-11-vs2026-arm' }
+)) {
+    $pattern = 'architecture:\s*' + $entry.Architecture +
+        '\s+runner:\s*' + [regex]::Escape($entry.Runner) + '\s'
+    if ($buildMsixJob -cnotmatch $pattern) {
+        throw "Missing native $($entry.Architecture) payload runner $($entry.Runner)."
+    }
+}
 if ($buildMsixJob.Contains(
         'name: Download payload',
         [StringComparison]::Ordinal)) {
     throw 'The build-msix job must compose the locally built payload directly.'
+}
+
+$packageJob = [regex]::Match(
+    $workflow,
+    '(?ms)^  build-package:\s*(?<job>.*?)(?=^  [a-z][a-z0-9-]+:)'
+).Groups['job'].Value
+foreach ($fragment in @(
+    "SIGNING_MODE: `${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode || 'unsigned' }}"
+    '.\scripts\Test-OpenClawWorkflowInputs.ps1'
+    '-SigningMode $env:SIGNING_MODE'
+    '-RequestedRef $env:OPENCLAW_REF'
+    '-EventName $env:GITHUB_EVENT_NAME'
+    '-GitRef $env:GITHUB_REF'
+)) {
+    if (-not $packageJob.Contains($fragment, [StringComparison]::Ordinal)) {
+        throw "The source build must validate actual workflow inputs: $fragment"
+    }
+}
+if ($packageJob.IndexOf('Test-OpenClawWorkflowInputs.ps1', [StringComparison]::Ordinal) -ge
+    $packageJob.IndexOf('name: Resolve immutable OpenClaw source', [StringComparison]::Ordinal)) {
+    throw 'Validate source/signing inputs before resolving or building OpenClaw.'
 }
 
 $dispatchDefaultMatch = [regex]::Match(
@@ -107,17 +147,26 @@ $releasePolicy = Get-Content `
     -LiteralPath (Join-Path $repositoryRoot 'release-policy.json') `
     -Raw |
     ConvertFrom-Json
+$expectedDefault = [string]$releasePolicy.approvedCommit
+if ($releasePolicy.PSObject.Properties.Name -contains 'developmentCommit') {
+    $expectedDefault = [string]$releasePolicy.developmentCommit
+    if ($expectedDefault -cnotmatch '^[0-9a-f]{40}$' -or
+        $expectedDefault -ieq [string]$releasePolicy.approvedCommit) {
+        throw 'The development pin must be an immutable commit distinct from the official approval.'
+    }
+}
 $pinnedRevisions = @(
     @(
         $dispatchDefaultMatch.Groups['sha'].Value
         $automaticFallbackMatch.Groups['sha'].Value
-        [string]$releasePolicy.approvedCommit
+        $expectedDefault
     ) | Select-Object -Unique
 )
 if ($pinnedRevisions.Count -ne 1) {
     throw (
-        'The workflow defaults and official release policy must pin the same ' +
-        "OpenClaw commit; found: $($pinnedRevisions -join ', ')."
+        'The workflow defaults must match the declared development pin, or ' +
+        'the official approval when no development pin is declared. ' +
+        "Found: $($pinnedRevisions -join ', ')."
     )
 }
 

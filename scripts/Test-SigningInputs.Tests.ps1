@@ -421,14 +421,16 @@ function Update-TestMsix {
 }
 
 function Reset-TestArtifacts {
+    param([string]$PayloadCommit = $approvedCommit)
+
     Remove-Item `
         -LiteralPath $testRoot `
         -Recurse `
         -Force `
         -ErrorAction SilentlyContinue
     New-Item -Path $testRoot -ItemType Directory | Out-Null
-    New-TestArtifact -Root $testRoot -Architecture x64
-    New-TestArtifact -Root $testRoot -Architecture arm64
+    New-TestArtifact -Root $testRoot -Architecture x64 -PayloadCommit $PayloadCommit
+    New-TestArtifact -Root $testRoot -Architecture arm64 -PayloadCommit $PayloadCommit
 }
 
 try {
@@ -457,6 +459,21 @@ try {
         -Action {
             Invoke-PolicyValidation -Root $testRoot -PreserveBundle
         }
+
+    Reset-TestArtifacts
+    if ($policy.PSObject.Properties.Name -contains 'developmentCommit') {
+        Assert-Fails `
+            -MessagePattern 'approved immutable OpenClaw commit' `
+            -Action {
+                Invoke-PolicyValidation `
+                    -Root $testRoot `
+                    -RequestedRef ([string]$policy.developmentCommit)
+            }
+        Reset-TestArtifacts -PayloadCommit ([string]$policy.developmentCommit)
+        Assert-Fails `
+            -MessagePattern 'MSIX metadata is not eligible for signing' `
+            -Action { Invoke-PolicyValidation -Root $testRoot }
+    }
 
     Reset-TestArtifacts
     Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
