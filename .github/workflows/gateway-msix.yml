@@ -89,6 +89,23 @@ jobs:
           }
           "versioning=$versioning" >> $env:GITHUB_OUTPUT
 
+  # Advisory only. This job annotates documentation-reference findings but is
+  # deliberately absent from ci-gate's needs, so it can never block a merge.
+  # Run .\scripts\Test-DocReferences.ps1 without -Advisory locally for a
+  # nonzero exit on findings.
+  docs:
+    name: Check documentation references
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check documentation references
+        shell: pwsh
+        run: ./scripts/Test-DocReferences.ps1 -Advisory
+
   test-host:
     name: Test Gateway MSIX host
     runs-on: windows-latest

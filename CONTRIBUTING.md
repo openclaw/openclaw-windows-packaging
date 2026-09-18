@@ -175,10 +175,12 @@ bypassable, and required CI checks remain authoritative.
   consume `--`, rewrite arguments, or block upstream commands. The
   System.CommandLine tree covers `clawctl` only; the `openclaw` entrypoint must
   keep forwarding its argument vector without parsing it.
-- Preserve direct execution of `app\openclaw.mjs` from the read-only MSIX
-  package. `clawctl setup` owns idempotent extraction of the bundled Node.js
-  archive into versioned package LocalState; do not copy the OpenClaw
-  application payload or use device-installed Node.js.
+- Preserve execution of the packaged `app\openclaw.mjs` from the read-only MSIX
+  package, but run it inside the isolated session rather than launching it
+  directly. `clawctl setup` owns session provisioning and writes the setup
+  marker that `openclaw` requires. Node.js is installed into the agent
+  account's profile by the session host, not into package LocalState; do not
+  copy the OpenClaw application payload or use device-installed Node.js.
 - Keep x64 and ARM64 behavior synchronized across the workflow matrix, scripts,
   project runtime identifiers, manifest content, and signing validation.
 - Metadata files are part of the release trust chain. Coordinate changes across
@@ -218,6 +220,35 @@ bypassable, and required CI checks remain authoritative.
 - Tests must be deterministic: no sleep-based synchronization, hardcoded ports,
   or inter-test ordering dependencies.
 
+## Documentation
+
+`README.md`, `CONTRIBUTING.md`, and `.github\copilot-instructions.md` are a
+three-way contract. They must agree with each other and with the source that
+owns each behavior claim. When they disagree, source wins — verify the claim
+and correct the documents rather than picking whichever reads best.
+
+Check documentation references before you push:
+
+```powershell
+.\scripts\Test-DocReferences.ps1
+```
+
+It validates that repository paths named in markdown are actually tracked,
+that relative links and their anchors resolve, and that markdown stays LF. It
+resolves paths through `git ls-files` rather than the filesystem, because a
+stale untracked build directory can make a renamed project path look valid.
+Findings exit nonzero locally. Continuous integration runs the same script with
+`-Advisory`, which annotates the pull request without failing the build, so a
+documentation change is never blocked by it.
+
+Three project skills in `.github\skills\` support this work:
+
+| Skill | Use it for |
+|---|---|
+| `technical-documentation` | Writing, reviewing, or auditing any documentation surface |
+| `docs-refactor` | Rewriting, splitting, or reorganizing a page without losing behavior facts |
+| `deslop` | Behavior-neutral cleanup of a branch diff before code review |
+
 ## Pull requests
 
 Use the pull request template. Title the PR
@@ -233,8 +264,13 @@ run.
 
 Keep the description current when review feedback changes the implementation;
 the body is the durable explanation, not just the comment thread. Keep **Allow
-edits from maintainers** enabled so a maintainer can update the branch. Do not
-edit `CHANGELOG.md`.
+edits from maintainers** enabled so a maintainer can update the branch.
+
+This repository keeps no changelog file. An official release calls
+`softprops/action-gh-release` with `generate_release_notes: true`, so GitHub
+composes the release notes from the titles of the pull requests merged since
+the previous release tag. Your pull request title is the release note, which is
+why the `type: user-facing description` form matters.
 
 ### Stacked pull requests
 

@@ -19,7 +19,7 @@ $vsInstaller = Join-Path `
   ([Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFilesX86)) `
   'Microsoft Visual Studio\Installer'
 $env:Path = "$vsInstaller;$env:Path"
-dotnet publish .\src\OpenClaw.Gateway.Launcher\OpenClaw.Gateway.Launcher.csproj `
+dotnet publish .\src\OpenClaw.Launcher\OpenClaw.Launcher.csproj `
   --configuration Release `
   --runtime win-x64 `
   --self-contained
@@ -30,9 +30,9 @@ dotnet test .\OpenClaw.Gateway.MSIX.slnx `
   --no-restore
 
 # Run one xUnit test by fully qualified name.
-dotnet test .\tests\OpenClaw.Gateway.Launcher.Tests\OpenClaw.Gateway.Launcher.Tests.csproj `
+dotnet test .\tests\OpenClaw.Launcher.Tests\OpenClaw.Launcher.Tests.csproj `
   --configuration Release `
-  --filter "FullyQualifiedName=OpenClaw.Launcher.Tests.ProgramTests.AgentLaunchResolvesNodeAndRunsPackagedApplication"
+  --filter "FullyQualifiedName=OpenClaw.Launcher.Tests.HostOptionsTests.ParseForwardsAllArgumentsUnchanged"
 
 # Exercise the official-signing policy checks.
 .\scripts\Test-SigningInputs.Tests.ps1
@@ -76,30 +76,62 @@ package.
 
 ## Architecture
 
-- `OpenClaw.Gateway.Launcher` is a .NET 10 NativeAOT executable packaged as
-  `openclaw.exe`. `Package.appxmanifest` exposes it through the `openclaw.exe`
-  app execution alias and declares the `OpenClaw.Gateway` MSIX identity.
-- The package contains an expanded, read-only OpenClaw application tree.
-  `HostOptions` resolves `app\openclaw.mjs` directly from the package.
-- `openclaw` resolves the Node.js executable extracted into package LocalState,
-  confirms the packaged entry point exists, and forwards every argument
-  unchanged to `openclaw.mjs`.
-- `clawctl setup` validates and reuses or repairs the architecture-specific
-  bundled Node.js runtime in versioned package LocalState and verifies the
-  packaged entry point. Runtime launches do not hash or walk application files.
+- `OpenClaw.Launcher` is a .NET 10 NativeAOT executable packaged as
+  `openclaw.exe`. `Package.appxmanifest` declares the `OpenClaw.Gateway` MSIX
+  identity and exposes the same binary through two app execution aliases,
+  `openclaw.exe` and `clawctl.exe`. `HostEntrypointResolver` picks the surface
+  from the package-qualified application user model ID, falling back to the
+  invoked name parsed from the native command line; an unrecognized name falls
+  back to the agent surface.
+- `OpenClaw.SessionHost` is a second NativeAOT executable
+  (`openclaw-session-host.exe`) that runs *inside* the isolated session under
+  the agent identity. `OpenClaw.SessionProtocol` is the AOT-safe,
+  source-generated JSON file contract the two processes exchange; it rejects
+  unsupported schema versions.
+- Sessions are mandatory. `openclaw` does not execute the packaged application
+  directly. It requires the `clawctl setup` marker (`SetupStateStore`), starts
+  or reuses the recorded isolated session through `SessionCoordinator`, and
+  runs the work through `SessionExecutor`. Without a usable setup record it
+  reports an error and exits nonzero rather than provisioning implicitly.
+- Isolation is provided by the MXC runtime, not by this code.
+  `MxcRuntimeLocator` resolves the architecture-specific `wxc-exec.exe` from
+  package content and `MxcCliSessionClient` exchanges versioned JSON envelopes
+  with it. `mxc-runtime.lock.json` pins the archive, integrity data, and the
+  allowlisted runtime files; `scripts\Get-MxcRuntime.ps1` verifies every one of
+  them and never runs package lifecycle scripts.
+- `clawctl setup` stages the packaged session helper into a shared workspace
+  through `SessionHelperStager`. The helper cannot execute in place from
+  another package identity's `WindowsApps` directory, so the copy is required,
+  not an optimization.
+- The packaged application tree stays expanded and read-only, and
+  `app\openclaw.mjs` remains the entry point, but it is executed inside the
+  session. Node.js is installed by `SessionRuntimeInstaller` into the **agent
+  account's profile** (`OpenClawGatewayMSIX\agent-node\<archive-root>`), not
+  package LocalState, because the agent identity cannot read the launcher's
+  LocalState. The session host prepends that runtime to the agent's `PATH`.
 - `clawctl` parses its own arguments with System.CommandLine
   (`ClawCtlCommandLine` builds the tree; `Program.RunControlAsync` invokes it).
-  Help, usage, version, and completion are library behavior; parse errors exit
-  `1`. Response-file expansion is disabled, so `@file` is an ordinary
-  unrecognized argument. The library is scoped to `clawctl` only and must never
-  see `openclaw` arguments.
-- `GatewayLauncher` starts Node without a shell, uses `ArgumentList`, inherits
-  the console streams, and sets `OPENCLAW_SUPERVISOR_MODE=external` plus
-  `OPENCLAW_NO_AUTO_UPDATE=1`. The child process exit code is the launcher exit
-  code. Only the child environment prepends the bundled runtime to `PATH`.
+  The tree is `setup` (`--fresh`, `--force`), `status`, `collect-logs`
+  (`--output`), `teardown` (`--force`), `pwsh` (which rejects `--json`), and
+  `gateway-service` (`start` with a hidden `--recovery`, `status`, `stop`),
+  plus the recursive global options `--json` and `--no-color`. Help, usage,
+  version, and completion are library behavior; parse errors exit `1`.
+  Response-file expansion is disabled, so `@file` is an ordinary unrecognized
+  argument. The library is scoped to `clawctl` only and must never see
+  `openclaw` arguments.
+- The gateway is not a foreground child. `SchTasksGatewayScheduler` persists it
+  as a Windows logon task through inbox `schtasks.exe`, and
+  `GatewayConfigurationStore` persists the launch configuration because the
+  task starts later with no interactive caller. Do not force a port: an absent
+  configured port is omitted so OpenClaw resolves its own `gateway.port`. The
+  recorded `18789` is upstream's default, kept for guidance only, so never
+  report it as an observed address. `GatewayController` reports status from the
+  observed listening port.
 - Diagnostics are written to packaged LocalState (or
   `%LOCALAPPDATA%\OpenClawGatewayMSIX` outside an MSIX context) with a named
-  mutex so concurrent processes append complete records.
+  mutex so concurrent processes append complete records. `collect-logs` emits a
+  timestamped ZIP, excludes credential databases and auth profiles, and passes
+  included text through `DiagnosticsRedactor`.
 - The GitHub workflow first builds and packs a pinned `openclaw/openclaw`
   revision on Linux using that revision's `setup-node-env` action. Non-official
   runs cache that tarball by resolved upstream commit and verify its recorded
@@ -144,10 +176,23 @@ package.
 - Treat launcher arguments as OpenClaw-owned. Do not add host-only switches,
   consume `--`, rewrite arguments, or block upstream commands; tests explicitly
   protect transparent forwarding.
-- Preserve direct execution of `app\openclaw.mjs` from the immutable package
-  and the caller's working directory. Node.js extraction belongs only to
-  `clawctl setup` and targets versioned package LocalState; do not copy the
-  OpenClaw application payload.
+- Preserve execution of the packaged `app\openclaw.mjs` from the immutable
+  package and the caller's working directory, but run it through the isolated
+  session; never copy the OpenClaw application payload. Node.js installation
+  belongs to `SessionRuntimeInstaller` and targets the agent account's profile,
+  not package LocalState, because the agent identity cannot read the launcher's
+  LocalState.
+- Sessions are mandatory and explicit. `clawctl setup` owns provisioning and
+  writes the setup marker; `openclaw` starts only the recorded session and
+  never provisions implicitly. Do not add an implicit-provisioning fallback.
+- Publishing the session host is a separate NativeAOT step. Restore
+  `src\OpenClaw.SessionHost\OpenClaw.SessionHost.csproj` with the target runtime
+  and `PublishAot=true` before `Build-MSIX.ps1` publishes it with
+  `--no-restore`; the ordinary solution restore is not sufficient.
+- The MXC runtime is a release trust input. Keep `mxc-runtime.lock.json`, the
+  allowlisted file set, and the per-file integrity checks in
+  `scripts\Get-MxcRuntime.ps1` synchronized, and keep the staged runtime and
+  session host in the build inventory for both architectures.
 - The build-time inventory is a release trust boundary. Keep safe unique paths,
   lengths, and SHA-256 values synchronized across composition and signing
   validation.
@@ -180,3 +225,21 @@ package.
 - Tests create isolated temporary directories through `TestDirectory`; extend
   those fixtures instead of reading or modifying real OpenClaw profile,
   packaged LocalState, or installed MSIX data.
+
+## Documentation
+
+Three project skills in `.github\skills\` cover documentation and pre-review
+cleanup: `technical-documentation` for authoring and reviewing,
+`docs-refactor` for whole-page rewrites that must not lose behavior facts, and
+`deslop` for behavior-neutral cleanup of a branch diff before review.
+
+`.\scripts\Test-DocReferences.ps1` is an advisory checker for documentation
+references: it validates that repository paths named in markdown are tracked,
+that relative links and anchors resolve, and that markdown stays LF. It
+resolves paths through `git ls-files` rather than the filesystem, because
+stale untracked build output would otherwise make a renamed path look valid.
+CI runs it with `-Advisory`, which annotates without failing the build; run it
+without that switch locally to get a nonzero exit on findings.
+
+Keep `README.md`, `CONTRIBUTING.md`, and this file consistent with each other
+and with source. When they disagree, source wins.
