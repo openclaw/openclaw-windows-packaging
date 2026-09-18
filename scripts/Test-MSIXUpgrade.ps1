@@ -182,8 +182,8 @@ if ($candidateIdentity.Publisher -cne [string]$policy.publisher) {
 
 $baselineManifest = Get-Content -LiteralPath $resolvedBaselinesPath -Raw |
     ConvertFrom-Json
-if ($baselineManifest.baselines.Count -ne 4) {
-    throw 'Upgrade validation requires standalone and bundle proof-release baselines.'
+if ($baselineManifest.baselines.Count -ne 6) {
+    throw 'Upgrade validation requires proof and latest-production baselines for both delivery types.'
 }
 if (@(Get-GatewayPackages).Count -ne 0) {
     throw (

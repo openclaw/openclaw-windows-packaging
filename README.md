@@ -406,22 +406,27 @@ key is stored in the repository.
 Official releases derive their GitHub tag and four-part numeric MSIX identity
 from `gatewayTag` and `msixRevision` in `release-policy.json`. The GitHub tag is
 `<gateway-tag>-msix.<revision>`. The MSIX identity is
-`year.month.patch.(gateway-release-sequence * 1000 + msix-revision)`.
+`year.month.VVPN.0`: `VV` is the two-digit monthly Gateway release sequence,
+`P` is the Gateway correction digit, and `N` is the MSIX rebuild digit. The
+digits are packed numerically into the third component, so leading zeroes are
+not written.
 
 | Gateway tag | MSIX revision | GitHub release tag | MSIX version |
 |---|---:|---|---|
-| `v2026.7.1` | `0` | `v2026.7.1-msix.0` | `2026.7.1.1000` |
-| `v2026.7.1-2` | `0` | `v2026.7.1-2-msix.0` | `2026.7.1.2000` |
-| `v2026.7.1-2` | `1` | `v2026.7.1-2-msix.1` | `2026.7.1.2001` |
-| `v2026.7.2` | `0` | `v2026.7.2-msix.0` | `2026.7.2.1000` |
+| `v2026.7.1` | `0` | `v2026.7.1-msix.0` | `2026.7.100.0` |
+| `v2026.7.1` | `1` | `v2026.7.1-msix.1` | `2026.7.101.0` |
+| `v2026.7.1-2` | `0` | `v2026.7.1-2-msix.0` | `2026.7.120.0` |
+| `v2026.7.2` | `0` | `v2026.7.2-msix.0` | `2026.7.200.0` |
+| `v2026.7.12` | `0` | `v2026.7.12-msix.0` | `2026.7.1200.0` |
 
-The unsuffixed Gateway tag is release sequence `1`; correction suffixes `-2`
-through `-64` use their numeric suffix as the sequence. A `-1` suffix is
-rejected because it would collide with the unsuffixed tag. Set `msixRevision`
-from `0` through `999`, starting at `0` for each Gateway tag and incrementing it
-only when that exact Gateway tag is repackaged. Each Gateway release therefore
-owns a deterministic 1,000-number block, and an MSIX-only rebuild cannot shift
-the version assigned to a later Gateway correction or patch.
+Gateway release sequences must be `1` through `99`. The unsuffixed Gateway tag
+uses correction digit `0`; correction suffixes `-2` through `-9` use their
+numeric suffix. A `-1` suffix remains rejected to match the Gateway release-tag
+contract. Set `msixRevision` from `0` through `9`, starting at `0` for each
+Gateway tag and incrementing it only when that exact Gateway tag is repackaged.
+Decimal place value guarantees Gateway release > Gateway correction > MSIX
+rebuild while keeping every component at four digits or fewer and reserving the
+fourth component as `0` for Microsoft Store submission.
 
 To prepare an official release, update these policy inputs together in a
 reviewed pull request:
@@ -445,14 +450,15 @@ release notes. Each release contains a signed, multi-architecture
 deployment. The duplicate GitHub Actions artifacts remain short-lived transport
 and diagnostic copies.
 
-Microsoft Store submissions reserve the fourth version component as zero, so
-Store publication will need its own version policy when it is introduced.
+The same identity can be used for direct distribution and Microsoft Store
+submission; the fourth component is always `0`.
 
 The signed `v0.0.0.0` and `v0.0.0.1` proof releases are not production version
-identities, but they are retained as transition baselines. Pull requests that
-change release versioning download the hash-pinned standalone x64 and
-recommended `.msixbundle` assets, install each one on a clean GitHub-hosted
-Windows runner, upgrade it in place through the same delivery format, and
+identities, but they are retained as transition baselines. The latest production
+release is also retained as a migration baseline. Pull requests that change
+release versioning download the hash-pinned standalone x64 and recommended
+`.msixbundle` assets, install each one on a clean GitHub-hosted Windows runner,
+upgrade it in place through the same delivery format, and
 verify that the package family remains stable and a LocalState marker is
 retained. The gate also proves fresh installation of both the standalone and
 bundle candidates. It refuses to run when an OpenClaw Gateway package is

@@ -27,6 +27,20 @@
       "assetName": "OpenClawGateway-0.0.0.1.msixbundle",
       "packageVersion": "0.0.0.1",
       "sha256": "48a65dd7bdc515acac96f73129aed9a343604bbfb3ceed8be4e5bd5367fd85c4"
+    },
+    {
+      "releaseTag": "v2026.9.4-msix.1",
+      "deliveryType": "standalone",
+      "assetName": "OpenClawGateway-2026.9.4-msix.1-x64.msix",
+      "packageVersion": "2026.9.4.1001",
+      "sha256": "581f7b393e450bff4717c4f972b7ba9acb6a8be871c48cc086f26f6db5330e43"
+    },
+    {
+      "releaseTag": "v2026.9.4-msix.1",
+      "deliveryType": "bundle",
+      "assetName": "OpenClawGateway-2026.9.4-msix.1.msixbundle",
+      "packageVersion": "2026.9.4.1001",
+      "sha256": "bdfc9701218a7b651704382dd1d7d89689a39ac0e23a86626932e9a1ec26e59c"
     }
   ]
 }
