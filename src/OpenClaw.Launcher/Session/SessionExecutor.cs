@@ -1,3 +1,4 @@
+using System.Globalization;
 using OpenClaw.Launcher.Mxc;
 using OpenClaw.SessionProtocol;
 
@@ -73,6 +74,13 @@ internal sealed record SessionCommandRequest(
     /// </summary>
     public string? NativeRootPath { get; init; }
 }
+
+/// <summary>
+/// Captured output from a non-interactive command run in the isolated session.
+/// </summary>
+internal sealed record SessionCommandCaptureResult(
+    string StandardOutput,
+    string StandardError);
 
 /// <summary>
 /// Runs OpenClaw inside the owned session.
@@ -205,6 +213,62 @@ internal sealed class SessionExecutor
         {
             // Only this invocation's files are removed. Concurrent invocations
             // own differently named requests in the same shared workspace.
+            operation.Delete(requestPath);
+            operation.Delete(resultPath);
+        }
+    }
+
+    /// <summary>
+    /// Runs a non-interactive command inside the session and captures its output.
+    /// </summary>
+    /// <remarks>
+    /// The captured streams can contain authenticated data. This method must not
+    /// log them.
+    /// </remarks>
+    public async Task<SessionCommandCaptureResult> ExecuteCommandCaptureAsync(
+        SessionRecord record,
+        SessionCommandRequest request,
+        string startingMessage,
+        string subject,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        ArgumentNullException.ThrowIfNull(request);
+
+        string requestId = _createRequestId();
+        using var operation = new SessionWorkspaceOperation(record, _isCurrentRecord);
+        string requestPath = operation.FilePath("launch", requestId);
+        string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
+        var launchRequest = new SessionLaunchRequest
+        {
+            RequestId = requestId,
+            Executable = request.Executable,
+            Arguments = request.Arguments,
+            WorkingDirectory = request.WorkingDirectory,
+            Environment = MergeEnvironment(
+                _buildEnvironment(), request.AdditionalEnvironment),
+            PathPrefix = request.PathPrefix,
+        };
+
+        try
+        {
+            await operation.WriteTextNewAsync(
+                requestPath,
+                SessionLaunchProtocol.SerializeRequest(launchRequest),
+                cancellationToken).ConfigureAwait(false);
+
+            _log(startingMessage);
+            MxcExecutionResult execution = await _backend.ExecuteAsync(
+                record.ToSandboxIdOrThrow(),
+                new MxcExecutionRequest(BuildGuestCommandLine(request.HelperPath, requestPath)),
+                null,
+                cancellationToken).ConfigureAwait(false);
+
+            operation.EnsureCurrent();
+            return ReadCapturedOutcome(operation, resultPath, execution, requestId, subject);
+        }
+        finally
+        {
             operation.Delete(requestPath);
             operation.Delete(resultPath);
         }
@@ -599,6 +663,73 @@ internal sealed class SessionExecutor
     /// captures nothing, so a dispatch failure is indistinguishable from an
     /// application exit without this file.
     /// </remarks>
+    private static SessionCommandCaptureResult ReadCapturedOutcome(
+        SessionWorkspaceOperation operation,
+        string resultPath,
+        MxcExecutionResult execution,
+        string requestId,
+        string subject)
+    {
+        string resultText;
+        try
+        {
+            resultText = operation.ReadTextAsync(resultPath, CancellationToken.None)
+                .GetAwaiter().GetResult();
+        }
+        catch (Exception exception) when (
+            exception is FileNotFoundException or DirectoryNotFoundException or IOException)
+        {
+            throw new SessionException(
+                "The isolated session did not report a launch result " +
+                $"(executor exit code {execution.ExitCode}). {subject} may not have started.");
+        }
+
+        SessionLaunchResult result;
+        try
+        {
+            result = SessionLaunchProtocol.ReadResult(resultText);
+        }
+        catch (SessionLaunchException exception)
+        {
+            throw new SessionException(
+                $"The isolated session reported an unreadable launch result: {exception.Message}",
+                exception);
+        }
+
+        if (!string.Equals(result.RequestId, requestId, StringComparison.Ordinal))
+        {
+            throw new SessionException(
+                "The isolated session reported a launch result for a different request.");
+        }
+
+        if (!result.Launched)
+        {
+            throw new SessionException(
+                $"{subject} could not be started inside the isolated session: " +
+                (result.Error ?? "no reason was reported."));
+        }
+
+        if (execution.ExitCode != 0)
+        {
+            throw new SessionException(
+                $"The isolated session backend failed to run {subject} " +
+                $"(executor exit code {execution.ExitCode}).");
+        }
+
+        if (result.ExitCode is not 0)
+        {
+            string exitCode = result.ExitCode is int value
+                ? value.ToString(CultureInfo.InvariantCulture)
+                : "no exit code";
+            throw new SessionException(
+                $"{subject} exited with code {exitCode}.");
+        }
+
+        return new SessionCommandCaptureResult(
+            execution.StandardOutput,
+            execution.StandardError);
+    }
+
     private static int ReadOutcome(
         SessionWorkspaceOperation operation,
         string resultPath,

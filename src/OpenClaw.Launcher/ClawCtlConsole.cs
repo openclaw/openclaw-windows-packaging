@@ -61,6 +61,9 @@ internal static class ClawCtlConsole
             case TeardownCommandResult teardown:
                 WriteTeardown(view, teardown);
                 break;
+            case OpenCommandResult open:
+                WriteOpen(view, open);
+                break;
             case GatewayCommandResult gateway:
                 WriteGateway(view, gateway);
                 break;
@@ -520,6 +523,7 @@ internal static class ClawCtlConsole
         {
             view.Row("URL", new Text(result.Url));
         }
+
         else if (result.Port is not null)
         {
             view.Row(
@@ -540,12 +544,12 @@ internal static class ClawCtlConsole
 
         WriteReadiness(view, result.Readiness);
 
-        // Reaching the Control UI needs the shared token, and the command that
-        // reveals it belongs to OpenClaw rather than to this package.
-        if (result.State == Gateway.GatewayState.Running && result.Port is not null)
+        // The authenticated handoff is owned by OpenClaw and must not expose
+        // a reusable token at the console.
+        if (result.State == Gateway.GatewayState.Running)
         {
             view.Blank();
-            view.Command("Token", "openclaw gateway auth-token --show");
+            view.Command("Open Control UI", "clawctl open");
         }
 
         if (result.State == Gateway.GatewayState.NotStarted &&
@@ -556,6 +560,18 @@ internal static class ClawCtlConsole
             view.Blank();
             view.Command("Run", "clawctl gateway-service start");
         }
+    }
+
+    private static void WriteOpen(ResultView view, OpenCommandResult result)
+    {
+        if (result.State is { } state)
+        {
+            view.Row("Gateway", state == Gateway.GatewayState.Running
+                ? Status(view, StatusKind.Success, "listening")
+                : Status(view, StatusKind.Failure, state.ToString()));
+        }
+
+        view.Detail(result.Message);
     }
 
     private static void WriteReadiness(

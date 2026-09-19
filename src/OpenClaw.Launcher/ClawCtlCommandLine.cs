@@ -10,6 +10,7 @@ internal sealed record ClawCtlHandlers
     public required Func<CancellationToken, Task<int>> Status { get; init; }
     public required Func<string?, CancellationToken, Task<int>> CollectLogs { get; init; }
     public required Func<bool, CancellationToken, Task<int>> Teardown { get; init; }
+    public Func<CancellationToken, Task<int>> Open { get; init; } = _ => Task.FromResult(1);
     public required Func<CancellationToken, Task<int>> PowerShell { get; init; }
     public required Func<bool, CancellationToken, Task<int>> GatewayStart { get; init; }
     public required Func<CancellationToken, Task<int>> GatewayStatus { get; init; }
@@ -34,6 +35,7 @@ internal static class ClawCtlCommandLine
     public const string SetupCommandName = "setup";
     public const string StatusCommandName = "status";
     public const string CollectLogsCommandName = "collect-logs";
+    public const string OpenCommandName = "open";
 
     // Response-file expansion is off. A leading `@` means nothing to clawctl,
     // so it is reported as an unrecognized argument instead of silently reading
@@ -142,6 +144,15 @@ internal static class ClawCtlCommandLine
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.Teardown(parsed.GetValue(teardownForce), cancellationToken);
         });
+        Command open = new(
+            OpenCommandName,
+            "Open the running gateway's Control UI in the default browser.");
+        open.SetAction((parsed, cancellationToken) =>
+        {
+            outputOptions.Json = parsed.GetValue(json);
+            outputOptions.NoColor = parsed.GetValue(noColor);
+            return handlers.Open(cancellationToken);
+        });
         Command powerShell = new(
             "pwsh",
             "Open PowerShell inside the isolated agent. `openclaw` and `node` " +
@@ -195,6 +206,7 @@ internal static class ClawCtlCommandLine
             status,
             collectLogs,
             teardown,
+            open,
             powerShell,
             gateway
         };

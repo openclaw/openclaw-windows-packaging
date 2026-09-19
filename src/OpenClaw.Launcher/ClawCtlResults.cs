@@ -74,6 +74,14 @@ internal sealed record TeardownCommandResult(
     public int ExitCode => Teardown.Succeeded ? 0 : 1;
 }
 
+internal sealed record OpenCommandResult(
+    GatewayState? State,
+    string Message,
+    int ExitCode) : IClawCtlResult
+{
+    public string Command => "open";
+}
+
 internal sealed record GatewayCommandResult(
     string Action,
     GatewayState State,
