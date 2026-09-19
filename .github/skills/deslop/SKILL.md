@@ -97,7 +97,7 @@ documentation review.
 |---|---|
 | Narrating comments, syntax explanations, or prose that repeats code without explaining a non-obvious reason. | Policy comments that explain *why*, including the substantial policy rationale in `scripts\Get-PackagingRelevance.ps1` and `.github\workflows\gateway-msix.yml`. |
 | Null guards, `try`/`catch`, or existence checks protecting only imagined states that are abnormal for the surrounding type. | `$ErrorActionPreference = 'Stop'` and explicit `$LASTEXITCODE` checks after native tools in PowerShell build scripts; these are intentional fail-fast behavior. |
-| Gratuitous `object` round-trips, unnecessary casts, `dynamic`, or reflection. | Source-generated `System.Text.Json` through `OpenClawJsonContext`; reflection is a NativeAOT defect, not a stylistic shortcut. |
+| Gratuitous `object` round-trips, unnecessary casts, `dynamic`, or reflection. | Contract-specific source-generated `JsonSerializerContext` metadata; reflection is a NativeAOT defect, not a stylistic shortcut. |
 | One-use variables or helpers that add no domain meaning, remove no duplication, and simplify no control flow. | Hash and metadata validation in packaging scripts; this is a release trust boundary and must never be simplified away. |
 | Aliases, retries, or fallback branches with no named shipped contract or removal plan. | Spectre.Console renderable composition (`Grid`, `Panel`, `Paragraph`, `Rows`, and `Paragraph.Append`) rather than interpolated markup strings. |
 | Naming, `using` placement, control flow, or formatting that visibly conflicts with neighboring code. | Local conventions intentionally established by surrounding code, even if a generic cleanup preference differs. |

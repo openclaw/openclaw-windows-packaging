@@ -103,6 +103,12 @@ a real process.
 Formatting and analyzer severity are defined by the root `.editorconfig`. The
 analyzer properties themselves live in `Directory.Build.props`, and the
 repository uses only the analyzers that ship with the pinned SDK.
+`AnalysisMode=All` enables the full analyzer set, and
+`EnforceCodeStyleInBuild` runs IDE-style rules during command-line builds.
+`GenerateDocumentationFile` is required for build-time `IDE0005`; the
+resulting `CS1591` diagnostic is deliberately suppressed rather than filled
+with low-value XML comments. Rule severity belongs in `.editorconfig`, not in
+individual project files.
 
 Continuous integration never rewrites source. To apply formatting locally,
 review the resulting diff before committing:
@@ -178,7 +184,8 @@ bypassable, and required CI checks remain authoritative.
 ## Repository conventions
 
 - Ordinary builds and tests must leave `IncludePackagingContent` unset.
-  Packaging builds set it to `true` and supply a runtime identifier.
+  Packaging builds set it to `true`, supply a runtime identifier and platform,
+  and isolate MSIX intermediates under `obj\packaging`.
 - Treat launcher arguments as OpenClaw-owned. Do not add host-only switches,
   consume `--`, rewrite arguments, or block upstream commands. The
   System.CommandLine tree covers `clawctl` only; the `openclaw` entrypoint must
@@ -201,6 +208,13 @@ bypassable, and required CI checks remain authoritative.
   for its lifetime, and a held root is left whole for a later setup.
 - Keep x64 and ARM64 behavior synchronized across the workflow matrix, scripts,
   project runtime identifiers, manifest content, and signing validation.
+- Restore `src\OpenClaw.SessionHost\OpenClaw.SessionHost.csproj` separately
+  with the target runtime and `PublishAot=true` before `Build-MSIX.ps1`
+  publishes it with `--no-restore`; the ordinary solution restore is not
+  sufficient.
+- Do not add a packaging-side Node.js version pin or support range. The
+  selected upstream toolchain owns the version; package composition supplies
+  `NodeRuntimeArchiveFileName`, and the host reads the archive name.
 - Metadata files are part of the release trust chain. Coordinate changes across
   payload creation, MSIX creation, signing validation, workflow artifacts, and
   tests.
@@ -217,9 +231,9 @@ bypassable, and required CI checks remain authoritative.
   LocalState, and prove both candidate delivery formats install fresh. Run the
   harness only on an isolated clean Windows account; it refuses pre-existing
   OpenClaw Gateway registrations and cleans up only its own installation.
-- Use source-generated `System.Text.Json` metadata through `OpenClawJsonContext`.
-  The launcher is NativeAOT and must not introduce reflection-based
-  serialization.
+- Use contract-specific source-generated `JsonSerializerContext` metadata.
+  The launcher and session host are NativeAOT and must not introduce
+  reflection-based serialization.
 - PowerShell scripts set `$ErrorActionPreference = 'Stop'` and must also check
   `$LASTEXITCODE` after invoking native tools.
 - Package versions have four numeric components that each fit in `UInt16`.
@@ -233,17 +247,17 @@ bypassable, and required CI checks remain authoritative.
   exit codes, rendered output. Do not read a source file and assert on string
   markers of the implementation.
 - Tests must never modify real user state. Use the isolated temporary
-  directory fixtures rather than touching a real OpenClaw profile, packaged
-  LocalState, or an installed MSIX.
+  directories created by `TestDirectory` rather than touching a real OpenClaw
+  profile, packaged LocalState, or an installed MSIX.
 - Tests must be deterministic: no sleep-based synchronization, hardcoded ports,
   or inter-test ordering dependencies.
 
 ## Documentation
 
-`README.md`, `CONTRIBUTING.md`, and `.github\copilot-instructions.md` are a
-three-way contract. They must agree with each other and with the source that
-owns each behavior claim. When they disagree, source wins — verify the claim
-and correct the documents rather than picking whichever reads best.
+`README.md`, `CONTRIBUTING.md`, the root and scoped `AGENTS.md` files, and
+`docs\*.md` must agree with the source that owns each behavior claim. When
+they disagree, source wins — verify the claim and correct the documents rather
+than picking whichever reads best.
 
 Check documentation references before you push:
 

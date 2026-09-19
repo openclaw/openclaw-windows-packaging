@@ -6,7 +6,11 @@ Use only these documentation surfaces in this repository.
 |---|---|
 | `README.md` | User-facing requirements, command model, gateway startup, OpenClaw revision selection, build/test, local development, signing, installed data, and integrity boundary. |
 | `CONTRIBUTING.md` | Contributor prerequisites, build/analyze/test workflow, formatting, pre-push hook, conventions, tests, PR rules, and stacked PRs. |
-| `.github\copilot-instructions.md` | Canonical agent instructions. |
+| `AGENTS.md`; `src\AGENTS.md`; `scripts\AGENTS.md`; `tests\AGENTS.md` | Canonical repository-wide and scoped agent instructions. |
+| `docs\architecture.md` | Runtime components, ownership boundaries, setup, session execution, gateway lifecycle, diagnostics, and source map. |
+| `docs\local-development.md` | Loose registration, local package composition, test signing, and validation-lane selection. |
+| `docs\release-process.md` | Official release policy, dispatch, signing workflow, publication checks, failure, and rollback. |
+| `docs\troubleshooting.md` | Observable failures, diagnostic checks, and user recovery steps. |
 | `docs\clawctl-output-style.md` | Spectre.Console output contract. |
 | `docs\mxc-compatibility-evidence.md` | Evidence record. |
 | `.github\pull_request_template.md` | PR body structure. |

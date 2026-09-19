@@ -17,6 +17,8 @@ packages.
 
 ## Contributor guides
 
+- [Agent instructions](AGENTS.md) define repository-wide working, ownership,
+  validation, and safety rules and route scoped source, script, and test work.
 - [Architecture](docs/architecture.md) explains the host, isolated session,
   MXC, agent runtime, and gateway boundaries.
 - [Troubleshooting](docs/troubleshooting.md) maps observable failures to checks

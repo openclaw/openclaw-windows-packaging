@@ -22,7 +22,7 @@ A rewrite improves structure; it is never permission to discard behavior facts.
 
 | Concern | Rule |
 |---|---|
-| Use when | Rewriting, splitting, merging, reorganizing, or materially shortening a README section, `docs\*.md` page, or `.github\copilot-instructions.md`. |
+| Use when | Rewriting, splitting, merging, reorganizing, or materially shortening a README section, `docs\*.md` page, or root or scoped `AGENTS.md` file. |
 | Do not use when | Writing a new page, making a targeted documentation correction, or reviewing documentation without a whole-page restructuring; use `technical-documentation`. |
 | Required inputs | Target page or section, desired reader outcome, intended page type, and the authority for every behavior-sensitive claim. |
 | Mutation boundary | Inventory the old content before editing. Give every fact exactly one outcome: keep, move to a named destination, or delete with source-backed proof of obsolescence. |
@@ -48,8 +48,9 @@ A rewrite improves structure; it is never permission to discard behavior facts.
    path, give an observable check, then route detailed, rare, or reference
    material without burying task-critical safety information.
 6. Preserve or repair cross-surface consistency. For instruction files,
-   `README.md`, `CONTRIBUTING.md`, and `.github\copilot-instructions.md` must
-   agree with each other and source according to their distinct audiences.
+   `README.md`, `CONTRIBUTING.md`, root and scoped `AGENTS.md` files, and
+   `docs\*.md` must agree with each other and source according to their
+   distinct audiences.
 7. Perform an old-versus-new comparison. Reconcile each fact-inventory row,
    every command, warning, link, and moved destination before declaring the
    refactor complete.

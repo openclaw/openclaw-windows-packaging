@@ -2,11 +2,11 @@
 name: technical-documentation
 description: >-
   Write, review, or audit this repository's technical documentation, including
-  README.md, CONTRIBUTING.md, .github\copilot-instructions.md, docs pages, and
-  documentation drift. Use for source-backed documentation authoring, behavior
-  verification, and cross-surface consistency. Do not use for code review,
-  deslop diff cleanup, or whole-page rewrites, splits, or reorganizations
-  handled by docs-refactor.
+  README.md, CONTRIBUTING.md, root and scoped AGENTS.md files, docs pages, and
+  documentation drift. Use for source-backed documentation authoring,
+  behavior verification, and cross-surface consistency. Do not use for code
+  review, deslop diff cleanup, or whole-page rewrites, splits, or
+  reorganizations handled by docs-refactor.
 license: MIT
 metadata:
   source: https://github.com/vincentkoc/dotskills
@@ -23,7 +23,7 @@ before drafting or reviewing.
 
 | Concern | Rule |
 |---|---|
-| Use when | Writing, reviewing, or auditing any of this repository's seven documentation surfaces; resolving README, CONTRIBUTING, agent-instruction, command, or doc-drift claims. |
+| Use when | Writing, reviewing, or auditing any documented repository surface; resolving README, CONTRIBUTING, AGENTS.md, command, or doc-drift claims. |
 | Do not use when | Reviewing code behavior (`code-review`), cleaning a diff (`deslop`), or substantially rewriting, splitting, or reorganizing a page (`docs-refactor`). |
 | Required inputs | Requested outcome or review scope, target audience, affected surface, and the source authority for each behavior claim. |
 | Mutation boundary | Investigate read-only first. Edit only requested documentation surfaces; do not invent commands or behavior, and preserve verified facts unless source proves they are obsolete. |
@@ -34,9 +34,9 @@ before drafting or reviewing.
 1. Classify the work as **build** (authoring or targeted correction) or
    **review** (finding and reporting or correcting defects). Identify the
    reader, trigger, steps, and observable outcome before naming a structure.
-2. Inventory only the seven repository surfaces and their ownership using
-   [repository surfaces](references/repo-surfaces.md). State which are in
-   scope and which are intentionally out of scope.
+2. Inventory the relevant documented repository surfaces and their ownership
+   using [repository surfaces](references/repo-surfaces.md). State which are
+   in scope and which are intentionally out of scope.
 3. For every behavior claim, locate its listed authority and verify the claim
    in source. Never infer behavior from names, defaults, generated output, or
    maintainer intent. Separate current behavior from planned behavior.
@@ -68,9 +68,10 @@ before drafting or reviewing.
   expected outcome, common failure, and recovery when each is relevant.
 - Treat missing referenced files, nonexistent commands, stale command scope,
   and cross-surface conflicts as high-priority defects.
-- Keep README.md, CONTRIBUTING.md, and `.github\copilot-instructions.md`
-  mutually consistent and aligned with source; no instruction-file aliases
-  exist in this repository.
+- Keep README.md, CONTRIBUTING.md, root and scoped `AGENTS.md` files, and
+  `docs\*.md` mutually consistent and aligned with source. Scoped
+  `AGENTS.md` files may narrow their tree's rules but must not compete with
+  repository-wide ownership or safety rules.
 
 ## References
 
