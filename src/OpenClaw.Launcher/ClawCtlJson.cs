@@ -79,6 +79,7 @@ internal static class ClawCtlJson
             StatusCommandResult status => FromStatus(status),
             CollectLogsCommandResult logs => FromCollectLogs(logs),
             TeardownCommandResult teardown => FromTeardown(teardown),
+            OpenCommandResult open => FromOpen(open),
             GatewayCommandResult gateway => FromGateway(gateway),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(result),
@@ -231,6 +232,18 @@ internal static class ClawCtlJson
                 Error: new ClawCtlJsonError(
                     "cli_error",
                     NormalizeMessage(result.Detail ?? result.Message)));
+
+    private static ClawCtlJsonDocument FromOpen(OpenCommandResult result) =>
+        new(
+            result.ExitCode == 0,
+            SchemaVersion,
+            result.Command,
+            Gateway: result.State is { } state
+                ? new ClawCtlJsonGateway(DescribeGateway(state))
+                : null,
+            Error: result.ExitCode == 0
+                ? null
+                : new ClawCtlJsonError("cli_error", NormalizeMessage(result.Message)));
 
     private static void Write(TextWriter output, ClawCtlJsonDocument document) =>
         output.WriteLine(JsonSerializer.Serialize(
