@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using OpenClaw.SessionProtocol;
 
@@ -235,7 +236,7 @@ internal static class Program
                 return action is null ? argument : $"{argument} {action}";
             }
 
-            if (argument is "setup" or "status" or "collect-logs" or "teardown" or "pwsh")
+            if (argument is "setup" or "status" or "collect-logs" or "teardown" or "open" or "pwsh")
             {
                 return argument;
             }
@@ -447,7 +448,8 @@ internal static class Program
         Func<string, string?>? readEnvironmentVariable = null,
         ClawCtlOutputOptions? controlOutputOptions = null,
         Func<string>? getLogonSessionId = null,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null,
+        Func<string, Task>? launchBrowserAsync = null)
     {
         Session.IInstallationLifecycle lifecycle =
             installationLifecycle ?? Session.InstallationLifecycle.Production;
@@ -605,6 +607,84 @@ internal static class Program
                         .ConfigureAwait(false);
                     return WriteResult(new TeardownCommandResult(result));
                 },
+                Open = async cancellationToken =>
+                {
+                    Session.SessionRuntime runtime = GetSessionRuntime();
+                    try
+                    {
+                        _ = runtime.RequireSetup();
+                    }
+                    catch (Session.SessionException exception)
+                    {
+                        return WriteResult(new OpenCommandResult(null, exception.Message, 1));
+                    }
+
+                    Gateway.GatewayStatusReport gateway = await Gateway.GatewayRuntime
+                        .Create(options, runtime.Paths, runtime, log)
+                        .Controller
+                        .GetStatusAsync(runtime.HelperPath, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (gateway.State != Gateway.GatewayState.Running)
+                    {
+                        string message = gateway.State is Gateway.GatewayState.NotStarted or
+                            Gateway.GatewayState.Stopped
+                            ? $"{gateway.Message} Run `clawctl gateway-service start` before opening the Control UI."
+                            : gateway.Message;
+                        return WriteResult(new OpenCommandResult(gateway.State, message, 1));
+                    }
+
+                    Session.SessionRecord record = await runtime.StartForExecutionAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    string applicationDirectory = GetPackagedApplicationDirectory(options);
+                    string nodePath = runtime.RequireAgentNodePath(
+                        GetPackagedNodeArchivePath(options));
+                    Session.SessionCommandCaptureResult capture = await runtime.Executor
+                        .ExecuteCommandCaptureAsync(
+                            record,
+                            new Session.SessionCommandRequest(
+                                runtime.RequireStagedHelper(record),
+                                nodePath,
+                                [Path.Combine(applicationDirectory, "openclaw.mjs"), "dashboard", "--json"],
+                                record.WorkspacePath!)
+                            {
+                                PathPrefix = Path.GetDirectoryName(nodePath),
+                                AdditionalEnvironment = OpenClawRuntimeEnvironment.Build()
+                            },
+                            "Resolving the Control UI handoff in the isolated session.",
+                            "OpenClaw dashboard",
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    if (!Gateway.ControlUiHandoffParser.TryParse(capture.StandardOutput, out string? browserUrl) ||
+                        browserUrl is null)
+                    {
+                        return WriteResult(new OpenCommandResult(
+                            gateway.State,
+                            "OpenClaw did not return a usable Control UI handoff.",
+                            1));
+                    }
+
+                    try
+                    {
+                        await (launchBrowserAsync ?? (url => LaunchBrowserAsync(url)))(browserUrl)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception exception) when (
+                        exception is System.ComponentModel.Win32Exception or
+                        InvalidOperationException or
+                        NotSupportedException)
+                    {
+                        log($"Browser launch failed: {exception.GetType().Name}");
+                        return WriteResult(new OpenCommandResult(
+                            gateway.State,
+                            "The Control UI is ready, but the default browser could not be opened.",
+                            1));
+                    }
+
+                    return WriteResult(new OpenCommandResult(
+                        gateway.State,
+                        "Opened the Control UI in the default browser.",
+                        0));
+                },
                 PowerShell = cancellationToken => RunPowerShellAsync(
                     options,
                     GetSessionRuntime(),
@@ -747,6 +827,19 @@ internal static class Program
             .Parse(args, ClawCtlCommandLine.CreateParserConfiguration())
             .InvokeAsync(configuration)
             .ConfigureAwait(false);
+    }
+
+    internal static Task LaunchBrowserAsync(
+        string browserUrl,
+        Func<ProcessStartInfo, Process?>? startProcess = null)
+    {
+        _ = (startProcess ?? Process.Start)(new ProcessStartInfo(browserUrl)
+        {
+            UseShellExecute = true
+        }) ?? throw new InvalidOperationException(
+            "Windows did not start a process for the default browser.");
+
+        return Task.CompletedTask;
     }
 
     private static async Task<SetupCommandResult> RunSetupAsync(

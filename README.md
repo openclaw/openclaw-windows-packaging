@@ -106,6 +106,7 @@ terminal the hint uses the crab identity and the same warning/accent palette as
 | `clawctl setup` | Confirm packaged `app\openclaw.mjs` exists, provision or reuse the owned isolated session, and install the bundled Node.js runtime in the agent profile. It also configures gateway sign-in recovery without starting a gateway. On a machine that cannot host a session it fails with the Windows requirement described under [Requirements](#requirements). |
 | `clawctl setup --fresh [--force]` | Remove this installation's owned session and package-local state, then run setup again. Without `--force`, incomplete external cleanup stops before local state is erased. `--force` is valid only with `--fresh`; it preserves an explicit warning when cleanup of owned external resources cannot be confirmed, but still stops if bounded local deletion fails. |
 | `clawctl status` | Report the recorded isolated session, installed Node.js runtime, gateway, sign-in recovery, and file-only config readiness when the gateway is not running. It asks the backend to start the recorded provision as its status probe, so it is not a passive diagnostic, but it does not provision a replacement or start the gateway. Use `clawctl gateway-service status` to inspect the gateway alone. |
+| `clawctl open` | Open the running managed gateway's Control UI in the default browser. Requires completed `clawctl setup` and an already-running gateway; it probes those prerequisites and fails rather than starting the gateway. Packaged OpenClaw resolves the endpoint, TLS, Control UI base path, and authenticated one-time browser handoff. Authenticated URLs and tokens are not printed. |
 | `clawctl teardown --force` | Confirm deletion, then stop and deprovision the owned session and remove its data and setup state. The MSIX remains installed. |
 | `clawctl pwsh` | Open an interactive PowerShell session inside the agent session. |
 | `clawctl collect-logs [--output <path>]` | Create a redacted host-and-agent diagnostics ZIP. |
@@ -159,19 +160,18 @@ clawctl gateway-service start
 
   Gateway:    ✓ listening
   Port:       18789
-
-  Token:      openclaw gateway auth-token --show
 ```
 
 OpenClaw owns the endpoint configuration, including TLS and a custom Control UI
-base path. The Windows package therefore does not construct an HTTP URL that
-might contradict that configuration. It reports no port when multiple
-unclassified listeners remain. JSON follows the same rule: `gateway.port` is
-present only when identified, and no URL is promised.
-Reaching the Control UI needs the shared gateway token, which
-`openclaw gateway auth-token --show` reveals. `--json` carries the identified
-port but not that command: a script should run it rather than parse a
-suggestion.
+base path. `clawctl status` and `clawctl gateway-service start` therefore do
+not construct an HTTP URL that might contradict that configuration. They report
+no port when multiple unclassified listeners remain; JSON follows the same
+rule, with `gateway.port` present only when identified and no URL promised.
+
+`clawctl open` uses packaged OpenClaw's verified, authenticated browser handoff
+instead of constructing a URL from that port. It does not start or recover the
+gateway: start it first with `clawctl gateway-service start` if the probe says
+it is not running. The command does not print authenticated URLs or tokens.
 
 Help and version requests take precedence over the rest of the command line.
 `clawctl --version bogus` reports the build identity and exits `0` rather than

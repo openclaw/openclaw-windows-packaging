@@ -37,6 +37,13 @@ public sealed class SessionExecutorTests : IDisposable
             arguments,
             @"C:\work");
 
+    private SessionCommandRequest CaptureRequest(params string[] arguments) =>
+        new(
+            @"C:\Package\session-host\x64\openclaw-session-host.exe",
+            @"C:\Program Files\nodejs\node.exe",
+            arguments,
+            @"C:\work");
+
     private SessionExecutor Create(Func<string>? createRequestId = null) =>
         new(_backend, _log.Add, createRequestId: createRequestId);
 
@@ -102,6 +109,26 @@ public sealed class SessionExecutorTests : IDisposable
             Launched = true,
             ExitCode = exitCode,
         });
+
+    private void RespondAsCapturedHelper(
+        Func<SessionLaunchRequest, SessionLaunchResult> respond,
+        MxcExecutionResult? execution = null)
+    {
+        _backend.ExecuteBehavior = _ =>
+        {
+            string requestPath = Directory.GetFiles(Workspace, "launch-*.json")
+                .Single(path => !path.EndsWith(".result.json", StringComparison.Ordinal));
+            SessionLaunchRequest request = SessionLaunchProtocol.ReadRequest(
+                File.ReadAllText(requestPath));
+            File.WriteAllText(
+                SessionLaunchProtocol.ResultPathFor(requestPath),
+                SessionLaunchProtocol.SerializeResult(respond(request)));
+            return Task.FromResult(execution ?? new MxcExecutionResult(
+                0,
+                "{\"browserUrl\":\"secret\"}",
+                "captured stderr"));
+        };
+    }
 
     private void RespondAsCollector(
         Func<SessionCollectRequest, SessionCollectResult> respond)
@@ -707,6 +734,141 @@ public sealed class SessionExecutorTests : IDisposable
     // processor the backend actually uses, in SessionGuestCommandLineTests.
     // A string-equality assertion here previously passed against a command line
     // that the command processor then broke apart at the first space.
+
+    [Fact]
+    public async Task CapturedCommandReturnsBackendOutputAfterSuccessfulHelperLaunch()
+    {
+        RespondAsCapturedHelper(request => new SessionLaunchResult
+        {
+            RequestId = request.RequestId,
+            Launched = true,
+            ExitCode = 0,
+        });
+
+        SessionCommandCaptureResult result = await Create().ExecuteCommandCaptureAsync(
+            Record(),
+            CaptureRequest("dashboard", "--json"),
+            "Resolving the dashboard.",
+            "OpenClaw",
+            CancellationToken.None);
+
+        Assert.Equal("{\"browserUrl\":\"secret\"}", result.StandardOutput);
+        Assert.Equal("captured stderr", result.StandardError);
+        Assert.Empty(_backend.AttachedCommandLines);
+        Assert.Single(_backend.ExecutedCommandLines);
+        Assert.All(
+            _log,
+            entry => Assert.DoesNotContain("secret", entry, StringComparison.Ordinal));
+        Assert.Empty(Directory.GetFiles(Workspace));
+    }
+
+    [Fact]
+    public async Task CapturedCommandRejectsMalformedHelperResult()
+    {
+        _backend.ExecuteBehavior = _ =>
+        {
+            string requestPath = Directory.GetFiles(Workspace, "launch-*.json").Single();
+            File.WriteAllText(SessionLaunchProtocol.ResultPathFor(requestPath), "{");
+            return Task.FromResult(new MxcExecutionResult(0, "secret", string.Empty));
+        };
+
+        SessionException exception = await Assert.ThrowsAsync<SessionException>(
+            () => Create().ExecuteCommandCaptureAsync(
+                Record(), CaptureRequest(), "Resolving the dashboard.", "OpenClaw", CancellationToken.None));
+
+        Assert.Contains("unreadable launch result", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(Directory.GetFiles(Workspace));
+    }
+
+    [Fact]
+    public async Task CapturedCommandRejectsMissingHelperResult()
+    {
+        _backend.ExecuteBehavior = _ => Task.FromResult(
+            new MxcExecutionResult(0, "secret", "more secret"));
+
+        SessionException exception = await Assert.ThrowsAsync<SessionException>(
+            () => Create().ExecuteCommandCaptureAsync(
+                Record(), CaptureRequest(), "Resolving the dashboard.", "OpenClaw", CancellationToken.None));
+
+        Assert.Contains("did not report a launch result", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(Directory.GetFiles(Workspace));
+    }
+
+    [Fact]
+    public async Task CapturedCommandRejectsMismatchedHelperResult()
+    {
+        RespondAsCapturedHelper(_ => new SessionLaunchResult
+        {
+            RequestId = "different-request",
+            Launched = true,
+            ExitCode = 0,
+        });
+
+        SessionException exception = await Assert.ThrowsAsync<SessionException>(
+            () => Create().ExecuteCommandCaptureAsync(
+                Record(), CaptureRequest(), "Resolving the dashboard.", "OpenClaw", CancellationToken.None));
+
+        Assert.Contains("different request", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(Directory.GetFiles(Workspace));
+    }
+
+    [Fact]
+    public async Task CapturedCommandRejectsBackendFailure()
+    {
+        RespondAsCapturedHelper(
+            request => new SessionLaunchResult
+            {
+                RequestId = request.RequestId,
+                Launched = true,
+                ExitCode = 0,
+            },
+            new MxcExecutionResult(23, "secret", "more secret"));
+
+        SessionException exception = await Assert.ThrowsAsync<SessionException>(
+            () => Create().ExecuteCommandCaptureAsync(
+                Record(), CaptureRequest(), "Resolving the dashboard.", "OpenClaw", CancellationToken.None));
+
+        Assert.Contains("backend failed", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(Directory.GetFiles(Workspace));
+    }
+
+    [Fact]
+    public async Task CapturedCommandRejectsHelperFailure()
+    {
+        RespondAsCapturedHelper(request => new SessionLaunchResult
+        {
+            RequestId = request.RequestId,
+            Launched = false,
+            Error = "The executable was not found.",
+        });
+
+        SessionException exception = await Assert.ThrowsAsync<SessionException>(
+            () => Create().ExecuteCommandCaptureAsync(
+                Record(), CaptureRequest(), "Resolving the dashboard.", "OpenClaw", CancellationToken.None));
+
+        Assert.Contains("could not be started", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(Directory.GetFiles(Workspace));
+    }
+
+    [Fact]
+    public async Task CapturedCommandRejectsChildFailure()
+    {
+        RespondAsCapturedHelper(request => new SessionLaunchResult
+        {
+            RequestId = request.RequestId,
+            Launched = true,
+            ExitCode = 42,
+        });
+
+        SessionException exception = await Assert.ThrowsAsync<SessionException>(
+            () => Create().ExecuteCommandCaptureAsync(
+                Record(), CaptureRequest(), "Resolving the dashboard.", "OpenClaw", CancellationToken.None));
+
+        Assert.Contains("exited with code 42", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(Directory.GetFiles(Workspace));
+    }
 
     [Fact]
     public async Task CancellationPropagates()

@@ -54,7 +54,7 @@ public sealed class GatewayStartPresentationTests
         null);
 
     [Fact]
-    public void ARunningGatewayReportsItsPortAndHowToGetTheToken()
+    public void ARunningGatewayReportsItsPortAndHowToOpenTheControlUi()
     {
         using var output = new StringWriter();
 
@@ -64,25 +64,36 @@ public sealed class GatewayStartPresentationTests
         Assert.Contains("Port:", text, StringComparison.Ordinal);
         Assert.Contains("18789", text, StringComparison.Ordinal);
         Assert.DoesNotContain("http://", text, StringComparison.Ordinal);
-        Assert.Contains("openclaw gateway auth-token --show", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("openclaw dashboard", text, StringComparison.Ordinal);
+        Assert.Contains("clawctl open", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("auth-token", text, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void RunningStatusDoesNotSuggestOpeningTheDashboard()
+    public void RunningStatusSuggestsOpeningTheControlUi()
     {
         using var output = new StringWriter();
 
         ClawCtlConsole.WriteResult(output, Running() with { Action = "status" });
 
-        Assert.DoesNotContain(
-            "openclaw dashboard",
+        Assert.Contains(
+            "clawctl open",
             output.ToString(),
             StringComparison.Ordinal);
     }
 
-    // The token command is guidance for a person. A script asked for a document
-    // and should run the command itself rather than parse a suggestion.
+    [Fact]
+    public void ARunningGatewayWithoutAResolvedPortStillSuggestsOpeningTheControlUi()
+    {
+        using var output = new StringWriter();
+
+        ClawCtlConsole.WriteResult(output, Running() with { Port = null });
+
+        string text = output.ToString();
+        Assert.DoesNotContain("Port:", text, StringComparison.Ordinal);
+        Assert.Contains("clawctl open", text, StringComparison.Ordinal);
+    }
+
+    // A script asked for a document must not receive a browser URL or token.
     [Fact]
     public void TheJsonDocumentCarriesThePortButNoUnverifiedUrl()
     {
