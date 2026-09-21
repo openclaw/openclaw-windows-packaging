@@ -151,7 +151,8 @@ public sealed class GatewayControllerTests : IDisposable
 
     private GatewayController CreateController(
         GatewayStateStore? store = null,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null,
+        ISessionLock? lifecycleLock = null)
     {
         var sessionStore = new SessionStateStore(Path.Combine(_root, "session.json"));
         if (sessionStore.Read(ApplicationId).Fault == SessionStateFault.Missing)
@@ -177,7 +178,7 @@ public sealed class GatewayControllerTests : IDisposable
                 Port: null)),
             _ => { },
             () => sessions.GetRecordedStatus().Record ?? throw new SessionException("Run setup."),
-            new AlwaysFreeLock(),
+            lifecycleLock ?? new AlwaysFreeLock(),
             clock);
     }
 
@@ -217,6 +218,24 @@ public sealed class GatewayControllerTests : IDisposable
         Assert.Null(result.Record.Port);
         Assert.Equal([18789], result.Record.ObservedPorts);
         Assert.Contains("port 18789", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RunningCompletionRunsBeforeTheLifecycleLockIsReleased()
+    {
+        _client.Inspection = Healthy();
+        var lifecycleLock = new TrackingLock();
+        bool callbackObservedHeldLock = false;
+
+        await CreateController(lifecycleLock: lifecycleLock)
+            .StartAsync(
+                "helper.exe",
+                CancellationToken.None,
+                onRunningUnderLock: _ =>
+                    callbackObservedHeldLock = lifecycleLock.IsHeld);
+
+        Assert.True(callbackObservedHeldLock);
+        Assert.False(lifecycleLock.IsHeld);
     }
 
     // A pinned port the gateway is not on means OpenClaw's configuration moved
@@ -585,6 +604,29 @@ public sealed class GatewayControllerTests : IDisposable
             _backend.Calls,
             call => call.StartsWith("deprovision:", StringComparison.Ordinal));
     }
+
+    private sealed class TrackingLock : ISessionLock
+    {
+        public bool IsHeld { get; private set; }
+
+        public ISessionLockHandle? TryAcquire(TimeSpan timeout)
+        {
+            Assert.False(IsHeld);
+            IsHeld = true;
+            return new Handle(this);
+        }
+
+        private sealed class Handle(TrackingLock owner) : ISessionLockHandle
+        {
+            private TrackingLock? _owner = owner;
+
+            public void Dispose()
+            {
+                TrackingLock? current = Interlocked.Exchange(ref _owner, null);
+                current?.IsHeld = false;
+            }
+        }
+    }
 }
 
 public sealed class GatewayStateStoreTests : IDisposable
@@ -662,4 +704,5 @@ public sealed class GatewayStateStoreTests : IDisposable
 
         Assert.Equal(GatewayStateFault.Missing, Store.Read().Fault);
     }
+
 }

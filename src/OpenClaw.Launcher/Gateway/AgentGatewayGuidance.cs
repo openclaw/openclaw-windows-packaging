@@ -31,7 +31,10 @@ internal sealed class AgentGatewayGuidance
         TextWriter,
         Func<IProgress<GatewayStartProgress>, Task<GatewayStartResult>>,
         Task<GatewayStartResult>> _narrateGatewayStart;
-    private readonly Func<IProgress<GatewayStartProgress>, Task<GatewayStartResult>> _startGateway;
+    private readonly Func<
+        IProgress<GatewayStartProgress>,
+        Action<GatewayStartResult>,
+        Task<GatewayStartResult>> _startGateway;
     private readonly Action<TextWriter, string> _writeGatewayStartFailure;
     private readonly Func<string, string?> _readEnvironmentVariable;
 
@@ -48,7 +51,10 @@ internal sealed class AgentGatewayGuidance
             TextWriter,
             Func<IProgress<GatewayStartProgress>, Task<GatewayStartResult>>,
             Task<GatewayStartResult>>? narrateGatewayStart = null,
-        Func<IProgress<GatewayStartProgress>, Task<GatewayStartResult>>? startGateway = null,
+        Func<
+            IProgress<GatewayStartProgress>,
+            Action<GatewayStartResult>,
+            Task<GatewayStartResult>>? startGateway = null,
         Action<TextWriter, string>? writeGatewayStartFailure = null,
         Func<string, string?>? readEnvironmentVariable = null)
     {
@@ -63,7 +69,7 @@ internal sealed class AgentGatewayGuidance
         _narrateGatewayStart = narrateGatewayStart ??
             ((TextWriter _, Func<IProgress<GatewayStartProgress>, Task<GatewayStartResult>> start) =>
                 start(new Progress<GatewayStartProgress>()));
-        _startGateway = startGateway ?? (_ => throw new InvalidOperationException(
+        _startGateway = startGateway ?? ((_, _) => throw new InvalidOperationException(
             "Gateway start is not configured."));
         _writeGatewayStartFailure = writeGatewayStartFailure ??
             ((writer, message) =>
@@ -188,19 +194,20 @@ internal sealed class AgentGatewayGuidance
     {
         try
         {
-            GatewayStartResult result = await _narrateGatewayStart(error, _startGateway)
-                .ConfigureAwait(false);
-            if (result.State == GatewayState.Running || result.AlreadyRunning)
-            {
-                Acknowledge(
-                    logonSessionId,
-                    GatewayGuidanceAcknowledgement.GatewayObservedRunning);
-                return;
-            }
-
-            WriteGatewayStartFailure(
+            GatewayStartResult result = await _narrateGatewayStart(
                 error,
-                $"Gateway start finished in {result.State} state: {result.Message}");
+                progress => _startGateway(
+                    progress,
+                    _ => AcknowledgeUnderLock(
+                        logonSessionId,
+                        GatewayGuidanceAcknowledgement.GatewayObservedRunning)))
+                .ConfigureAwait(false);
+            if (result.State != GatewayState.Running && !result.AlreadyRunning)
+            {
+                WriteGatewayStartFailure(
+                    error,
+                    $"Gateway start finished in {result.State} state: {result.Message}");
+            }
         }
         catch (Exception exception) when (
             exception is MxcException or SessionException or SessionLaunchException or
@@ -217,4 +224,23 @@ internal sealed class AgentGatewayGuidance
 
     private void WriteGatewayStartFailure(TextWriter error, string detail) =>
         _writeGatewayStartFailure(error, detail);
+
+    private void AcknowledgeUnderLock(
+        string logonSessionId,
+        GatewayGuidanceAcknowledgement acknowledgement)
+    {
+        try
+        {
+            _state.Write(logonSessionId, acknowledgement, _clock.GetUtcNow());
+        }
+        catch (Exception exception) when (
+            exception is SessionException or
+            IOException or UnauthorizedAccessException or
+            InvalidOperationException or Win32Exception)
+        {
+            _log(
+                $"Gateway guidance acknowledgement failed after start: " +
+                $"{exception.GetType().Name}: {exception.Message}");
+        }
+    }
 }

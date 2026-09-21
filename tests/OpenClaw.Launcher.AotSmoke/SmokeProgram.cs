@@ -1,7 +1,9 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using OpenClaw.Launcher.Gateway;
+using OpenClaw.Launcher.Mxc;
 using OpenClaw.Launcher.Session;
+using OpenClaw.SessionProtocol;
 using LauncherProgram = OpenClaw.Launcher.Program;
 
 namespace OpenClaw.Launcher.AotSmoke;
@@ -52,7 +54,11 @@ internal static class SmokeProgram
             ("gateway narration survives NativeAOT", GatewayNarrationRenders),
             ("Windows logon identity survives NativeAOT", WindowsLogonIdentityWorks),
             ("missing application reports diagnostics", MissingApplicationReportsAsync),
-            ("openclaw never parses its arguments", AgentNeverParsesItsArgumentsAsync)
+            ("openclaw never parses its arguments", AgentNeverParsesItsArgumentsAsync),
+            ("first agent launch provisions and forwards arguments", FirstAgentLaunchProvisionsAsync),
+            ("prepared agent launch has no setup narration", PreparedAgentLaunchIsQuietAsync),
+            ("automatic setup opt-out preserves missing-setup failure", AutomaticSetupOptOutPreservesFailureAsync),
+            ("gateway-start opt-out writes the gateway hint to stderr", GatewayStartOptOutWritesHintAsync)
         ];
 
         int failures = 0;
@@ -534,6 +540,93 @@ internal static class SmokeProgram
         fixture.AssertLogRecordsStartupAndExit();
     }
 
+    private static async Task FirstAgentLaunchProvisionsAsync()
+    {
+        using Fixture fixture = await Fixture.CreateAgentFixtureAsync().ConfigureAwait(false);
+        string[] arguments = ["gateway", "run", "--port", "12345", "--", "a b"];
+
+        int exitCode = await fixture.RunAsync(arguments).ConfigureAwait(false);
+
+        AssertExitCode(7, exitCode, fixture);
+        Assert(
+            arguments.SequenceEqual(fixture.ForwardedArguments),
+            "The agent launch did not preserve the exact argument vector.");
+        fixture.AssertSetupCompleted();
+        AssertContains(fixture.Error.ToString(), "Setting up OpenClaw", fixture);
+        Assert(
+            !fixture.Output.ToString().Contains("Setting up OpenClaw", StringComparison.Ordinal),
+            "Setup narration leaked to standard output.");
+    }
+
+    private static async Task PreparedAgentLaunchIsQuietAsync()
+    {
+        using Fixture fixture = await Fixture.CreateAgentFixtureAsync().ConfigureAwait(false);
+
+        AssertExitCode(7, await fixture.RunAsync(["status"]).ConfigureAwait(false), fixture);
+        fixture.ClearOutput();
+
+        AssertExitCode(7, await fixture.RunAsync(["status"]).ConfigureAwait(false), fixture);
+        Assert(
+            !fixture.Error.ToString().Contains("Setting up OpenClaw", StringComparison.Ordinal),
+            "An already prepared agent launch narrated setup.");
+        Assert(
+            string.IsNullOrEmpty(fixture.Output.ToString()),
+            "Host narration wrote to the child-owned standard output.");
+    }
+
+    private static async Task AutomaticSetupOptOutPreservesFailureAsync()
+    {
+        using Fixture fixture = await Fixture.CreateAgentFixtureAsync().ConfigureAwait(false);
+
+        int exitCode = await fixture.RunAsync(
+            ["status"],
+            name => name == OpenClawRuntimeEnvironment.AutoSetupVariable ? "0" : null)
+            .ConfigureAwait(false);
+
+        AssertExitCode(1, exitCode, fixture);
+        AssertContains(fixture.Error.ToString(), "clawctl setup", fixture);
+        fixture.AssertNoSetupWorkOccurred();
+        Assert(
+            string.IsNullOrEmpty(fixture.Output.ToString()),
+            "The missing-setup failure wrote to standard output.");
+    }
+
+    private static async Task GatewayStartOptOutWritesHintAsync()
+    {
+        using Fixture fixture = Fixture.CreateWithoutApplication();
+        bool started = false;
+        var guidance = new AgentGatewayGuidance(
+            new NamedSessionLock(Path.Combine(fixture.Root, "gateway-guidance-lock")),
+            _ => Task.FromResult(new SessionConfigReadinessResult
+            {
+                State = SessionConfigReadinessState.StartupEligible,
+                Reason = SessionConfigReadinessReason.GatewayModeLocal
+            }),
+            _ => Task.FromResult(new GatewayStatusReport(
+                GatewayState.NotStarted,
+                null,
+                "The gateway has not been started.")),
+            new GatewayGuidanceStateStore(Path.Combine(fixture.Root, "gateway-guidance.json")),
+            () => "fixture-logon",
+            _ => { },
+            writeHint: writer => writer.WriteLine(AgentGatewayGuidance.Hint),
+            startGateway: (_, _) =>
+            {
+                started = true;
+                throw new InvalidOperationException("Gateway start must be suppressed.");
+            },
+            readEnvironmentVariable: name =>
+                name == OpenClawRuntimeEnvironment.AutoGatewayStartVariable ? "0" : null);
+
+        await guidance.EvaluateAsync(0, interactive: true, fixture.Error).ConfigureAwait(false);
+
+        Assert(!started, "Gateway start ran despite the opt-out.");
+        AssertContains(fixture.Error.ToString(), "clawctl gateway-service start", fixture);
+        Assert(
+            string.IsNullOrEmpty(fixture.Output.ToString()),
+            "Gateway guidance wrote to the child-owned standard output.");
+    }
+
     private static string LauncherVersion() =>
         typeof(HostStartup).Assembly.GetName().Version?.ToString() ?? "unknown";
 
@@ -571,16 +664,39 @@ internal static class SmokeProgram
         }
     }
 
+    private static async Task<TException> CaptureExceptionAsync<TException>(
+        Func<Task> action)
+        where TException : Exception
+    {
+        try
+        {
+            await action().ConfigureAwait(false);
+        }
+        catch (TException exception)
+        {
+            return exception;
+        }
+
+        throw new InvalidOperationException(
+            $"Expected {typeof(TException).Name} but the operation completed successfully.");
+    }
+
     private sealed class Fixture : IDisposable
     {
         private readonly HostEntrypoint _entrypoint;
         private readonly WorkTrackingLifecycle? _lifecycle;
+        private readonly AgentLifecycle? _agentLifecycle;
 
-        private Fixture(string root, HostEntrypoint entrypoint, bool allowInstallationWork)
+        private Fixture(
+            string root,
+            HostEntrypoint entrypoint,
+            bool allowInstallationWork,
+            AgentLifecycle? agentLifecycle = null)
         {
             Root = root;
             _entrypoint = entrypoint;
             _lifecycle = allowInstallationWork ? null : new WorkTrackingLifecycle();
+            _agentLifecycle = agentLifecycle;
             LogPath = Path.Combine(root, "diagnostics", "openclaw.log");
             ApplicationDirectory = Path.Combine(root, "app");
             EntryPoint = Path.Combine(ApplicationDirectory, "openclaw.mjs");
@@ -615,7 +731,16 @@ internal static class SmokeProgram
             return fixture;
         }
 
-        public async Task<int> RunAsync(string[] args)
+        public static async Task<Fixture> CreateAgentFixtureAsync()
+        {
+            string root = CreateRoot();
+            AgentLifecycle lifecycle = await AgentLifecycle.CreateAsync(root).ConfigureAwait(false);
+            return new Fixture(root, HostEntrypoint.Agent, allowInstallationWork: true, lifecycle);
+        }
+
+        public async Task<int> RunAsync(
+            string[] args,
+            Func<string, string?>? readEnvironmentVariable = null)
         {
             HostStartup startup = new()
             {
@@ -625,10 +750,60 @@ internal static class SmokeProgram
                 Output = Output,
                 Error = Error,
                 InstallationLifecycle =
-                    _lifecycle ?? (IInstallationLifecycle)InstallationLifecycle.Production
+                    _agentLifecycle ??
+                    _lifecycle ??
+                    (IInstallationLifecycle)InstallationLifecycle.Production,
+                ReadEnvironmentVariable = readEnvironmentVariable ?? (_ => null),
+                ProbeReadiness = _agentLifecycle is null
+                    ? null
+                    : _ => Task.FromResult(new MxcReadinessReport(
+                        "fixture",
+                        null,
+                        null,
+                        MxcHostSupport.Supported,
+                        null,
+                        MxcSupportEvidence.BackendProbe)),
+                GetPackageFamilyName =
+                    _agentLifecycle is null
+                        ? null
+                        : () => _agentLifecycle.Runtime.Paths.PackageFamilyName,
+                IsInteractive = _agentLifecycle is null ? null : () => false
             };
 
             return await LauncherProgram.RunAsync(args, startup).ConfigureAwait(false);
+        }
+
+        public IReadOnlyList<string> ForwardedArguments =>
+            _agentLifecycle?.ForwardedArguments ?? [];
+
+        public void ClearOutput()
+        {
+            Output.GetStringBuilder().Clear();
+            Error.GetStringBuilder().Clear();
+        }
+
+        public void AssertSetupCompleted()
+        {
+            AgentLifecycle lifecycle = _agentLifecycle ??
+                throw new InvalidOperationException("The fixture has no agent lifecycle.");
+            Assert(
+                lifecycle.Runtime.SetupState.Read(lifecycle.Runtime.ApplicationId).Record?.Phase ==
+                    SetupPhase.Ready,
+                "Implicit setup did not write the fixture setup marker.");
+            Assert(
+                lifecycle.RecoveryInstalls == 1,
+                "Implicit setup did not perform exactly one fixture recovery install.");
+        }
+
+        public void AssertNoSetupWorkOccurred()
+        {
+            AgentLifecycle lifecycle = _agentLifecycle ??
+                throw new InvalidOperationException("The fixture has no agent lifecycle.");
+            Assert(
+                lifecycle.Runtime.SetupState.Read(lifecycle.Runtime.ApplicationId).Record is null,
+                "Automatic setup opt-out wrote a setup marker.");
+            Assert(lifecycle.RecoveryInstalls == 0, "Automatic setup opt-out installed recovery.");
+            Assert(lifecycle.Backend.Calls.Count == 0, "Automatic setup opt-out used the session backend.");
         }
 
         public void AssertNoInstallationWorkStarted() =>
@@ -656,6 +831,244 @@ internal static class SmokeProgram
             {
                 Directory.Delete(Root, recursive: true);
             }
+        }
+
+        private sealed class AgentLifecycle : IInstallationLifecycle
+        {
+            private AgentLifecycle(
+                SessionRuntime runtime,
+                FixtureMxcSessionClient backend,
+                string nodeArchivePath)
+            {
+                Runtime = runtime;
+                Backend = backend;
+                NodeArchivePath = nodeArchivePath;
+            }
+
+            public SessionRuntime Runtime { get; }
+
+            public FixtureMxcSessionClient Backend { get; }
+
+            public string NodeArchivePath { get; }
+
+            public int RecoveryInstalls { get; private set; }
+
+            public IReadOnlyList<string> ForwardedArguments { get; private set; } = [];
+
+            public static async Task<AgentLifecycle> CreateAsync(string root)
+            {
+                string applicationDirectory = Path.Combine(root, "app");
+                Directory.CreateDirectory(applicationDirectory);
+                await File.WriteAllTextAsync(
+                    Path.Combine(applicationDirectory, "openclaw.mjs"),
+                    "console.log('fixture');").ConfigureAwait(false);
+
+                string runtimeDirectory = Path.Combine(root, "runtime");
+                Directory.CreateDirectory(runtimeDirectory);
+                string nodeArchivePath = Path.Combine(
+                    runtimeDirectory,
+                    "node-v24.20.0-win-x64.zip");
+                await File.WriteAllTextAsync(nodeArchivePath, "fixture").ConfigureAwait(false);
+
+                string baseDirectory = Path.Combine(root, "base");
+                string helperPath = SessionRuntime.ResolveHelperPath(baseDirectory);
+                Directory.CreateDirectory(Path.GetDirectoryName(helperPath)!);
+                await File.WriteAllTextAsync(helperPath, "fixture").ConfigureAwait(false);
+
+                string workspace = Path.Combine(root, "workspace");
+                Directory.CreateDirectory(workspace);
+                var backend = new FixtureMxcSessionClient
+                {
+                    Metadata = new MxcProvisionMetadata(
+                        "agent_1",
+                        "S-1-5-21-0-0-0-1001",
+                        workspace)
+                };
+                SessionRuntime runtime = SessionRuntime.Create(
+                    HostPaths.ForRoot(
+                        Path.Combine(root, "state"),
+                        "OpenClaw.Gateway_aot-smoke"),
+                    () => throw new InvalidOperationException(
+                        "The fixture backend must be supplied."),
+                    baseDirectory,
+                    _ => { },
+                    backend);
+                var lifecycle = new AgentLifecycle(runtime, backend, nodeArchivePath);
+                backend.ExecuteBehavior = lifecycle.HandleExecutionAsync;
+                return lifecycle;
+            }
+
+            public SessionRuntime CreateRuntime(Action<string> log) => Runtime;
+
+            public Task<GatewayPersistenceInstallResult> InstallRecoveryAsync(
+                Action<string> log,
+                CancellationToken cancellationToken)
+            {
+                RecoveryInstalls++;
+                return Task.FromResult(new GatewayPersistenceInstallResult(
+                    GatewayPersistenceState.Ready,
+                    GatewayPersistenceLane.TaskScheduler,
+                    "Fixture recovery is configured.",
+                    Changed: true));
+            }
+
+            public Task EnsureSessionSupportedAsync(CancellationToken cancellationToken) =>
+                throw new NotSupportedException();
+
+            public PackageRuntimeMetadata ValidatePackageRuntime(
+                HostOptions options,
+                SessionRuntime sessionRuntime) =>
+                throw new NotSupportedException();
+
+            public ISessionLockHandle AcquireLifecycleLock(SessionRuntime sessionRuntime) =>
+                throw new NotSupportedException();
+
+            public Task<TeardownResult> TeardownAsync(
+                HostOptions options,
+                SessionRuntime sessionRuntime,
+                Action<string> log,
+                bool lockAlreadyHeld,
+                CancellationToken cancellationToken) =>
+                throw new NotSupportedException();
+
+            public IInstallationStateCleaner CreateStateCleaner(SessionRuntime sessionRuntime) =>
+                throw new NotSupportedException();
+
+            public Task<GatewayPersistenceStatus> GetRecoveryStatusAsync(
+                Action<string> log,
+                CancellationToken cancellationToken) =>
+                throw new NotSupportedException();
+
+            private Task<MxcExecutionResult> HandleExecutionAsync(MxcExecutionRequest request)
+            {
+                string workspace = Backend.Metadata!.EphemeralWorkspacePath;
+                string[] runtimeRequests = Directory.GetFiles(workspace, "runtime-*.json");
+                if (runtimeRequests.Length > 0)
+                {
+                    string requestPath = runtimeRequests.Single();
+                    SessionRuntimeInstallRequest runtimeRequest = SessionRuntimeProtocol.ReadRequest(
+                        File.ReadAllText(requestPath));
+                    File.WriteAllText(
+                        SessionLaunchProtocol.ResultPathFor(requestPath),
+                        SessionRuntimeProtocol.SerializeResult(new SessionRuntimeInstallResult
+                        {
+                            RequestId = runtimeRequest.RequestId,
+                            ExecutablePath = Path.Combine(workspace, "node.exe"),
+                            Version = "24.20.0",
+                            ArchiveName = Path.GetFileName(NodeArchivePath)
+                        }));
+                    return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
+                }
+
+                string[] launchRequests = Directory.GetFiles(workspace, "launch-*.json");
+                if (launchRequests.Length > 0)
+                {
+                    string requestPath = launchRequests.Single();
+                    SessionLaunchRequest launchRequest = SessionLaunchProtocol.ReadRequest(
+                        File.ReadAllText(requestPath));
+                    ForwardedArguments = launchRequest.Arguments is null
+                        ? []
+                        : [.. launchRequest.Arguments.Skip(1)];
+                    File.WriteAllText(
+                        SessionLaunchProtocol.ResultPathFor(requestPath),
+                        SessionLaunchProtocol.SerializeResult(new SessionLaunchResult
+                        {
+                            RequestId = launchRequest.RequestId,
+                            Launched = true,
+                            ExitCode = 7
+                        }));
+                    return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
+                }
+
+                string readinessPath = Directory
+                    .GetFiles(workspace, "config-readiness-*.json")
+                    .Single();
+                SessionConfigReadinessRequest readinessRequest =
+                    SessionConfigReadinessProtocol.ReadRequest(File.ReadAllText(readinessPath));
+                File.WriteAllText(
+                    SessionLaunchProtocol.ResultPathFor(readinessPath),
+                    SessionConfigReadinessProtocol.SerializeResult(new SessionConfigReadinessResult
+                    {
+                        RequestId = readinessRequest.RequestId,
+                        State = SessionConfigReadinessState.Absent,
+                        Reason = SessionConfigReadinessReason.ConfigFileMissing
+                    }));
+                return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
+            }
+        }
+
+        private sealed class FixtureMxcSessionClient : IMxcSessionClient
+        {
+            private int _provisionCount;
+
+            public List<string> Calls { get; } = [];
+
+            public MxcProvisionMetadata? Metadata { get; init; }
+
+            public Func<MxcExecutionRequest, Task<MxcExecutionResult>>? ExecuteBehavior { get; set; }
+
+            public Task<MxcProvisionResult> ProvisionAsync(
+                MxcProvisionRequest request,
+                CancellationToken cancellationToken)
+            {
+                Calls.Add("provision");
+                _provisionCount++;
+                return Task.FromResult(new MxcProvisionResult(
+                    MxcSandboxId.Parse($"iso:fixture{_provisionCount}"),
+                    Metadata,
+                    null));
+            }
+
+            public Task StartAsync(
+                MxcSandboxId sandboxId,
+                string? correlationVector,
+                CancellationToken cancellationToken)
+            {
+                Calls.Add("start");
+                return Task.CompletedTask;
+            }
+
+            public Task<MxcExecutionResult> ExecuteAsync(
+                MxcSandboxId sandboxId,
+                MxcExecutionRequest request,
+                string? correlationVector,
+                CancellationToken cancellationToken)
+            {
+                Calls.Add("execute");
+                return ExecuteBehavior is null
+                    ? Task.FromException<MxcExecutionResult>(
+                        new InvalidOperationException("Fixture execution is not configured."))
+                    : ExecuteBehavior(request);
+            }
+
+            public Task<int> ExecuteAttachedAsync(
+                MxcSandboxId sandboxId,
+                MxcExecutionRequest request,
+                string? correlationVector,
+                CancellationToken cancellationToken) =>
+                ExecuteAttachedCoreAsync(request);
+
+            private async Task<int> ExecuteAttachedCoreAsync(MxcExecutionRequest request)
+            {
+                Calls.Add("execute-attached");
+                if (ExecuteBehavior is null)
+                {
+                    throw new InvalidOperationException("Fixture execution is not configured.");
+                }
+
+                MxcExecutionResult result = await ExecuteBehavior(request).ConfigureAwait(false);
+                return result.ExitCode;
+            }
+
+            public Task StopAsync(
+                MxcSandboxId sandboxId,
+                string? correlationVector,
+                CancellationToken cancellationToken) => Task.CompletedTask;
+
+            public Task DeprovisionAsync(
+                MxcSandboxId sandboxId,
+                string? correlationVector,
+                CancellationToken cancellationToken) => Task.CompletedTask;
         }
 
         // Records whether the command reached real installation work, and

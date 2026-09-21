@@ -31,7 +31,7 @@ internal sealed class SessionRuntime
         HostPaths paths,
         SetupStateStore setupState,
         GatewayStateStore gatewayState,
-        string lifecycleLockScope)
+        ISessionLock lifecycleLock)
     {
         Coordinator = coordinator;
         Executor = executor;
@@ -41,7 +41,7 @@ internal sealed class SessionRuntime
         Paths = paths;
         SetupState = setupState;
         GatewayState = gatewayState;
-        LifecycleLock = new NamedSessionLock(lifecycleLockScope);
+        LifecycleLock = lifecycleLock;
     }
 
     public SessionCoordinator Coordinator { get; }
@@ -112,7 +112,8 @@ internal sealed class SessionRuntime
         Func<MxcRuntimeLocation> locateRuntime,
         string baseDirectory,
         Action<string> log,
-        IMxcSessionClient? backend = null)
+        IMxcSessionClient? backend = null,
+        ISessionLock? lifecycleLock = null)
     {
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(log);
@@ -148,7 +149,8 @@ internal sealed class SessionRuntime
             paths,
             new SetupStateStore(paths.SetupStatePath),
             new GatewayStateStore(paths.GatewayStatePath),
-            paths.SessionStatePath + "_Installation");
+            lifecycleLock ??
+                new NamedSessionLock(paths.SessionStatePath + "_Installation"));
 
     }
 

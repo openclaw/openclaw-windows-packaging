@@ -86,10 +86,11 @@ internal sealed class AgentPostflight
                     interactive,
                     start).ConfigureAwait(false);
             },
-            progress => gateway.StartAsync(
+            (progress, onRunningUnderLock) => gateway.StartAsync(
                 runtime.HelperPath,
                 CancellationToken.None,
-                progress),
+                progress,
+                onRunningUnderLock),
             (target, detail) =>
             {
                 using GatewayOutput output = PrepareGatewayOutput(

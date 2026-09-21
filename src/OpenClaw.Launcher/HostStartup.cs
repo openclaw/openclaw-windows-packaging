@@ -25,6 +25,12 @@ internal sealed class HostStartup
 
     public Func<string, string?>? ReadEnvironmentVariable { get; init; }
 
+    public Func<CancellationToken, Task<Mxc.MxcReadinessReport>>? ProbeReadiness { get; init; }
+
+    public Func<string?>? GetPackageFamilyName { get; init; }
+
+    public Func<bool>? IsInteractive { get; init; }
+
     public static HostStartup CreateProduction() => new()
     {
         Entrypoint = HostEntrypointResolver.Resolve(),

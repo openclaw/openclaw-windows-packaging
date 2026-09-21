@@ -150,7 +150,10 @@ internal static class Program
                     startup.InstallationLifecycle is null
                         ? null
                         : startup.InstallationLifecycle.CreateRuntime,
+                    probeReadiness: startup.ProbeReadiness,
+                    getPackageFamilyName: startup.GetPackageFamilyName,
                     readEnvironmentVariable: startup.ReadEnvironmentVariable,
+                    isInteractive: startup.IsInteractive,
                     error: error,
                     errorIsProcessConsoleWriter:
                         startup.UsesProcessConsoleWriters ? () => true : null,

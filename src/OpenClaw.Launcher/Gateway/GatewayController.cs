@@ -177,11 +177,21 @@ internal sealed class GatewayController
     public async Task<GatewayStartResult> StartAsync(
         string helperPath,
         CancellationToken cancellationToken,
-        IProgress<GatewayStartProgress>? progress = null)
+        IProgress<GatewayStartProgress>? progress = null,
+        Action<GatewayStartResult>? onRunningUnderLock = null)
     {
         using ISessionLockHandle handle = AcquireLock();
-        return await StartUnderLockAsync(helperPath, cancellationToken, progress)
+        GatewayStartResult result = await StartUnderLockAsync(
+            helperPath,
+            cancellationToken,
+            progress)
             .ConfigureAwait(false);
+        if (result.State == GatewayState.Running || result.AlreadyRunning)
+        {
+            onRunningUnderLock?.Invoke(result);
+        }
+
+        return result;
     }
 
     private async Task<GatewayStartResult> StartUnderLockAsync(

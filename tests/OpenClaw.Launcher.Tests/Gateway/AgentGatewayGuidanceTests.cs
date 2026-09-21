@@ -21,15 +21,19 @@ public sealed class AgentGatewayGuidanceTests : IDisposable
         GatewayState gatewayState,
         out GatewayGuidanceStateStore store,
         Action? startCalled = null,
-        Func<IProgress<GatewayStartProgress>, Task<GatewayStartResult>>? startGateway = null,
+        Func<
+            IProgress<GatewayStartProgress>,
+            Action<GatewayStartResult>,
+            Task<GatewayStartResult>>? startGateway = null,
         Func<string, string?>? readEnvironmentVariable = null,
         Action? readinessCalled = null,
         Action? statusCalled = null,
         ISessionLock? lifecycleLock = null,
         Func<CancellationToken, Task<SessionConfigReadinessResult>>? checkReadiness = null,
-        Func<CancellationToken, Task<GatewayStatusReport>>? getGatewayStatus = null)
+        Func<CancellationToken, Task<GatewayStatusReport>>? getGatewayStatus = null,
+        GatewayGuidanceStateStore? stateOverride = null)
     {
-        store = new GatewayGuidanceStateStore(
+        store = stateOverride ?? new GatewayGuidanceStateStore(
             Path.Combine(_root, $"gateway-guidance-{Guid.NewGuid():N}.json"));
         return new AgentGatewayGuidance(
             lifecycleLock ?? new AlwaysFreeLock(),
@@ -58,14 +62,16 @@ public sealed class AgentGatewayGuidanceTests : IDisposable
             _log.Add,
             new FixedTimeProvider(
                 new DateTimeOffset(2026, 9, 18, 18, 0, 0, TimeSpan.Zero)),
-            startGateway: startGateway ?? (_ =>
+            startGateway: startGateway ?? ((_, onRunningUnderLock) =>
             {
                 startCalled?.Invoke();
-                return Task.FromResult(new GatewayStartResult(
+                var result = new GatewayStartResult(
                     GatewayState.Running,
                     new GatewayRecord(),
                     AlreadyRunning: false,
-                    "The gateway is running."));
+                    "The gateway is running.");
+                onRunningUnderLock(result);
+                return Task.FromResult(result);
             }),
             readEnvironmentVariable: readEnvironmentVariable ?? (_ => null));
     }
@@ -86,6 +92,46 @@ public sealed class AgentGatewayGuidanceTests : IDisposable
 
         Assert.Equal(1, starts);
         Assert.True(store.IsAcknowledged("logon-a"));
+    }
+
+    [Fact]
+    public async Task RunningResultWithoutUnderLockCompletionDoesNotAcknowledge()
+    {
+        AgentGatewayGuidance guidance = Create(
+            SessionConfigReadinessState.StartupEligible,
+            GatewayState.NotStarted,
+            out GatewayGuidanceStateStore store,
+            startGateway: (_, _) => Task.FromResult(new GatewayStartResult(
+                GatewayState.Running,
+                new GatewayRecord(),
+                AlreadyRunning: false,
+                "The gateway is running.")));
+
+        await guidance.EvaluateAsync(0, interactive: true, TextWriter.Null);
+
+        Assert.False(store.IsAcknowledged("logon-a"));
+    }
+
+    [Fact]
+    public async Task AcknowledgementFailureDoesNotReportAStartFailure()
+    {
+        string statePath = Path.Combine(_root, "state-path-is-a-directory");
+        Directory.CreateDirectory(statePath);
+        AgentGatewayGuidance guidance = Create(
+            SessionConfigReadinessState.StartupEligible,
+            GatewayState.NotStarted,
+            out _,
+            stateOverride: new GatewayGuidanceStateStore(statePath));
+        var error = new StringWriter();
+
+        await guidance.EvaluateAsync(0, interactive: true, error);
+
+        Assert.Equal(string.Empty, error.ToString());
+        Assert.Contains(
+            _log,
+            message => message.Contains(
+                "acknowledgement failed after start",
+                StringComparison.Ordinal));
     }
 
     [Theory]
@@ -333,7 +379,7 @@ public sealed class AgentGatewayGuidanceTests : IDisposable
             SessionConfigReadinessState.StartupEligible,
             GatewayState.NotStarted,
             out GatewayGuidanceStateStore store,
-            startGateway: _ => throw new SessionBusyException(TimeSpan.Zero));
+            startGateway: (_, _) => throw new SessionBusyException(TimeSpan.Zero));
         var error = new StringWriter();
 
         await guidance.EvaluateAsync(0, interactive: true, error);
@@ -353,7 +399,7 @@ public sealed class AgentGatewayGuidanceTests : IDisposable
             SessionConfigReadinessState.StartupEligible,
             GatewayState.NotStarted,
             out _,
-            startGateway: _ => throw new SessionBusyException(TimeSpan.Zero));
+            startGateway: (_, _) => throw new SessionBusyException(TimeSpan.Zero));
         var postflight = new AgentPostflight(guidance);
 
         int exitCode = await postflight.RunAsync(23, interactive: true, TextWriter.Null);

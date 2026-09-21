@@ -163,15 +163,40 @@ public sealed class SetupOrchestratorTests : IDisposable
     [Fact]
     public async Task ConcurrentFirstLaunchesProvisionExactlyOnce()
     {
-        SessionRuntime runtime = CreateRuntime();
+        using var lifecycleLock = new CoordinatedSessionLock();
+        SessionRuntime runtime = CreateRuntime(lifecycleLock);
         var lifecycle = new StubLifecycle();
+        (HostOptions options, string applicationDirectory) = CreateHostOptions();
 
-        SetupEnsureOutcome[] outcomes = await Task.WhenAll(
-            Task.Run(() => EnsureAsync(runtime, lifecycle)),
-            Task.Run(() => EnsureAsync(runtime, lifecycle))).ConfigureAwait(true);
+        ISessionLockHandle held =
+            lifecycleLock.TryAcquire(TimeSpan.Zero) ??
+            throw new InvalidOperationException("The fixture lock was unexpectedly busy.");
+        lifecycleLock.ObserveNextAttempts(2);
+        Task<SetupEnsureOutcome>[] ensures =
+        [
+            Task.Run(() => EnsureAsync(
+                options,
+                applicationDirectory,
+                runtime,
+                lifecycle)),
+            Task.Run(() => EnsureAsync(
+                options,
+                applicationDirectory,
+                runtime,
+                lifecycle))
+        ];
+        try
+        {
+            await lifecycleLock.WaitForObservedAttemptsAsync().ConfigureAwait(true);
+            Assert.Equal(0, lifecycle.RecoveryInstalls);
+        }
+        finally
+        {
+            held.Dispose();
+        }
 
-        // Whichever order they interleave in, the second must observe the
-        // marker the first wrote rather than provisioning a second session.
+        SetupEnsureOutcome[] outcomes = await Task.WhenAll(ensures).ConfigureAwait(true);
+
         Assert.Equal(1, lifecycle.RecoveryInstalls);
         Assert.Single(outcomes, SetupEnsureOutcome.Provisioned);
         Assert.Single(outcomes, SetupEnsureOutcome.Skipped);
@@ -181,14 +206,31 @@ public sealed class SetupOrchestratorTests : IDisposable
         SessionRuntime runtime,
         StubLifecycle lifecycle)
     {
+        (HostOptions options, string applicationDirectory) = CreateHostOptions();
+        return EnsureAsync(options, applicationDirectory, runtime, lifecycle);
+    }
+
+    private (HostOptions Options, string ApplicationDirectory) CreateHostOptions()
+    {
         string applicationDirectory = Path.Combine(_root, "app");
         Directory.CreateDirectory(applicationDirectory);
         File.WriteAllText(Path.Combine(applicationDirectory, "openclaw.mjs"), "fixture");
         string archivePath = Path.Combine(_root, "node-v24.20.0-win-x64.zip");
         File.WriteAllText(archivePath, "fixture");
 
-        return SetupOrchestrator.EnsureAsync(
+        return (
             new HostOptions(applicationDirectory, archivePath, []),
+            applicationDirectory);
+    }
+
+    private Task<SetupEnsureOutcome> EnsureAsync(
+        HostOptions options,
+        string applicationDirectory,
+        SessionRuntime runtime,
+        StubLifecycle lifecycle)
+    {
+        return SetupOrchestrator.EnsureAsync(
+            options,
             runtime,
             lifecycle,
             applicationDirectory,
@@ -197,7 +239,7 @@ public sealed class SetupOrchestratorTests : IDisposable
             CancellationToken.None);
     }
 
-    private SessionRuntime CreateRuntime()
+    private SessionRuntime CreateRuntime(ISessionLock? lifecycleLock = null)
     {
         string baseDirectory = Path.Combine(_root, "base");
         Directory.CreateDirectory(baseDirectory);
@@ -241,7 +283,48 @@ public sealed class SetupOrchestratorTests : IDisposable
             () => throw new InvalidOperationException("The test backend must be supplied."),
             baseDirectory,
             _ => { },
-            _backend);
+            _backend,
+            lifecycleLock);
+    }
+
+    private sealed class CoordinatedSessionLock : ISessionLock, IDisposable
+    {
+        private readonly SemaphoreSlim _semaphore = new(1, 1);
+        private TaskCompletionSource _observedAttempts =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _remainingAttempts;
+
+        public void ObserveNextAttempts(int count)
+        {
+            _remainingAttempts = count;
+            _observedAttempts =
+                new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        public Task WaitForObservedAttemptsAsync() => _observedAttempts.Task;
+
+        public void Dispose() => _semaphore.Dispose();
+
+        public ISessionLockHandle? TryAcquire(TimeSpan timeout)
+        {
+            if (Volatile.Read(ref _remainingAttempts) > 0 &&
+                Interlocked.Decrement(ref _remainingAttempts) == 0)
+            {
+                _observedAttempts.TrySetResult();
+            }
+
+            return _semaphore.Wait(timeout)
+                ? new Handle(() => _semaphore.Release())
+                : null;
+        }
+
+        private sealed class Handle(Action release) : ISessionLockHandle
+        {
+            private Action? _release = release;
+
+            public void Dispose() =>
+                Interlocked.Exchange(ref _release, null)?.Invoke();
+        }
     }
 
     private sealed class NoProgress : IProgress<ClawCtlProgress>
