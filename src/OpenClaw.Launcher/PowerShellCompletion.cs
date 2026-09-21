@@ -17,7 +17,8 @@ internal static class PowerShellCompletion
         Register-ArgumentCompleter -Native -CommandName clawctl -ScriptBlock {
             param($wordToComplete, $commandAst, $cursorPosition)
 
-            $directive = "[suggest:$cursorPosition]"
+            $cursorInCommand = $cursorPosition - $commandAst.Extent.StartOffset
+            $directive = "[suggest:$cursorInCommand]"
             & clawctl $directive $commandAst.Extent.Text 2>$null | ForEach-Object {
                 [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
             }

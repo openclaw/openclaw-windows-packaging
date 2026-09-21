@@ -363,6 +363,45 @@ try {
     $i.Offline = $true
     Assert-Fails { Invoke-Fixture $i } 'unavailable|cache'
 
+    # A cache selected before completion shipped must fail without disturbing
+    # its registration or selection, then recover through an explicit refresh.
+    $upgrade = New-Fixture
+    $upgradeDeployment = Invoke-Fixture $upgrade
+    $upgradeSelectionPath = Join-Path (
+        $upgrade.Root
+    ) 'artifacts\local-package\x64\payloads\current.json'
+    $upgradeSelectionBefore = Get-Content -LiteralPath $upgradeSelectionPath -Raw
+    $upgradeSelection = $upgradeSelectionBefore | ConvertFrom-Json
+    $upgradePayload = Join-Path (
+        Split-Path $upgradeSelectionPath
+    ) $upgradeSelection.generation
+    Remove-Item -LiteralPath (
+        Join-Path $upgradePayload 'app\shell-completions\openclaw.ps1'
+    )
+    $upgradeRegistrations = $upgrade.Registrations
+
+    Assert-Fails { Invoke-Fixture $upgrade } 'missing app\\shell-completions\\openclaw.ps1'
+    Assert-True (
+        $upgrade.Registrations -eq $upgradeRegistrations -and
+        $upgrade.Installed.PackageFullName -eq $upgradeDeployment.PackageFullName
+    ) 'An incompatible cached payload changed the working registration.'
+    Assert-True (
+        (Get-Content -LiteralPath $upgradeSelectionPath -Raw) -eq
+        $upgradeSelectionBefore
+    ) 'An incompatible cached payload changed the selected generation.'
+
+    $upgrade.PayloadText = 'completion-compatible payload'
+    $upgradeRecovered = Invoke-Fixture $upgrade @{ RefreshPayload = $true }
+    $upgradeSelectionAfter = Get-Content -LiteralPath $upgradeSelectionPath -Raw
+    Assert-True (
+        $upgradeRecovered.Changed -and
+        $upgrade.Registrations -eq ($upgradeRegistrations + 1)
+    ) 'Refreshing an incompatible cached payload did not register its replacement.'
+    Assert-True (
+        $upgradeSelectionAfter -ne $upgradeSelectionBefore -and
+        -not (Test-Path -LiteralPath $upgradePayload)
+    ) 'Successful recovery did not select the replacement and retire the old payload.'
+
     # Argument guards.
     $j = New-Fixture
     $external = Join-Path $testRoot 'supplied payload with spaces'
