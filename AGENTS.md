@@ -7,7 +7,7 @@ The task defines scope and authorization; its chosen workflow owns execution, re
 - **One owner per responsibility.** An owner makes a decision or changes authoritative state. Callers consume its operations and recorded facts; adapters translate contracts, and caches or projections derive from the owner with an explicit invalidation lifecycle.
 - **Thin Windows host, upstream OpenClaw.** This repository packages and launches the pinned upstream application; it does not reimplement OpenClaw commands, parse `openclaw` arguments, copy the application payload, or invent a second configuration owner.
 - **One release trust chain.** Upstream revision, Node.js version and archive, MXC runtime lock, application inventory, package identity, payload metadata, signing policy, and x64/ARM64 outputs are coordinated inputs. Change every producer, validator, consumer, test, and document together.
-- **Explicit isolation lifecycle.** `clawctl setup` provisions and records the isolated session; `openclaw` starts only that recorded session. Do not add implicit provisioning or direct execution outside the session.
+- **Explicit isolation lifecycle.** `clawctl setup` provisions and records the isolated session. `openclaw` provisions only when the setup marker is absent, then starts that recorded session; every unreadable, incomplete, foreign, newer-schema, preparing, tearing-down, or otherwise degraded state remains an explicit `clawctl setup` or `clawctl teardown` recovery path. Do not add other implicit provisioning or direct execution outside the session.
 
 ## Working agreement
 

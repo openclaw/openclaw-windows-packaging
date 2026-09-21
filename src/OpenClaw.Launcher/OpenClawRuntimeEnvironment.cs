@@ -16,6 +16,10 @@ internal static class OpenClawRuntimeEnvironment
     public const string NoAutoUpdateVariable = "OPENCLAW_NO_AUTO_UPDATE";
     public const string GatewayIsolationVariable = "CLAWCTL_GATEWAY_ISOLATION";
 
+    // Host-side policy reads; never flow into the OpenClaw child environment.
+    public const string AutoSetupVariable = "CLAWCTL_AUTO_SETUP";
+    public const string AutoGatewayStartVariable = "CLAWCTL_AUTO_GATEWAY_START";
+
     /// <summary>
     /// The packaged application root whose native dependency packages were
     /// mirrored, and the agent-owned root holding those copies.

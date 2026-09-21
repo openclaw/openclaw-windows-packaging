@@ -21,10 +21,17 @@ should describe that environment in terms an operator can act on, while
   presents onboarding as mandatory nor launches it automatically.
 - End neutral states with the command that moves the user forward, such as
   `Run: clawctl setup`.
-- When a gateway is not running, show the file-only agent config readiness
-  immediately after the gateway row. Suggest `clawctl gateway-service start`
-  only when readiness is `startup eligible`; absent, incomplete, unavailable,
-  and unknown config states need diagnosis or configuration instead.
+- When a successful interactive `openclaw` launch finds a `NotStarted` or
+  `Stopped` gateway with `startup eligible` readiness, narrate the managed
+  gateway start on standard error. Do nothing for non-zero child exits,
+  redirected output, non-eligible readiness, or `Starting`, `Unhealthy`, and
+  `Unknown` gateway states; acknowledge an observed running gateway.
+- A failed or unverified automatic gateway start must not change the OpenClaw
+  exit code. Write a warning to standard error, followed by
+  `clawctl gateway-service start` on its own line so width-constrained wrapping
+  cannot break the retry command. Leave the guidance unacknowledged so a later
+  eligible launch retries. `CLAWCTL_AUTO_GATEWAY_START=0` (or `false`, `no`,
+  or `off`) restores the start hint.
 - Keep a successful `clawctl pwsh` launch silent so the user reaches the shell
   prompt directly. Its help text explains which commands are available inside
   the session.

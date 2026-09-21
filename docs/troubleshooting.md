@@ -27,16 +27,35 @@ clawctl setup
 
 For another stated prerequisite, correct that prerequisite and rerun setup.
 
+## Automatic setup failed during `openclaw`
+
+**Check.** Preserve the complete automatic-setup error from standard error. It
+includes the setup failure reason and directs you to `clawctl setup`.
+
+**Likely cause.** The setup marker was absent, so `openclaw` attempted its
+one-time provisioning path. Automatic setup does not write a ready marker when
+that provisioning fails.
+
+**Fix.** Run:
+
+```powershell
+clawctl setup
+```
+
+Correct the reported prerequisite or recovery condition, then run `openclaw`
+again.
+
 ## `openclaw` says setup is required, incomplete, or its setup marker is unusable
 
 **Check.** Preserve the exact setup error. It distinguishes a missing,
 unreadable, incompatible, incomplete, or foreign-package setup marker from a
 missing recorded session.
 
-**Likely cause.** Running `openclaw` requires both the explicit, package-local
-setup marker and the matching recorded isolated session. A session created by
-an older management operation is not authorization to run OpenClaw, and the
-runtime deliberately does not turn a stale marker into provisioning.
+**Likely cause.** Running `openclaw` requires the package-local setup marker
+and matching recorded isolated session. An absent marker normally triggers
+automatic setup, but an unreadable, incomplete, foreign, newer-schema,
+preparing, or tearing-down marker, a session mismatch, or a stale agent Node.js
+runtime deliberately remains an explicit recovery state.
 
 **Fix.** Run:
 
@@ -46,7 +65,7 @@ clawctl setup
 
 If the message instead says teardown is incomplete, finish it with
 `clawctl teardown` before setting up again. Do not expect `openclaw`, status,
-or a gateway command to provision a replacement session implicitly.
+or a gateway command to repair degraded setup state implicitly.
 
 ## The session is unavailable or will not start
 
@@ -104,6 +123,50 @@ record and aborts rather than risk starting a second process. Use
 Use the port reported by status as the observed endpoint. Do not assume the
 upstream default port (18789): an explicit OpenClaw `gateway.port` can differ,
 and multiple unclassified listeners intentionally do not identify an endpoint.
+
+## Automatic gateway start failed after `openclaw`
+
+**Check.** Read the standard-error warning and the following
+`clawctl gateway-service start` retry command. The OpenClaw exit code still
+describes the OpenClaw child, not the postflight start attempt.
+
+**Likely cause.** The gateway was `NotStarted` or `Stopped` and configuration
+was `startup eligible`, but the managed start did not complete or could not be
+verified. The launcher deliberately leaves the guidance unacknowledged so a
+later eligible interactive launch can retry.
+
+**Fix.** Run:
+
+```powershell
+clawctl gateway-service start
+```
+
+If it fails, use the reported gateway status and diagnostic detail to correct
+the condition before retrying.
+
+## Opting out of automatic setup or gateway start
+
+**Check.** Inspect the host environment for `CLAWCTL_AUTO_SETUP` or
+`CLAWCTL_AUTO_GATEWAY_START`.
+
+**Likely cause.** Setting either variable to `0`, `false`, `no`, or `off`
+(case-insensitive, with surrounding whitespace ignored) suppresses that
+automatic behavior. Unset and unrecognized values leave it enabled.
+
+**Fix.** To restore the previous clean-machine setup failure, set:
+
+```powershell
+$env:CLAWCTL_AUTO_SETUP = '0'
+```
+
+`openclaw` then reports that setup is required and provisions nothing. To
+restore the previous gateway-start hint, set:
+
+```powershell
+$env:CLAWCTL_AUTO_GATEWAY_START = '0'
+```
+
+The variables are host-side only and are not passed to the OpenClaw child.
 
 ## Status says the default configuration is missing or not ready
 

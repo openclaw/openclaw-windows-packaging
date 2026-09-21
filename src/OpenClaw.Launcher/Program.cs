@@ -153,7 +153,8 @@ internal static class Program
                     readEnvironmentVariable: startup.ReadEnvironmentVariable,
                     error: error,
                     errorIsProcessConsoleWriter:
-                        startup.UsesProcessConsoleWriters ? () => true : null)
+                        startup.UsesProcessConsoleWriters ? () => true : null,
+                    installationLifecycle: startup.InstallationLifecycle)
                     .ConfigureAwait(false);
         }
         catch (Exception exception)
@@ -288,9 +289,10 @@ internal static class Program
         TimeProvider? clock = null,
         Func<bool>? errorIsProcessConsoleWriter = null,
         Func<bool>? errorIsInteractive = null,
-        Func<bool>? supportsUnicode = null)
+        Func<bool>? supportsUnicode = null,
+        Session.IInstallationLifecycle? installationLifecycle = null)
     {
-        string applicationDirectory = GetPackagedApplicationDirectory(options);
+        string applicationDirectory = options.RequirePackagedApplicationDirectory();
         log("Using the OpenClaw application directly from the package.");
 
         Mxc.MxcReadinessReport readiness = await (probeReadiness ??
@@ -300,18 +302,30 @@ internal static class Program
             readiness);
         log("The isolated-session backend is available.");
 
-        Session.SessionRuntime runtime = (createSessionRuntime ??
-            Session.SessionRuntime.Create)(log);
-        Session.SessionRecord record =
-            await runtime.StartForExecutionAsync(CancellationToken.None)
-                .ConfigureAwait(false);
-        string agentNodePath = runtime.RequireAgentNodePath(
-            GetPackagedNodeArchivePath(options));
         bool interactive =
             (isInteractive ?? (() => WindowsHostConsole.Instance.IsInteractive))();
         TextWriter errorWriter = error ?? Console.Error;
         Func<string, string?> environmentReader =
             readEnvironmentVariable ?? Environment.GetEnvironmentVariable;
+
+        Session.SessionRuntime runtime = (createSessionRuntime ??
+            Session.SessionRuntime.Create)(log);
+        await EnsureSetupForLaunchAsync(
+            options,
+            runtime,
+            installationLifecycle,
+            applicationDirectory,
+            interactive,
+            environmentReader,
+            errorWriter,
+            log,
+            errorIsProcessConsoleWriter,
+            errorIsInteractive).ConfigureAwait(false);
+        Session.SessionRecord record =
+            await runtime.StartForExecutionAsync(CancellationToken.None)
+                .ConfigureAwait(false);
+        string agentNodePath = runtime.RequireAgentNodePath(
+            options.RequirePackagedNodeArchivePath());
         int exitCode = await runtime.Executor.ExecuteAsync(
             record,
             new Session.SessionExecutionRequest(
@@ -330,63 +344,101 @@ internal static class Program
                 NativeRootPath = runtime.GetAgentNativeRoot()
             },
             CancellationToken.None).ConfigureAwait(false);
-        Gateway.GatewayController gateway = Gateway.GatewayRuntime
-            .Create(options, runtime.Paths, runtime, log, clock)
-            .Controller;
-        var guidance = new Gateway.AgentGatewayGuidance(
-            runtime.LifecycleLock,
-            cancellationToken => runtime.Executor.CheckConfigReadinessAsync(
-                record,
-                runtime.RequireStagedHelper(record),
-                cancellationToken),
-            cancellationToken => gateway.GetStatusAsync(
-                runtime.HelperPath,
-                cancellationToken),
-            new Gateway.GatewayGuidanceStateStore(
-                runtime.Paths.GatewayGuidanceStatePath),
-            getLogonSessionId ?? Gateway.WindowsLogonSession.GetCurrentId,
+        return await Gateway.AgentPostflight.Create(
+            options,
+            runtime,
+            record,
+            interactive,
+            environmentReader,
             log,
             clock,
-            target =>
-            {
-                bool selectedStreamIsInteractive =
-                    errorIsInteractive?.Invoke() ??
-                    WindowsHostConsole.Instance.IsInteractiveOutput(target);
-                bool processConsoleWriter =
-                    errorIsProcessConsoleWriter?.Invoke() ??
-                    ReferenceEquals(target, Console.Error);
-                IDisposable? restore = null;
-                bool useColor = ClawCtlColorPolicy.PrepareForegroundOutput(
-                    noColor: false,
-                    json: false,
-                    processConsoleWriter,
-                    interactive,
-                    selectedStreamIsInteractive,
-                    environmentReader,
-                    () => WindowsHostConsole.Instance.TryEnableVirtualTerminalProcessing(
-                        target,
-                        log,
-                        out restore));
-                bool useUnicode = supportsUnicode?.Invoke() ??
-                    (interactive && Console.OutputEncoding.CodePage == 65001);
-                log(
-                    $"Gateway hint capabilities: interactive={interactive}, " +
-                    $"processStderr={processConsoleWriter}, " +
-                    $"stderrConsole={selectedStreamIsInteractive}, " +
-                    $"color={useColor}, unicode={useUnicode}.");
-                using (restore)
-                {
-                    ClawCtlConsole.WriteGatewayHint(
-                        target,
-                        useColor,
-                        useUnicode);
-                }
-            });
-        await guidance.EvaluateAsync(
-            exitCode,
+            getLogonSessionId,
+            errorIsProcessConsoleWriter,
+            errorIsInteractive,
+            supportsUnicode)
+            .RunAsync(exitCode, interactive, errorWriter)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Provisions this installation, when it has never been set up, before an
+    /// <c>openclaw</c> launch needs the session.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Narration goes to standard error. Standard output belongs to the
+    /// OpenClaw child, so piping <c>openclaw --version</c> must not pick up a
+    /// setup message.
+    /// </para>
+    /// <para>
+    /// Only an absent setup marker is provisioned. Anything else is left for
+    /// <see cref="Session.SessionRuntime.RequireSetup"/> to report with the
+    /// command that resolves it.
+    /// </para>
+    /// </remarks>
+    private static async Task EnsureSetupForLaunchAsync(
+        HostOptions options,
+        Session.SessionRuntime runtime,
+        Session.IInstallationLifecycle? installationLifecycle,
+        string applicationDirectory,
+        bool interactive,
+        Func<string, string?> environmentReader,
+        TextWriter errorWriter,
+        Action<string> log,
+        Func<bool>? errorIsProcessConsoleWriter,
+        Func<bool>? errorIsInteractive)
+    {
+        if (installationLifecycle is null)
+        {
+            log("Automatic setup is unavailable: no installation lifecycle was supplied.");
+            return;
+        }
+
+        if (!Gateway.AutoBehaviorPolicy.IsAutomaticSetupEnabled(environmentReader))
+        {
+            // The operator opted out, so an installation that was never set up
+            // must fail exactly as it did before automatic setup existed.
+            log(
+                "Automatic setup is disabled by " +
+                $"{OpenClawRuntimeEnvironment.AutoSetupVariable}.");
+            return;
+        }
+
+        if (!Session.SetupOrchestrator.NeedsProvisioning(runtime))
+        {
+            return;
+        }
+
+        IDisposable? restore = null;
+        bool useColor = ClawCtlColorPolicy.PrepareForegroundOutput(
+            noColor: false,
+            json: false,
+            errorIsProcessConsoleWriter?.Invoke() ??
+                ReferenceEquals(errorWriter, Console.Error),
             interactive,
-            errorWriter).ConfigureAwait(false);
-        return exitCode;
+            errorIsInteractive?.Invoke() ??
+                WindowsHostConsole.Instance.IsInteractiveOutput(errorWriter),
+            environmentReader,
+            () => WindowsHostConsole.Instance.TryEnableVirtualTerminalProcessing(
+                errorWriter,
+                log,
+                out restore));
+        using (restore)
+        {
+            _ = await ClawCtlConsole.NarrateAsync(
+                errorWriter,
+                useColor,
+                narrate: true,
+                new ClawCtlProgress("Setting up OpenClaw for first use."),
+                progress => Session.SetupOrchestrator.EnsureAsync(
+                    options,
+                    runtime,
+                    installationLifecycle,
+                    applicationDirectory,
+                    log,
+                    progress,
+                    CancellationToken.None)).ConfigureAwait(false);
+        }
     }
 
     /// <summary>
@@ -543,7 +595,7 @@ internal static class Program
                         useColor,
                         narrate: !outputOptions.Json,
                         new ClawCtlProgress("Checking isolated-session support."),
-                        progress => RunSetupAsync(
+                        progress => Session.SetupOrchestrator.RunAsync(
                             setupOptions,
                             options,
                             GetSessionRuntime,
@@ -560,7 +612,7 @@ internal static class Program
             {
                 return WriteResult(new SetupCommandResult(
                     1,
-                    GetPackagedApplicationDirectory(options),
+                    options.RequirePackagedApplicationDirectory(),
                     null,
                     null,
                     false,
@@ -667,9 +719,9 @@ internal static class Program
 
                     Session.SessionRecord record = await runtime.StartForExecutionAsync(cancellationToken)
                         .ConfigureAwait(false);
-                    string applicationDirectory = GetPackagedApplicationDirectory(options);
+                    string applicationDirectory = options.RequirePackagedApplicationDirectory();
                     string nodePath = runtime.RequireAgentNodePath(
-                        GetPackagedNodeArchivePath(options));
+                        options.RequirePackagedNodeArchivePath());
                     IReadOnlyDictionary<string, string> dashboardEnvironment =
                         BuildRuntimeEnvironment(
                             runtime,
@@ -771,7 +823,8 @@ internal static class Program
                             ExitCode: 0)));
                     }
 
-                    string applicationDirectory = GetPackagedApplicationDirectory(options);
+                    string applicationDirectory =
+                        options.RequirePackagedApplicationDirectory();
                     string openClawScript =
                         PowerShellCompletion.ReadPackagedOpenClawScript(applicationDirectory);
                     string combinedScript = PowerShellCompletion.BuildScript(openClawScript);
@@ -967,357 +1020,6 @@ internal static class Program
         return Task.CompletedTask;
     }
 
-    private static async Task<SetupCommandResult> RunSetupAsync(
-        SetupOptions setupOptions,
-        HostOptions options,
-        Func<Session.SessionRuntime> getSessionRuntime,
-        Session.IInstallationLifecycle lifecycle,
-        Action<string> log,
-        IProgress<ClawCtlProgress> progress,
-        CancellationToken cancellationToken)
-    {
-        string applicationDirectory = GetPackagedApplicationDirectory(options);
-        log("Confirmed the packaged OpenClaw application is present.");
-        // Throws with the reason and its remediation when this machine cannot
-        // host a session. There is no session-free setup to fall back to, so
-        // nothing is reported as ready before this succeeds.
-        await lifecycle.EnsureSessionSupportedAsync(cancellationToken)
-            .ConfigureAwait(false);
-
-        FreshSetupWarning? warning = null;
-        bool localStateCleared = false;
-        try
-        {
-            Session.SessionRuntime runtime = getSessionRuntime();
-            if (setupOptions.Fresh)
-            {
-                progress.Report(new ClawCtlProgress("Inspecting the existing installation."));
-                // Resolve every required package input before removing state.
-                _ = lifecycle.ValidatePackageRuntime(options, runtime);
-
-                using Session.ISessionLockHandle handle = lifecycle.AcquireLifecycleLock(runtime);
-                FreshDiagnosticReport report = WriteFreshDiagnosticReport(runtime, log);
-                Session.TeardownResult teardownResult;
-                try
-                {
-                    progress.Report(new ClawCtlProgress("Removing existing OpenClaw resources."));
-                    teardownResult = await lifecycle.TeardownAsync(
-                        options, runtime, log, lockAlreadyHeld: true, cancellationToken)
-                        .ConfigureAwait(false);
-                }
-                catch (Exception exception) when (
-                    setupOptions.Force &&
-                    exception is Session.SessionException or Mxc.MxcException)
-                {
-                    teardownResult = new Session.TeardownResult(
-                        false,
-                        "Teardown failed before external cleanup could be confirmed.",
-                        exception.Message);
-                }
-                if (!teardownResult.Succeeded)
-                {
-                    if (!setupOptions.Force)
-                    {
-                        return new SetupCommandResult(
-                            1,
-                            applicationDirectory,
-                            null,
-                            null,
-                            false,
-                            Error: teardownResult.Detail ?? teardownResult.Message,
-                            Fresh: true);
-                    }
-
-                    warning = new FreshSetupWarning(
-                        teardownResult.Message,
-                        teardownResult.Detail);
-                }
-
-                Session.IInstallationStateCleaner cleaner = lifecycle.CreateStateCleaner(runtime);
-                try
-                {
-                    progress.Report(new ClawCtlProgress("Clearing package-local state."));
-                    cleaner.Clear();
-                    localStateCleared = true;
-                }
-                catch (Exception cleanupException)
-                {
-                    try
-                    {
-                        RestoreFreshDiagnosticReport(report, log);
-                    }
-                    catch (Exception restoreException)
-                    {
-                        throw new Session.SessionException(
-                            "Fresh setup local cleanup failed and the pre-reset " +
-                            $"diagnostic report could not be restored. Cleanup: {cleanupException.Message} " +
-                            $"Report: {restoreException.Message}",
-                            new AggregateException(cleanupException, restoreException));
-                    }
-
-                    throw;
-                }
-
-                RestoreFreshDiagnosticReport(report, log);
-                log("Fresh setup cleared package-owned local state.");
-                if (!teardownResult.Succeeded)
-                {
-                    const string residualWarning =
-                        "WARNING: Forced fresh setup did not prove a pristine machine because owned external cleanup remains unresolved. " +
-                        "Review the pre-reset report for residual sandbox or gateway identifiers. " +
-                        "A later setup reset cannot remove resources whose ownership record was cleared; " +
-                        "remove them through the backend's administrative cleanup path before treating this machine as pristine.";
-                    log(residualWarning);
-                }
-
-                return await RunSetupCoreAsync(
-                    runtime,
-                    options,
-                    lifecycle,
-                    applicationDirectory,
-                    log,
-                    lockAlreadyHeld: true,
-                    warning,
-                    localStateCleared,
-                    fresh: true,
-                    progress,
-                    cancellationToken)
-                    .ConfigureAwait(false);
-            }
-
-            return await RunSetupCoreAsync(
-                runtime,
-                options,
-                lifecycle,
-                applicationDirectory,
-                log,
-                lockAlreadyHeld: false,
-                warning,
-                localStateCleared,
-                fresh: false,
-                progress,
-                cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (Session.SessionException exception)
-        {
-            log($"Isolated session setup is unavailable: {exception.Message}");
-            return new SetupCommandResult(
-                1,
-                applicationDirectory,
-                null,
-                null,
-                false,
-                warning,
-                Error: exception.Message,
-                Fresh: setupOptions.Fresh,
-                LocalStateCleared: localStateCleared);
-        }
-        catch (IOException exception)
-        {
-            log($"Fresh setup local cleanup failed: {exception.Message}");
-            return new SetupCommandResult(
-                1,
-                applicationDirectory,
-                null,
-                null,
-                false,
-                warning,
-                Error: exception.Message,
-                Fresh: setupOptions.Fresh,
-                LocalStateCleared: localStateCleared);
-        }
-        catch (UnauthorizedAccessException exception)
-        {
-            log($"Fresh setup local cleanup was denied: {exception.Message}");
-            return new SetupCommandResult(
-                1,
-                applicationDirectory,
-                null,
-                null,
-                false,
-                warning,
-                Error: exception.Message,
-                Fresh: setupOptions.Fresh,
-                LocalStateCleared: localStateCleared);
-        }
-        catch (OperationCanceledException)
-        {
-            string retryCommand = setupOptions.Fresh
-                ? "clawctl setup --fresh"
-                : "clawctl setup";
-            log($"Setup was cancelled before it completed. Retry `{retryCommand}`.");
-            return new SetupCommandResult(
-                1,
-                applicationDirectory,
-                null,
-                null,
-                false,
-                warning,
-                Error:
-                    "Setup was cancelled and may be incomplete. " +
-                    $"Run `{retryCommand}` to retry.",
-                Fresh: setupOptions.Fresh,
-                LocalStateCleared: localStateCleared);
-        }
-    }
-
-    internal static async Task<SetupCommandResult> RunSetupCoreAsync(
-        Session.SessionRuntime runtime,
-        HostOptions options,
-        Session.IInstallationLifecycle lifecycle,
-        string applicationDirectory,
-        Action<string> log,
-        bool lockAlreadyHeld,
-        FreshSetupWarning? warning,
-        bool localStateCleared,
-        bool fresh,
-        IProgress<ClawCtlProgress> progress,
-        CancellationToken cancellationToken)
-    {
-        progress.Report(new ClawCtlProgress("Preparing the isolated session."));
-        using Session.ISessionLockHandle? handle = lockAlreadyHeld
-            ? null
-            : runtime.AcquireLifecycleLock();
-        runtime.SetupState.Write(new Session.SetupRecord
-        {
-            ApplicationId = runtime.ApplicationId,
-            Phase = Session.SetupPhase.Preparing
-        });
-        Session.SessionStartResult session = await runtime.Coordinator
-            .EnsureStartedWithResultAsync(cancellationToken).ConfigureAwait(false);
-        IEnumerable<string> supersededSandboxIds = (session.Record.SupersededSandboxIds ?? [])
-            .Append(session.Record.SupersededSandboxId)
-            .Append(session.SupersededRecord?.SandboxId)
-            .Where(static id => !string.IsNullOrWhiteSpace(id))
-            .Select(static id => id!)
-            .Where(id => !string.Equals(
-                id,
-                session.Record.SandboxId,
-                StringComparison.Ordinal))
-            .Distinct(StringComparer.Ordinal);
-        foreach (string supersededSandboxId in supersededSandboxIds)
-        {
-            if (runtime.GatewayState.ClearForSupersededSession(supersededSandboxId))
-            {
-                log($"Removed the gateway record for superseded session '{supersededSandboxId}'.");
-            }
-        }
-
-        Session.SessionRecord record = session.Record;
-        string helperPath = runtime.StageHelper(record);
-        progress.Report(new ClawCtlProgress(
-            "Installing Node.js in the isolated session."));
-        SessionRuntimeInstallResult agentRuntime = await runtime.Executor.InstallRuntimeAsync(
-            record,
-            helperPath,
-            GetPackagedNodeArchivePath(options),
-            applicationDirectory,
-            cancellationToken).ConfigureAwait(false);
-        progress.Report(new ClawCtlProgress("Enabling gateway startup at sign-in."));
-        Gateway.GatewayPersistenceInstallResult recovery = await lifecycle
-            .InstallRecoveryAsync(log, cancellationToken).ConfigureAwait(false);
-
-        if (recovery.State != Gateway.GatewayPersistenceState.Ready)
-        {
-            return new SetupCommandResult(
-                1,
-                applicationDirectory,
-                $"{agentRuntime.Version}",
-                recovery,
-                false,
-                warning,
-                SandboxId: record.SandboxId,
-                Fresh: fresh,
-                RuntimeLocation: SetupRuntimeLocation.IsolatedSession,
-                LocalStateCleared: localStateCleared);
-        }
-
-        progress.Report(new ClawCtlProgress("Finalizing setup."));
-        runtime.CompleteSetup(record, agentRuntime, startupEnabled: true);
-        return new SetupCommandResult(
-            0,
-            applicationDirectory,
-            $"{agentRuntime.Version}",
-            recovery,
-            true,
-            warning,
-            SandboxId: record.SandboxId,
-            Fresh: fresh,
-            RuntimeLocation: SetupRuntimeLocation.IsolatedSession,
-            LocalStateCleared: localStateCleared);
-    }
-
-    private static FreshDiagnosticReport WriteFreshDiagnosticReport(
-        Session.SessionRuntime runtime,
-        Action<string> log)
-    {
-        Session.SessionStatus session = runtime.Coordinator.GetRecordedStatus();
-        Gateway.GatewayStateResult gateway = runtime.GatewayState.Read();
-        string path = runtime.Paths.PreResetReportPath;
-        string directory = Path.GetDirectoryName(path)
-            ?? throw new Session.SessionException(
-                "The pre-reset diagnostic report path has no parent directory.");
-        Directory.CreateDirectory(directory);
-        var lines = File.Exists(path)
-            ? new List<string>(File.ReadAllLines(path))
-            : [];
-        if (lines.Count > 0)
-        {
-            lines.Add(string.Empty);
-        }
-
-        lines.AddRange(
-        [
-            "--- pre-reset snapshot ---",
-            $"timestampUtc={DateTimeOffset.UtcNow:O}",
-            $"applicationId={runtime.ApplicationId}",
-            "report=pre-reset diagnostic metadata; credentials and local file contents are excluded"
-        ]);
-        if (session.Record is not null)
-        {
-            lines.Add($"sessionSandboxId={session.Record.SandboxId}");
-            lines.Add($"sessionAgentUserName={session.Record.AgentUserName ?? string.Empty}");
-            lines.Add($"sessionAgentUserSid={session.Record.AgentUserSid ?? string.Empty}");
-        }
-        else
-        {
-            lines.Add($"sessionRecordFault={session.Fault?.ToString() ?? "none"}");
-        }
-
-        if (gateway.Record is not null)
-        {
-            lines.Add($"gatewaySandboxId={gateway.Record.SandboxId}");
-            lines.Add($"gatewayProcessId={gateway.Record.ProcessId}");
-            lines.Add($"gatewayLaunchPending={gateway.Record.LaunchPending}");
-        }
-        else
-        {
-            lines.Add($"gatewayRecordFault={gateway.Fault?.ToString() ?? "none"}");
-        }
-        lines.Add("--- end pre-reset snapshot ---");
-
-        File.WriteAllLines(path, lines);
-        log($"Captured redacted pre-reset diagnostic report at {path}.");
-        return new FreshDiagnosticReport(path, lines);
-    }
-
-    private static void RestoreFreshDiagnosticReport(
-        FreshDiagnosticReport report,
-        Action<string> log)
-    {
-        string directory = Path.GetDirectoryName(report.Path)
-            ?? throw new Session.SessionException(
-                "The pre-reset diagnostic report path has no parent directory.");
-        Directory.CreateDirectory(directory);
-        File.WriteAllLines(report.Path, report.Lines);
-        log($"Preserved the redacted pre-reset diagnostic report at {report.Path}.");
-    }
-
-    private sealed record FreshDiagnosticReport(
-        string Path,
-        IReadOnlyList<string> Lines);
-
     private static async Task<int> RunPowerShellAsync(
         HostOptions options,
         Session.SessionRuntime runtime,
@@ -1327,9 +1029,9 @@ internal static class Program
         record = await runtime.StartForExecutionAsync(cancellationToken)
             .ConfigureAwait(false);
         string helperPath = runtime.RequireStagedHelper(record);
-        string applicationDirectory = GetPackagedApplicationDirectory(options);
+        string applicationDirectory = options.RequirePackagedApplicationDirectory();
         string agentNodePath = runtime.RequireAgentNodePath(
-            GetPackagedNodeArchivePath(options));
+            options.RequirePackagedNodeArchivePath());
         string nodeDirectory = Path.GetDirectoryName(agentNodePath)
             ?? throw new Session.SessionException(
                 "The agent's Node.js runtime has no parent directory.");
@@ -1390,47 +1092,11 @@ internal static class Program
             shell.DisplayName,
             cancellationToken).ConfigureAwait(false);
     }
-
     private static void DeleteCompletionCache(string cachePath)
     {
         if (File.Exists(cachePath))
         {
             File.Delete(cachePath);
         }
-    }
-
-    private static string GetPackagedApplicationDirectory(HostOptions options)
-    {
-        // Re-check File.Exists here (HostOptions.Parse already checked it)
-        // so both a never-resolved and a since-removed application directory
-        // fail through the same FileNotFoundException message.
-        string? applicationDirectory = options.PackagedApplicationDirectory;
-        string entryPoint = Path.Combine(
-            applicationDirectory ?? Path.Combine(AppContext.BaseDirectory, "app"),
-            "openclaw.mjs");
-        if (applicationDirectory is null || !File.Exists(entryPoint))
-        {
-            throw new FileNotFoundException(
-                "The packaged OpenClaw entry point was not found.",
-                entryPoint);
-        }
-
-        return applicationDirectory;
-    }
-
-    private static string GetPackagedNodeArchivePath(HostOptions options)
-    {
-        string? archivePath = options.PackagedNodeArchivePath;
-        string expectedPath = archivePath ?? Path.Combine(
-            AppContext.BaseDirectory,
-            "runtime");
-        if (archivePath is null || !File.Exists(archivePath))
-        {
-            throw new FileNotFoundException(
-                "The packaged Node.js runtime archive was not found.",
-                expectedPath);
-        }
-
-        return archivePath;
     }
 }

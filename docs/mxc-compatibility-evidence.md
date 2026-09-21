@@ -23,7 +23,7 @@ into that command line.
 
 ## Session ownership and routing
 
-`clawctl setup` is the required lifecycle entry point. It writes package-local
+`clawctl setup` is the explicit lifecycle entry point. It writes package-local
 setup state and records the session that this installation owns in
 `session.json`. Ownership is never inferred from a machine account or profile:
 unrelated agent accounts may exist, and teardown must remain safe and
@@ -41,10 +41,16 @@ the ordinary setup route. It refuses unpackaged execution, never follows
 reparse points, and stops without a wipe or replacement setup when teardown is
 incomplete. It does not onboard OpenClaw or start the gateway.
 
-`openclaw` always runs inside the isolated session recorded by `clawctl setup`.
-There is no environment variable, option, or automatic fallback that runs
-OpenClaw on the host. Before touching any recorded state, both `clawctl setup`
-and `openclaw` require that this machine can host a session: an MXC runtime
+`openclaw` always runs inside the isolated session recorded for this
+installation. When its setup marker is absent, it provisions that session
+before launching; the lifecycle lock double-checks the marker so concurrent
+first launches provision only once. It leaves unreadable, incomplete, foreign,
+newer-schema, preparing, and tearing-down markers, session mismatches, and
+stale agent Node.js runtimes for their explicit `clawctl setup` or
+`clawctl teardown` recovery paths. There is no environment variable, option,
+or automatic fallback that runs OpenClaw on the host. Before touching any
+recorded state, both `clawctl setup` and `openclaw` require that this machine
+can host a session: an MXC runtime
 that is unavailable, a backend that reports no isolation-session support, a
 host build measured as unsupported, or a missing package identity all fail with
 the same message, which names Windows Update or a newer Windows version as the
@@ -130,18 +136,19 @@ stable reason. A running gateway omits readiness and avoids the helper call.
 
 After an `openclaw` child exits, the launcher uses the helper's file-only
 readiness result before checking the managed gateway record and liveness. A
-successful interactive call gets a start suggestion only for `NotStarted` or
-`Stopped`; unsuccessful or redirected calls, and `Starting`, `Unhealthy`, or
-`Unknown` gateway states, remain silent. The advisory path cannot change the
-OpenClaw exit code.
+successful interactive call starts the managed gateway only for `NotStarted` or
+`Stopped` with `startup eligible` readiness; unsuccessful or redirected calls,
+and `Starting`, `Unhealthy`, or `Unknown` gateway states, remain silent. An
+observed `Running` gateway is acknowledged. A failed or unverified start warns
+on standard error and prints `clawctl gateway-service start` on its own retry
+line; it does not change the OpenClaw exit code or acknowledge the guidance, so
+the next eligible launch retries.
 
-The suggestion remains eligible until a manual
-`clawctl gateway-service start` invocation or an observed `Running` state.
-Acknowledgement is package-local and keyed to the Windows token authentication
-ID, so it suppresses later checks only for the current Windows logon. The
-sign-in recovery command carries a hidden provenance marker and does not count
-as a manual acknowledgement; a later OpenClaw invocation that observes its
-running gateway does.
+A successful automatic or manual start, or an observed running gateway,
+acknowledges the guidance for the current Windows logon. Acknowledgement is
+package-local and keyed to the Windows token authentication ID. Setting
+`CLAWCTL_AUTO_GATEWAY_START` to `0`, `false`, `no`, or `off` restores the
+previous start hint instead of automatically starting the gateway.
 
 Agent entrypoint startup captures and restores console state and initializes
 UTF-8 just as the control entrypoint does. Postflight rendering treats
