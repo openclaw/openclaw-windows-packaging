@@ -24,9 +24,10 @@ internal static class PowerShellCompletion
         "PowerShell",
         "Microsoft.PowerShell_profile.ps1");
 
-    internal static void Install(string profilePath)
+    internal static string Install(string profilePath, string? baseDirectory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(profilePath);
+        profilePath = Path.GetFullPath(profilePath, baseDirectory ?? Environment.CurrentDirectory);
         ProfileText profile = ReadProfile(profilePath);
         ValidateMarkers(profile.Text, out int begin, out int end);
         string block = $"{BeginMarker}{profile.NewLine}{Script.TrimEnd()}{profile.NewLine}{EndMarker}";
@@ -34,21 +35,23 @@ internal static class PowerShellCompletion
             ? string.IsNullOrEmpty(profile.Text) ? block + profile.NewLine : profile.Text.TrimEnd() + profile.NewLine + profile.NewLine + block + profile.NewLine
             : profile.Text[..begin] + block + profile.Text[(end + EndMarker.Length)..];
         WriteAtomically(profilePath, profile.Encode(updated));
+        return profilePath;
     }
 
-    internal static void Uninstall(string profilePath)
+    internal static string Uninstall(string profilePath, string? baseDirectory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(profilePath);
+        profilePath = Path.GetFullPath(profilePath, baseDirectory ?? Environment.CurrentDirectory);
         if (!File.Exists(profilePath))
         {
-            return;
+            return profilePath;
         }
 
         ProfileText profile = ReadProfile(profilePath);
         ValidateMarkers(profile.Text, out int begin, out int end);
         if (begin < 0)
         {
-            return;
+            return profilePath;
         }
 
         int removeStart = begin;
@@ -63,6 +66,7 @@ internal static class PowerShellCompletion
             removeEnd += profile.NewLine.Length;
         }
         WriteAtomically(profilePath, profile.Encode(profile.Text.Remove(removeStart, removeEnd - removeStart)));
+        return profilePath;
     }
 
     internal static void WriteScriptAtomically(string path, string script) =>

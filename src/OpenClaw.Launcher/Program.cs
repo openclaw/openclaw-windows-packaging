@@ -765,7 +765,7 @@ internal static class Program
                         PowerShellCompletion.DefaultProfilePath();
                     if (completionOptions.Uninstall)
                     {
-                        PowerShellCompletion.Uninstall(profilePath);
+                        profilePath = PowerShellCompletion.Uninstall(profilePath);
                         DeleteCompletionCache(GetSessionRuntime().Paths.CompletionCachePath);
                         return WriteResult(new CompletionCommandResult(
                             PowerShellCompletion.Script,
@@ -774,7 +774,7 @@ internal static class Program
                             ExitCode: 0));
                     }
 
-                    PowerShellCompletion.Install(profilePath);
+                    profilePath = PowerShellCompletion.Install(profilePath);
                     string? scriptPath = null;
                     string? warning = null;
                     try

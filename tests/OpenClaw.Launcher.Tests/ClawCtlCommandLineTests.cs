@@ -465,6 +465,24 @@ public sealed class ClawCtlCommandLineTests
     }
 
     [Fact]
+    public void CompletionProfileRelativePathIsResolved()
+    {
+        string directory = TestDirectory.Create();
+        string profile = Path.Combine(directory, "profile.ps1");
+        try
+        {
+            string installedProfile = PowerShellCompletion.Install("profile.ps1", directory);
+
+            Assert.Equal(Path.GetFullPath(profile), installedProfile);
+            Assert.True(File.Exists(profile));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void CompletionProfileUpdatePreservesUnrelatedBytes()
     {
         string directory = TestDirectory.Create();
