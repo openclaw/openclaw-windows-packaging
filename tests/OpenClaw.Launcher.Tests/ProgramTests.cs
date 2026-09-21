@@ -1961,7 +1961,11 @@ public sealed class ProgramTests : IDisposable
                 }));
             return Task.FromResult(new MxcExecutionResult(
                 0,
-                $$"""{"ok":true,"browserUrl":"{{browserUrl}}"}""",
+                // Mirrors the packaged upstream `dashboard --json` field layout so the
+                // handoff is validated against the shape the guest actually returns.
+                $$"""
+                {"ok":true,"url":"https://127.0.0.1:{{handoffPort}}/","httpUrl":"https://127.0.0.1:{{handoffPort}}/","wsUrl":"ws://127.0.0.1:{{handoffPort}}","port":{{handoffPort}},"tokenIncluded":false,"browserUrl":"{{browserUrl}}","browserBootstrapExpiresAtMs":1790019149639}
+                """,
                 string.Empty));
         };
         using var output = new StringWriter();
