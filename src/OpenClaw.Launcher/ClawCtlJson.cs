@@ -58,8 +58,7 @@ internal sealed record ClawCtlJsonBundle(
 internal sealed record ClawCtlJsonCompletion(
     string Script,
     string? ProfilePath,
-    string? AgentScriptPath,
-    string? Warning = null);
+    string? AgentScriptPath);
 
 internal sealed record ClawCtlJsonWarning(string Message, string? Detail = null);
 
@@ -95,8 +94,10 @@ internal static class ClawCtlJson
                 Completion: new ClawCtlJsonCompletion(
                     completion.Script,
                     completion.ProfilePath,
-                    completion.AgentScriptPath,
-                    completion.Warning)),
+                    completion.AgentScriptPath),
+                Warning: completion.Warning is null
+                    ? null
+                    : new ClawCtlJsonWarning(completion.Warning)),
             GatewayCommandResult gateway => FromGateway(gateway),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(result),

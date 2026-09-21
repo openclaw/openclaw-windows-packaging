@@ -89,6 +89,43 @@ public sealed class AgentShellTests : IDisposable
         Assert.DoesNotContain("LocalState", arguments[4], StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task PowerShellCompleterPassesTheActualCursorAndFullCommandLine()
+    {
+        string directory = Path.Combine(_root, "completion");
+        Directory.CreateDirectory(directory);
+        string capture = Path.Combine(directory, "arguments.txt");
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, "clawctl.cmd"),
+            $"@echo off\r\necho %* > \"{capture}\"\r\n");
+        string script = PowerShellCompletion.Script;
+        AgentShell shell = AgentShellResolver.Resolve(File.Exists);
+        using Process process = new()
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = shell.ExecutablePath,
+                UseShellExecute = false,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true
+            }
+        };
+        process.StartInfo.ArgumentList.Add("-NoLogo");
+        process.StartInfo.ArgumentList.Add("-NoProfile");
+        process.StartInfo.ArgumentList.Add("-Command");
+        process.StartInfo.ArgumentList.Add(
+            $"$env:PATH='{directory};' + $env:PATH; {script}; " +
+            "TabExpansion2 -inputScript 'clawctl sta' -cursorColumn 11 | Out-Null");
+
+        Assert.True(process.Start());
+        await process.WaitForExitAsync();
+        Assert.True(
+            process.ExitCode == 0,
+            await process.StandardError.ReadToEndAsync());
+        string arguments = await File.ReadAllTextAsync(capture);
+        Assert.Contains("[suggest:11] \"clawctl sta\"", arguments, StringComparison.Ordinal);
+    }
+
     public void Dispose()
     {
         Directory.Delete(_root, recursive: true);

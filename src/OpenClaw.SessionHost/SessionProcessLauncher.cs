@@ -52,8 +52,7 @@ internal sealed class SessionProcessLauncher : ISessionProcessLauncher
         {
             FileName = request.Executable!,
 
-            // No shell: the isolated session's console handles are inherited
-            // unless this request explicitly captures stdout into a file.
+            // No shell: the isolated session's console handles are inherited.
             UseShellExecute = false,
             WorkingDirectory = workingDirectory
         };
@@ -78,41 +77,12 @@ internal sealed class SessionProcessLauncher : ISessionProcessLauncher
         using FileStream? lease =
             SessionNativeStager.OpenConsumerLease(request.NativeRootPath);
 
-        FileStream? stdout = null;
-        FileStream? input = null;
-        FileStream? error = null;
-        WindowsKillOnCloseJob? job = null;
         Process? process = null;
         try
         {
-            if (request.StdoutPath is string stdoutPath)
-            {
-                string? stdoutDirectory = Path.GetDirectoryName(stdoutPath);
-                if (!string.IsNullOrEmpty(stdoutDirectory))
-                {
-                    Directory.CreateDirectory(stdoutDirectory);
-                }
-
-                stdout = new FileStream(
-                    stdoutPath,
-                    FileMode.Create,
-                    FileAccess.Write,
-                    FileShare.Read);
-                input = new FileStream("NUL", FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                error = new FileStream("NUL", FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
-                job = WindowsKillOnCloseJob.Create();
-                process = job.StartProcess(
-                    startInfo,
-                    input.SafeFileHandle,
-                    stdout.SafeFileHandle,
-                    error.SafeFileHandle);
-            }
-            else
-            {
-                process = Process.Start(startInfo) ??
-                    throw new SessionLaunchException(
-                        $"Unable to start '{request.Executable}'.");
-            }
+            process = Process.Start(startInfo) ??
+                throw new SessionLaunchException(
+                    $"Unable to start '{request.Executable}'.");
             process.WaitForExit();
             return process.ExitCode;
         }
@@ -128,10 +98,6 @@ internal sealed class SessionProcessLauncher : ISessionProcessLauncher
         finally
         {
             process?.Dispose();
-            job?.Dispose();
-            error?.Dispose();
-            input?.Dispose();
-            stdout?.Dispose();
         }
     }
 

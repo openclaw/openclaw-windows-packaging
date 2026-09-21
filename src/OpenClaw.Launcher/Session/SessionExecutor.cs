@@ -73,9 +73,6 @@ internal sealed record SessionCommandRequest(
     /// held open by the guest for the command's lifetime.
     /// </summary>
     public string? NativeRootPath { get; init; }
-
-    /// <summary>Guest-visible destination for captured standard output.</summary>
-    public string? StdoutPath { get; init; }
 }
 
 /// <summary>
@@ -271,7 +268,6 @@ internal sealed class SessionExecutor
             PathPrefix = request.PathPrefix,
             NodeOptionsSuffix = request.NodeOptionsSuffix,
             NativeRootPath = request.NativeRootPath,
-            StdoutPath = request.StdoutPath,
         };
 
     /// <summary>

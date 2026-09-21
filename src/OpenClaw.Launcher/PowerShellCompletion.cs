@@ -12,9 +12,8 @@ internal static class PowerShellCompletion
         Register-ArgumentCompleter -Native -CommandName clawctl -ScriptBlock {
             param($wordToComplete, $commandAst, $cursorPosition)
 
-            $words = @($commandAst.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.Extent.Text })
-            $directive = "[suggest:$($words.Count + 1)]"
-            & clawctl $directive @words 2>$null | ForEach-Object {
+            $directive = "[suggest:$cursorPosition]"
+            & clawctl $directive $commandAst.Extent.Text 2>$null | ForEach-Object {
                 [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
             }
         }
@@ -28,10 +27,13 @@ internal static class PowerShellCompletion
     internal static void Install(string profilePath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(profilePath);
-        byte[] existing = File.Exists(profilePath) ? File.ReadAllBytes(profilePath) : [];
-        byte[] block = Encoding.UTF8.GetBytes(
-            $"{BeginMarker}{NewLine(existing)}{Script.TrimEnd()}{NewLine(existing)}{EndMarker}");
-        WriteAtomically(profilePath, ReplaceBlock(existing, block));
+        ProfileText profile = ReadProfile(profilePath);
+        ValidateMarkers(profile.Text, out int begin, out int end);
+        string block = $"{BeginMarker}{profile.NewLine}{Script.TrimEnd()}{profile.NewLine}{EndMarker}";
+        string updated = begin < 0
+            ? string.IsNullOrEmpty(profile.Text) ? block + profile.NewLine : profile.Text.TrimEnd() + profile.NewLine + profile.NewLine + block + profile.NewLine
+            : profile.Text[..begin] + block + profile.Text[(end + EndMarker.Length)..];
+        WriteAtomically(profilePath, profile.Encode(updated));
     }
 
     internal static void Uninstall(string profilePath)
@@ -42,93 +44,86 @@ internal static class PowerShellCompletion
             return;
         }
 
-        byte[] existing = File.ReadAllBytes(profilePath);
-        int begin = Find(existing, BeginMarker);
+        ProfileText profile = ReadProfile(profilePath);
+        ValidateMarkers(profile.Text, out int begin, out int end);
         if (begin < 0)
         {
             return;
         }
-        int end = Find(existing, EndMarker, begin);
+
         int removeStart = begin;
-        if (begin >= 4 && existing.AsSpan(begin - 4, 4).SequenceEqual("\r\n\r\n"u8))
+        if (removeStart >= profile.NewLine.Length &&
+            profile.Text.AsSpan(0, removeStart).EndsWith(profile.NewLine + profile.NewLine, StringComparison.Ordinal))
         {
-            removeStart -= 4;
+            removeStart -= profile.NewLine.Length;
         }
-        else if (begin >= 2 && existing.AsSpan(begin - 2, 2).SequenceEqual("\n\n"u8))
+        int removeEnd = end + EndMarker.Length;
+        if (profile.Text.AsSpan(removeEnd).StartsWith(profile.NewLine, StringComparison.Ordinal))
         {
-            removeStart -= 2;
+            removeEnd += profile.NewLine.Length;
         }
-        int removeEnd = end < 0
-            ? existing.Length
-            : end + EndMarker.Length;
-        if (existing.AsSpan(removeEnd).StartsWith("\r\n"u8))
-        {
-            removeEnd += 2;
-        }
-        else if (existing.AsSpan(removeEnd).StartsWith("\n"u8))
-        {
-            removeEnd++;
-        }
-        byte[] updated = end < 0
-            ? existing.AsSpan(0, removeStart).ToArray()
-            : [.. existing.AsSpan(0, removeStart), .. existing.AsSpan(removeEnd)];
-        WriteAtomically(profilePath, updated);
+        WriteAtomically(profilePath, profile.Encode(profile.Text.Remove(removeStart, removeEnd - removeStart)));
     }
 
     internal static void WriteScriptAtomically(string path, string script) =>
-        WriteAtomically(path, Encoding.UTF8.GetBytes(script));
+        WriteAtomically(path, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(script));
 
-    private static byte[] ReplaceBlock(byte[] existing, byte[] block)
+    private static ProfileText ReadProfile(string path)
     {
-        int begin = Find(existing, BeginMarker);
-        if (begin < 0)
+        byte[] bytes = File.Exists(path) ? File.ReadAllBytes(path) : [];
+        Encoding encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+        int preambleLength = 0;
+        if (bytes.AsSpan().StartsWith(Encoding.UTF8.Preamble))
         {
-            return existing.Length == 0
-                ? [.. block, .. Encoding.UTF8.GetBytes(NewLine(existing))]
-                : [.. existing, .. Encoding.UTF8.GetBytes(NewLine(existing) + NewLine(existing)), .. block, .. Encoding.UTF8.GetBytes(NewLine(existing))];
+            encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true, throwOnInvalidBytes: true);
+            preambleLength = Encoding.UTF8.Preamble.Length;
+        }
+        else if (bytes.AsSpan().StartsWith(Encoding.Unicode.Preamble))
+        {
+            encoding = Encoding.Unicode;
+            preambleLength = Encoding.Unicode.Preamble.Length;
+        }
+        else if (bytes.AsSpan().StartsWith(Encoding.BigEndianUnicode.Preamble))
+        {
+            encoding = Encoding.BigEndianUnicode;
+            preambleLength = Encoding.BigEndianUnicode.Preamble.Length;
         }
 
-        int end = Find(existing, EndMarker, begin);
-        return end < 0
-            ? [.. existing.AsSpan(0, begin), .. block, .. Encoding.UTF8.GetBytes(NewLine(existing))]
-            : [.. existing.AsSpan(0, begin), .. block, .. existing.AsSpan(end + EndMarker.Length)];
-    }
-
-    private static string NewLine(byte[] bytes) =>
-        bytes.AsSpan().IndexOf("\r\n"u8) >= 0 ? "\r\n" : "\n";
-
-    private static int Find(byte[] bytes, string text, int start = 0) =>
-        bytes.AsSpan(start).IndexOf(Encoding.UTF8.GetBytes(text)) is int index && index >= 0
-            ? start + index
-            : -1;
-
-    private static void WriteAtomically(string path, byte[] content)
-    {
-        string directory = Path.GetDirectoryName(path)
-            ?? throw new ArgumentException("The profile path must have a parent directory.", nameof(path));
-        Directory.CreateDirectory(directory);
-        string temporary = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
         try
         {
-            using (FileStream stream = new(
-                temporary,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None,
-                bufferSize: 4096,
-                FileOptions.WriteThrough))
-            {
-                stream.Write(content);
-                stream.Flush(flushToDisk: true);
-            }
-            if (File.Exists(path))
-            {
-                File.Replace(temporary, path, destinationBackupFileName: null);
-            }
-            else
-            {
-                File.Move(temporary, path);
-            }
+            string text = encoding.GetString(bytes, preambleLength, bytes.Length - preambleLength);
+            return new ProfileText(text, encoding, preambleLength != 0,
+                text.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n");
+        }
+        catch (DecoderFallbackException exception)
+        {
+            throw new InvalidDataException($"The PowerShell profile '{path}' is not valid {encoding.WebName} text.", exception);
+        }
+    }
+
+    private static void ValidateMarkers(string text, out int begin, out int end)
+    {
+        begin = text.IndexOf(BeginMarker, StringComparison.Ordinal);
+        end = text.IndexOf(EndMarker, StringComparison.Ordinal);
+        bool valid = begin < 0 && end < 0 ||
+            begin >= 0 && end > begin &&
+            text.IndexOf(BeginMarker, begin + BeginMarker.Length, StringComparison.Ordinal) < 0 &&
+            text.IndexOf(EndMarker, end + EndMarker.Length, StringComparison.Ordinal) < 0;
+        if (!valid)
+        {
+            throw new InvalidDataException("The PowerShell profile contains malformed OpenClaw completion markers. Remove or repair the marked block before retrying.");
+        }
+    }
+
+    private static void WriteAtomically(string path, byte[] contents)
+    {
+        string directory = Path.GetDirectoryName(path) ?? throw new IOException($"The profile path '{path}' has no parent directory.");
+        Directory.CreateDirectory(directory);
+        string temporary = path + ".tmp-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            File.WriteAllBytes(temporary, contents);
+            File.Move(temporary, path, overwrite: true);
         }
         finally
         {
@@ -137,5 +132,12 @@ internal static class PowerShellCompletion
                 File.Delete(temporary);
             }
         }
+    }
+
+    private sealed record ProfileText(string Text, Encoding Encoding, bool HasPreamble, string NewLine)
+    {
+        public byte[] Encode(string text) => HasPreamble
+            ? [.. Encoding.GetPreamble(), .. Encoding.GetBytes(text)]
+            : Encoding.GetBytes(text);
     }
 }

@@ -93,13 +93,6 @@ public sealed record SessionLaunchRequest
     public string? NativeRootPath { get; init; }
 
     /// <summary>
-    /// Attached only. A guest-visible file that receives the application's
-    /// standard output instead of the transient MXC execution stream.
-    /// </summary>
-    [JsonPropertyName("stdoutPath")]
-    public string? StdoutPath { get; init; }
-
-    /// <summary>
     /// Detached only. Where the application's output is written, because a
     /// detached process has no console to inherit and the pipe it was started
     /// through closes as soon as the launching execution returns.
@@ -295,12 +288,6 @@ public static class SessionLaunchProtocol
 
         if (request.Mode == SessionLaunchMode.Detached)
         {
-            if (request.StdoutPath is not null)
-            {
-                throw new SessionLaunchException(
-                    "A detached launch request cannot capture stdout.");
-            }
-
             // A detached process has no console to inherit and the pipe it was
             // started through closes as soon as the launching execution
             // returns. Without a log it would write into a dead handle and
@@ -316,17 +303,6 @@ public static class SessionLaunchProtocol
                 throw new SessionLaunchException(
                     "A detached launch request has no status path.");
             }
-        }
-        else if (request.StdoutPath is not null &&
-            string.IsNullOrWhiteSpace(request.StdoutPath))
-        {
-            throw new SessionLaunchException(
-                "An attached launch request has an invalid stdout path.");
-        }
-        else if (request.StdoutPath is not null && !Path.IsPathFullyQualified(request.StdoutPath))
-        {
-            throw new SessionLaunchException(
-                "An attached launch request has a stdout path that is not fully qualified.");
         }
 
         return request;

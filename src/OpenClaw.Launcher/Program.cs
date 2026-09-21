@@ -766,6 +766,7 @@ internal static class Program
                     if (completionOptions.Uninstall)
                     {
                         PowerShellCompletion.Uninstall(profilePath);
+                        DeleteCompletionCache(GetSessionRuntime().Paths.CompletionCachePath);
                         return WriteResult(new CompletionCommandResult(
                             PowerShellCompletion.Script,
                             profilePath,
@@ -780,7 +781,7 @@ internal static class Program
                     {
                         Session.SessionRuntime runtime = GetSessionRuntime();
                         Session.SessionRecord record = runtime.RequireSetup();
-                        record = await runtime.Coordinator.StartRecordedAsync(cancellationToken)
+                        record = await runtime.StartForExecutionAsync(cancellationToken)
                             .ConfigureAwait(false);
                         string helperPath = runtime.RequireStagedHelper(record);
                         string applicationDirectory = GetPackagedApplicationDirectory(options);
@@ -1362,7 +1363,7 @@ internal static class Program
         CancellationToken cancellationToken)
     {
         Session.SessionRecord record = runtime.RequireSetup();
-        record = await runtime.Coordinator.StartRecordedAsync(cancellationToken)
+        record = await runtime.StartForExecutionAsync(cancellationToken)
             .ConfigureAwait(false);
         string helperPath = runtime.RequireStagedHelper(record);
         string applicationDirectory = GetPackagedApplicationDirectory(options);
@@ -1380,6 +1381,7 @@ internal static class Program
                 ?? throw new Session.SessionException(
                     "The installed agent command shim has no parent directory."),
             installedTools.ShimPath!);
+        ProjectCompletionCache(runtime.Paths.CompletionCachePath, record.WorkspacePath!);
         Session.AgentShell shell = Session.AgentShellResolver.Resolve(File.Exists);
 
         return await runtime.Executor.ExecuteCommandAsync(
@@ -1408,6 +1410,31 @@ internal static class Program
             $"Opening {shell.DisplayName} in the isolated session.",
             shell.DisplayName,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    private static void ProjectCompletionCache(string cachePath, string workspacePath)
+    {
+        if (!File.Exists(cachePath))
+        {
+            return;
+        }
+
+        string projection = Path.Combine(
+            workspacePath,
+            ".openclaw",
+            "cache",
+            "completion.ps1");
+        PowerShellCompletion.WriteScriptAtomically(
+            projection,
+            File.ReadAllText(cachePath));
+    }
+
+    private static void DeleteCompletionCache(string cachePath)
+    {
+        if (File.Exists(cachePath))
+        {
+            File.Delete(cachePath);
+        }
     }
 
     private static string GetPackagedApplicationDirectory(HostOptions options)
