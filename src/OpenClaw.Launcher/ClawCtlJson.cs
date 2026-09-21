@@ -27,7 +27,9 @@ internal sealed record ClawCtlJsonBuild(string Version, string Commit);
 internal sealed record ClawCtlJsonSession(
     string State,
     string? SandboxId = null,
-    string? NodeVersion = null);
+    string? NodeVersion = null,
+    string? AgentUser = null,
+    string? SharedFolder = null);
 
 internal sealed record ClawCtlJsonRuntime(string NodeVersion);
 
@@ -168,7 +170,9 @@ internal static class ClawCtlJson
             Session: new ClawCtlJsonSession(
                 DescribeSession(result.Session.Availability),
                 result.Session.Record?.SandboxId,
-                result.NodeVersion),
+                result.NodeVersion,
+                result.Session.Record?.AgentUserName,
+                result.Session.Record?.WorkspacePath),
             Gateway: new ClawCtlJsonGateway(
                 DescribeGateway(result.Gateway.State),
                 GatewayAddress.ResolvePort(result.Gateway.Record),

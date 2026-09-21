@@ -1,4 +1,5 @@
 using OpenClaw.Launcher.Gateway;
+using OpenClaw.Launcher.Session;
 using Spectre.Console;
 using System.Text.RegularExpressions;
 
@@ -230,6 +231,49 @@ public sealed class ClawCtlConsoleTests
         Assert.Contains(bundlePath, rendered, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData((int)SessionAvailability.Running)]
+    [InlineData((int)SessionAvailability.Stale)]
+    public void StatusShowsRecordedAgentAndSharedFolder(
+        int availability)
+    {
+        using var output = new StringWriter();
+
+        ClawCtlConsole.WriteResult(
+            output,
+            new StatusCommandResult(
+                new SessionStatus(
+                    (SessionAvailability)availability,
+                    new SessionRecord
+                    {
+                        SchemaVersion = SessionStateStore.CurrentSchemaVersion,
+                        SandboxId = "iso:sandbox1",
+                        ApplicationId = "PFN:OpenClaw.Gateway_test",
+                        AgentUserName = "agent_1",
+                        AgentUserSid = "S-1-5-21-0-0-0-1001",
+                        WorkspacePath = @"C:\Users\agent_1\Shared",
+                        Generation = "generation",
+                        CreatedUtc = DateTimeOffset.UnixEpoch
+                    },
+                    null,
+                    null),
+                new GatewayStatusReport(
+                    GatewayState.NotStarted,
+                    null,
+                    "No gateway has been started."),
+                new GatewayPersistenceStatus(
+                    GatewayPersistenceState.Ready,
+                    GatewayPersistenceLane.TaskScheduler,
+                    "Gateway recovery is configured."),
+                null));
+
+        string rendered = output.ToString();
+        Assert.Contains("Agent:", rendered, StringComparison.Ordinal);
+        Assert.Contains("agent_1", rendered, StringComparison.Ordinal);
+        Assert.Contains("Shared folder:", rendered, StringComparison.Ordinal);
+        Assert.Contains(@"C:\Users\agent_1\Shared", rendered, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void ColorChangesOnlyTerminalFormatting()
     {
@@ -255,4 +299,5 @@ public sealed class ClawCtlConsoleTests
             plain.ToString(),
             Regex.Replace(colored.ToString(), "\u001b\\[[0-9;]*m", string.Empty));
     }
+
 }

@@ -397,6 +397,16 @@ internal static class ClawCtlConsole
             view.Detail(result.Session.Detail);
         }
 
+        if (!string.IsNullOrWhiteSpace(result.Session.Record?.AgentUserName))
+        {
+            view.Row("Agent", new Text(result.Session.Record.AgentUserName));
+        }
+
+        if (!string.IsNullOrWhiteSpace(result.Session.Record?.WorkspacePath))
+        {
+            view.Row("Shared folder", new Text(result.Session.Record.WorkspacePath));
+        }
+
         if (!string.IsNullOrWhiteSpace(result.NodeVersion))
         {
             view.Row("Runtime", new Text($"Node.js {result.NodeVersion}"));

@@ -135,18 +135,21 @@ important distinction between a running session and an unconfigured gateway:
 ```text
 clawctl status
 
-  Session:      [ok] running
-  Runtime:      Node.js 24.20.0
-  Gateway:      not started
-  Readiness:    not configured
-                the default config file is missing
-  Recovery:     [ok] configured
+  Session:        [ok] running
+  Agent:          agent_1
+  Shared folder:  C:\Users\agent_1\Shared
+  Runtime:        Node.js 24.20.0
+  Gateway:        not started
+  Readiness:      not configured
+                  the default config file is missing
+  Recovery:       [ok] configured
 ```
 
-The corresponding `status --json` response uses `schemaVersion` 1 and reports session
-`running`, gateway `not-started`, readiness `absent` with reason
-`config-file-missing`, and recovery `configured`. Machine-specific identifiers
-are intentionally omitted.
+The corresponding `status --json` response uses `schemaVersion` 1 and reports
+the session as `running`, including `agentUser` and `sharedFolder`; gateway
+`not-started`; readiness `absent` with reason `config-file-missing`; and
+recovery `configured`. The sandbox ID is intentionally omitted from this
+example.
 
 ## A command was cancelled with Ctrl+C
 
@@ -198,10 +201,11 @@ review, and the collector does not enumerate arbitrary agent-profile files.
 ## Bug report collection checklist
 
 Attach the reviewed diagnostics ZIP, the exact command and complete output,
-the `clawctl status` (or `status --json`) result with machine-specific IDs
-removed, Windows version/build, package version, and the observed session,
-gateway, readiness, recovery, and scheduled-task states. For a special-profile
-registration failure, include the policy error.
+the `clawctl status` (or `status --json`) result with machine-specific IDs,
+the agent account, and the shared folder path removed, Windows version/build,
+package version, and the observed session, gateway, readiness, recovery, and
+scheduled-task states. For a special-profile registration failure, include the
+policy error.
 
 ## Source authorities
 

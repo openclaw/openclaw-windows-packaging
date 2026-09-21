@@ -843,6 +843,27 @@ public sealed class ProgramTests : IDisposable
     }
 
     [Fact]
+    public async Task StatusBeforeSetupOmitsAgentAndSharedFolder()
+    {
+        string applicationDirectory = await CreateApplicationAsync().ConfigureAwait(true);
+        using var output = new StringWriter();
+
+        int exitCode = await Program.RunControlAsync(
+            CreateSetupOptions(applicationDirectory),
+            ["status"],
+            _ => { },
+            output,
+            TextWriter.Null,
+            installationLifecycle: new FailingFreshLifecycle(CreateSessionRuntime()));
+
+        Assert.Equal(0, exitCode);
+        string status = output.ToString();
+        Assert.DoesNotContain("Agent:", status, StringComparison.Ordinal);
+        Assert.DoesNotContain("Shared folder:", status, StringComparison.Ordinal);
+        Assert.Contains("clawctl setup", status, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task StatusReportsSessionRuntimeGatewayAndRecovery()
     {
         string applicationDirectory = await CreateApplicationAsync().ConfigureAwait(true);
@@ -874,6 +895,9 @@ public sealed class ProgramTests : IDisposable
         Assert.Equal(0, statusExitCode);
         string status = statusOutput.ToString();
         Assert.Contains("Session:", status, StringComparison.Ordinal);
+        Assert.Contains("Agent:", status, StringComparison.Ordinal);
+        Assert.Contains("agent_1", status, StringComparison.Ordinal);
+        Assert.Contains("Shared folder:", status, StringComparison.Ordinal);
         Assert.Contains("Runtime:", status, StringComparison.Ordinal);
         Assert.Contains("Node.js 24.20.0", status, StringComparison.Ordinal);
         Assert.Contains("Gateway:", status, StringComparison.Ordinal);
@@ -922,6 +946,10 @@ public sealed class ProgramTests : IDisposable
         Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
         Assert.Equal("running", root.GetProperty("session").GetProperty("state").GetString());
         Assert.Equal("24.20.0", root.GetProperty("session").GetProperty("nodeVersion").GetString());
+        Assert.Equal("agent_1", root.GetProperty("session").GetProperty("agentUser").GetString());
+        Assert.Equal(
+            ((FakeMxcSessionClient)runtime.Backend).Metadata!.EphemeralWorkspacePath,
+            root.GetProperty("session").GetProperty("sharedFolder").GetString());
         Assert.Equal("not-started", root.GetProperty("gateway").GetProperty("state").GetString());
         JsonElement readiness =
             root.GetProperty("gateway").GetProperty("readiness");
@@ -1149,6 +1177,8 @@ public sealed class ProgramTests : IDisposable
             "action-required",
             root.GetProperty("recovery").GetProperty("state").GetString());
         Assert.Equal("cli_error", root.GetProperty("error").GetProperty("type").GetString());
+        Assert.False(root.GetProperty("session").TryGetProperty("agentUser", out _));
+        Assert.False(root.GetProperty("session").TryGetProperty("sharedFolder", out _));
     }
 
     [Fact]
