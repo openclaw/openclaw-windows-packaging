@@ -1,6 +1,7 @@
 using System.CommandLine;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using OpenClaw.SessionProtocol;
 
 namespace OpenClaw.Launcher;
@@ -639,6 +640,23 @@ internal static class Program
                     string applicationDirectory = GetPackagedApplicationDirectory(options);
                     string nodePath = runtime.RequireAgentNodePath(
                         GetPackagedNodeArchivePath(options));
+                    IReadOnlyDictionary<string, string> dashboardEnvironment =
+                        BuildRuntimeEnvironment(
+                            runtime,
+                            applicationDirectory,
+                            isInteractive: false,
+                            readEnvironmentVariable ?? Environment.GetEnvironmentVariable);
+                    if (gateway.Record?.ObservedPorts is { Count: 1 } observedPorts)
+                    {
+                        dashboardEnvironment = Session.SessionExecutor.MergeEnvironment(
+                            dashboardEnvironment,
+                            new Dictionary<string, string>
+                            {
+                                [Gateway.GatewayConfigurationStore.PortVariable] =
+                                    observedPorts[0].ToString(CultureInfo.InvariantCulture)
+                            });
+                    }
+
                     Session.SessionCommandCaptureResult capture = await runtime.Executor
                         .ExecuteCommandCaptureAsync(
                             record,
@@ -649,11 +667,7 @@ internal static class Program
                                 record.WorkspacePath!)
                             {
                                 PathPrefix = Path.GetDirectoryName(nodePath),
-                                AdditionalEnvironment = BuildRuntimeEnvironment(
-                                    runtime,
-                                    applicationDirectory,
-                                    isInteractive: false,
-                                    readEnvironmentVariable ?? Environment.GetEnvironmentVariable),
+                                AdditionalEnvironment = dashboardEnvironment,
                                 NodeOptionsSuffix = BuildNativeRedirectNodeOption(runtime),
                                 NativeRootPath = runtime.GetAgentNativeRoot()
                             },

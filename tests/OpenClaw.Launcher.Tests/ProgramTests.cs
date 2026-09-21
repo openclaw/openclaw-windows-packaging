@@ -1880,18 +1880,28 @@ public sealed class ProgramTests : IDisposable
     }
 
     [Theory]
-    [InlineData(18789, false, 0, 1)]
-    [InlineData(3000, false, 1, 0)]
-    [InlineData(18789, true, 1, 0)]
+    [InlineData(51789, 51789, 0, false, 0, 1, true)]
+    [InlineData(3000, 18789, 0, false, 1, 0, true)]
+    [InlineData(18789, 18789, 0, true, 1, 0, true)]
+    [InlineData(51789, 51789, 51790, false, 0, 1, false)]
+    [InlineData(51789, 0, 0, false, 1, 0, false)]
     public async Task OpenBindsBrowserActivationToTheObservedGatewayAndCurrentSession(
         int handoffPort,
+        int observedPort,
+        int additionalObservedPort,
         bool replaceSessionBeforeValidation,
         int expectedExitCode,
-        int expectedBrowserLaunches)
+        int expectedBrowserLaunches,
+        bool expectedPortOverride)
     {
         SessionRuntime runtime = await SetUpSessionAsync();
         SessionRecord session = runtime.RequireSetup();
         var backend = (FakeMxcSessionClient)runtime.Backend;
+        int[] observedPorts = observedPort == 0
+            ? []
+            : additionalObservedPort == 0
+                ? [observedPort]
+                : [observedPort, additionalObservedPort];
         string browserUrl = $"https://127.0.0.1:{handoffPort}/control#token=one-time-secret";
         var logs = new List<string>();
         var launchedUrls = new List<string>();
@@ -1911,7 +1921,7 @@ public sealed class ProgramTests : IDisposable
             ProcessStartTimeUtc = DateTimeOffset.UtcNow,
             HelperPath = runtime.HelperPath,
             Port = 18789,
-            ObservedPorts = [18789],
+            ObservedPorts = observedPorts,
         });
         backend.ExecuteBehavior = _ =>
         {
@@ -1930,7 +1940,7 @@ public sealed class ProgramTests : IDisposable
                         ProcessFound = true,
                         StartTimeMatches = true,
                         PortListening = true,
-                        ListeningPorts = [18789],
+                        ListeningPorts = observedPorts,
                         ListenerOwned = true,
                     }));
                 return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
@@ -1992,6 +2002,17 @@ public sealed class ProgramTests : IDisposable
             nativeRoot))
         {
             Assert.Equal(value, dashboardRequest.Environment![name]);
+        }
+        if (expectedPortOverride)
+        {
+            Assert.Equal(
+                observedPort.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                dashboardRequest.Environment![GatewayConfigurationStore.PortVariable]);
+        }
+        else
+        {
+            Assert.False(
+                dashboardRequest.Environment!.ContainsKey(GatewayConfigurationStore.PortVariable));
         }
         Assert.Equal(expectedBrowserLaunches, launchedUrls.Count);
         if (expectedBrowserLaunches == 1)
