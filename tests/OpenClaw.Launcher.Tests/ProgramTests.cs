@@ -2348,13 +2348,14 @@ public sealed class ProgramTests : IDisposable
 
         Assert.Equal(0, exitCode);
         Assert.Empty(_lastSessionBackend!.Calls);
+        string installedProfile = await File.ReadAllTextAsync(profile).ConfigureAwait(true);
         Assert.Contains(
-            "Register-ArgumentCompleter -Native -CommandName clawctl",
-            await File.ReadAllTextAsync(profile).ConfigureAwait(true),
+            "Get-Command clawctl -CommandType Application",
+            installedProfile,
             StringComparison.Ordinal);
-        Assert.Contains(
+        Assert.DoesNotContain(
             openClawScript,
-            await File.ReadAllTextAsync(profile).ConfigureAwait(true),
+            installedProfile,
             StringComparison.Ordinal);
         Assert.Equal(
             openClawScript,

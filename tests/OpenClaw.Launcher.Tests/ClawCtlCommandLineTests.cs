@@ -450,13 +450,23 @@ public sealed class ClawCtlCommandLineTests
         {
             File.WriteAllText(profile, "Set-StrictMode -Version Latest\r\n");
 
-            PowerShellCompletion.Install(profile, OpenClawCompletionScript);
+            PowerShellCompletion.Install(profile);
 
             string installed = File.ReadAllText(profile);
             Assert.Contains("Set-StrictMode -Version Latest", installed, StringComparison.Ordinal);
             Assert.Contains(PowerShellCompletion.BeginMarker, installed, StringComparison.Ordinal);
-            Assert.Contains("Register-ArgumentCompleter -Native -CommandName clawctl", installed, StringComparison.Ordinal);
-            Assert.Contains("Register-ArgumentCompleter -Native -CommandName openclaw", installed, StringComparison.Ordinal);
+            Assert.Contains(
+                "Get-Command clawctl -CommandType Application",
+                installed,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "& $clawctlCommand.Source completion",
+                installed,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                OpenClawCompletionScript,
+                installed,
+                StringComparison.Ordinal);
 
             PowerShellCompletion.Uninstall(profile);
 
@@ -478,7 +488,6 @@ public sealed class ClawCtlCommandLineTests
         {
             string installedProfile = PowerShellCompletion.Install(
                 "profile.ps1",
-                OpenClawCompletionScript,
                 directory);
 
             Assert.Equal(Path.GetFullPath(profile), installedProfile);
@@ -507,7 +516,7 @@ public sealed class ClawCtlCommandLineTests
         {
             File.WriteAllBytes(profile, original);
 
-            PowerShellCompletion.Install(profile, OpenClawCompletionScript);
+            PowerShellCompletion.Install(profile);
             PowerShellCompletion.Uninstall(profile);
 
             Assert.Equal(original, File.ReadAllBytes(profile));
@@ -538,7 +547,7 @@ public sealed class ClawCtlCommandLineTests
         {
             File.WriteAllBytes(profile, original);
 
-            PowerShellCompletion.Install(profile, OpenClawCompletionScript);
+            PowerShellCompletion.Install(profile);
 
             byte[] installed = File.ReadAllBytes(profile);
             Assert.True(installed.AsSpan().StartsWith(encoding.GetPreamble()));

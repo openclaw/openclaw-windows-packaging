@@ -780,7 +780,7 @@ internal static class Program
 
                     string profilePath = completionOptions.ProfilePath ??
                         PowerShellCompletion.DefaultProfilePath();
-                    profilePath = PowerShellCompletion.Install(profilePath, openClawScript);
+                    profilePath = PowerShellCompletion.Install(profilePath);
                     Session.SessionRuntime runtime = GetSessionRuntime();
                     PowerShellCompletion.WriteScriptAtomically(
                         runtime.Paths.CompletionCachePath,

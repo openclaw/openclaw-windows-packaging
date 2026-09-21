@@ -24,6 +24,23 @@ internal static class PowerShellCompletion
         }
         """;
 
+    internal static string ProfileLoaderScript { get; } = """
+        & {
+            $clawctlCommand = Get-Command clawctl -CommandType Application -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+            if ($null -eq $clawctlCommand) {
+                return
+            }
+
+            [string[]] $completionLines = @(& $clawctlCommand.Source completion)
+            if ($LASTEXITCODE -ne 0 -or $completionLines.Count -eq 0) {
+                return
+            }
+
+            Invoke-Expression ([string]::Join([Environment]::NewLine, $completionLines))
+        }
+        """;
+
     internal static string DefaultProfilePath() => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
         "PowerShell",
@@ -61,7 +78,6 @@ internal static class PowerShellCompletion
 
     internal static string Install(
         string profilePath,
-        string openClawScript,
         string? baseDirectory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(profilePath);
@@ -69,7 +85,7 @@ internal static class PowerShellCompletion
         ProfileText profile = ReadProfile(profilePath);
         ValidateMarkers(profile.Text, out int begin, out int end);
         string block = BeginMarker + profile.NewLine +
-            BuildScript(openClawScript, profile.NewLine).TrimEnd() +
+            NormalizeNewLines(ProfileLoaderScript.TrimEnd(), profile.NewLine) +
             profile.NewLine + EndMarker;
         string updated = begin < 0
             ? string.IsNullOrEmpty(profile.Text)

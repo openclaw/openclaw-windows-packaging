@@ -34,10 +34,12 @@ diagnostics, or runtime composition. It also protects transparent forwarding:
 ## Completion stays owned by the installed runtime
 
 `clawctl completion` writes completion for both aliases to standard output.
-`clawctl completion --install` also adds both registrations to the invoking
-user's PowerShell profile. The profile update changes only the marked byte
-range and replaces the file atomically, so an existing profile's encoding,
-line endings, and unrelated content survive.
+`clawctl completion --install` adds a marked loader to the invoking user's
+PowerShell profile. Each new shell resolves the installed `clawctl` application
+and sources its current completion output, so package updates do not require a
+profile rewrite. The profile update changes only the marked byte range and
+replaces the file atomically, so an existing profile's encoding, line endings,
+and unrelated content survive.
 
 The payload build asks the pinned OpenClaw application to generate its
 PowerShell completion script, validates the result, and includes those
