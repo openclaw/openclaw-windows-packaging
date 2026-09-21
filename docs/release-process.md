@@ -18,7 +18,7 @@ pull request when accepting a new upstream release:
 | `gatewayTag` | The accepted stable upstream Gateway tag; it contributes to the release identity. |
 | `msixRevision` | The packaging rebuild number used to derive the MSIX and GitHub release identity. |
 | `payloadPackageVersion` | The expected version in the validated upstream payload. |
-| `approvedCommit` | The immutable upstream commit that the workflow is allowed to package. |
+| `approvedCommit` | The immutable upstream commit approved for official signing. |
 | `publisher` | The expected MSIX publisher subject used by packaging and signing validation. |
 
 For a new upstream tag, change `gatewayTag`, `approvedCommit`, and
@@ -29,23 +29,24 @@ commit and that its payload reports that version. Keep `repository` and
 or MSIX version by hand: `scripts\Get-MSIXReleaseIdentity.ps1` derives them
 from `gatewayTag` and `msixRevision`.
 
-The same pull request must update both the `workflow_dispatch` `openclaw_ref`
-default and the non-manual `env.OPENCLAW_REF` fallback in
-`.github\workflows\gateway-msix.yml`. Both values must exactly match
-`approvedCommit`. The input also supplies `signing_mode`, whose choices are
-`unsigned`, `test`, and `official`; select `official` only for the approved
-release dispatch.
+Leave the workflow's `openclaw_ref` default empty: packaging runs follow the
+stable source selection described in the [README](../README.md#selecting-the-openclaw-revision).
+That selection does not grant official-signing approval. For an official
+dispatch, supply the full `approvedCommit`, or leave the input empty only when
+the selected stable release matches the reviewed policy. The workflow also
+accepts `signing_mode`, whose choices are `unsigned`, `test`, and `official`;
+select `official` only for the approved release dispatch.
 
 ## Before dispatch
 
 Complete this checklist after the policy pull request has merged to `main`.
 
-1. Confirm the dispatch target is `main`, the workflow input
-   `openclaw_ref` is the policy's `approvedCommit`, and `signing_mode` is
-   `official`. Official signing is rejected for every other branch.
+1. Confirm the dispatch target is `main` and `signing_mode` is `official`.
+   Set `openclaw_ref` to the policy's full `approvedCommit`, or leave it empty
+   to select stable. Official signing is rejected for every other branch.
 2. Confirm the accepted immutable commit, payload version, and publisher match
-   `release-policy.json`; confirm the manual input default and automatic
-   fallback match that same commit.
+   `release-policy.json`. If leaving `openclaw_ref` empty, confirm the selected
+   stable source matches that same approved commit and version.
 3. Confirm the derived identity with
    `scripts\Get-MSIXReleaseIdentity.ps1` rather than calculating a version or
    release tag manually. Use the README's [identity guidance](../README.md#official-signing-setup)
@@ -55,8 +56,8 @@ Complete this checklist after the policy pull request has merged to `main`.
    required title format.
 5. Confirm the policy pull request's `test-msix-upgrades` job succeeded and
    retained its upgrade-evidence artifact. That job runs only on pull requests
-   that change the versioning inputs; it does not run during the later official
-   dispatch.
+   that change versioning inputs or source-selection scripts; it does not run
+   during the later official dispatch.
 6. Do not reuse or alter an accepted GitHub release tag, and do not edit an
    existing proof-release entry in `scripts\msix-upgrade-baselines.json`.
 
@@ -120,7 +121,7 @@ failed release. If the upstream tag and accepted commit are unchanged and only
 packaging must be rebuilt, increment `msixRevision` in a reviewed policy
 change, then repeat the process with the exact same upstream tag and commit.
 For a new upstream tag, update the reviewed policy inputs together--tag,
-immutable commit, payload version, and corresponding workflow references--and
+immutable commit and payload version--and
 start a new release decision. A signing-authorization or upgrade-validation
 failure is a stop condition: correct the reviewed inputs or packaging defect,
 then dispatch a new compliant run rather than publishing partial artifacts.

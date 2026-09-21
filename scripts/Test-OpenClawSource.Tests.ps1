@@ -140,7 +140,7 @@ try {
         Assert-Equal $first.resolvedCommit $commit
         $identity = & (Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1') `
             -GatewayTag $selected.releaseTag -MSIXRevision 0
-        Assert-Equal $identity.PackageVersion '2026.9.5.1000'
+        Assert-Equal $identity.PackageVersion '2026.9.500.0'
         Assert-Equal $identity.ReleaseTag 'v2026.9.5-msix.0'
     }
     foreach ($missing in @('Registry:latest', "Registry:$version", "GitHub:git/ref/tags/v$version")) {
