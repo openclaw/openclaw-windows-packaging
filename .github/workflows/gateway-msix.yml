@@ -406,13 +406,15 @@ jobs:
       - changes
       - test-host
       - build-package
-    runs-on: windows-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        architecture:
-          - x64
-          - arm64
+        include:
+          - architecture: x64
+            runner: windows-latest
+          - architecture: arm64
+            runner: windows-11-arm
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -423,6 +425,11 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: ${{ needs.build-package.outputs.node_version }}
+          architecture: ${{ matrix.architecture }}
+
+      - name: Test native payload installation
+        shell: pwsh
+        run: .\scripts\Test-NodeRuntimeInputs.Tests.ps1
 
       - name: Download intermediate package
         uses: actions/download-artifact@v8

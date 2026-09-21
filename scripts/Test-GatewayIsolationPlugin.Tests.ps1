@@ -190,12 +190,16 @@ console.log(JSON.stringify({
             -LiteralPath (Join-Path $packageDirectory 'source.json') `
             -Encoding utf8
 
+    $nodeArchitecture = & node -p 'process.arch'
+    if ($LASTEXITCODE -ne 0 -or $nodeArchitecture -notin @('x64', 'arm64')) {
+        throw 'Unable to determine the fixture Node.js architecture.'
+    }
     $previousRunnerTemp = $env:RUNNER_TEMP
     try {
         $env:RUNNER_TEMP = $testRoot
         & (Join-Path $PSScriptRoot 'Build-Payload.ps1') `
             -PackageDirectory $packageDirectory `
-            -Architecture arm64 `
+            -Architecture $nodeArchitecture `
             -OutputDirectory $payloadDirectory
     }
     finally {
@@ -213,7 +217,7 @@ console.log(JSON.stringify({
     }
     $stagedPlugin = Join-Path `
         $testRoot `
-        'openclaw-stage-arm64\node_modules\openclaw\dist\extensions\gateway-isolation'
+        "openclaw-stage-$nodeArchitecture\node_modules\openclaw\dist\extensions\gateway-isolation"
     if (Test-Path -LiteralPath $stagedPlugin) {
         throw 'Plugin provisioning must not mutate the reusable staged install.'
     }

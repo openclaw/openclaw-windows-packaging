@@ -357,7 +357,13 @@ dotnet test .\OpenClaw.Gateway.MSIX.slnx `
 ```
 
 `scripts\Build-Payload.ps1` npm-installs an OpenClaw package into an expanded,
-architecture-specific application tree. It validates the Gateway and Control UI
+architecture-specific application tree. Run it with Node.js matching both
+the selected upstream version and target architecture: native install scripts
+can use `process.arch` instead of npm's target-CPU flag. CI builds x64 on
+`windows-latest` and ARM64 on `windows-11-arm`, using matching Node.js binaries.
+Both payloads run their CLI smoke test. Cross-architecture Node.js execution
+is rejected before staging or npm installation, including when reusing a tree.
+It validates the Gateway and Control UI
 build identities on the installed tree, including reused staged installs, then
 provisions the packaging-owned Windows Launcher plugin into the payload copy's
 bundled plugin directory. Its internal package, path, and plugin ID remain

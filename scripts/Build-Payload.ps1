@@ -37,6 +37,17 @@ if ($sourceMetadata.nodeVersion -cne $nodeVersion) {
         "version '$($sourceMetadata.nodeVersion)'."
     )
 }
+$nodeArchitecture = & node -p 'process.arch'
+if ($LASTEXITCODE -ne 0 -or $nodeArchitecture -notin @('x64', 'arm64')) {
+    throw 'Unable to determine the payload build Node.js architecture.'
+}
+# npm's target CPU flag does not change process.arch inside dependency install scripts.
+if ($nodeArchitecture -cne $Architecture) {
+    throw (
+        "Node.js architecture '$nodeArchitecture' does not match the '$Architecture' payload. " +
+        "Run this build with $Architecture Node.js on a compatible Windows runner."
+    )
+}
 $npmVersion = & npm --version
 if ($LASTEXITCODE -ne 0) {
     throw 'Unable to determine the payload build npm version.'
@@ -52,6 +63,7 @@ $expectedStagingMetadata = [ordered]@{
     resolvedCommit = [string]$sourceMetadata.resolvedCommit
     packageVersion = [string]$sourceMetadata.packageVersion
     nodeVersion = $nodeVersion
+    nodeArchitecture = $nodeArchitecture
     npmVersion = $npmVersion
     packageSha256 = $packageHash
 }
@@ -344,17 +356,15 @@ if ($bundledNodeFiles.Count -ne 0) {
     )
 }
 
-if ($Architecture -eq 'x64') {
-    Push-Location $installedPackage
-    try {
-        & node .\openclaw.mjs --version
-        if ($LASTEXITCODE -ne 0) {
-            throw "OpenClaw payload smoke test failed with exit code $LASTEXITCODE."
-        }
+Push-Location $installedPackage
+try {
+    & node .\openclaw.mjs --version
+    if ($LASTEXITCODE -ne 0) {
+        throw "OpenClaw payload smoke test failed with exit code $LASTEXITCODE."
     }
-    finally {
-        Pop-Location
-    }
+}
+finally {
+    Pop-Location
 }
 
 [ordered]@{

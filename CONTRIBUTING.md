@@ -63,7 +63,11 @@ or package version logic:
 The source-selection tests use offline npm and GitHub fixtures.
 
 The Node.js input suite requires Node.js and npm. It builds a dependency-free
-local fixture; it does not download or build OpenClaw.
+local fixture, including its install script, for the running Node.js
+architecture; it does not download or build OpenClaw. CI also runs this suite
+on the native x64 and ARM64 packaging runners. Payload installation requires
+Node.js to match the target architecture; npm's CPU flags alone do not change
+the architecture seen by dependency install scripts.
 
 Run the NativeAOT publish when you change host JSON, reflection, interop, or
 anything else that is trimming-sensitive. A JIT `dotnet build` does not
