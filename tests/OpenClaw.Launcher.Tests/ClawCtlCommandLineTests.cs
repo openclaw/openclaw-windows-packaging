@@ -483,6 +483,13 @@ public sealed class ClawCtlCommandLineTests
 
             Assert.Equal(Path.GetFullPath(profile), installedProfile);
             Assert.True(File.Exists(profile));
+
+            string uninstalledProfile = PowerShellCompletion.Uninstall(
+                "profile.ps1",
+                directory);
+
+            Assert.Equal(installedProfile, uninstalledProfile);
+            Assert.Empty(File.ReadAllText(profile));
         }
         finally
         {
