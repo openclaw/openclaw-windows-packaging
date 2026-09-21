@@ -808,10 +808,6 @@ internal static class Program
                                 "OpenClaw generated an empty PowerShell completion script.");
                         }
 
-                        // The host cache survives a replaceable session.  The
-                        // workspace file is only a projection used by the
-                        // current agent shell, never an authority for future
-                        // sessions.
                         PowerShellCompletion.WriteScriptAtomically(
                             runtime.Paths.CompletionCachePath,
                             completion.StandardOutput);
