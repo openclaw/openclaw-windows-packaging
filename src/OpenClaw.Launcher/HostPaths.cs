@@ -156,6 +156,17 @@ internal sealed class HostPaths
         Path.Combine(StateRoot, "gateway-guidance.json");
 
     /// <summary>
+    /// The host-owned copy of the generated PowerShell completion script.
+    /// </summary>
+    /// <remarks>
+    /// The agent workspace is replaceable during setup.  Keep the authoritative
+    /// cache in LocalState and project it into that workspace only for shells
+    /// running in the current isolated session.
+    /// </remarks>
+    public string CompletionCachePath =>
+        Path.Combine(StateRoot, "Completions", "openclaw.ps1");
+
+    /// <summary>
     /// The gateway's launch configuration, kept separate from its recorded
     /// process so that stopping the gateway never discards the user's port.
     /// </summary>

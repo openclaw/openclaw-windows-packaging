@@ -786,13 +786,8 @@ internal static class Program
                         string applicationDirectory = GetPackagedApplicationDirectory(options);
                         string nodePath = runtime.RequireAgentNodePath(
                             GetPackagedNodeArchivePath(options));
-                        string cacheDirectory = Path.Combine(
-                            record.WorkspacePath!,
-                            ".openclaw",
-                            "cache");
-                        scriptPath = Path.Combine(cacheDirectory, "completion.ps1");
-                        Directory.CreateDirectory(cacheDirectory);
-                        await runtime.Executor.ExecuteCommandAsync(
+                        Session.SessionCommandCaptureResult completion =
+                            await runtime.Executor.ExecuteCommandCaptureAsync(
                             record,
                             new Session.SessionCommandRequest(
                                 helperPath,
@@ -801,12 +796,32 @@ internal static class Program
                                     "completion", "--shell", "powershell"],
                                 record.WorkspacePath!)
                             {
-                                PathPrefix = Path.GetDirectoryName(nodePath),
-                                StdoutPath = scriptPath
+                                PathPrefix = Path.GetDirectoryName(nodePath)
                             },
                             "Generating PowerShell completion.",
                             "OpenClaw completion generation",
                             cancellationToken).ConfigureAwait(false);
+                        if (string.IsNullOrWhiteSpace(completion.StandardOutput))
+                        {
+                            throw new Session.SessionException(
+                                "OpenClaw generated an empty PowerShell completion script.");
+                        }
+
+                        // The host cache survives a replaceable session.  The
+                        // workspace file is only a projection used by the
+                        // current agent shell, never an authority for future
+                        // sessions.
+                        PowerShellCompletion.WriteScriptAtomically(
+                            runtime.Paths.CompletionCachePath,
+                            completion.StandardOutput);
+                        scriptPath = Path.Combine(
+                            record.WorkspacePath!,
+                            ".openclaw",
+                            "cache",
+                            "completion.ps1");
+                        PowerShellCompletion.WriteScriptAtomically(
+                            scriptPath,
+                            completion.StandardOutput);
                     }
                     catch (Session.SessionException exception)
                     {

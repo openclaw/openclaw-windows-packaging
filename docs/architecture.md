@@ -31,6 +31,22 @@ activation, while avoiding two launchers that could drift in AOT settings,
 diagnostics, or runtime composition. It also protects transparent forwarding:
 `openclaw` arguments are OpenClaw-owned and never become `clawctl` options.
 
+## Completion stays owned by the installed runtime
+
+`clawctl completion` writes the lightweight `clawctl` argument completer to
+standard output. `clawctl completion --install` also adds that registration to
+the invoking user's PowerShell profile. The profile update changes only the
+marked byte range and replaces the file atomically, so an existing profile's
+encoding, line endings, and unrelated content survive.
+
+The install operation asks the isolated agent to generate OpenClaw's own
+PowerShell completion script. The host captures that output through the
+versioned session protocol, validates it is nonempty, and atomically caches it
+under host LocalState. It then projects the same bytes into the current shared
+agent workspace. The workspace copy is intentionally disposable: it lets an
+agent shell load upstream completion without granting the agent access to host
+LocalState, while the host cache remains the only durable owner.
+
 ```mermaid
 flowchart LR
     openclaw["openclaw alias"] --> host["openclaw.exe NativeAOT host"]

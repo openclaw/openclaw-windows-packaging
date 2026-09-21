@@ -71,6 +71,24 @@ public sealed class AgentShellTests : IDisposable
         Assert.Contains("agent''s name", preparation, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ShellPreparationLoadsOnlyTheSharedCompletionProjection()
+    {
+        string projection = @"C:\shared workspace\.openclaw\cache\completion.ps1";
+        IReadOnlyList<string> arguments = AgentShellResolver.BuildArguments(
+            @"C:\shared workspace",
+            "agent",
+            @"C:\tools",
+            @"C:\node",
+            projection);
+
+        Assert.Contains(
+            $"Test-Path -LiteralPath '{projection}'",
+            arguments[4],
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("LocalState", arguments[4], StringComparison.Ordinal);
+    }
+
     public void Dispose()
     {
         Directory.Delete(_root, recursive: true);

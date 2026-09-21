@@ -60,6 +60,32 @@ public sealed class SessionLaunchProtocolTests
         Assert.Equal("%NOT_EXPANDED%", restored.Environment!["LITERAL"]);
     }
 
+    [Fact]
+    public void CapturedOutputPathMustBeFullyQualified()
+    {
+        Assert.Throws<SessionLaunchException>(() => SessionLaunchProtocol.ReadRequest(
+            SessionLaunchProtocol.SerializeRequest(Valid() with
+            {
+                StdoutPath = @"cache\completion.ps1"
+            })));
+    }
+
+    [Fact]
+    public void DetachedLaunchCannotCaptureStandardOutput()
+    {
+        SessionLaunchException exception = Assert.Throws<SessionLaunchException>(
+            () => SessionLaunchProtocol.ReadRequest(
+                SessionLaunchProtocol.SerializeRequest(Valid() with
+                {
+                    Mode = SessionLaunchMode.Detached,
+                    LogPath = @"C:\logs\gateway.log",
+                    StatusPath = @"C:\state\gateway.json",
+                    StdoutPath = @"C:\state\completion.ps1"
+                })));
+
+        Assert.Contains("cannot capture stdout", exception.Message, StringComparison.Ordinal);
+    }
+
     // The guest composes PATH and NODE_OPTIONS from these named values, so a
     // serialization gap would silently strip the native redirect rather than
     // fail loudly.

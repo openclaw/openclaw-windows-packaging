@@ -28,9 +28,10 @@ internal static class PowerShellCompletion
     internal static void Install(string profilePath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(profilePath);
-        string existing = File.Exists(profilePath) ? File.ReadAllText(profilePath) : string.Empty;
-        string updated = ReplaceBlock(existing, $"{BeginMarker}{Environment.NewLine}{Script.TrimEnd()}{Environment.NewLine}{EndMarker}");
-        WriteAtomically(profilePath, updated);
+        byte[] existing = File.Exists(profilePath) ? File.ReadAllBytes(profilePath) : [];
+        byte[] block = Encoding.UTF8.GetBytes(
+            $"{BeginMarker}{NewLine(existing)}{Script.TrimEnd()}{NewLine(existing)}{EndMarker}");
+        WriteAtomically(profilePath, ReplaceBlock(existing, block));
     }
 
     internal static void Uninstall(string profilePath)
@@ -41,37 +42,67 @@ internal static class PowerShellCompletion
             return;
         }
 
-        string existing = File.ReadAllText(profilePath);
-        int begin = existing.IndexOf(BeginMarker, StringComparison.Ordinal);
+        byte[] existing = File.ReadAllBytes(profilePath);
+        int begin = Find(existing, BeginMarker);
         if (begin < 0)
         {
             return;
         }
-        int end = existing.IndexOf(EndMarker, begin, StringComparison.Ordinal);
-        string updated = end < 0
-            ? existing[..begin]
-            : existing.Remove(begin, end + EndMarker.Length - begin)
-                .TrimEnd('\r', '\n') + Environment.NewLine;
+        int end = Find(existing, EndMarker, begin);
+        int removeStart = begin;
+        if (begin >= 4 && existing.AsSpan(begin - 4, 4).SequenceEqual("\r\n\r\n"u8))
+        {
+            removeStart -= 4;
+        }
+        else if (begin >= 2 && existing.AsSpan(begin - 2, 2).SequenceEqual("\n\n"u8))
+        {
+            removeStart -= 2;
+        }
+        int removeEnd = end < 0
+            ? existing.Length
+            : end + EndMarker.Length;
+        if (existing.AsSpan(removeEnd).StartsWith("\r\n"u8))
+        {
+            removeEnd += 2;
+        }
+        else if (existing.AsSpan(removeEnd).StartsWith("\n"u8))
+        {
+            removeEnd++;
+        }
+        byte[] updated = end < 0
+            ? existing.AsSpan(0, removeStart).ToArray()
+            : [.. existing.AsSpan(0, removeStart), .. existing.AsSpan(removeEnd)];
         WriteAtomically(profilePath, updated);
     }
 
-    private static string ReplaceBlock(string existing, string block)
+    internal static void WriteScriptAtomically(string path, string script) =>
+        WriteAtomically(path, Encoding.UTF8.GetBytes(script));
+
+    private static byte[] ReplaceBlock(byte[] existing, byte[] block)
     {
-        int begin = existing.IndexOf(BeginMarker, StringComparison.Ordinal);
+        int begin = Find(existing, BeginMarker);
         if (begin < 0)
         {
-            return string.IsNullOrEmpty(existing)
-                ? $"{block}{Environment.NewLine}"
-                : $"{existing.TrimEnd()}{Environment.NewLine}{Environment.NewLine}{block}{Environment.NewLine}";
+            return existing.Length == 0
+                ? [.. block, .. Encoding.UTF8.GetBytes(NewLine(existing))]
+                : [.. existing, .. Encoding.UTF8.GetBytes(NewLine(existing) + NewLine(existing)), .. block, .. Encoding.UTF8.GetBytes(NewLine(existing))];
         }
 
-        int end = existing.IndexOf(EndMarker, begin, StringComparison.Ordinal);
+        int end = Find(existing, EndMarker, begin);
         return end < 0
-            ? existing[..begin] + block + Environment.NewLine
-            : existing[..begin] + block + existing[(end + EndMarker.Length)..];
+            ? [.. existing.AsSpan(0, begin), .. block, .. Encoding.UTF8.GetBytes(NewLine(existing))]
+            : [.. existing.AsSpan(0, begin), .. block, .. existing.AsSpan(end + EndMarker.Length)];
     }
 
-    private static void WriteAtomically(string path, string content)
+    private static string NewLine(byte[] bytes) =>
+        bytes.AsSpan().IndexOf("\r\n"u8) >= 0 ? "\r\n" : "\n";
+
+    private static int Find(byte[] bytes, string text, int start = 0) =>
+        bytes.AsSpan(start).IndexOf(Encoding.UTF8.GetBytes(text)) is int index && index >= 0
+            ? start + index
+            : -1;
+
+    private static void WriteAtomically(string path, byte[] content)
     {
         string directory = Path.GetDirectoryName(path)
             ?? throw new ArgumentException("The profile path must have a parent directory.", nameof(path));
@@ -86,11 +117,18 @@ internal static class PowerShellCompletion
                 FileShare.None,
                 bufferSize: 4096,
                 FileOptions.WriteThrough))
-            using (var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
             {
-                writer.Write(content);
+                stream.Write(content);
+                stream.Flush(flushToDisk: true);
             }
-            File.Move(temporary, path, overwrite: true);
+            if (File.Exists(path))
+            {
+                File.Replace(temporary, path, destinationBackupFileName: null);
+            }
+            else
+            {
+                File.Move(temporary, path);
+            }
         }
         finally
         {

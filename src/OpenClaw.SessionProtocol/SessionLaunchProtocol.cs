@@ -295,6 +295,12 @@ public static class SessionLaunchProtocol
 
         if (request.Mode == SessionLaunchMode.Detached)
         {
+            if (request.StdoutPath is not null)
+            {
+                throw new SessionLaunchException(
+                    "A detached launch request cannot capture stdout.");
+            }
+
             // A detached process has no console to inherit and the pipe it was
             // started through closes as soon as the launching execution
             // returns. Without a log it would write into a dead handle and
@@ -316,6 +322,11 @@ public static class SessionLaunchProtocol
         {
             throw new SessionLaunchException(
                 "An attached launch request has an invalid stdout path.");
+        }
+        else if (request.StdoutPath is not null && !Path.IsPathFullyQualified(request.StdoutPath))
+        {
+            throw new SessionLaunchException(
+                "An attached launch request has a stdout path that is not fully qualified.");
         }
 
         return request;

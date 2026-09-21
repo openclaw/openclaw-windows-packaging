@@ -465,6 +465,27 @@ public sealed class ClawCtlCommandLineTests
     }
 
     [Fact]
+    public void CompletionProfileUpdatePreservesUnrelatedBytes()
+    {
+        string directory = TestDirectory.Create();
+        string profile = Path.Combine(directory, "profile.ps1");
+        byte[] original = [0xff, 0xfe, (byte)'x', 0, 0x0d, 0, 0x0a, 0];
+        try
+        {
+            File.WriteAllBytes(profile, original);
+
+            PowerShellCompletion.Install(profile);
+            PowerShellCompletion.Uninstall(profile);
+
+            Assert.Equal(original, File.ReadAllBytes(profile));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task PowerShellHelpDescribesTheIsolatedAgentShell()
     {
         (int exitCode, string output, string error) =
