@@ -750,6 +750,76 @@ internal static class Program
                     options,
                     GetSessionRuntime(),
                     cancellationToken),
+                Completion = async (completionOptions, cancellationToken) =>
+                {
+                    if (!completionOptions.Install && !completionOptions.Uninstall)
+                    {
+                        return WriteResult(new CompletionCommandResult(
+                            PowerShellCompletion.Script,
+                            ProfilePath: null,
+                            AgentScriptPath: null,
+                            ExitCode: 0));
+                    }
+
+                    string profilePath = completionOptions.ProfilePath ??
+                        PowerShellCompletion.DefaultProfilePath();
+                    if (completionOptions.Uninstall)
+                    {
+                        PowerShellCompletion.Uninstall(profilePath);
+                        return WriteResult(new CompletionCommandResult(
+                            PowerShellCompletion.Script,
+                            profilePath,
+                            AgentScriptPath: null,
+                            ExitCode: 0));
+                    }
+
+                    PowerShellCompletion.Install(profilePath);
+                    string? scriptPath = null;
+                    string? warning = null;
+                    try
+                    {
+                        Session.SessionRuntime runtime = GetSessionRuntime();
+                        Session.SessionRecord record = runtime.RequireSetup();
+                        record = await runtime.Coordinator.StartRecordedAsync(cancellationToken)
+                            .ConfigureAwait(false);
+                        string helperPath = runtime.RequireStagedHelper(record);
+                        string applicationDirectory = GetPackagedApplicationDirectory(options);
+                        string nodePath = runtime.RequireAgentNodePath(
+                            GetPackagedNodeArchivePath(options));
+                        string cacheDirectory = Path.Combine(
+                            record.WorkspacePath!,
+                            ".openclaw",
+                            "cache");
+                        scriptPath = Path.Combine(cacheDirectory, "completion.ps1");
+                        Directory.CreateDirectory(cacheDirectory);
+                        await runtime.Executor.ExecuteCommandAsync(
+                            record,
+                            new Session.SessionCommandRequest(
+                                helperPath,
+                                nodePath,
+                                [Path.Combine(applicationDirectory, "openclaw.mjs"),
+                                    "completion", "--shell", "powershell"],
+                                record.WorkspacePath!)
+                            {
+                                PathPrefix = Path.GetDirectoryName(nodePath),
+                                StdoutPath = scriptPath
+                            },
+                            "Generating PowerShell completion.",
+                            "OpenClaw completion generation",
+                            cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (Session.SessionException exception)
+                    {
+                        warning = $"Host completion was installed, but the isolated agent completion could not be cached: {exception.Message}";
+                    }
+
+                    return WriteResult(new CompletionCommandResult(
+                        PowerShellCompletion.Script,
+                        profilePath,
+                        scriptPath,
+                        ExitCode: 0,
+                        Warning: warning));
+                },
                 GatewayStart = async (recovery, cancellationToken) =>
                 {
                     Session.SessionRuntime runtime = GetSessionRuntime();
@@ -1306,7 +1376,8 @@ internal static class Program
                     record.WorkspacePath!,
                     record.AgentUserName ?? "agent",
                     tools.DirectoryPath,
-                    nodeDirectory),
+                    nodeDirectory,
+                    Path.Combine(record.WorkspacePath!, ".openclaw", "cache", "completion.ps1")),
                 record.WorkspacePath!)
             {
                 AdditionalEnvironment = Session.SessionExecutor.MergeEnvironment(

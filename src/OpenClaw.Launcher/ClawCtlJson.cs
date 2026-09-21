@@ -17,6 +17,7 @@ internal sealed record ClawCtlJsonDocument(
     ClawCtlJsonGateway? Gateway = null,
     ClawCtlJsonRecovery? Recovery = null,
     ClawCtlJsonBundle? Bundle = null,
+    ClawCtlJsonCompletion? Completion = null,
     ClawCtlJsonWarning? Warning = null,
     ClawCtlJsonError? Error = null);
 
@@ -54,6 +55,11 @@ internal sealed record ClawCtlJsonBundle(
     string? Path,
     string Included,
     IReadOnlyList<string> Notes);
+internal sealed record ClawCtlJsonCompletion(
+    string Script,
+    string? ProfilePath,
+    string? AgentScriptPath,
+    string? Warning = null);
 
 internal sealed record ClawCtlJsonWarning(string Message, string? Detail = null);
 
@@ -82,6 +88,15 @@ internal static class ClawCtlJson
             CollectLogsCommandResult logs => FromCollectLogs(logs),
             TeardownCommandResult teardown => FromTeardown(teardown),
             OpenCommandResult open => FromOpen(open),
+            CompletionCommandResult completion => new ClawCtlJsonDocument(
+                completion.ExitCode == 0,
+                SchemaVersion,
+                completion.Command,
+                Completion: new ClawCtlJsonCompletion(
+                    completion.Script,
+                    completion.ProfilePath,
+                    completion.AgentScriptPath,
+                    completion.Warning)),
             GatewayCommandResult gateway => FromGateway(gateway),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(result),

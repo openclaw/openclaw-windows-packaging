@@ -99,6 +99,7 @@ public sealed class ClawCtlCommandLineTests
                 ClawCtlCommandLine.CollectLogsCommandName,
                 "teardown",
                 ClawCtlCommandLine.OpenCommandName,
+                ClawCtlCommandLine.CompletionCommandName,
                 "pwsh",
                 "gateway-service"
             ],
@@ -392,6 +393,75 @@ public sealed class ClawCtlCommandLineTests
 
         Assert.Equal(0, exitCode);
         Assert.Equal(new SetupOptions(Fresh: true, Force: true), received);
+    }
+
+    [Fact]
+    public async Task CompletionInstallDispatchesProfileOptions()
+    {
+        CompletionOptions? received = null;
+        RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
+        {
+            Setup = (_, _) => Task.FromResult(0),
+            Status = _ => Task.FromResult(0),
+            CollectLogs = (_, _) => Task.FromResult(0),
+            Teardown = (_, _) => Task.FromResult(0),
+            Completion = (value, _) =>
+            {
+                received = value;
+                return Task.FromResult(0);
+            },
+            PowerShell = _ => Task.FromResult(0),
+            GatewayStart = (_, _) => Task.FromResult(0),
+            GatewayStatus = _ => Task.FromResult(0),
+            GatewayStop = _ => Task.FromResult(0)
+        });
+
+        int exitCode = await root.Parse("completion --install --profile C:\\test\\profile.ps1").InvokeAsync();
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(
+            new CompletionOptions(
+                Install: true,
+                Uninstall: false,
+                ProfilePath: @"C:\test\profile.ps1"),
+            received);
+    }
+
+    [Fact]
+    public async Task CompletionRejectsConflictingProfileOperations()
+    {
+        (int exitCode, _, string error) =
+            await RunAsync("completion", "--install", "--uninstall").ConfigureAwait(true);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("cannot be used together", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CompletionProfileInstallAndUninstallPreserveOtherProfileContent()
+    {
+        string directory = TestDirectory.Create();
+        string profile = Path.Combine(directory, "profile.ps1");
+        try
+        {
+            File.WriteAllText(profile, "Set-StrictMode -Version Latest\r\n");
+
+            PowerShellCompletion.Install(profile);
+
+            string installed = File.ReadAllText(profile);
+            Assert.Contains("Set-StrictMode -Version Latest", installed, StringComparison.Ordinal);
+            Assert.Contains(PowerShellCompletion.BeginMarker, installed, StringComparison.Ordinal);
+            Assert.Contains("Register-ArgumentCompleter -Native -CommandName clawctl", installed, StringComparison.Ordinal);
+
+            PowerShellCompletion.Uninstall(profile);
+
+            string uninstalled = File.ReadAllText(profile);
+            Assert.Equal("Set-StrictMode -Version Latest" + Environment.NewLine, uninstalled);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Fact]

@@ -52,9 +52,8 @@ internal sealed class SessionProcessLauncher : ISessionProcessLauncher
         {
             FileName = request.Executable!,
 
-            // No shell, and no stream redirection: the isolated session's
-            // console handles are inherited so interactive and piped OpenClaw
-            // behave as they do on the host.
+            // No shell: the isolated session's console handles are inherited
+            // unless this request explicitly captures stdout into a file.
             UseShellExecute = false,
             WorkingDirectory = workingDirectory
         };
@@ -79,22 +78,61 @@ internal sealed class SessionProcessLauncher : ISessionProcessLauncher
         using FileStream? lease =
             SessionNativeStager.OpenConsumerLease(request.NativeRootPath);
 
-        using Process process = new() { StartInfo = startInfo };
+        FileStream? stdout = null;
+        FileStream? input = null;
+        FileStream? error = null;
+        WindowsKillOnCloseJob? job = null;
+        Process? process = null;
         try
         {
-            process.Start();
+            if (request.StdoutPath is string stdoutPath)
+            {
+                string? stdoutDirectory = Path.GetDirectoryName(stdoutPath);
+                if (!string.IsNullOrEmpty(stdoutDirectory))
+                {
+                    Directory.CreateDirectory(stdoutDirectory);
+                }
+
+                stdout = new FileStream(
+                    stdoutPath,
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.Read);
+                input = new FileStream("NUL", FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                error = new FileStream("NUL", FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
+                job = WindowsKillOnCloseJob.Create();
+                process = job.StartProcess(
+                    startInfo,
+                    input.SafeFileHandle,
+                    stdout.SafeFileHandle,
+                    error.SafeFileHandle);
+            }
+            else
+            {
+                process = Process.Start(startInfo) ??
+                    throw new SessionLaunchException(
+                        $"Unable to start '{request.Executable}'.");
+            }
+            process.WaitForExit();
+            return process.ExitCode;
         }
         catch (Exception exception) when (
             exception is System.ComponentModel.Win32Exception or
             InvalidOperationException or
-            PlatformNotSupportedException)
+            PlatformNotSupportedException or
+            IOException)
         {
             throw new SessionLaunchException(
                 $"Unable to start '{request.Executable}': {exception.Message}");
         }
-
-        process.WaitForExit();
-        return process.ExitCode;
+        finally
+        {
+            process?.Dispose();
+            job?.Dispose();
+            error?.Dispose();
+            input?.Dispose();
+            stdout?.Dispose();
+        }
     }
 
     /// <summary>

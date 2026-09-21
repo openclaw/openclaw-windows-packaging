@@ -38,6 +38,7 @@ internal static class SmokeProgram
             ("--help prints help", HelpOptionPrintsHelpAsync),
             ("setup --help prints command help", SetupHelpPrintsCommandHelpAsync),
             ("gateway-service help includes restart", GatewayServiceHelpIncludesRestartAsync),
+            ("completion --help prints command help", CompletionHelpPrintsCommandHelpAsync),
             ("--version reports the launcher", VersionReportsLauncherAssemblyAsync),
             ("--version wins over trailing arguments", VersionWinsOverTrailingAsync),
             ("unknown command fails", UnknownCommandFailsAsync),
@@ -160,6 +161,20 @@ internal static class SmokeProgram
 
         AssertExitCode(0, exitCode, fixture);
         AssertContains(fixture.Output.ToString(), "restart", fixture);
+        fixture.AssertNoInstallationWorkStarted();
+    }
+
+    private static async Task CompletionHelpPrintsCommandHelpAsync()
+    {
+        using Fixture fixture = Fixture.CreateWithoutApplication();
+
+        int exitCode = await fixture.RunAsync(["completion", "--help"]).ConfigureAwait(false);
+
+        AssertExitCode(0, exitCode, fixture);
+        AssertContains(fixture.Output.ToString(), "clawctl completion", fixture);
+        AssertContains(fixture.Output.ToString(), "--install", fixture);
+        AssertContains(fixture.Output.ToString(), "--uninstall", fixture);
+        AssertContains(fixture.Output.ToString(), "--profile", fixture);
         fixture.AssertNoInstallationWorkStarted();
     }
 

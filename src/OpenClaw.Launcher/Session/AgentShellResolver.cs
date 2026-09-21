@@ -37,7 +37,8 @@ internal static class AgentShellResolver
         string workspacePath,
         string agentName,
         string toolsDirectory,
-        string nodeDirectory)
+        string nodeDirectory,
+        string? completionScriptPath = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspacePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(toolsDirectory);
@@ -54,7 +55,10 @@ internal static class AgentShellResolver
         string preparation =
             path +
             $"Set-Location -LiteralPath '{Escape(workspacePath)}' -ErrorAction SilentlyContinue; " +
-            prompt;
+            prompt +
+            (string.IsNullOrWhiteSpace(completionScriptPath)
+                ? string.Empty
+                : $"; if (Test-Path -LiteralPath '{Escape(completionScriptPath)}') {{ . '{Escape(completionScriptPath)}' }}");
 
         return ["-NoLogo", "-NoProfile", "-NoExit", "-Command", preparation];
     }

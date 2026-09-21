@@ -11,6 +11,7 @@ internal sealed record ClawCtlHandlers
     public required Func<string?, CancellationToken, Task<int>> CollectLogs { get; init; }
     public required Func<bool, CancellationToken, Task<int>> Teardown { get; init; }
     public Func<CancellationToken, Task<int>> Open { get; init; } = _ => Task.FromResult(1);
+    public Func<CompletionOptions, CancellationToken, Task<int>> Completion { get; init; } = (_, _) => Task.FromResult(1);
     public required Func<CancellationToken, Task<int>> PowerShell { get; init; }
     public required Func<bool, CancellationToken, Task<int>> GatewayStart { get; init; }
     public required Func<CancellationToken, Task<int>> GatewayStatus { get; init; }
@@ -19,6 +20,7 @@ internal sealed record ClawCtlHandlers
 }
 
 internal sealed record SetupOptions(bool Fresh, bool Force);
+internal sealed record CompletionOptions(bool Install, bool Uninstall, string? ProfilePath);
 
 internal sealed class ClawCtlOutputOptions
 {
@@ -37,6 +39,7 @@ internal static class ClawCtlCommandLine
     public const string StatusCommandName = "status";
     public const string CollectLogsCommandName = "collect-logs";
     public const string OpenCommandName = "open";
+    public const string CompletionCommandName = "completion";
 
     // Response-file expansion is off. A leading `@` means nothing to clawctl,
     // so it is reported as an unrecognized argument instead of silently reading
@@ -154,6 +157,49 @@ internal static class ClawCtlCommandLine
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.Open(cancellationToken);
         });
+        Option<bool> installCompletion = new("--install")
+        {
+            Description = "Install completion into the PowerShell profile."
+        };
+        Option<bool> uninstallCompletion = new("--uninstall")
+        {
+            Description = "Remove completion from the PowerShell profile."
+        };
+        Option<string?> completionProfile = new("--profile")
+        {
+            Description = "PowerShell profile path to update."
+        };
+        Command completion = new(
+            CompletionCommandName,
+            "Write PowerShell completion for clawctl.");
+        completion.Options.Add(installCompletion);
+        completion.Options.Add(uninstallCompletion);
+        completion.Options.Add(completionProfile);
+        completion.Validators.Add(result =>
+        {
+            bool install = result.GetValue(installCompletion);
+            bool uninstall = result.GetValue(uninstallCompletion);
+            if (install && uninstall)
+            {
+                result.AddError("'--install' and '--uninstall' cannot be used together.");
+            }
+            if (!string.IsNullOrWhiteSpace(result.GetValue(completionProfile)) &&
+                !install && !uninstall)
+            {
+                result.AddError("'--profile' requires '--install' or '--uninstall'.");
+            }
+        });
+        completion.SetAction((parsed, cancellationToken) =>
+        {
+            outputOptions.Json = parsed.GetValue(json);
+            outputOptions.NoColor = parsed.GetValue(noColor);
+            return handlers.Completion(
+                new CompletionOptions(
+                    parsed.GetValue(installCompletion),
+                    parsed.GetValue(uninstallCompletion),
+                    parsed.GetValue(completionProfile)),
+                cancellationToken);
+        });
         Command powerShell = new(
             "pwsh",
             "Open PowerShell inside the isolated agent. `openclaw` and `node` " +
@@ -216,6 +262,7 @@ internal static class ClawCtlCommandLine
             collectLogs,
             teardown,
             open,
+            completion,
             powerShell,
             gateway
         };
