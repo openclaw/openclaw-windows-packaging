@@ -33,6 +33,9 @@ function Assert-OpenClawSourceVersion {
     # Patch 33+ is extended stable; numeric suffixes are regular stable corrections.
     Assert-OpenClawSourceText $Version 'packageVersion' -Pattern (
         '\A[1-9][0-9]{3}\.(?:[1-9]|1[0-2])\.(?:[1-9]|[12][0-9]|3[0-2])(?:-[1-9][0-9]*)?\z')
+    # Keep package-version limits owned by the release identity helper.
+    $null = & (Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1') `
+        -GatewayTag "v$Version" -MSIXRevision 0
 }
 
 function Assert-OpenClawSourceRef {

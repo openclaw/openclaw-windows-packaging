@@ -167,19 +167,64 @@ try {
             @{ Name = 'nested tag target'; Edit = { $http.Responses["GitHub:git/tags/$tagObject"].object.type = 'tag' }; Error = 'directly to a commit' },
             @{ Name = 'source name'; Edit = { Set-Package -Name 'other' }; Error = 'source package name' },
             @{ Name = 'source correction mismatch'; Edit = {
-                    Add-Release "$version-1"; $http.Responses['Registry:latest'].version = "$version-1"
+                    Add-Release "$version-2"; $http.Responses['Registry:latest'].version = "$version-2"
                     Set-Package $version
                 }; Error = 'source package version' }
         )) {
         Invoke-Test "rejects $($case.Name)" { & $case.Edit; Assert-Throws { Resolve-OpenClawSource $policy } $case.Error }
     }
-    Invoke-Test 'regular patch 32 and numeric corrections are retained verbatim; gitHead is optional' {
-        foreach ($stable in @('2026.9.32', '2026.9.4-1', '2026.9.4-64')) {
+    Invoke-Test 'selected stable versions map to supported MSIX identities; gitHead is optional' {
+        foreach ($case in @(
+                @{ Version = '2026.9.4'; Build = 400 },
+                @{ Version = '2026.9.32'; Build = 3200 },
+                @{ Version = '2026.9.4-2'; Build = 420 },
+                @{ Version = '2026.9.4-9'; Build = 490 }
+            )) {
+            $stable = $case.Version
             Add-Release $stable
             $http.Responses["Registry:$stable"].PSObject.Properties.Remove('gitHead')
             $http.Responses['Registry:latest'].version = $stable
-            Assert-Equal (Resolve-OpenClawSource $policy).packageVersion $stable
-            Assert-Equal (Resolve-OpenClawSource $policy -Ref $commit).packageVersion $stable
+            foreach ($ref in @('', $commit)) {
+                $selected = Resolve-OpenClawSource $policy -Ref $ref
+                Assert-Equal $selected.packageVersion $stable
+                foreach ($revision in @(0, 9)) {
+                    $identity = & (Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1') `
+                        -GatewayTag "v$($selected.packageVersion)" -MSIXRevision $revision
+                    Assert-Equal $identity.PackageVersion "2026.9.$($case.Build + $revision).0"
+                    Assert-Equal $identity.ReleaseTag "v$stable-msix.$revision"
+                }
+            }
+        }
+    }
+    foreach ($unsupported in @('2026.9.4-1', '2026.9.4-10', '2026.9.4-64')) {
+        Invoke-Test "rejects unsupported correction $unsupported during selection and replay" {
+            $saved = & $workflowPath @workflow
+            Remove-Item -LiteralPath $workflow.OutputPath
+            Add-Release $unsupported
+            $http.Responses['Registry:latest'].version = $unsupported
+            $http.Calls.Clear()
+            Assert-Throws { & $workflowPath @workflow } 'correction suffix must be between 2 and 9'
+            Assert-Equal $http.Calls.Count 1
+            Assert-Equal (Test-Path -LiteralPath $workflow.OutputPath) $false
+
+            $http.Calls.Clear()
+            Assert-Throws { & $workflowPath @workflow -Ref $commit } 'correction suffix must be between 2 and 9'
+            Assert-Equal $http.Calls.Count 2
+            Assert-Equal (Test-Path -LiteralPath $workflow.OutputPath) $false
+
+            $saved.packageVersion = $unsupported
+            $saved.releaseTag = "v$unsupported"
+            [IO.File]::WriteAllText($workflow.OutputPath, ($saved | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+            $http.Calls.Clear()
+            Assert-Throws { & $workflowPath @workflow -ReuseSnapshot } 'correction suffix must be between 2 and 9'
+            Assert-Equal $http.Calls.Count 0
+            Remove-Item -LiteralPath $workflow.OutputPath
+
+            $policy | Add-Member stableVersion $unsupported
+            Save-Policy
+            Assert-Throws { & $workflowPath @workflow } 'correction suffix must be between 2 and 9'
+            Assert-Equal $http.Calls.Count 0
+            Assert-Equal (Test-Path -LiteralPath $workflow.OutputPath) $false
         }
     }
     foreach ($invalid in @('2026.9.33', '2026.6.35-2', '2026.9.4-beta.1', '2026.09.4', '2026.9.4-0', '2026.9.4-01', '2026.9.4+build')) {

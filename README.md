@@ -286,6 +286,9 @@ place so an update does not remove a running process's runtime.
 exact published version, its signed upstream tag and commit, and the source
 package version before building. There is no automatic fallback to another
 version or channel; extended-stable and named prereleases are rejected.
+Source selection also checks the MSIX release-version rules before building:
+numeric correction suffixes must be `-2` through `-9`. Unsupported corrections
+are rejected for channel selection, explicit refs, policy pins, and retries.
 
 The `openclaw-source-resolution` artifact records this choice once per run.
 Retries reuse it without querying the moving channel again. If the snapshot
