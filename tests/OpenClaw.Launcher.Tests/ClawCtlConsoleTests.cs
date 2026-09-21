@@ -59,6 +59,23 @@ public sealed class ClawCtlConsoleTests
     }
 
     [Fact]
+    public void CompletionScriptIsTheExactStandardOutput()
+    {
+        const string script = "# completion\nRegister-ArgumentCompleter\n";
+        using var output = new StringWriter();
+
+        ClawCtlConsole.WriteResult(
+            output,
+            new CompletionCommandResult(
+                script,
+                ProfilePath: null,
+                CachePath: null,
+                ExitCode: 0));
+
+        Assert.Equal(script, output.ToString());
+    }
+
+    [Fact]
     public void WriteSetupResultShowsReadyStateAndNextAction()
     {
         using var output = new StringWriter();

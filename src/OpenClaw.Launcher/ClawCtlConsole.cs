@@ -68,16 +68,14 @@ internal static class ClawCtlConsole
                 if (completion.ProfilePath is null)
                 {
                     output.Write(completion.Script);
+                    return;
                 }
-                else
-                {
-                    view.Row("Profile", new Text(completion.ProfilePath));
-                    view.Row(
-                        "OpenClaw completion",
-                        new Text(completion.CachePath is null
-                            ? "not requested"
-                            : $"cached at {completion.CachePath}"));
-                }
+                view.Row("Profile", new Text(completion.ProfilePath));
+                view.Row(
+                    "OpenClaw completion",
+                    new Text(completion.CachePath is null
+                        ? "not requested"
+                        : $"cached at {completion.CachePath}"));
                 break;
             case GatewayCommandResult gateway:
                 WriteGateway(view, gateway);
