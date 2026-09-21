@@ -15,6 +15,7 @@ internal sealed record ClawCtlHandlers
     public required Func<bool, CancellationToken, Task<int>> GatewayStart { get; init; }
     public required Func<CancellationToken, Task<int>> GatewayStatus { get; init; }
     public required Func<CancellationToken, Task<int>> GatewayStop { get; init; }
+    public required Func<CancellationToken, Task<int>> GatewayRestart { get; init; }
 }
 
 internal sealed record SetupOptions(bool Fresh, bool Force);
@@ -196,9 +197,17 @@ internal static class ClawCtlCommandLine
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.GatewayStop(token);
         });
+        Command gatewayRestart = new("restart", "Stop the gateway and start it again.");
+        gatewayRestart.SetAction((parsed, token) =>
+        {
+            outputOptions.Json = parsed.GetValue(json);
+            outputOptions.NoColor = parsed.GetValue(noColor);
+            return handlers.GatewayRestart(token);
+        });
         gateway.Subcommands.Add(gatewayStart);
         gateway.Subcommands.Add(gatewayStatus);
         gateway.Subcommands.Add(gatewayStop);
+        gateway.Subcommands.Add(gatewayRestart);
 
         RootCommand root = new(RootDescription)
         {

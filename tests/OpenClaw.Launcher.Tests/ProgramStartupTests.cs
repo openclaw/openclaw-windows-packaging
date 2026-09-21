@@ -133,6 +133,7 @@ public sealed class ProgramStartupTests : IDisposable
     [InlineData("status --json", "status")]
     [InlineData("--json status", "status")]
     [InlineData("gateway-service start --json", "gateway-service start")]
+    [InlineData("gateway-service restart --json", "gateway-service restart")]
     public async Task JsonOperationalFailurePreservesTheSelectedCommand(
         string commandLine,
         string expectedCommand)

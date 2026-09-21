@@ -233,7 +233,7 @@ internal static class Program
                 string? action = args
                     .Skip(index + 1)
                     .FirstOrDefault(candidate =>
-                        candidate is "start" or "status" or "stop");
+                        candidate is "start" or "status" or "stop" or "restart");
                 return action is null ? argument : $"{argument} {action}";
             }
 
@@ -496,6 +496,34 @@ internal static class Program
             return result.ExitCode;
         }
 
+        void AcknowledgeManualGatewayStart(Session.SessionRuntime runtime)
+        {
+            new Gateway.AgentGatewayGuidance(
+                runtime.LifecycleLock,
+                _ => throw new InvalidOperationException(
+                    "Manual acknowledgement must not check config readiness."),
+                _ => throw new InvalidOperationException(
+                    "Manual acknowledgement must not inspect the gateway."),
+                new Gateway.GatewayGuidanceStateStore(
+                    runtime.Paths.GatewayGuidanceStatePath),
+                getLogonSessionId ?? Gateway.WindowsLogonSession.GetCurrentId,
+                log,
+                clock)
+                .AcknowledgeManualStart();
+        }
+
+        int WriteGatewayStartResult(string action, Gateway.GatewayStartResult result)
+        {
+            int? port = Gateway.GatewayAddress.ResolvePort(result.Record);
+            return WriteResult(new GatewayCommandResult(
+                action,
+                result.State,
+                result.Message,
+                null,
+                result.State == Gateway.GatewayState.Running ? 0 : 1,
+                port));
+        }
+
         async Task<int> RunSetupCommandAsync(
             SetupOptions setupOptions,
             CancellationToken cancellationToken)
@@ -739,18 +767,7 @@ internal static class Program
                         .Controller;
                     if (!recovery && !retainedRecoveryInvocation)
                     {
-                        new Gateway.AgentGatewayGuidance(
-                            runtime.LifecycleLock,
-                            _ => throw new InvalidOperationException(
-                                "Manual acknowledgement must not check config readiness."),
-                            _ => throw new InvalidOperationException(
-                                "Manual acknowledgement must not inspect the gateway."),
-                            new Gateway.GatewayGuidanceStateStore(
-                                runtime.Paths.GatewayGuidanceStatePath),
-                            getLogonSessionId ?? Gateway.WindowsLogonSession.GetCurrentId,
-                            log,
-                            clock)
-                            .AcknowledgeManualStart();
+                        AcknowledgeManualGatewayStart(runtime);
                     }
 
                     // Narration is human guidance, so it is off whenever the
@@ -770,14 +787,7 @@ internal static class Program
                             .ConfigureAwait(false);
                     }
 
-                    int? port = Gateway.GatewayAddress.ResolvePort(result.Record);
-                    return WriteResult(new GatewayCommandResult(
-                        "start",
-                        result.State,
-                        result.Message,
-                        null,
-                        result.State == Gateway.GatewayState.Running ? 0 : 1,
-                        port));
+                    return WriteGatewayStartResult("start", result);
                 },
                 GatewayStatus = async cancellationToken =>
                 {
@@ -836,6 +846,41 @@ internal static class Program
                         result.Message,
                         result.Detail,
                         result.Succeeded ? 0 : 1));
+                },
+                GatewayRestart = async cancellationToken =>
+                {
+                    Session.SessionRuntime runtime = GetSessionRuntime();
+                    AcknowledgeManualGatewayStart(runtime);
+                    Gateway.GatewayController controller = Gateway.GatewayRuntime
+                        .Create(options, runtime.Paths, runtime, log, clock)
+                        .Controller;
+                    (bool useColor, IDisposable? restore) = PrepareColor();
+                    Gateway.GatewayRestartResult result;
+                    using (restore)
+                    {
+                        result = await ClawCtlConsole.NarrateAsync(
+                            output,
+                            useColor,
+                            narrate: !outputOptions.Json,
+                            Gateway.GatewayStartProgress.StoppingFirst,
+                            progress => controller.RestartAsync(
+                                runtime.HelperPath,
+                                cancellationToken,
+                                progress))
+                            .ConfigureAwait(false);
+                    }
+
+                    if (result.Start is null)
+                    {
+                        return WriteResult(new GatewayCommandResult(
+                            "restart",
+                            Gateway.GatewayState.Unknown,
+                            result.Stop.Message,
+                            result.Stop.Detail,
+                            1));
+                    }
+
+                    return WriteGatewayStartResult("restart", result.Start);
                 },
             },
             outputOptions);

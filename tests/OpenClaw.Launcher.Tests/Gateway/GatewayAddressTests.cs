@@ -157,6 +157,22 @@ public sealed class GatewayStartPresentationTests
     }
 
     [Fact]
+    public void AGatewayThatExitedDuringRestartIsReportedAsAStartupFailure()
+    {
+        using var output = new StringWriter();
+
+        ClawCtlConsole.WriteResult(output, new GatewayCommandResult(
+            "restart",
+            GatewayState.Stopped,
+            "The gateway exited during startup.",
+            null,
+            1));
+
+        Assert.Contains("exited during startup", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("[x]", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void StoppedStatusIsNotReportedAsAStartupFailure()
     {
         using var output = new StringWriter();

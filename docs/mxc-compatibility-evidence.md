@@ -178,8 +178,8 @@ setup. The collector does not enumerate arbitrary agent-profile files.
    naming Windows Update or a newer Windows version as the remedy.
 2. Run `openclaw <arguments>` for the upstream OpenClaw CLI, or
    `clawctl pwsh` for an interactive agent shell.
-3. Use `clawctl gateway-service start`, `status`, and `stop` for the managed
-   gateway. Use `clawctl status` to inspect session ownership and state.
+3. Use `clawctl gateway-service start`, `status`, `stop`, and `restart` for the
+   managed gateway. Use `clawctl status` to inspect session ownership and state.
 4. Run `clawctl collect-logs` when reporting a problem, then review the
    resulting ZIP before sharing it.
 5. Run `clawctl teardown --force` to confirm removal of the owned isolated

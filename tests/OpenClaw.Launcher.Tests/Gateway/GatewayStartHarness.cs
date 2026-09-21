@@ -6,8 +6,8 @@ namespace OpenClaw.Launcher.Tests.Gateway;
 
 /// <summary>
 /// A gateway controller wired to fixture-owned storage, a dictated guest, and a
-/// clock the test controls, so start behaviour can be exercised without a real
-/// session, a real process, or real elapsed time.
+/// clock the test controls, so gateway lifecycle operations can be exercised
+/// without a real session, a real process, or real elapsed time.
 /// </summary>
 internal sealed class GatewayStartHarness : IDisposable
 {
@@ -36,23 +36,39 @@ internal sealed class GatewayStartHarness : IDisposable
 
     public DateTimeOffset Start { get; }
 
+    public AlwaysFreeLock LifecycleLock { get; } = new();
+
     public GatewayStateStore Store => new(Path.Combine(_root, "gateway.json"));
 
     public Task<GatewayStartResult> StartAsync(
         IProgress<GatewayStartProgress>? progress = null) =>
         CreateController().StartAsync("helper.exe", CancellationToken.None, progress);
 
+    public Task<GatewayRestartResult> RestartAsync(
+        IProgress<GatewayStartProgress>? progress = null) =>
+        CreateController().RestartAsync("helper.exe", CancellationToken.None, progress);
+
     /// <summary>
     /// Records a gateway whose identity matches what the fake guest reports, so
     /// the controller treats it as one it already owns.
     /// </summary>
-    public void RecordRunningGateway() =>
+    public void RecordRunningGateway(bool autostartDisabled = false) =>
         Store.Write(new GatewayRecord
         {
             SandboxId = SandboxId,
             ProcessId = 1234,
             ProcessStartTimeUtc = new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero),
-            StatusPath = "status.json"
+            StatusPath = "status.json",
+            AutostartDisabled = autostartDisabled
+        });
+
+    public void RecordPendingGateway() =>
+        Store.Write(new GatewayRecord
+        {
+            SandboxId = SandboxId,
+            LaunchPending = true,
+            ProcessStartTimeUtc = Start,
+            StartedUtc = Start
         });
 
     private GatewayController CreateController()
@@ -77,7 +93,7 @@ internal sealed class GatewayStartHarness : IDisposable
             _ => { },
             () => sessions.GetRecordedStatus().Record
                 ?? throw new SessionException("Run setup."),
-            new AlwaysFreeLock(),
+            LifecycleLock,
             Clock);
     }
 

@@ -15,7 +15,8 @@ public sealed class ClawCtlHelpTests
         PowerShell = _ => Task.FromResult(0),
         GatewayStart = (_, _) => Task.FromResult(0),
         GatewayStatus = _ => Task.FromResult(0),
-        GatewayStop = _ => Task.FromResult(0)
+        GatewayStop = _ => Task.FromResult(0),
+        GatewayRestart = _ => Task.FromResult(0)
     };
 
     private static ClawCtlHelpModel Describe(string commandPath)

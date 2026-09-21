@@ -11,6 +11,9 @@ namespace OpenClaw.Launcher.Gateway;
 /// </remarks>
 internal enum GatewayStartStage
 {
+    /// <summary>The existing gateway is being stopped before replacement.</summary>
+    Stopping,
+
     /// <summary>The owned session is being started or confirmed.</summary>
     PreparingSession,
 
@@ -33,6 +36,10 @@ internal enum GatewayStartStage
 internal sealed record GatewayStartProgress(GatewayStartStage Stage, string Message)
     : ClawCtlProgress(Message)
 {
+    internal static GatewayStartProgress StoppingFirst { get; } = new(
+        GatewayStartStage.Stopping,
+        "Stopping the gateway.");
+
     internal static GatewayStartProgress Initial { get; } = new(
         GatewayStartStage.PreparingSession,
         "Preparing the isolated session.");

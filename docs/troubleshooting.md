@@ -96,11 +96,14 @@ then run:
 clawctl gateway-service start
 ```
 
-For an unhealthy gateway, inspect the emitted log tail or run
-`clawctl gateway-service stop` before attempting another start. Use the port
-reported by status as the observed endpoint. Do not assume the upstream
-default port (18789): an explicit OpenClaw `gateway.port` can differ, and
-multiple unclassified listeners intentionally do not identify an endpoint.
+For an unhealthy gateway, inspect the emitted log tail, then run
+`clawctl gateway-service restart` to stop the verified gateway and start its
+replacement. If the stop cannot be verified, restart retains the gateway
+record and aborts rather than risk starting a second process. Use
+`clawctl gateway-service stop` instead when the gateway should remain stopped.
+Use the port reported by status as the observed endpoint. Do not assume the
+upstream default port (18789): an explicit OpenClaw `gateway.port` can differ,
+and multiple unclassified listeners intentionally do not identify an endpoint.
 
 ## Status says the default configuration is missing or not ready
 

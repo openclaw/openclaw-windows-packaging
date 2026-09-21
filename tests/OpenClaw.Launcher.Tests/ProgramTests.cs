@@ -254,6 +254,28 @@ public sealed class ProgramTests : IDisposable
     }
 
     [Fact]
+    public async Task ManualGatewayRestartAcknowledgesBeforeAStartFailure()
+    {
+        SessionRuntime runtime = await SetUpSessionAsync().ConfigureAwait(true);
+        ((FakeMxcSessionClient)runtime.Backend).ExecuteFailure =
+            new SessionException("gateway restart failed");
+
+        await Assert.ThrowsAsync<SessionException>(
+            () => Program.RunControlAsync(
+                CreateSetupOptions(Path.Combine(_testDirectory, "app")),
+                ["gateway-service", "restart"],
+                _ => { },
+                TextWriter.Null,
+                TextWriter.Null,
+                installationLifecycle: new FailingFreshLifecycle(runtime),
+                getLogonSessionId: () => "logon-restart"));
+
+        var store = new GatewayGuidanceStateStore(
+            runtime.Paths.GatewayGuidanceStatePath);
+        Assert.True(store.IsAcknowledged("logon-restart"));
+    }
+
+    [Fact]
     public async Task RetainedRecoveryScriptUpgradesWithoutManualAcknowledgement()
     {
         SessionRuntime runtime = await SetUpSessionAsync().ConfigureAwait(true);

@@ -59,6 +59,105 @@ public sealed class GatewayStartWaitTests
         Assert.True(harness.Clock.WaitCount >= 2);
     }
 
+    [Fact]
+    public async Task RestartStopsTheRunningGatewayBeforeStartingItsReplacement()
+    {
+        using var harness = new GatewayStartHarness();
+        harness.RecordRunningGateway(autostartDisabled: true);
+        harness.Client.Inspection = Listening();
+
+        GatewayRestartResult result = await harness.RestartAsync();
+
+        Assert.True(result.Stop.Stopped);
+        Assert.Equal(GatewayState.Running, result.Start!.State);
+        Assert.Equal(
+            ["inspect:1234", "stop:1234", "start", "inspect:1234"],
+            harness.Client.Calls);
+        Assert.True(result.Start!.Record.AutostartDisabled);
+        Assert.Equal(1, harness.LifecycleLock.TotalAcquisitions);
+    }
+
+    [Fact]
+    public async Task RestartStartsWhenNoGatewayWasRunning()
+    {
+        using var harness = new GatewayStartHarness();
+        harness.Client.Inspection = Listening();
+
+        GatewayRestartResult result = await harness.RestartAsync();
+
+        Assert.True(result.Stop.Succeeded);
+        Assert.False(result.Stop.Stopped);
+        Assert.Equal(GatewayState.Running, result.Start!.State);
+        Assert.DoesNotContain(
+            harness.Client.Calls,
+            call => call.StartsWith("stop:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task RestartStartsWhenTheRecordedGatewayAlreadyExited()
+    {
+        using var harness = new GatewayStartHarness();
+        harness.RecordRunningGateway();
+        harness.Client.InspectionSequence.Enqueue(Gone());
+        harness.Client.Inspection = Listening();
+
+        GatewayRestartResult result = await harness.RestartAsync();
+
+        Assert.True(result.Stop.Succeeded);
+        Assert.False(result.Stop.Stopped);
+        Assert.Equal(GatewayState.Running, result.Start!.State);
+        Assert.DoesNotContain(
+            harness.Client.Calls,
+            call => call.StartsWith("stop:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task RestartDoesNotLaunchWhenTheGatewayCannotBeInspected()
+    {
+        using var harness = new GatewayStartHarness();
+        harness.RecordRunningGateway();
+        harness.Client.Inspection = new SessionInspectResult { Error = "no answer" };
+
+        GatewayRestartResult result = await harness.RestartAsync();
+
+        Assert.False(result.Stop.Succeeded);
+        Assert.Null(result.Start);
+        Assert.DoesNotContain("start", harness.Client.Calls);
+    }
+
+    [Fact]
+    public async Task RestartDoesNotLaunchWhenTheStopCannotBeVerified()
+    {
+        using var harness = new GatewayStartHarness();
+        harness.RecordRunningGateway();
+        harness.Client.Inspection = Listening();
+        harness.Client.StopResult = new SessionInspectResult
+        {
+            ProcessFound = true,
+            StartTimeMatches = true,
+            Error = "stop could not be verified"
+        };
+
+        GatewayRestartResult result = await harness.RestartAsync();
+
+        Assert.False(result.Stop.Succeeded);
+        Assert.Null(result.Start);
+        Assert.DoesNotContain("start", harness.Client.Calls);
+    }
+
+    [Fact]
+    public async Task RestartDoesNotLaunchOverAnUnconfirmedLaunch()
+    {
+        using var harness = new GatewayStartHarness();
+        harness.RecordPendingGateway();
+
+        GatewayRestartResult result = await harness.RestartAsync();
+
+        Assert.False(result.Stop.Succeeded);
+        Assert.Null(result.Start);
+        Assert.DoesNotContain("start", harness.Client.Calls);
+    }
+
     // The budget has to end the wait, or a wedged launch would hold the
     // terminal open indefinitely.
     [Fact]

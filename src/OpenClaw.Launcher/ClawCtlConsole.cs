@@ -511,7 +511,8 @@ internal static class ClawCtlConsole
             Gateway.GatewayState.Stopped => result.Action switch
             {
                 "stop" => Status(view, StatusKind.Success, "stopped"),
-                "start" => Status(view, StatusKind.Failure, "exited during startup"),
+                "start" or "restart" =>
+                    Status(view, StatusKind.Failure, "exited during startup"),
                 _ => Status(view, StatusKind.Neutral, "stopped")
             },
             Gateway.GatewayState.Starting => Status(view, StatusKind.Warning, "starting"),

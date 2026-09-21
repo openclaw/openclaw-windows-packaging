@@ -163,6 +163,11 @@ OpenClaw resolve its own configuration and prevents a packaging-side default
 from overriding upstream behavior or sending a user to a port that was never
 observed.
 
+`gateway-service restart` performs the existing stop and start operations
+under one lifecycle lock. A missing or already-exited gateway makes the stop a
+no-op and the start continues. If the gateway cannot be confirmed stopped, the
+operation retains its ownership record and does not launch a replacement.
+
 ## Diagnostics and build inputs have different trust roles
 
 [`HostDiagnosticLog`](../src/OpenClaw.Launcher/HostDiagnosticLog.cs) writes

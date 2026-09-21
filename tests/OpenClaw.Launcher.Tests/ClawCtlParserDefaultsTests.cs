@@ -75,7 +75,8 @@ public sealed class ClawCtlParserDefaultsTests : IDisposable
             PowerShell = _ => Task.FromResult(0),
             GatewayStart = (_, _) => Task.FromResult(0),
             GatewayStatus = _ => Task.FromResult(0),
-            GatewayStop = _ => Task.FromResult(0)
+            GatewayStop = _ => Task.FromResult(0),
+            GatewayRestart = _ => Task.FromResult(0)
         });
 
         IEnumerable<string> completions = root

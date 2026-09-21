@@ -6,9 +6,12 @@ internal sealed class AlwaysFreeLock : ISessionLock
 {
     public int HeldCount { get; private set; }
 
+    public int TotalAcquisitions { get; private set; }
+
     public ISessionLockHandle? TryAcquire(TimeSpan timeout)
     {
         HeldCount++;
+        TotalAcquisitions++;
         return new Handle(this);
     }
 

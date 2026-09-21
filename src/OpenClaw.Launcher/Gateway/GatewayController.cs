@@ -49,6 +49,10 @@ internal sealed record GatewayStartResult(
 internal sealed record GatewayStopResult(
     bool Stopped, string Message, string? Detail = null, bool Succeeded = true);
 
+internal sealed record GatewayRestartResult(
+    GatewayStopResult Stop,
+    GatewayStartResult? Start);
+
 /// <summary>
 /// Owns this installation's background gateway.
 /// </summary>
@@ -176,6 +180,16 @@ internal sealed class GatewayController
         IProgress<GatewayStartProgress>? progress = null)
     {
         using ISessionLockHandle handle = AcquireLock();
+        return await StartUnderLockAsync(helperPath, cancellationToken, progress)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<GatewayStartResult> StartUnderLockAsync(
+        string helperPath,
+        CancellationToken cancellationToken,
+        IProgress<GatewayStartProgress>? progress,
+        bool? autostartDisabledOverride = null)
+    {
         SessionRecord configured = _requireSetup();
         GatewayStateResult existing = _store.Read();
         if (existing.Record is null && existing.Fault != GatewayStateFault.Missing)
@@ -281,7 +295,8 @@ internal sealed class GatewayController
 
             // An explicit earlier choice to disable logon recovery survives a
             // restart, so a later manual start does not quietly re-enable it.
-            AutostartDisabled = existing.Record?.AutostartDisabled ?? false
+            AutostartDisabled =
+                autostartDisabledOverride ?? existing.Record?.AutostartDisabled ?? false
         };
 
         _store.Write(record);
@@ -324,6 +339,34 @@ internal sealed class GatewayController
                 GatewayState.Unknown => $"The gateway launch could not be verified: {observed.Error}",
                 _ => DescribeExitedDuringStartup(record, observed)
             });
+    }
+
+    /// <summary>
+    /// Stops the gateway and starts it again without releasing the lifecycle
+    /// lock between the two operations.
+    /// </summary>
+    public async Task<GatewayRestartResult> RestartAsync(
+        string helperPath,
+        CancellationToken cancellationToken,
+        IProgress<GatewayStartProgress>? progress = null)
+    {
+        using ISessionLockHandle handle = AcquireLock();
+        Report(progress, GatewayStartStage.Stopping, "Stopping the gateway.");
+        bool autostartDisabled = _store.Read().Record?.AutostartDisabled ?? false;
+        GatewayStopResult stopped = await StopUnderLockAsync(
+            helperPath,
+            cancellationToken).ConfigureAwait(false);
+        if (!stopped.Succeeded)
+        {
+            return new GatewayRestartResult(stopped, Start: null);
+        }
+
+        GatewayStartResult started = await StartUnderLockAsync(
+            helperPath,
+            cancellationToken,
+            progress,
+            autostartDisabled).ConfigureAwait(false);
+        return new GatewayRestartResult(stopped, started);
     }
 
     /// <summary>
