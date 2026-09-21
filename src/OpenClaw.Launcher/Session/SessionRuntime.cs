@@ -138,7 +138,10 @@ internal sealed class SessionRuntime
 
         return new SessionRuntime(
             coordinator,
-            new SessionExecutor(client, log, isCurrentRecord: IsCurrentSessionRecord),
+            new SessionExecutor(
+                client,
+                log,
+                isCurrentRecord: record => IsCurrentSessionRecord(coordinator, record)),
             client,
             ResolveHelperPath(baseDirectory),
             applicationId,
@@ -147,13 +150,22 @@ internal sealed class SessionRuntime
             new GatewayStateStore(paths.GatewayStatePath),
             paths.SessionStatePath + "_Installation");
 
-        bool IsCurrentSessionRecord(SessionRecord record)
-        {
-            SessionStatus status = coordinator.GetRecordedStatus();
-            return status.Record is not null &&
-                string.Equals(status.Record.SandboxId, record.SandboxId, StringComparison.Ordinal) &&
-                string.Equals(status.Record.Generation, record.Generation, StringComparison.Ordinal);
-        }
+    }
+
+    public bool IsCurrentSessionRecord(SessionRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        return IsCurrentSessionRecord(Coordinator, record);
+    }
+
+    private static bool IsCurrentSessionRecord(
+        SessionCoordinator coordinator,
+        SessionRecord record)
+    {
+        SessionStatus status = coordinator.GetRecordedStatus();
+        return status.Record is not null &&
+            string.Equals(status.Record.SandboxId, record.SandboxId, StringComparison.Ordinal) &&
+            string.Equals(status.Record.Generation, record.Generation, StringComparison.Ordinal);
     }
 
     /// <summary>

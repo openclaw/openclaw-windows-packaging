@@ -738,22 +738,34 @@ public sealed class SessionExecutorTests : IDisposable
     [Fact]
     public async Task CapturedCommandReturnsBackendOutputAfterSuccessfulHelperLaunch()
     {
-        RespondAsCapturedHelper(request => new SessionLaunchResult
+        SessionLaunchRequest? delivered = null;
+        RespondAsCapturedHelper(request =>
         {
-            RequestId = request.RequestId,
-            Launched = true,
-            ExitCode = 0,
+            delivered = request;
+            return new SessionLaunchResult
+            {
+                RequestId = request.RequestId,
+                Launched = true,
+                ExitCode = 0,
+            };
         });
 
         SessionCommandCaptureResult result = await Create().ExecuteCommandCaptureAsync(
             Record(),
-            CaptureRequest("dashboard", "--json"),
+            CaptureRequest("dashboard", "--json") with
+            {
+                NodeOptionsSuffix = "--require C:\\agent\\native-redirect.cjs",
+                NativeRootPath = @"C:\agent\native",
+            },
             "Resolving the dashboard.",
             "OpenClaw",
             CancellationToken.None);
 
         Assert.Equal("{\"browserUrl\":\"secret\"}", result.StandardOutput);
         Assert.Equal("captured stderr", result.StandardError);
+        Assert.NotNull(delivered);
+        Assert.Equal("--require C:\\agent\\native-redirect.cjs", delivered.NodeOptionsSuffix);
+        Assert.Equal(@"C:\agent\native", delivered.NativeRootPath);
         Assert.Empty(_backend.AttachedCommandLines);
         Assert.Single(_backend.ExecutedCommandLines);
         Assert.All(

@@ -11,7 +11,10 @@ internal sealed partial class ControlUiHandoffJsonContext : JsonSerializerContex
 
 internal static class ControlUiHandoffParser
 {
-    internal static bool TryParse(string output, out string? browserUrl)
+    internal static bool TryParse(
+        string output,
+        IReadOnlyCollection<int> observedPorts,
+        out string? browserUrl)
     {
         browserUrl = null;
         try
@@ -23,7 +26,8 @@ internal static class ControlUiHandoffParser
                 string.IsNullOrWhiteSpace(handoff.BrowserUrl) ||
                 !Uri.TryCreate(handoff.BrowserUrl, UriKind.Absolute, out Uri? candidate) ||
                 (candidate.Scheme != Uri.UriSchemeHttp && candidate.Scheme != Uri.UriSchemeHttps) ||
-                !candidate.IsLoopback)
+                !candidate.IsLoopback ||
+                !observedPorts.Contains(candidate.Port))
             {
                 return false;
             }

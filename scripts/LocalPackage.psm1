@@ -394,6 +394,10 @@ function New-LocalPackageLayout {
     $manifest.Save($manifestPath)
 
     Copy-Item -LiteralPath $HostExecutable -Destination (Join-Path $LayoutDirectory 'openclaw.exe') -Force
+    $nodeScripts = Join-Path $LayoutDirectory 'node'
+    if (Test-Path -LiteralPath $nodeScripts) { Remove-Item -LiteralPath $nodeScripts -Recurse -Force }
+    Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'src\OpenClaw.Launcher\node') `
+        -Destination $nodeScripts -Recurse
     $images = Join-Path $LayoutDirectory 'Images'
     if (Test-Path -LiteralPath $images) { Remove-Item -LiteralPath $images -Recurse -Force }
     Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'src\OpenClaw.Launcher\Images') `
@@ -474,10 +478,24 @@ function Test-LocalPackageOwnership {
         [IO.Path]::GetFullPath($LayoutDirectory).TrimEnd('\')
 }
 
+function Get-LocalPackageFileInventory {
+    param([string]$Directory)
+
+    return @(
+        Get-ChildItem -LiteralPath $Directory -File -Recurse |
+            Sort-Object FullName |
+            ForEach-Object {
+                $relativePath = [IO.Path]::GetRelativePath($Directory, $_.FullName)
+                "$relativePath`:$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
+            }
+    )
+}
+
 function Test-LocalPackageLayout {
     param(
         [string]$LayoutDirectory,
         [string]$PayloadDirectory,
+        [string]$NodeScriptsDirectory,
         [string]$RuntimeArchiveName,
         [string]$Architecture
     )
@@ -491,13 +509,19 @@ function Test-LocalPackageLayout {
         "session-host\$Architecture\openclaw-session-host.exe",
         "mxc\$Architecture\wxc-exec.exe",
         "mxc\$Architecture\plm.exe",
-        "mxc\$Architecture\mxc-runtime.json"
+        "mxc\$Architecture\mxc-runtime.json",
+        'node\native-redirect.mjs'
     )) {
         if (-not (Test-Path -LiteralPath (Join-Path $LayoutDirectory $relative) -PathType Leaf)) {
             return $false
         }
     }
     if (-not (Test-Path -LiteralPath (Join-Path $LayoutDirectory 'Images') -PathType Container)) {
+        return $false
+    }
+    $expectedNodeScripts = Get-LocalPackageFileInventory -Directory $NodeScriptsDirectory
+    $actualNodeScripts = Get-LocalPackageFileInventory -Directory (Join-Path $LayoutDirectory 'node')
+    if ([string]::Join("`n", $actualNodeScripts) -cne [string]::Join("`n", $expectedNodeScripts)) {
         return $false
     }
     $link = Join-Path $LayoutDirectory 'app'
@@ -865,6 +889,8 @@ function Invoke-LocalPackageDeployment {
                 Sort-Object FullName |
                 ForEach-Object { "$($_.Name):$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)" }
         )
+        $nodeScriptsDirectory = Join-Path $root 'src\OpenClaw.Launcher\node'
+        $nodeScriptHashes = Get-LocalPackageFileInventory -Directory $nodeScriptsDirectory
         $fingerprint = Get-LocalPackageFingerprint (@(
             $Architecture
             $payload.Directory
@@ -874,7 +900,7 @@ function Invoke-LocalPackageDeployment {
             $sessionHostInfo.Length.ToString()
             $sessionHostHash
             (Get-FileHash -LiteralPath $manifestSource -Algorithm SHA256).Hash
-        ) + $imageHashes + $mxcHashes)
+        ) + $imageHashes + $nodeScriptHashes + $mxcHashes)
         $setupSatisfied = $SkipSetup -or ($null -ne $previous -and $previous['setupComplete'] -eq $true)
         if (-not $Force -and $null -ne $previous -and $null -ne $installed -and
             $installed.IsDevelopmentMode -and
@@ -885,6 +911,7 @@ function Invoke-LocalPackageDeployment {
             $setupSatisfied -and
             (Test-LocalPackageLayout -LayoutDirectory $layoutDirectory `
                 -PayloadDirectory $payload.Directory `
+                -NodeScriptsDirectory $nodeScriptsDirectory `
                 -RuntimeArchiveName ([IO.Path]::GetFileName($runtimeArchive)) `
                 -Architecture $Architecture)) {
             $total.Stop()
@@ -920,7 +947,7 @@ function Invoke-LocalPackageDeployment {
                 $sessionHostInfo.Length.ToString()
                 $sessionHostHash
                 (Get-FileHash -LiteralPath $manifestSource -Algorithm SHA256).Hash
-            ) + $imageHashes + $mxcHashes)
+            ) + $imageHashes + $nodeScriptHashes + $mxcHashes)
         }
 
         $manifestPath = Invoke-LocalPackagePhase $progress 'Assemble layout' {

@@ -72,6 +72,8 @@ function New-Fixture {
     $project = Join-Path $root 'src\OpenClaw.Launcher'
     New-Item -Path (Join-Path $project 'Images') -ItemType Directory -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $project 'Images\StoreLogo.png'), 'fixture image')
+    New-Item -Path (Join-Path $project 'node') -ItemType Directory -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $project 'node\native-redirect.mjs'), 'fixture redirect')
     [IO.File]::WriteAllText((Join-Path $project 'Package.appxmanifest'), @'
 <?xml version="1.0" encoding="utf-8"?>
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
@@ -246,6 +248,8 @@ try {
     Assert-True ((Get-Content (Join-Path $layout 'app\openclaw.mjs') -Raw) -eq 'first payload') 'Layout does not expose the payload application.'
     Assert-True ((Get-Item (Join-Path $layout 'app')).Attributes -band [IO.FileAttributes]::ReparsePoint) 'The layout copied the application instead of linking it.'
     Assert-True (Test-Path (Join-Path $layout 'openclaw.exe')) 'Layout is missing the launcher.'
+    Assert-True (Test-Path (Join-Path $layout 'node\native-redirect.mjs')) `
+        'Layout is missing the native redirect script.'
     Assert-True (
         Test-Path (Join-Path $layout 'session-host\x64\openclaw-session-host.exe')
     ) 'Layout is missing the session host.'
@@ -422,7 +426,7 @@ try {
     Assert-True ($afterSkip.Changed -and $sk.Setups -eq 1) 'A run after -SkipSetup did not complete the setup it skipped.'
 
     # A damaged live layout must not be reported as up to date.
-    foreach ($break in @('openclaw.exe', 'Images', 'app', 'runtime')) {
+    foreach ($break in @('openclaw.exe', 'Images', 'app', 'runtime', 'node\native-redirect.mjs')) {
         $d = New-Fixture
         $deployed = Invoke-Fixture $d
         $target = Join-Path $deployed.LayoutDirectory $break
@@ -431,6 +435,15 @@ try {
         Assert-True ($repaired.Changed) "A layout missing '$break' was reported as up to date."
         Assert-True (Test-Path -LiteralPath $target) "A layout missing '$break' was not repaired."
     }
+
+    $modifiedNodeScript = New-Fixture
+    $modifiedDeployment = Invoke-Fixture $modifiedNodeScript
+    $redirectScript = Join-Path $modifiedDeployment.LayoutDirectory 'node\native-redirect.mjs'
+    [IO.File]::WriteAllText($redirectScript, 'corrupt redirect')
+    $repairedNodeScript = Invoke-Fixture $modifiedNodeScript
+    Assert-True $repairedNodeScript.Changed 'A modified redirect script was reported as up to date.'
+    Assert-True ((Get-Content -LiteralPath $redirectScript -Raw) -eq 'fixture redirect') `
+        'A modified redirect script was not repaired.'
 
     # The layout runtime copy is replaced, not trusted by name.
     $c = New-Fixture

@@ -449,7 +449,8 @@ internal static class Program
         ClawCtlOutputOptions? controlOutputOptions = null,
         Func<string>? getLogonSessionId = null,
         TimeProvider? clock = null,
-        Func<string, Task>? launchBrowserAsync = null)
+        Func<string, Task>? launchBrowserAsync = null,
+        Action? beforeBrowserValidation = null)
     {
         Session.IInstallationLifecycle lifecycle =
             installationLifecycle ?? Session.InstallationLifecycle.Production;
@@ -648,18 +649,36 @@ internal static class Program
                                 record.WorkspacePath!)
                             {
                                 PathPrefix = Path.GetDirectoryName(nodePath),
-                                AdditionalEnvironment = OpenClawRuntimeEnvironment.Build()
+                                AdditionalEnvironment = BuildRuntimeEnvironment(
+                                    runtime,
+                                    applicationDirectory,
+                                    isInteractive: false,
+                                    readEnvironmentVariable ?? Environment.GetEnvironmentVariable),
+                                NodeOptionsSuffix = BuildNativeRedirectNodeOption(runtime),
+                                NativeRootPath = runtime.GetAgentNativeRoot()
                             },
                             "Resolving the Control UI handoff in the isolated session.",
                             "OpenClaw dashboard",
                             cancellationToken)
                         .ConfigureAwait(false);
-                    if (!Gateway.ControlUiHandoffParser.TryParse(capture.StandardOutput, out string? browserUrl) ||
+                    if (!Gateway.ControlUiHandoffParser.TryParse(
+                            capture.StandardOutput,
+                            gateway.Record?.ObservedPorts ?? [],
+                            out string? browserUrl) ||
                         browserUrl is null)
                     {
                         return WriteResult(new OpenCommandResult(
                             gateway.State,
                             "OpenClaw did not return a usable Control UI handoff.",
+                            1));
+                    }
+
+                    beforeBrowserValidation?.Invoke();
+                    if (!runtime.IsCurrentSessionRecord(record))
+                    {
+                        return WriteResult(new OpenCommandResult(
+                            gateway.State,
+                            "The isolated session changed before the Control UI could be opened. Retry the command.",
                             1));
                     }
 
@@ -833,11 +852,11 @@ internal static class Program
         string browserUrl,
         Func<ProcessStartInfo, Process?>? startProcess = null)
     {
+        // Shell activation returns null when an already-running browser handles the URL.
         _ = (startProcess ?? Process.Start)(new ProcessStartInfo(browserUrl)
         {
             UseShellExecute = true
-        }) ?? throw new InvalidOperationException(
-            "Windows did not start a process for the default browser.");
+        });
 
         return Task.CompletedTask;
     }

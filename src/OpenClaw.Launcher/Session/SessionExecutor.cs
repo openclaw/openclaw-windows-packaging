@@ -177,18 +177,7 @@ internal sealed class SessionExecutor
         string requestPath = operation.FilePath("launch", requestId);
         string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
 
-        var launchRequest = new SessionLaunchRequest
-        {
-            RequestId = requestId,
-            Executable = request.Executable,
-            Arguments = request.Arguments,
-            WorkingDirectory = request.WorkingDirectory,
-            Environment = MergeEnvironment(
-                _buildEnvironment(), request.AdditionalEnvironment),
-            PathPrefix = request.PathPrefix,
-            NodeOptionsSuffix = request.NodeOptionsSuffix,
-            NativeRootPath = request.NativeRootPath,
-        };
+        SessionLaunchRequest launchRequest = CreateLaunchRequest(requestId, request);
 
         try
         {
@@ -239,16 +228,7 @@ internal sealed class SessionExecutor
         using var operation = new SessionWorkspaceOperation(record, _isCurrentRecord);
         string requestPath = operation.FilePath("launch", requestId);
         string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
-        var launchRequest = new SessionLaunchRequest
-        {
-            RequestId = requestId,
-            Executable = request.Executable,
-            Arguments = request.Arguments,
-            WorkingDirectory = request.WorkingDirectory,
-            Environment = MergeEnvironment(
-                _buildEnvironment(), request.AdditionalEnvironment),
-            PathPrefix = request.PathPrefix,
-        };
+        SessionLaunchRequest launchRequest = CreateLaunchRequest(requestId, request);
 
         try
         {
@@ -273,6 +253,22 @@ internal sealed class SessionExecutor
             operation.Delete(resultPath);
         }
     }
+
+    private SessionLaunchRequest CreateLaunchRequest(
+        string requestId,
+        SessionCommandRequest request) =>
+        new()
+        {
+            RequestId = requestId,
+            Executable = request.Executable,
+            Arguments = request.Arguments,
+            WorkingDirectory = request.WorkingDirectory,
+            Environment = MergeEnvironment(
+                _buildEnvironment(), request.AdditionalEnvironment),
+            PathPrefix = request.PathPrefix,
+            NodeOptionsSuffix = request.NodeOptionsSuffix,
+            NativeRootPath = request.NativeRootPath,
+        };
 
     /// <summary>
     /// Asks the guest to stage diagnostic files into the shared workspace.
