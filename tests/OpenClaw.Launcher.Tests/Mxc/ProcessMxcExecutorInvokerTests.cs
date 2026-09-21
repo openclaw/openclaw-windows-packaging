@@ -128,6 +128,123 @@ public sealed class ProcessMxcExecutorInvokerTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
+    // The defect this guards: with piped input the pinned backend selects a
+    // console-record relay that cannot read a pipe, so the guest saw
+    // end-of-input immediately and the caller's bytes were discarded.
+    [Fact(Timeout = 300_000)]
+    public async Task PipedInputReachesTheExecutorByteForByte()
+    {
+        string capturedPath = Path.Combine(_root, "captured.bin");
+        byte[] payload =
+        [
+            0x00, 0xFF, 0x0D, 0x0A, 0x1A,
+            .. Encoding.UTF8.GetBytes("piped-café-\u00e9\u4e2d\u6587"),
+            0x0D, 0x0A, 0x7F,
+        ];
+
+        var streams = new FakeStandardStreams(payload);
+        var invoker = new ProcessMxcExecutorInvoker(
+            new RecordingHostConsole { IsInputRedirected = true },
+            streams);
+
+        int exitCode = await invoker.InvokeAttachedAsync(
+            CopyStandardInputScript(capturedPath),
+            CancellationToken.None).ConfigureAwait(true);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(payload, await File.ReadAllBytesAsync(capturedPath).ConfigureAwait(true));
+        Assert.Equal("relayed-ok", Encoding.UTF8.GetString(streams.Output.ToArray()));
+    }
+
+    // A payload larger than a pipe buffer deadlocks if either direction is
+    // copied to completion before the other is drained.
+    [Fact(Timeout = 300_000)]
+    public async Task PipedInputLargerThanAPipeBufferCompletes()
+    {
+        string capturedPath = Path.Combine(_root, "large.bin");
+        byte[] payload = new byte[1024 * 1024];
+        for (int index = 0; index < payload.Length; index++)
+        {
+            payload[index] = (byte)(index % 251);
+        }
+
+        var streams = new FakeStandardStreams(payload);
+        var invoker = new ProcessMxcExecutorInvoker(
+            new RecordingHostConsole { IsInputRedirected = true },
+            streams);
+
+        int exitCode = await invoker.InvokeAttachedAsync(
+            CopyStandardInputScript(capturedPath),
+            CancellationToken.None).ConfigureAwait(true);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(payload, await File.ReadAllBytesAsync(capturedPath).ConfigureAwait(true));
+    }
+
+    [Fact(Timeout = 300_000)]
+    public async Task RelayedInvocationReportsTheExecutorExitCodeAndErrorOutput()
+    {
+        var streams = new FakeStandardStreams([]);
+        var invoker = new ProcessMxcExecutorInvoker(
+            new RecordingHostConsole { IsInputRedirected = true },
+            streams);
+
+        int exitCode = await invoker.InvokeAttachedAsync(
+            Cmd("echo relayed-failure 1>&2 & exit /b 3"),
+            CancellationToken.None).ConfigureAwait(true);
+
+        Assert.Equal(3, exitCode);
+        Assert.Contains(
+            "relayed-failure",
+            Encoding.UTF8.GetString(streams.Error.ToArray()),
+            StringComparison.Ordinal);
+    }
+
+    // An interactive run must keep inheriting the console handles: that is what
+    // lets OpenClaw draw its own prompts and read typed input.
+    [Fact(Timeout = 300_000)]
+    public async Task AttachedInvocationWithATerminalInputNeverOpensHostStreams()
+    {
+        var invoker = new ProcessMxcExecutorInvoker(
+            new RecordingHostConsole { IsInputRedirected = false },
+            new ThrowingStandardStreams());
+
+        int exitCode = await invoker.InvokeAttachedAsync(
+            Cmd("exit /b 0"),
+            CancellationToken.None).ConfigureAwait(true);
+
+        Assert.Equal(0, exitCode);
+    }
+
+    private MxcExecutorInvocation CopyStandardInputScript(string destinationPath)
+    {
+        string scriptPath = Path.Combine(
+            _root,
+            $"copy-stdin-{Guid.NewGuid():N}.ps1");
+        File.WriteAllText(
+            scriptPath,
+            """
+            $ErrorActionPreference = 'Stop'
+            $stdin = [Console]::OpenStandardInput()
+            $file = [IO.File]::Create($args[0])
+            $stdin.CopyTo($file)
+            $file.Dispose()
+            $out = [Console]::OpenStandardOutput()
+            $marker = [Text.Encoding]::UTF8.GetBytes('relayed-ok')
+            $out.Write($marker, 0, $marker.Length)
+            $out.Flush()
+            """);
+
+        return new MxcExecutorInvocation(
+            Path.Combine(
+                Environment.SystemDirectory,
+                "WindowsPowerShell",
+                "v1.0",
+                "powershell.exe"),
+            ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", scriptPath,
+             destinationPath]);
+    }
+
     private static MxcExecutorInvocation Cmd(string command) =>
         new(
             Environment.GetEnvironmentVariable("ComSpec")
@@ -139,6 +256,8 @@ public sealed class ProcessMxcExecutorInvokerTests : IDisposable
         public List<string> Events { get; } = [];
 
         public bool IsInteractive => true;
+
+        public bool IsInputRedirected { get; init; }
 
         public IDisposable Capture(Action<string> log)
         {
@@ -152,5 +271,33 @@ public sealed class ProcessMxcExecutorInvokerTests : IDisposable
         {
             public void Dispose() => events.Add("restore");
         }
+    }
+
+    // Byte streams the test owns, so the relay can be driven without a real
+    // console. The relay closes only the destination it is told to close - the
+    // child's input - so these buffers stay readable for the assertions.
+    private sealed class FakeStandardStreams(byte[] input) : IHostStandardStreams
+    {
+        public MemoryStream Output { get; } = new();
+
+        public MemoryStream Error { get; } = new();
+
+        public Stream OpenInput() => new MemoryStream(input, writable: false);
+
+        public Stream OpenOutput() => Output;
+
+        public Stream OpenError() => Error;
+    }
+
+    private sealed class ThrowingStandardStreams : IHostStandardStreams
+    {
+        public Stream OpenInput() => throw new InvalidOperationException(
+            "An inherited-handle invocation must not open the host's input.");
+
+        public Stream OpenOutput() => throw new InvalidOperationException(
+            "An inherited-handle invocation must not open the host's output.");
+
+        public Stream OpenError() => throw new InvalidOperationException(
+            "An inherited-handle invocation must not open the host's error stream.");
     }
 }

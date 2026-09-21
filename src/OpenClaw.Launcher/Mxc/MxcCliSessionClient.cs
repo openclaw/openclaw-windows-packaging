@@ -253,9 +253,15 @@ internal sealed class ProcessMxcExecutorInvoker
     : IMxcExecutorInvoker, IMxcAttachedExecutorInvoker
 {
     private readonly IHostConsole _console;
+    private readonly IHostStandardStreams _streams;
 
-    internal ProcessMxcExecutorInvoker(IHostConsole? console = null) =>
+    internal ProcessMxcExecutorInvoker(
+        IHostConsole? console = null,
+        IHostStandardStreams? streams = null)
+    {
         _console = console ?? WindowsHostConsole.Instance;
+        _streams = streams ?? ProcessStandardStreams.Instance;
+    }
 
     public async Task<MxcExecutorOutcome> InvokeAsync(
         MxcExecutorInvocation invocation,
@@ -321,15 +327,32 @@ internal sealed class ProcessMxcExecutorInvoker
         cancellationToken.ThrowIfCancellationRequested();
         using IDisposable capture = _console.Capture(_ => { });
         _console.InitializeUtf8();
+
+        // The pinned backend decides whether to give the guest a pseudo-console
+        // by asking whether *its own* standard output is a terminal, and that
+        // one answer also selects how it relays standard input. With a
+        // terminal standard output it drives the console-record relay, which
+        // cannot read a pipe: the caller's piped bytes are dropped and the
+        // guest sees end-of-input immediately.
+        //
+        // So when this process's input is piped, the executor's streams are
+        // redirected and copied through instead. Redirecting input alone would
+        // not work - standard output is what the backend probes - which is why
+        // all three move together.
+        bool relayStreams = _console.IsInputRedirected;
         ProcessStartInfo startInfo = new()
         {
             FileName = invocation.ExecutorPath,
 
-            // Nothing is redirected, so the child inherits this process's
-            // console handles. That is the point: OpenClaw draws its own
-            // prompts and reads typed input, and any interposed pipe would
-            // both buffer that output and hide the terminal from the child.
-            UseShellExecute = false
+            // When nothing is redirected the child inherits this process's
+            // console handles. That is the point for an interactive run:
+            // OpenClaw draws its own prompts and reads typed input, and any
+            // interposed pipe would both buffer that output and hide the
+            // terminal from the child.
+            UseShellExecute = false,
+            RedirectStandardInput = relayStreams,
+            RedirectStandardOutput = relayStreams,
+            RedirectStandardError = relayStreams
         };
 
         foreach (string argument in invocation.Arguments)
@@ -352,6 +375,33 @@ internal sealed class ProcessMxcExecutorInvoker
                 innerException: exception);
         }
 
+        // Started before the wait so neither pipe can fill and block the child
+        // before it exits. The input relay is deliberately not awaited: a read
+        // from a console or pipe handle is not reliably cancellable, so waiting
+        // on it could outlive the child. It ends when its source reaches
+        // end-of-input or the child's input pipe closes.
+        Task outputRelay = Task.CompletedTask;
+        Task errorRelay = Task.CompletedTask;
+        if (relayStreams)
+        {
+            outputRelay = RelayAsync(
+                process.StandardOutput.BaseStream,
+                _streams.OpenOutput(),
+                closeDestination: false);
+            errorRelay = RelayAsync(
+                process.StandardError.BaseStream,
+                _streams.OpenError(),
+                closeDestination: false);
+
+            // Closing the child's input at end-of-input is what lets the guest
+            // observe it. Without it a command reading piped input never
+            // finishes.
+            _ = RelayAsync(
+                _streams.OpenInput(),
+                process.StandardInput.BaseStream,
+                closeDestination: true);
+        }
+
         // Only this invocation's process tree is killed. The session itself
         // outlives the command, and other OpenClaw invocations own their own
         // executor processes. Awaiting without the cancelled token guarantees
@@ -359,10 +409,60 @@ internal sealed class ProcessMxcExecutorInvoker
         using CancellationTokenRegistration registration =
             cancellationToken.Register(() => TryKill(process));
         await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+
+        // After exit, so no output produced before the child ended is lost.
+        await Task.WhenAll(outputRelay, errorRelay).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
 
         return process.ExitCode;
     }
+
+    /// <summary>
+    /// Copies bytes from one stream to another until the source ends.
+    /// </summary>
+    /// <remarks>
+    /// Byte-oriented on purpose. Decoding to text would re-encode the payload
+    /// and rewrite line endings, so piped input would not reach the guest as
+    /// the caller wrote it. Each write is flushed so an interactive prompt the
+    /// guest emits is not held in a buffer.
+    /// </remarks>
+    private static Task RelayAsync(Stream source, Stream destination, bool closeDestination) =>
+        Task.Run(async () =>
+        {
+            byte[] buffer = new byte[8192];
+            try
+            {
+                int read;
+                while ((read = await source.ReadAsync(buffer).ConfigureAwait(false)) > 0)
+                {
+                    await destination.WriteAsync(buffer.AsMemory(0, read))
+                        .ConfigureAwait(false);
+                    await destination.FlushAsync().ConfigureAwait(false);
+                }
+            }
+            catch (Exception exception) when (
+                exception is IOException or ObjectDisposedException or
+                OperationCanceledException)
+            {
+                // The peer ended first: the child exited while this relay was
+                // mid-copy, or its pipe was torn down by cancellation. The exit
+                // code is the authoritative outcome, so there is nothing to
+                // report here.
+            }
+
+            if (closeDestination)
+            {
+                try
+                {
+                    await destination.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (Exception exception) when (
+                    exception is IOException or ObjectDisposedException)
+                {
+                    // Already closed by the child exiting.
+                }
+            }
+        });
 
     private static void TryKill(Process process)
     {

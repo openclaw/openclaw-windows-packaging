@@ -21,6 +21,55 @@ uses a controlled `cmd.exe` command line only to start the staged helper; the
 requested executable and argument vector are JSON data rather than interpolated
 into that command line.
 
+## Standard-stream topology for an execution
+
+The pinned backend exposes one interactive decision per execution, and it makes
+that decision by probing whether its **own standard output** is a terminal. In
+`@microsoft/mxc-sdk` 0.8.0 the isolation-session backend resolves
+`wants_interactive_console(consumer, || std::io::stdout().is_terminal())`, and
+the resulting flag selects both whether the guest gets a pseudo-console and how
+standard input is relayed:
+
+- Terminal standard output selects a console-record relay. It waits on the
+  executor's standard input handle and reads it with `PeekConsoleInputW` /
+  `ReadConsoleInputW`, which only work on a console handle.
+- Non-terminal standard output selects a byte-oriented pipe relay, which copies
+  standard input with `ReadFile` / `WriteFile` and therefore accepts a pipe.
+
+The consequence for this package is not obvious from either end alone. In
+`data | openclaw ...` from an ordinary terminal, standard input is a pipe while
+standard output is still a terminal. The backend selects the console-record
+relay, the first `PeekConsoleInputW` on the pipe fails, the relay loop ends, and
+the guest observes end-of-input without receiving any of the caller's bytes.
+Neither the launcher nor the session host is at fault: both deliberately avoid
+redirection so console handles are inherited.
+
+`ProcessMxcExecutorInvoker.InvokeAttachedAsync` therefore inspects this
+process's standard input. When it is not a console, the executor is started with
+all three standard streams redirected and the launcher copies bytes through
+itself. Redirecting standard input alone would not help, because standard
+output is what the backend probes; the three move together or not at all.
+
+Two deliberate consequences:
+
+- The relayed path has no pseudo-console, so OpenClaw sees a non-terminal
+  standard output inside the session. Color is preserved separately: the
+  launcher derives interactivity from the host's standard output, and
+  `OpenClawRuntimeEnvironment.Build` sets `FORCE_COLOR` and `WT_SESSION` from
+  that, independently of how standard input is connected.
+- The backend's own comments note that its stop event cannot interrupt a
+  `ReadFile` blocked on a pipe handle, so its standard-input relay ends when the
+  executor exits rather than on demand. That is bounded by the executor's
+  lifetime and is the same behavior any non-terminal caller already gets.
+
+An interactive invocation is unchanged: nothing is redirected, the child
+inherits the console handles, and the pseudo-console path is used exactly as
+before.
+
+This is a packaging-side accommodation of backend behavior, not a fix. The
+probe belongs to MXC. A later pinned runtime that selects its topology from
+both standard input and standard output would let this redirect path be removed.
+
 ## Session ownership and routing
 
 `clawctl setup` is the required lifecycle entry point. It writes package-local

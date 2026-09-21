@@ -144,6 +144,33 @@ public sealed class WindowsHostConsoleTests
         Assert.False(console.IsInteractiveOutput(new StringWriter()));
     }
 
+    // Piped input selects the relayed executor path, but color and the
+    // interactive runtime environment are derived from the *output* stream.
+    // If this probe ever started answering for output, `data | openclaw` would
+    // silently lose color even though the terminal is still there.
+    [Fact]
+    public void RedirectedInputDoesNotChangeOutputInteractivity()
+    {
+        var native = new FakeConsoleNativeApi
+        {
+            InputIsConsole = false,
+            OutputIsConsole = true
+        };
+        var console = new WindowsHostConsole(native);
+
+        Assert.True(console.IsInputRedirected);
+        Assert.True(console.IsInteractiveOutput(Console.Out));
+    }
+
+    [Fact]
+    public void ConsoleInputIsNotReportedAsRedirected()
+    {
+        var console = new WindowsHostConsole(
+            new FakeConsoleNativeApi { InputIsConsole = true });
+
+        Assert.False(console.IsInputRedirected);
+    }
+
     private sealed class FakeConsoleNativeApi : IConsoleNativeApi
     {
         public uint InputMode { get; set; }
@@ -152,6 +179,7 @@ public sealed class WindowsHostConsoleTests
         public uint OutputCodePage { get; set; }
         public bool OutputIsConsole { get; set; } = true;
         public bool ErrorIsConsole { get; set; } = true;
+        public bool InputIsConsole { get; set; } = true;
         public List<string> Writes { get; } = [];
         public List<(nint Handle, uint Mode)> SetModes { get; } = [];
         public List<uint> SetCodePages { get; } = [];
@@ -169,7 +197,7 @@ public sealed class WindowsHostConsoleTests
             if (handle == 1)
             {
                 mode = InputMode;
-                return true;
+                return InputIsConsole;
             }
 
             mode = OutputMode;

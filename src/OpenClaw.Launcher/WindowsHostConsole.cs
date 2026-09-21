@@ -10,6 +10,19 @@ internal interface IHostConsole
     void InitializeUtf8();
 
     bool IsInteractive { get; }
+
+    /// <summary>
+    /// Whether this process's standard input is something other than a
+    /// console, such as a pipe or a file.
+    /// </summary>
+    /// <remarks>
+    /// This selects how the MXC executor is started. The pinned backend
+    /// chooses its stdin transport from whether its own standard output is a
+    /// terminal, so an invocation that reads piped input has to be given a
+    /// non-terminal standard output before it will read that input at all.
+    /// See <c>docs/mxc-compatibility-evidence.md</c>.
+    /// </remarks>
+    bool IsInputRedirected { get; }
 }
 
 internal interface IConsoleNativeApi
@@ -58,6 +71,21 @@ internal sealed class WindowsHostConsole : IHostConsole
     }
 
     public bool IsInteractive => IsInteractiveOutput(Console.Out);
+
+    /// <summary>
+    /// Reads the real standard input handle rather than <see
+    /// cref="Console.IsInputRedirected"/> so the probe goes through the same
+    /// injectable native seam the output probes use and a test can vary it.
+    /// </summary>
+    public bool IsInputRedirected
+    {
+        get
+        {
+            nint handle = _native.GetStdHandle(StdInput);
+            return handle == 0 || handle == InvalidHandle ||
+                !_native.GetConsoleMode(handle, out _);
+        }
+    }
 
     internal bool IsInteractiveOutput(TextWriter output)
     {
