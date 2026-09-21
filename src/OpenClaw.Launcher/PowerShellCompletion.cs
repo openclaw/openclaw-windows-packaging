@@ -6,8 +6,13 @@ internal static class PowerShellCompletion
 {
     internal const string BeginMarker = "# >>> openclaw completion >>>";
     internal const string EndMarker = "# <<< openclaw completion <<<";
+    internal const string OpenClawScriptRelativePath = @"shell-completions\openclaw.ps1";
+    private static readonly Encoding Utf32LittleEndian =
+        new UTF32Encoding(bigEndian: false, byteOrderMark: true, throwOnInvalidCharacters: true);
+    private static readonly Encoding Utf32BigEndian =
+        new UTF32Encoding(bigEndian: true, byteOrderMark: true, throwOnInvalidCharacters: true);
 
-    internal static string Script { get; } = """
+    internal static string ClawCtlScript { get; } = """
         # PowerShell completion for clawctl.
         Register-ArgumentCompleter -Native -CommandName clawctl -ScriptBlock {
             param($wordToComplete, $commandAst, $cursorPosition)
@@ -24,15 +29,52 @@ internal static class PowerShellCompletion
         "PowerShell",
         "Microsoft.PowerShell_profile.ps1");
 
-    internal static string Install(string profilePath, string? baseDirectory = null)
+    internal static string BuildScript(
+        string openClawScript,
+        string newLine = "\n")
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(openClawScript);
+        return NormalizeNewLines(ClawCtlScript.TrimEnd(), newLine) +
+            newLine + newLine +
+            NormalizeNewLines(openClawScript.TrimEnd(), newLine) +
+            newLine;
+    }
+
+    internal static string ReadPackagedOpenClawScript(string applicationDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(applicationDirectory);
+        string path = Path.Combine(applicationDirectory, OpenClawScriptRelativePath);
+        try
+        {
+            return new UTF8Encoding(
+                encoderShouldEmitUTF8Identifier: false,
+                throwOnInvalidBytes: true).GetString(File.ReadAllBytes(path));
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or DecoderFallbackException)
+        {
+            throw new InvalidDataException(
+                $"The packaged OpenClaw completion script could not be read: {path}",
+                exception);
+        }
+    }
+
+    internal static string Install(
+        string profilePath,
+        string openClawScript,
+        string? baseDirectory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(profilePath);
         profilePath = Path.GetFullPath(profilePath, baseDirectory ?? Environment.CurrentDirectory);
         ProfileText profile = ReadProfile(profilePath);
         ValidateMarkers(profile.Text, out int begin, out int end);
-        string block = $"{BeginMarker}{profile.NewLine}{Script.TrimEnd()}{profile.NewLine}{EndMarker}";
+        string block = BeginMarker + profile.NewLine +
+            BuildScript(openClawScript, profile.NewLine).TrimEnd() +
+            profile.NewLine + EndMarker;
         string updated = begin < 0
-            ? string.IsNullOrEmpty(profile.Text) ? block + profile.NewLine : profile.Text.TrimEnd() + profile.NewLine + profile.NewLine + block + profile.NewLine
+            ? string.IsNullOrEmpty(profile.Text)
+                ? block + profile.NewLine
+                : profile.Text + profile.NewLine + block + profile.NewLine
             : profile.Text[..begin] + block + profile.Text[(end + EndMarker.Length)..];
         WriteAtomically(profilePath, profile.Encode(updated));
         return profilePath;
@@ -55,8 +97,8 @@ internal static class PowerShellCompletion
         }
 
         int removeStart = begin;
-        if (removeStart >= profile.NewLine.Length &&
-            profile.Text.AsSpan(0, removeStart).EndsWith(profile.NewLine + profile.NewLine, StringComparison.Ordinal))
+        if (removeStart > 0 &&
+            profile.Text.AsSpan(0, removeStart).EndsWith(profile.NewLine, StringComparison.Ordinal))
         {
             removeStart -= profile.NewLine.Length;
         }
@@ -72,6 +114,24 @@ internal static class PowerShellCompletion
     internal static void WriteScriptAtomically(string path, string script) =>
         WriteAtomically(path, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(script));
 
+    internal static bool SynchronizeCacheIfInstalled(string path, string script)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentException.ThrowIfNullOrWhiteSpace(script);
+        if (!File.Exists(path))
+        {
+            return false;
+        }
+
+        byte[] expected =
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(script);
+        if (!File.ReadAllBytes(path).AsSpan().SequenceEqual(expected))
+        {
+            WriteAtomically(path, expected);
+        }
+        return true;
+    }
+
     private static ProfileText ReadProfile(string path)
     {
         byte[] bytes = File.Exists(path) ? File.ReadAllBytes(path) : [];
@@ -81,6 +141,16 @@ internal static class PowerShellCompletion
         {
             encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true, throwOnInvalidBytes: true);
             preambleLength = Encoding.UTF8.Preamble.Length;
+        }
+        else if (bytes.AsSpan().StartsWith(Utf32LittleEndian.Preamble))
+        {
+            encoding = Utf32LittleEndian;
+            preambleLength = Utf32LittleEndian.Preamble.Length;
+        }
+        else if (bytes.AsSpan().StartsWith(Utf32BigEndian.Preamble))
+        {
+            encoding = Utf32BigEndian;
+            preambleLength = Utf32BigEndian.Preamble.Length;
         }
         else if (bytes.AsSpan().StartsWith(Encoding.Unicode.Preamble))
         {
@@ -118,6 +188,11 @@ internal static class PowerShellCompletion
             throw new InvalidDataException("The PowerShell profile contains malformed OpenClaw completion markers. Remove or repair the marked block before retrying.");
         }
     }
+
+    private static string NormalizeNewLines(string text, string newLine) =>
+        text.Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Replace("\n", newLine, StringComparison.Ordinal);
 
     private static void WriteAtomically(string path, byte[] contents)
     {

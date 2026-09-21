@@ -85,9 +85,8 @@ internal sealed record OpenCommandResult(
 internal sealed record CompletionCommandResult(
     string Script,
     string? ProfilePath,
-    string? AgentScriptPath,
-    int ExitCode,
-    string? Warning = null) : IClawCtlResult
+    string? CachePath,
+    int ExitCode) : IClawCtlResult
 {
     public string Command => "completion";
 }

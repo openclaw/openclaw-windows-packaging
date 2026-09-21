@@ -750,87 +750,46 @@ internal static class Program
                     options,
                     GetSessionRuntime(),
                     cancellationToken),
-                Completion = async (completionOptions, cancellationToken) =>
+                Completion = (completionOptions, _) =>
                 {
-                    if (!completionOptions.Install && !completionOptions.Uninstall)
+                    if (completionOptions.Uninstall)
                     {
-                        return WriteResult(new CompletionCommandResult(
-                            PowerShellCompletion.Script,
+                        string uninstalledProfilePath = PowerShellCompletion.Uninstall(
+                            completionOptions.ProfilePath ??
+                            PowerShellCompletion.DefaultProfilePath());
+                        DeleteCompletionCache(GetSessionRuntime().Paths.CompletionCachePath);
+                        return Task.FromResult(WriteResult(new CompletionCommandResult(
+                            PowerShellCompletion.ClawCtlScript,
+                            uninstalledProfilePath,
+                            CachePath: null,
+                            ExitCode: 0)));
+                    }
+
+                    string applicationDirectory = GetPackagedApplicationDirectory(options);
+                    string openClawScript =
+                        PowerShellCompletion.ReadPackagedOpenClawScript(applicationDirectory);
+                    string combinedScript = PowerShellCompletion.BuildScript(openClawScript);
+                    if (!completionOptions.Install)
+                    {
+                        return Task.FromResult(WriteResult(new CompletionCommandResult(
+                            combinedScript,
                             ProfilePath: null,
-                            AgentScriptPath: null,
-                            ExitCode: 0));
+                            CachePath: null,
+                            ExitCode: 0)));
                     }
 
                     string profilePath = completionOptions.ProfilePath ??
                         PowerShellCompletion.DefaultProfilePath();
-                    if (completionOptions.Uninstall)
-                    {
-                        profilePath = PowerShellCompletion.Uninstall(profilePath);
-                        DeleteCompletionCache(GetSessionRuntime().Paths.CompletionCachePath);
-                        return WriteResult(new CompletionCommandResult(
-                            PowerShellCompletion.Script,
-                            profilePath,
-                            AgentScriptPath: null,
-                            ExitCode: 0));
-                    }
-
-                    profilePath = PowerShellCompletion.Install(profilePath);
-                    string? scriptPath = null;
-                    string? warning = null;
-                    try
-                    {
-                        Session.SessionRuntime runtime = GetSessionRuntime();
-                        Session.SessionRecord record = runtime.RequireSetup();
-                        record = await runtime.StartForExecutionAsync(cancellationToken)
-                            .ConfigureAwait(false);
-                        string helperPath = runtime.RequireStagedHelper(record);
-                        string applicationDirectory = GetPackagedApplicationDirectory(options);
-                        string nodePath = runtime.RequireAgentNodePath(
-                            GetPackagedNodeArchivePath(options));
-                        Session.SessionCommandCaptureResult completion =
-                            await runtime.Executor.ExecuteCommandCaptureAsync(
-                            record,
-                            new Session.SessionCommandRequest(
-                                helperPath,
-                                nodePath,
-                                [Path.Combine(applicationDirectory, "openclaw.mjs"),
-                                    "completion", "--shell", "powershell"],
-                                record.WorkspacePath!)
-                            {
-                                PathPrefix = Path.GetDirectoryName(nodePath)
-                            },
-                            "Generating PowerShell completion.",
-                            "OpenClaw completion generation",
-                            cancellationToken).ConfigureAwait(false);
-                        if (string.IsNullOrWhiteSpace(completion.StandardOutput))
-                        {
-                            throw new Session.SessionException(
-                                "OpenClaw generated an empty PowerShell completion script.");
-                        }
-
-                        PowerShellCompletion.WriteScriptAtomically(
-                            runtime.Paths.CompletionCachePath,
-                            completion.StandardOutput);
-                        scriptPath = Path.Combine(
-                            record.WorkspacePath!,
-                            ".openclaw",
-                            "cache",
-                            "completion.ps1");
-                        PowerShellCompletion.WriteScriptAtomically(
-                            scriptPath,
-                            completion.StandardOutput);
-                    }
-                    catch (Session.SessionException exception)
-                    {
-                        warning = $"Host completion was installed, but the isolated agent completion could not be cached: {exception.Message}";
-                    }
-
-                    return WriteResult(new CompletionCommandResult(
-                        PowerShellCompletion.Script,
+                    profilePath = PowerShellCompletion.Install(profilePath, openClawScript);
+                    Session.SessionRuntime runtime = GetSessionRuntime();
+                    PowerShellCompletion.WriteScriptAtomically(
+                        runtime.Paths.CompletionCachePath,
+                        openClawScript);
+                    return Task.FromResult(WriteResult(new CompletionCommandResult(
+                        combinedScript,
                         profilePath,
-                        scriptPath,
-                        ExitCode: 0,
-                        Warning: warning));
+                        runtime.Paths.CompletionCachePath,
+                        ExitCode: 0)));
                 },
                 GatewayStart = async (recovery, cancellationToken) =>
                 {
@@ -1377,7 +1336,20 @@ internal static class Program
                 ?? throw new Session.SessionException(
                     "The installed agent command shim has no parent directory."),
             installedTools.ShimPath!);
-        ProjectCompletionCache(runtime.Paths.CompletionCachePath, record.WorkspacePath!);
+        if (File.Exists(runtime.Paths.CompletionCachePath))
+        {
+            PowerShellCompletion.SynchronizeCacheIfInstalled(
+                runtime.Paths.CompletionCachePath,
+                PowerShellCompletion.ReadPackagedOpenClawScript(applicationDirectory));
+        }
+        string? completionScriptPath;
+        using (Session.SessionWorkspaceOperation operation =
+            runtime.Executor.CreateWorkspaceOperation(record))
+        {
+            completionScriptPath = Session.SessionCompletionProjection.Project(
+                operation,
+                runtime.Paths.CompletionCachePath);
+        }
         Session.AgentShell shell = Session.AgentShellResolver.Resolve(File.Exists);
 
         return await runtime.Executor.ExecuteCommandAsync(
@@ -1390,7 +1362,7 @@ internal static class Program
                     record.AgentUserName ?? "agent",
                     tools.DirectoryPath,
                     nodeDirectory,
-                    Path.Combine(record.WorkspacePath!, ".openclaw", "cache", "completion.ps1")),
+                    completionScriptPath),
                 record.WorkspacePath!)
             {
                 AdditionalEnvironment = Session.SessionExecutor.MergeEnvironment(
@@ -1406,23 +1378,6 @@ internal static class Program
             $"Opening {shell.DisplayName} in the isolated session.",
             shell.DisplayName,
             cancellationToken).ConfigureAwait(false);
-    }
-
-    private static void ProjectCompletionCache(string cachePath, string workspacePath)
-    {
-        if (!File.Exists(cachePath))
-        {
-            return;
-        }
-
-        string projection = Path.Combine(
-            workspacePath,
-            ".openclaw",
-            "cache",
-            "completion.ps1");
-        PowerShellCompletion.WriteScriptAtomically(
-            projection,
-            File.ReadAllText(cachePath));
     }
 
     private static void DeleteCompletionCache(string cachePath)

@@ -321,6 +321,37 @@ try {
             'runtime shape.'
         )
     }
+
+    Push-Location $installedPackage
+    try {
+        [string[]]$completionLines = @(
+            & node .\openclaw.mjs completion --shell powershell
+        )
+        if ($LASTEXITCODE -ne 0) {
+            throw (
+                'The selected OpenClaw payload could not generate PowerShell ' +
+                "completion. Exit code: $LASTEXITCODE."
+            )
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    $completionScript = [string]::Join("`n", $completionLines) + "`n"
+    if (
+        $completionScript -notmatch 'Register-ArgumentCompleter' -or
+        $completionScript -notmatch '(?i)openclaw'
+    ) {
+        throw 'The selected OpenClaw payload generated an invalid PowerShell completion script.'
+    }
+    $completionDirectory = Join-Path $installedPackage 'shell-completions'
+    New-Item -Path $completionDirectory -ItemType Directory | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $completionDirectory 'openclaw.ps1'),
+        $completionScript,
+        [Text.UTF8Encoding]::new($false)
+    )
 }
 finally {
     $env:OPENCLAW_STATE_DIR = $previousStateDirectory

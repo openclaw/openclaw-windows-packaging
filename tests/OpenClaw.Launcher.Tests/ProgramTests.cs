@@ -2291,6 +2291,80 @@ public sealed class ProgramTests : IDisposable
             runtime.SetupState);
     }
 
+    [Fact]
+    public async Task CompletionPrintsBothScriptsWithoutStartingTheSession()
+    {
+        string applicationDirectory = await CreateApplicationAsync().ConfigureAwait(true);
+        string completionDirectory = Path.Combine(
+            applicationDirectory,
+            "shell-completions");
+        Directory.CreateDirectory(completionDirectory);
+        const string openClawScript =
+            "Register-ArgumentCompleter -Native -CommandName openclaw -ScriptBlock {}";
+        await File.WriteAllTextAsync(
+            Path.Combine(completionDirectory, "openclaw.ps1"),
+            openClawScript).ConfigureAwait(true);
+        using var output = new StringWriter();
+
+        int exitCode = await Program.RunControlAsync(
+            new HostOptions(applicationDirectory, null, []),
+            ["completion"],
+            _ => { },
+            output,
+            TextWriter.Null,
+            new FailIfWorkStartsLifecycle()).ConfigureAwait(true);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains(
+            "Register-ArgumentCompleter -Native -CommandName clawctl",
+            output.ToString(),
+            StringComparison.Ordinal);
+        Assert.Contains(openClawScript, output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CompletionInstallUsesPackagedScriptWithoutStartingTheSession()
+    {
+        string applicationDirectory = await CreateApplicationAsync().ConfigureAwait(true);
+        string completionDirectory = Path.Combine(
+            applicationDirectory,
+            "shell-completions");
+        Directory.CreateDirectory(completionDirectory);
+        const string openClawScript =
+            "Register-ArgumentCompleter -Native -CommandName openclaw -ScriptBlock {}";
+        await File.WriteAllTextAsync(
+            Path.Combine(completionDirectory, "openclaw.ps1"),
+            openClawScript).ConfigureAwait(true);
+        string profile = Path.Combine(_testDirectory, "profile.ps1");
+        SessionRuntime runtime = CreateSessionRuntime();
+
+        int exitCode = await Program.RunControlAsync(
+            new HostOptions(applicationDirectory, null, []),
+            ["completion", "--install", "--profile", profile],
+            _ => { },
+            TextWriter.Null,
+            TextWriter.Null,
+            new StubbedRecoveryLifecycle(runtime)).ConfigureAwait(true);
+
+        Assert.Equal(0, exitCode);
+        Assert.Empty(_lastSessionBackend!.Calls);
+        Assert.Contains(
+            "Register-ArgumentCompleter -Native -CommandName clawctl",
+            await File.ReadAllTextAsync(profile).ConfigureAwait(true),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            openClawScript,
+            await File.ReadAllTextAsync(profile).ConfigureAwait(true),
+            StringComparison.Ordinal);
+        Assert.Equal(
+            openClawScript,
+            await File.ReadAllTextAsync(runtime.Paths.CompletionCachePath)
+                .ConfigureAwait(true));
+        Assert.False(Directory.Exists(Path.Combine(
+            _lastSessionBackend.Metadata!.EphemeralWorkspacePath,
+            ".openclaw")));
+    }
+
     private SessionRuntime CreateSessionRuntime()
     {
         string stateRoot = Path.Combine(_testDirectory, "state");

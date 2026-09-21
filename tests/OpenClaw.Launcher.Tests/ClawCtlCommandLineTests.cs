@@ -1,11 +1,15 @@
 using System.CommandLine;
-using System.Text.Json;
 using System.Reflection;
+using System.Text;
+using System.Text.Json;
 
 namespace OpenClaw.Launcher.Tests;
 
 public sealed class ClawCtlCommandLineTests
 {
+    private const string OpenClawCompletionScript =
+        "Register-ArgumentCompleter -Native -CommandName openclaw -ScriptBlock {}";
+
     private static async Task<(int ExitCode, string Output, string Error)> RunAsync(
         params string[] args)
     {
@@ -446,12 +450,13 @@ public sealed class ClawCtlCommandLineTests
         {
             File.WriteAllText(profile, "Set-StrictMode -Version Latest\r\n");
 
-            PowerShellCompletion.Install(profile);
+            PowerShellCompletion.Install(profile, OpenClawCompletionScript);
 
             string installed = File.ReadAllText(profile);
             Assert.Contains("Set-StrictMode -Version Latest", installed, StringComparison.Ordinal);
             Assert.Contains(PowerShellCompletion.BeginMarker, installed, StringComparison.Ordinal);
             Assert.Contains("Register-ArgumentCompleter -Native -CommandName clawctl", installed, StringComparison.Ordinal);
+            Assert.Contains("Register-ArgumentCompleter -Native -CommandName openclaw", installed, StringComparison.Ordinal);
 
             PowerShellCompletion.Uninstall(profile);
 
@@ -471,7 +476,10 @@ public sealed class ClawCtlCommandLineTests
         string profile = Path.Combine(directory, "profile.ps1");
         try
         {
-            string installedProfile = PowerShellCompletion.Install("profile.ps1", directory);
+            string installedProfile = PowerShellCompletion.Install(
+                "profile.ps1",
+                OpenClawCompletionScript,
+                directory);
 
             Assert.Equal(Path.GetFullPath(profile), installedProfile);
             Assert.True(File.Exists(profile));
@@ -487,15 +495,80 @@ public sealed class ClawCtlCommandLineTests
     {
         string directory = TestDirectory.Create();
         string profile = Path.Combine(directory, "profile.ps1");
-        byte[] original = [0xff, 0xfe, (byte)'x', 0, 0x0d, 0, 0x0a, 0];
+        byte[] original = Encoding.UTF8.GetBytes("Write-Host 'keep'  \r\n \t");
         try
         {
             File.WriteAllBytes(profile, original);
 
-            PowerShellCompletion.Install(profile);
+            PowerShellCompletion.Install(profile, OpenClawCompletionScript);
             PowerShellCompletion.Uninstall(profile);
 
             Assert.Equal(original, File.ReadAllBytes(profile));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CompletionProfilePreservesUtf32Encoding(bool bigEndian)
+    {
+        string directory = TestDirectory.Create();
+        string profile = Path.Combine(directory, "profile.ps1");
+        var encoding = new UTF32Encoding(
+            bigEndian,
+            byteOrderMark: true,
+            throwOnInvalidCharacters: true);
+        byte[] original =
+        [
+            .. encoding.GetPreamble(),
+            .. encoding.GetBytes("Set-StrictMode -Version Latest\r\n")
+        ];
+        try
+        {
+            File.WriteAllBytes(profile, original);
+
+            PowerShellCompletion.Install(profile, OpenClawCompletionScript);
+
+            byte[] installed = File.ReadAllBytes(profile);
+            Assert.True(installed.AsSpan().StartsWith(encoding.GetPreamble()));
+            Assert.Contains(
+                PowerShellCompletion.BeginMarker,
+                encoding.GetString(installed, encoding.GetPreamble().Length,
+                    installed.Length - encoding.GetPreamble().Length),
+                StringComparison.Ordinal);
+
+            PowerShellCompletion.Uninstall(profile);
+
+            Assert.Equal(original, File.ReadAllBytes(profile));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CompletionCacheRefreshesOnlyWhenInstalled()
+    {
+        string directory = TestDirectory.Create();
+        string cache = Path.Combine(directory, "openclaw.ps1");
+        try
+        {
+            Assert.False(PowerShellCompletion.SynchronizeCacheIfInstalled(
+                cache,
+                OpenClawCompletionScript));
+            Assert.False(File.Exists(cache));
+
+            File.WriteAllText(cache, "stale");
+
+            Assert.True(PowerShellCompletion.SynchronizeCacheIfInstalled(
+                cache,
+                OpenClawCompletionScript));
+            Assert.Equal(OpenClawCompletionScript, File.ReadAllText(cache));
         }
         finally
         {

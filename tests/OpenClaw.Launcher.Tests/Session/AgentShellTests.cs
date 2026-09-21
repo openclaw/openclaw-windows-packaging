@@ -98,7 +98,7 @@ public sealed class AgentShellTests : IDisposable
         await File.WriteAllTextAsync(
             Path.Combine(directory, "clawctl.cmd"),
             $"@echo off\r\necho %* > \"{capture}\"\r\n");
-        string script = PowerShellCompletion.Script;
+        string script = PowerShellCompletion.ClawCtlScript;
         AgentShell shell = AgentShellResolver.Resolve(File.Exists);
         using Process process = new()
         {

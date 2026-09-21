@@ -52,6 +52,10 @@ const configPath =
   (process.env.OPENCLAW_STATE_DIR
     ? path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json")
     : undefined);
+if (args[0] === "completion" && args[1] === "--shell" && args[2] === "powershell") {
+  console.log("Register-ArgumentCompleter -Native -CommandName openclaw -ScriptBlock {}");
+  process.exit(0);
+}
 if (args[0] === "plugins" && args[1] === "enable") {
   if (!configPath) {
     throw new Error("Missing isolated validation configuration path.");
@@ -153,6 +157,14 @@ console.log(JSON.stringify({
     if ((Get-Content -LiteralPath "$payload\app\installed-architecture.txt" -Raw) -cne $nodeArchitecture) {
         throw 'The npm install lifecycle did not execute with the target Node.js architecture.'
     }
+    $completionPath = Join-Path $payload 'app\shell-completions\openclaw.ps1'
+    if (
+        -not (Test-Path -LiteralPath $completionPath -PathType Leaf) -or
+        (Get-Content -LiteralPath $completionPath -Raw) -notmatch
+            'Register-ArgumentCompleter.+openclaw'
+    ) {
+        throw 'The payload did not include trusted OpenClaw PowerShell completion.'
+    }
 
     $reusedPayload = Join-Path $testRoot 'payload-reused'
     & "$PSScriptRoot\Build-Payload.ps1" `
@@ -162,6 +174,15 @@ console.log(JSON.stringify({
         -ReuseStagedInstall
     if (-not (Test-Path -LiteralPath "$reusedPayload\app\openclaw.mjs")) {
         throw 'The reused staged install did not produce an application payload.'
+    }
+    if (
+        -not (
+            Test-Path `
+                -LiteralPath "$reusedPayload\app\shell-completions\openclaw.ps1" `
+                -PathType Leaf
+        )
+    ) {
+        throw 'The reused staged install did not regenerate PowerShell completion.'
     }
 
     $packagePath = @(

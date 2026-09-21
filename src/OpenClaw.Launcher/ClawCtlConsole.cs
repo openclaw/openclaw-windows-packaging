@@ -73,11 +73,10 @@ internal static class ClawCtlConsole
                 {
                     view.Row("Profile", new Text(completion.ProfilePath));
                     view.Row(
-                        "Agent completion",
-                        new Text(completion.Warning ??
-                            (completion.AgentScriptPath is null
-                                ? "not requested"
-                                : $"cached at {completion.AgentScriptPath}")));
+                        "OpenClaw completion",
+                        new Text(completion.CachePath is null
+                            ? "not requested"
+                            : $"cached at {completion.CachePath}"));
                 }
                 break;
             case GatewayCommandResult gateway:

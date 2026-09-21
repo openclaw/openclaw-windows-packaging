@@ -33,19 +33,21 @@ diagnostics, or runtime composition. It also protects transparent forwarding:
 
 ## Completion stays owned by the installed runtime
 
-`clawctl completion` writes the lightweight `clawctl` argument completer to
-standard output. `clawctl completion --install` also adds that registration to
-the invoking user's PowerShell profile. The profile update changes only the
-marked byte range and replaces the file atomically, so an existing profile's
-encoding, line endings, and unrelated content survive.
+`clawctl completion` writes completion for both aliases to standard output.
+`clawctl completion --install` also adds both registrations to the invoking
+user's PowerShell profile. The profile update changes only the marked byte
+range and replaces the file atomically, so an existing profile's encoding,
+line endings, and unrelated content survive.
 
-The install operation asks the isolated agent to generate OpenClaw's own
-PowerShell completion script. The host captures that output through the
-versioned session protocol, validates it is nonempty, and atomically caches it
-under host LocalState. It then projects the same bytes into the current shared
-agent workspace. The workspace copy is intentionally disposable: it lets an
-agent shell load upstream completion without granting the agent access to host
-LocalState, while the host cache remains the only durable owner.
+The payload build asks the pinned OpenClaw application to generate its
+PowerShell completion script, validates the result, and includes those
+immutable bytes in the application inventory and signed package. Installation
+copies that trusted package asset into host LocalState. Before `clawctl pwsh`
+starts, the launcher refreshes an installed cache from the current package,
+then projects it through a generation-checked `SessionWorkspaceOperation`,
+which rejects guest-controlled path redirection. The workspace copy is
+disposable and is removed rather than loaded when the authoritative host cache
+is absent.
 
 ```mermaid
 flowchart LR

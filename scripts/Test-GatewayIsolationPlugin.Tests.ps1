@@ -77,6 +77,10 @@ const configPath =
   (process.env.OPENCLAW_STATE_DIR
     ? path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json")
     : undefined);
+if (args[0] === "completion" && args[1] === "--shell" && args[2] === "powershell") {
+  console.log("Register-ArgumentCompleter -Native -CommandName openclaw -ScriptBlock {}");
+  process.exit(0);
+}
 if (args[0] === "plugins" && args[1] === "enable") {
   if (!configPath) {
     throw new Error("Missing isolated validation configuration path.");
