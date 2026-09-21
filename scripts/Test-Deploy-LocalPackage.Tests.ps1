@@ -112,6 +112,11 @@ function New-Fixture {
         param($directory, $architecture, $text, $nodeVersion)
         New-Item -Path (Join-Path $directory 'app') -ItemType Directory -Force | Out-Null
         [IO.File]::WriteAllText((Join-Path $directory 'app\openclaw.mjs'), $text)
+        $completionDirectory = Join-Path $directory 'app\shell-completions'
+        New-Item -Path $completionDirectory -ItemType Directory -Force | Out-Null
+        [IO.File]::WriteAllText(
+            (Join-Path $completionDirectory 'openclaw.ps1'),
+            'Register-ArgumentCompleter -Native -CommandName openclaw')
         [IO.File]::WriteAllText((Join-Path $directory 'payload-metadata.json'), (@{
             architecture = $architecture
             layout = 'expanded-directory'
@@ -365,6 +370,15 @@ try {
     $supplied = Invoke-Fixture $j @{ PayloadDirectory = $external }
     Assert-True ($j.Downloads -eq 0 -and $j.Queries -eq 0) 'A supplied payload still contacted GitHub.'
     Assert-True ((Get-Content (Join-Path $supplied.LayoutDirectory 'app\openclaw.mjs') -Raw) -eq 'supplied') 'A supplied payload was not used.'
+    $incomplete = New-Fixture
+    $incompletePayload = Join-Path $testRoot 'incomplete supplied payload'
+    & $incomplete.WritePayload $incompletePayload 'x64' 'incomplete' '24.20.0'
+    Remove-Item -LiteralPath (
+        Join-Path $incompletePayload 'app\shell-completions\openclaw.ps1'
+    )
+    Assert-Fails {
+        Invoke-Fixture $incomplete @{ PayloadDirectory = $incompletePayload }
+    } 'missing app\\shell-completions\\openclaw.ps1.*-PayloadRunId'
     $legacy = New-Fixture
     $legacyPayload = Join-Path $testRoot 'legacy supplied payload'
     & $legacy.WritePayload $legacyPayload 'x64' 'legacy' '24.20.0'

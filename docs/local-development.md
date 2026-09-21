@@ -46,7 +46,7 @@ Use options for a concrete reason:
 | `-Architecture x64` or `arm64` | The target architecture is runnable on this device. `x64` is the default. |
 | `-PayloadDirectory <path>` | You already have an expanded payload containing `app` and `payload-metadata.json`, or need an offline/reproducible iteration. It is read directly, is not modified, makes no GitHub request, and must be supplied on every run. |
 | no payload option | You want the script to resolve the latest successful `main` payload workflow. |
-| `-PayloadRunId <id>` | You need a specific successful workflow payload instead of the latest one. |
+| `-PayloadRunId <id>` | You need a specific successful workflow payload instead of the latest one. Use the current branch's successful workflow run when that branch changes packaged application content. |
 | `-RefreshPayload` | A cached payload must be downloaded again; the previous payload remains available until the replacement registers successfully. |
 | `-Force` | You intentionally need to re-register although the recorded inputs have not changed. |
 | `-SkipSetup` | You only need the registration. Run `clawctl setup` before attempting to run OpenClaw, because the bundled Node.js runtime has not yet been extracted. |

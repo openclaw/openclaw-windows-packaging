@@ -184,6 +184,14 @@ function Assert-LocalPackagePayload {
     if (-not (Test-Path -LiteralPath (Join-Path $application 'openclaw.mjs') -PathType Leaf)) {
         throw "Payload is missing app\openclaw.mjs: $Directory. Supply a complete -PayloadDirectory or use -RefreshPayload."
     }
+    $completion = Join-Path $application 'shell-completions\openclaw.ps1'
+    if (-not (Test-Path -LiteralPath $completion -PathType Leaf)) {
+        throw (
+            "Payload is missing app\shell-completions\openclaw.ps1: $Directory. " +
+            'Use -PayloadRunId with a successful workflow run from this branch, or ' +
+            'supply a matching -PayloadDirectory.'
+        )
+    }
     $metadata = Read-LocalPackageRecord (Join-Path $Directory 'payload-metadata.json')
     if ($null -eq $metadata -or $metadata['architecture'] -ne $Architecture -or
         $metadata['layout'] -ne 'expanded-directory' -or
