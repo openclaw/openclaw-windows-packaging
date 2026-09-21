@@ -106,5 +106,15 @@ public sealed class ClawCtlParserDefaultsTests : IDisposable
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task CompletionDirectiveSuggestsCanonicalFlags()
+    {
+        (int exitCode, string output) =
+            await RunAsync("[suggest:3]", "--h").ConfigureAwait(true);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("--help", output, StringComparison.Ordinal);
+    }
+
     public void Dispose() => Directory.Delete(_testDirectory, recursive: true);
 }
