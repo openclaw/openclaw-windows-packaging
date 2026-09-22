@@ -85,6 +85,7 @@ internal sealed class AgentPostflight
                     output.UseColor,
                     interactive,
                     output.UseLiveRendering,
+                    output.UseUnicode,
                     start).ConfigureAwait(false);
             },
             (progress, onRunningUnderLock) => gateway.StartWithLockAlreadyHeldAsync(

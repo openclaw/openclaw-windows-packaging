@@ -240,6 +240,7 @@ public sealed class ClawCtlConsoleTests
             useColor: false,
             narrate: true,
             outputIsInteractive: true,
+            useUnicode: true,
             progress =>
             {
                 progress.Report(new GatewayStartProgress(
@@ -258,6 +259,32 @@ public sealed class ClawCtlConsoleTests
             $"  {GatewayStartProgress.Initial.Message}{Environment.NewLine}",
             output.ToString(),
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GatewayNarrationPreservesUnicodeCapabilityForNonConsoleOutput()
+    {
+        using var output = new StringWriter();
+
+        _ = await ClawCtlConsole.NarrateGatewayStartAsync(
+            output,
+            useColor: true,
+            narrate: true,
+            outputIsInteractive: true,
+            useUnicode: true,
+            progress =>
+            {
+                progress.Report(new GatewayStartProgress(
+                    GatewayStartStage.Launching,
+                    "Launching the gateway."));
+                return Task.FromResult(new GatewayStartResult(
+                    GatewayState.Running,
+                    new GatewayRecord(),
+                    AlreadyRunning: false,
+                    "The gateway is running."));
+            });
+
+        Assert.Contains("\u280b", output.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]

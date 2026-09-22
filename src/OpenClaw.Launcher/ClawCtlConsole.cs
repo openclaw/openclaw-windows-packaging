@@ -121,6 +121,7 @@ internal static class ClawCtlConsole
         bool useColor,
         bool narrate,
         bool outputIsInteractive,
+        bool useUnicode,
         Func<IProgress<GatewayStartProgress>, Task<GatewayStartResult>> start) =>
         NarrateAsync(
             output,
@@ -128,7 +129,8 @@ internal static class ClawCtlConsole
             narrate,
             outputIsInteractive,
             GatewayStartProgress.Initial,
-            start);
+            start,
+            useUnicode);
 
     internal static void WriteGatewayStartWarning(
         TextWriter output,
@@ -281,7 +283,8 @@ internal static class ClawCtlConsole
         bool narrate,
         bool outputIsInteractive,
         ClawCtlProgress initial,
-        Func<IProgress<ClawCtlProgress>, Task<T>> operation)
+        Func<IProgress<ClawCtlProgress>, Task<T>> operation,
+        bool? useUnicode = null)
     {
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(initial);
@@ -311,7 +314,7 @@ internal static class ClawCtlConsole
         IAnsiConsole console = CreateConsole(
             output,
             useColor,
-            SupportsUnicode(output),
+            useUnicode ?? SupportsUnicode(output),
             ResolveWidth(output),
             InteractionSupport.Yes);
         return await NarrateWithStatusAsync(console, initial, operation)
