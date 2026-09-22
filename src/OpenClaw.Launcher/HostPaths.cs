@@ -162,6 +162,13 @@ internal sealed class HostPaths
     public string GatewayConfigurationPath =>
         Path.Combine(StateRoot, "gateway-config.json");
 
+    /// <summary>
+    /// Package-owned registrations for user-approved commands available to the
+    /// isolated Gateway. The store intentionally contains no credentials.
+    /// </summary>
+    public string GatewayToolRegistryPath =>
+        Path.Combine(StateRoot, "gateway-tools.json");
+
     public static HostPaths Create() =>
         Create(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
