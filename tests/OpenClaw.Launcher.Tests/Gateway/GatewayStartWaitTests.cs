@@ -168,6 +168,7 @@ public sealed class GatewayStartWaitTests
 
         GatewayStartResult result = await harness.StartAsync();
 
+        Assert.Equal(TimeSpan.FromSeconds(90), GatewayController.ListenerWaitBudget);
         Assert.Equal(GatewayState.Starting, result.State);
         Assert.Contains("not listening yet", result.Message, StringComparison.Ordinal);
 

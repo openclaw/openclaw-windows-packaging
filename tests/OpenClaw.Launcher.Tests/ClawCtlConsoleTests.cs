@@ -231,6 +231,36 @@ public sealed class ClawCtlConsoleTests
     }
 
     [Fact]
+    public async Task GatewayNarrationUsesKnownInteractiveProcessOutput()
+    {
+        using var output = new StringWriter();
+
+        GatewayStartResult result = await ClawCtlConsole.NarrateGatewayStartAsync(
+            output,
+            useColor: false,
+            narrate: true,
+            outputIsInteractive: true,
+            progress =>
+            {
+                progress.Report(new GatewayStartProgress(
+                    GatewayStartStage.Launching,
+                    "Launching the gateway."));
+                return Task.FromResult(new GatewayStartResult(
+                    GatewayState.Running,
+                    new GatewayRecord(),
+                    AlreadyRunning: false,
+                    "The gateway is running."));
+            });
+
+        Assert.Equal(GatewayState.Running, result.State);
+        Assert.Contains("Launching the gateway.", output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            $"  {GatewayStartProgress.Initial.Message}{Environment.NewLine}",
+            output.ToString(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void DiagnosticsBundlePathRemainsAnExactStandaloneLine()
     {
         string bundlePath = @"C:\diagnostics\" + new string('a', 120) + ".zip";

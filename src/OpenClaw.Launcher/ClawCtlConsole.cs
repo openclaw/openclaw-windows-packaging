@@ -120,11 +120,13 @@ internal static class ClawCtlConsole
         TextWriter output,
         bool useColor,
         bool narrate,
+        bool outputIsInteractive,
         Func<IProgress<GatewayStartProgress>, Task<GatewayStartResult>> start) =>
         NarrateAsync(
             output,
             useColor,
             narrate,
+            outputIsInteractive,
             GatewayStartProgress.Initial,
             start);
 
@@ -264,6 +266,21 @@ internal static class ClawCtlConsole
         bool useColor,
         bool narrate,
         ClawCtlProgress initial,
+        Func<IProgress<ClawCtlProgress>, Task<T>> operation) =>
+        await NarrateAsync(
+            output,
+            useColor,
+            narrate,
+            IsInteractiveConsole(output),
+            initial,
+            operation).ConfigureAwait(false);
+
+    private static async Task<T> NarrateAsync<T>(
+        TextWriter output,
+        bool useColor,
+        bool narrate,
+        bool outputIsInteractive,
+        ClawCtlProgress initial,
         Func<IProgress<ClawCtlProgress>, Task<T>> operation)
     {
         ArgumentNullException.ThrowIfNull(output);
@@ -276,7 +293,7 @@ internal static class ClawCtlConsole
             return await operation(NullProgress.Instance).ConfigureAwait(false);
         }
 
-        if (!IsInteractiveConsole(output))
+        if (!outputIsInteractive)
         {
             await output.WriteLineAsync($"{new string(' ', Indent)}{initial.Message}")
                 .ConfigureAwait(false);

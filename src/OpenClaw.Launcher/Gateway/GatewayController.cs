@@ -67,7 +67,7 @@ internal sealed class GatewayController
     /// is still coming up. Long enough for a cold Node.js start inside the
     /// sandbox, short enough that a wedged launch does not hold the terminal.
     /// </summary>
-    internal static readonly TimeSpan ListenerWaitBudget = TimeSpan.FromSeconds(30);
+    internal static readonly TimeSpan ListenerWaitBudget = TimeSpan.FromSeconds(90);
 
     /// <summary>
     /// Gap between listener checks. Each check is an IPC round trip into the

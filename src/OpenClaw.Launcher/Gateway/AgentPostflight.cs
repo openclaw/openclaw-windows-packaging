@@ -84,6 +84,7 @@ internal sealed class AgentPostflight
                     target,
                     output.UseColor,
                     interactive,
+                    output.UseLiveRendering,
                     start).ConfigureAwait(false);
             },
             (progress, onRunningUnderLock) => gateway.StartWithLockAlreadyHeldAsync(
@@ -139,21 +140,24 @@ internal sealed class AgentPostflight
                 out restore));
         bool useUnicode = supportsUnicode?.Invoke() ??
             (interactive && Console.OutputEncoding.CodePage == 65001);
+        bool useLiveRendering = interactive && processConsoleWriter;
         log(
             $"Gateway output capabilities: interactive={interactive}, " +
             $"processStderr={processConsoleWriter}, " +
             $"stderrConsole={selectedStreamIsInteractive}, " +
-            $"color={useColor}, unicode={useUnicode}.");
-        return new GatewayOutput(useColor, useUnicode, restore);
+            $"live={useLiveRendering}, color={useColor}, unicode={useUnicode}.");
+        return new GatewayOutput(useColor, useUnicode, useLiveRendering, restore);
     }
 
     private sealed class GatewayOutput(
         bool useColor,
         bool useUnicode,
+        bool useLiveRendering,
         IDisposable? restore) : IDisposable
     {
         public bool UseColor { get; } = useColor;
         public bool UseUnicode { get; } = useUnicode;
+        public bool UseLiveRendering { get; } = useLiveRendering;
 
         public void Dispose() => restore?.Dispose();
     }
