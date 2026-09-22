@@ -25,6 +25,14 @@ Loose registration and an installed MSIX are mutually exclusive for the
 `OpenClawFoundation.OpenClawGateway` identity. Windows cannot preserve packaged app data while
 switching between them. Treat a transition as deliberate, not an update.
 
+Checkouts that previously registered the legacy `OpenClaw.Gateway` identity
+need an explicit transition because the old registration may still point at
+this checkout's layout. The deployment script detects both identities before
+changing that layout. Run `-Unregister` to remove an owned loose registration,
+or pass `-ReplaceExistingInstall` to explicitly remove the old registration as
+part of deployment; packaged LocalState does not transfer to the reserved
+package family.
+
 ## Fast, loose-registration inner loop
 
 From a clean checkout, register an x64 layout and prepare the runtime:

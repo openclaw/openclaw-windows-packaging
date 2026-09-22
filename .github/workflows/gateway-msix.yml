@@ -770,6 +770,7 @@ jobs:
       package_version: ${{ steps.release.outputs.package_version }}
       release_tag: ${{ steps.release.outputs.release_tag }}
       release_version: ${{ steps.release.outputs.release_version }}
+      publisher: ${{ steps.release.outputs.publisher }}
     permissions:
       actions: read
       contents: read
@@ -814,6 +815,7 @@ jobs:
           "package_version=$packageVersion" >> $env:GITHUB_OUTPUT
           "release_tag=$($identity.ReleaseTag)" >> $env:GITHUB_OUTPUT
           "release_version=$($identity.ReleaseVersion)" >> $env:GITHUB_OUTPUT
+          "publisher=$($policy.publisher)" >> $env:GITHUB_OUTPUT
 
       - name: Enforce official signing policy
         shell: pwsh
@@ -894,10 +896,13 @@ jobs:
 
       - name: Verify signatures and refresh metadata
         shell: pwsh
+        env:
+          EXPECTED_PUBLISHER: ${{ needs.authorize-signing.outputs.publisher }}
         run: |
-          $policy = Get-Content -LiteralPath release-policy.json -Raw |
-            ConvertFrom-Json
-          $expectedSubject = [string]$policy.publisher
+          $expectedSubject = $env:EXPECTED_PUBLISHER
+          if ([string]::IsNullOrWhiteSpace($expectedSubject)) {
+            throw 'The authorized publisher subject was not provided to the signing job.'
+          }
           foreach ($architecture in @('x64', 'arm64')) {
             $directory = Join-Path 'artifacts' $architecture
             $msix = Get-ChildItem -LiteralPath $directory -Filter '*.msix' -File

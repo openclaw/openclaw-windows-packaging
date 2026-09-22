@@ -69,7 +69,10 @@ $requiredFragments = @(
     '-BundlePath artifacts\bundle\OpenClawGateway.msixbundle'
     'files-folder-recurse: true'
     'files: ${{ github.workspace }}\artifacts\bundle\OpenClawGateway.msixbundle'
-    '$expectedSubject = [string]$policy.publisher'
+    'publisher: ${{ steps.release.outputs.publisher }}'
+    '"publisher=$($policy.publisher)" >> $env:GITHUB_OUTPUT'
+    'EXPECTED_PUBLISHER: ${{ needs.authorize-signing.outputs.publisher }}'
+    '$expectedSubject = $env:EXPECTED_PUBLISHER'
     'name: Upload signed multi-architecture MSIX bundle'
     'endpoint: https://eus.codesigning.azure.net/'
     'signing-account-name: openclaw'
@@ -122,6 +125,21 @@ if ($identityCalls.Count -ne 3) {
 
 if ($workflow.Contains('AZURE_CLIENT_SECRET', [StringComparison]::Ordinal)) {
     throw 'Signing workflow must use OIDC, not an Azure client secret.'
+}
+
+$signJobMatch = [regex]::Match(
+    $workflow,
+    '(?ms)^  sign-msix:\s*(?<job>.*?)(?=^  [a-z][a-z0-9-]+:)'
+)
+if (-not $signJobMatch.Success) {
+    throw 'Unable to locate the sign-msix workflow job.'
+}
+$signJob = $signJobMatch.Groups['job'].Value
+if ($signJob.Contains('release-policy.json', [StringComparison]::Ordinal)) {
+    throw (
+        'The signing runner must consume the publisher authorized by the ' +
+        'authorize-signing job; it does not check out release policy.'
+    )
 }
 
 Write-Host 'Gateway MSIX signing workflow configuration passed.'
