@@ -527,13 +527,16 @@ to remove the checkout. Local builds are unsigned development artifacts and are
 never official-signing inputs.
 
 Normal pull-request and push workflows publish unsigned packages for
-validation. Manual runs support three signing modes:
+validation. Manual runs support four modes:
 
 - `unsigned` follows stable or a stable-source override and publishes unsigned
   MSIX packages;
 - `test` uses the same source-selection rules and publishes MSIX packages signed with a
   temporary self-signed certificate plus the public `.cer` needed for local
   installation;
+- `store` requires the reviewed immutable commit from `release-policy.json`,
+  may run only from `main`, and publishes permanent unsigned Partner Center
+  submission assets; Microsoft signs them during Store ingestion;
 - `official` requires the approved immutable commit from
   `release-policy.json`, may run only from `main`, and publishes the signed
   packages as permanent assets on a GitHub Release named by the policy.
@@ -579,15 +582,18 @@ reviewed pull request:
    same Gateway tag.
 
 After that pull request merges, manually run **Build OpenClaw Gateway MSIX** on
-`main` with `openclaw_ref` set to the approved commit and `signing_mode` set to
-`official`. The workflow derives the package version and release tag, creates
+`main` with `openclaw_ref` set to the approved commit. Use `signing_mode=store`
+for the Partner Center identity, or `signing_mode=official` only when the Azure
+certificate subject exactly matches the reviewed publisher. The workflow derives
+the package version and release tag, creates
 the tag in this repository, and publishes a GitHub Release with generated
-release notes. Each release contains a signed, multi-architecture
-`OpenClawGateway-<version>.msixbundle` as the recommended download, plus signed
+release notes. Each release contains a multi-architecture
+`OpenClawGateway-<version>.msixbundle` as the recommended Store submission, plus
 `OpenClawGateway-<version>-x64.msix` and
 `OpenClawGateway-<version>-arm64.msix` packages for architecture-specific
-deployment. The duplicate GitHub Actions artifacts remain short-lived transport
-and diagnostic copies.
+deployment. Store-mode assets are intentionally unsigned and are not direct
+sideload downloads; Partner Center signs them during ingestion. The duplicate
+GitHub Actions artifacts remain short-lived transport and diagnostic copies.
 
 The same identity can be used for direct distribution and Microsoft Store
 submission; the fourth component is always `0`.

@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       openclaw_ref:
-        description: Optional stable-source ref; empty follows npm latest (official signing still requires policy approval)
+        description: Optional stable-source ref; empty follows npm latest (release publication still requires policy approval)
         required: false
         default: ''
         type: string
@@ -20,6 +20,7 @@ on:
         options:
           - unsigned
           - test
+          - store
           - official
 
 concurrency:
@@ -294,7 +295,7 @@ jobs:
 
       - name: Restore cached OpenClaw package
         id: package-cache
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.signing_mode != 'official' }}
+        if: ${{ github.event_name != 'workflow_dispatch' || (inputs.signing_mode != 'official' && inputs.signing_mode != 'store') }}
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/openclaw-package
@@ -386,7 +387,7 @@ jobs:
           "package_sha256=$([string]$metadata.packageSha256)" >> $env:GITHUB_OUTPUT
 
       - name: Save OpenClaw package cache
-        if: ${{ steps.package-cache.outputs.cache-hit != 'true' && (github.event_name != 'workflow_dispatch' || inputs.signing_mode != 'official') }}
+        if: ${{ steps.package-cache.outputs.cache-hit != 'true' && (github.event_name != 'workflow_dispatch' || (inputs.signing_mode != 'official' && inputs.signing_mode != 'store')) }}
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/openclaw-package
@@ -451,7 +452,7 @@ jobs:
 
       - name: Restore cached Windows dependency tree
         id: payload-cache
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.signing_mode != 'official' }}
+        if: ${{ github.event_name != 'workflow_dispatch' || (inputs.signing_mode != 'official' && inputs.signing_mode != 'store') }}
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}\openclaw-stage-${{ matrix.architecture }}
@@ -471,7 +472,7 @@ jobs:
           .\scripts\Build-Payload.ps1 @parameters
 
       - name: Save Windows dependency tree cache
-        if: ${{ steps.payload-cache.outputs.cache-hit != 'true' && (github.event_name != 'workflow_dispatch' || inputs.signing_mode != 'official') }}
+        if: ${{ steps.payload-cache.outputs.cache-hit != 'true' && (github.event_name != 'workflow_dispatch' || (inputs.signing_mode != 'official' && inputs.signing_mode != 'store')) }}
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}\openclaw-stage-${{ matrix.architecture }}
@@ -519,7 +520,7 @@ jobs:
             RunAttempt = '${{ github.run_attempt }}'
           }
           if (
-            $env:SIGNING_MODE -eq 'official' -or
+            $env:SIGNING_MODE -in @('official', 'store') -or
             $env:VERSIONING_CHANGE -eq 'true'
           ) {
             $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
@@ -635,7 +636,7 @@ jobs:
             RunAttempt = '${{ github.run_attempt }}'
           }
           if (
-            $env:SIGNING_MODE -eq 'official' -or
+            $env:SIGNING_MODE -in @('official', 'store') -or
             $env:VERSIONING_CHANGE -eq 'true'
           ) {
             $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
@@ -746,21 +747,21 @@ jobs:
           retention-days: 90
 
   reject-untrusted-official-signing:
-    name: Reject official signing outside main
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode == 'official' && github.ref != 'refs/heads/main' }}
+    name: Reject release publication outside main
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.signing_mode == 'official' || inputs.signing_mode == 'store') && github.ref != 'refs/heads/main' }}
     runs-on: windows-latest
     steps:
       - name: Reject untrusted workflow ref
         shell: pwsh
         run: |
           throw (
-            'Official Gateway MSIX signing may be dispatched only from main. ' +
+            'Gateway MSIX release publication may be dispatched only from main. ' +
             'Use unsigned or test mode for other branches.'
           )
 
   authorize-signing:
-    name: Authorize official Gateway MSIX signing
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode == 'official' && github.ref == 'refs/heads/main' }}
+    name: Authorize Gateway MSIX release
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.signing_mode == 'official' || inputs.signing_mode == 'store') && github.ref == 'refs/heads/main' }}
     needs:
       - build-package
       - build-msix
@@ -817,7 +818,7 @@ jobs:
           "release_version=$($identity.ReleaseVersion)" >> $env:GITHUB_OUTPUT
           "publisher=$($policy.publisher)" >> $env:GITHUB_OUTPUT
 
-      - name: Enforce official signing policy
+      - name: Enforce reviewed release policy
         shell: pwsh
         env:
           OPENCLAW_REF: ${{ inputs.openclaw_ref || needs.build-package.outputs.source_sha }}
@@ -832,7 +833,7 @@ jobs:
 
   sign-msix:
     name: Officially sign Gateway MSIX packages
-    if: ${{ needs.authorize-signing.result == 'success' }}
+    if: ${{ inputs.signing_mode == 'official' && needs.authorize-signing.result == 'success' }}
     needs:
       - build-msix
       - build-msix-bundle
@@ -1042,6 +1043,79 @@ jobs:
 
             The packages are signed by OpenClaw Foundation through Azure Artifact Signing.
 
+  publish-store-release:
+    name: Publish unsigned Microsoft Store MSIX release
+    if: ${{ inputs.signing_mode == 'store' && needs.authorize-signing.result == 'success' }}
+    needs:
+      - build-package
+      - build-msix
+      - build-msix-bundle
+      - authorize-signing
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download authorized unsigned x64 package
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-unsigned-x64
+          path: store/x64
+
+      - name: Download authorized unsigned ARM64 package
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-unsigned-arm64
+          path: store/arm64
+
+      - name: Download authorized unsigned multi-architecture bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-unsigned-bundle
+          path: store/bundle
+
+      - name: Stage versioned Store submission assets
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.authorize-signing.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          mkdir release-assets
+          cp store/x64/OpenClawGateway-x64.msix \
+            "release-assets/OpenClawGateway-${RELEASE_VERSION}-x64.msix"
+          cp store/arm64/OpenClawGateway-arm64.msix \
+            "release-assets/OpenClawGateway-${RELEASE_VERSION}-arm64.msix"
+          cp store/bundle/OpenClawGateway.msixbundle \
+            "release-assets/OpenClawGateway-${RELEASE_VERSION}.msixbundle"
+
+      - name: Create permanent GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.authorize-signing.outputs.release_tag }}
+          target_commitish: ${{ github.sha }}
+          name: OpenClaw Gateway MSIX ${{ needs.authorize-signing.outputs.release_tag }}
+          generate_release_notes: true
+          prerelease: false
+          make_latest: true
+          overwrite_files: false
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/*.msix
+            release-assets/*.msixbundle
+          body: |
+            > [!IMPORTANT]
+            > These packages are **unsigned Microsoft Store submission assets**.
+            > Submit them through Partner Center, which signs packages during Store ingestion.
+            > They are not intended for direct sideloading.
+
+            Packages OpenClaw `${{ needs.build-package.outputs.package_version }}`
+            from [`openclaw/openclaw@${{ needs.build-package.outputs.source_sha }}`](https://github.com/openclaw/openclaw/commit/${{ needs.build-package.outputs.source_sha }}).
+
+            ### Store submission assets
+            - **Recommended:** `OpenClawGateway-${{ needs.authorize-signing.outputs.release_version }}.msixbundle`
+            - **x64:** `OpenClawGateway-${{ needs.authorize-signing.outputs.release_version }}-x64.msix`
+            - **ARM64:** `OpenClawGateway-${{ needs.authorize-signing.outputs.release_version }}-arm64.msix`
+
   ci-gate:
     name: Gateway MSIX CI
     if: ${{ always() }}
@@ -1057,6 +1131,7 @@ jobs:
       - authorize-signing
       - sign-msix
       - publish-release
+      - publish-store-release
     runs-on: ubuntu-latest
     steps:
       - name: Check workflow results

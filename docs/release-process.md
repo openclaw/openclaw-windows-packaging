@@ -1,9 +1,9 @@
-# Official release process
+# Gateway MSIX release process
 
-Use this guide to prepare and publish an official OpenClaw Gateway MSIX
-release. It is a maintainer how-to: the release starts with a reviewed policy
-change and ends when the signed GitHub Release and its transition evidence are
-available. For signing prerequisites, MSIX identity rules, and the identity
+Use this guide to prepare and publish an OpenClaw Gateway MSIX release. It is a
+maintainer how-to: the release starts with a reviewed policy change and ends
+when the GitHub Release and its transition evidence are available. For signing
+prerequisites, MSIX identity rules, and the identity
 examples, see the [official signing setup](../README.md#official-signing-setup)
 in the README.
 
@@ -38,16 +38,19 @@ stable source selection described in the [README](../README.md#selecting-the-ope
 That selection does not grant official-signing approval. For an official
 dispatch, supply the full `approvedCommit`, or leave the input empty only when
 the selected stable release matches the reviewed policy. The workflow also
-accepts `signing_mode`, whose choices are `unsigned`, `test`, and `official`;
-select `official` only for the approved release dispatch.
+accepts `signing_mode`, whose choices are `unsigned`, `test`, `store`, and
+`official`. Select `store` for unsigned Partner Center submission assets.
+Select `official` only when the Azure certificate subject exactly matches the
+reviewed package publisher.
 
 ## Before dispatch
 
 Complete this checklist after the policy pull request has merged to `main`.
 
-1. Confirm the dispatch target is `main` and `signing_mode` is `official`.
+1. Confirm the dispatch target is `main` and select `signing_mode=store` for a
+   Partner Center submission or `official` for compatible Azure signing.
    Set `openclaw_ref` to the policy's full `approvedCommit`, or leave it empty
-   to select stable. Official signing is rejected for every other branch.
+   to select stable. Release publication is rejected for every other branch.
 2. Confirm the accepted immutable commit, payload version, and publisher match
    `release-policy.json`. If leaving `openclaw_ref` empty, confirm the selected
    stable source matches that same approved commit and version.
@@ -66,7 +69,7 @@ Complete this checklist after the policy pull request has merged to `main`.
    existing proof-release entry in `scripts\msix-upgrade-baselines.json`.
 
 Dispatch **Build OpenClaw Gateway MSIX** from `main` in GitHub Actions with
-those inputs. An official run deliberately bypasses both the upstream package
+those inputs. A `store` or `official` run deliberately bypasses both the upstream package
 cache and the architecture-specific Windows dependency-tree cache, so its
 payload is rebuilt and revalidated.
 
@@ -80,11 +83,11 @@ signing. `scripts\Build-MSIX.ps1` supplies the architecture-specific packages;
 the bundle script requires distinct x64 and ARM64 package inputs and the
 derived package version.
 
-Before Azure credentials are requested, `authorize-signing` runs
+Before publication or Azure credentials, `authorize-signing` runs
 `scripts\Test-SigningInputs.ps1`. That check validates the immutable requested
 commit, policy-controlled payload and publisher inputs, package and bundle
-identity, and the release artifacts. Only after it succeeds does `sign-msix`
-use Azure login. The workflow signs the x64 and ARM64 standalone packages and
+identity, and the release artifacts. For `official`, only after it succeeds does
+`sign-msix` use Azure login. The workflow signs the x64 and ARM64 standalone packages and
 the already-composed bundle; signing the bundle covers its contained packages.
 
 Observe these workflow outcomes:
@@ -108,13 +111,19 @@ profile or weaken those fixtures to make the check pass.
 
 ## Publication and completion
 
-After signing succeeds, `publish-release` creates the permanent GitHub release
+After authorization succeeds, `publish-store-release` can create a permanent
+GitHub release containing explicitly labeled unsigned Partner Center submission
+assets. Microsoft signs these packages during Store ingestion; they are not
+intended for direct sideloading. For a compatible Azure publisher certificate,
+`publish-release` runs after signing and creates the permanent GitHub release
 tag derived by `scripts\Get-MSIXReleaseIdentity.ps1`, generates release notes
 from merged pull request titles, and publishes the signed multi-architecture
 bundle plus signed x64 and ARM64 standalone MSIX assets.
 
 After publication, verify the release has the derived permanent tag, generated
-notes, and all three signed assets. Reconcile the release with the successful
+notes, and all three expected assets. For `official`, verify all signatures; for
+`store`, verify the release labels the packages as unsigned Store-submission
+assets. Reconcile the release with the successful
 identity-transition evidence from the policy pull request. Verify the bundle and both
 standalone packages are present; the bundle is the multi-architecture delivery,
 while the standalone packages support explicit architecture deployment. Keep

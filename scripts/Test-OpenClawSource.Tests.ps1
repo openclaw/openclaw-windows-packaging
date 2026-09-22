@@ -332,30 +332,38 @@ try {
         Assert-Throws { Assert-OpenClawSource $source $policy } 'repository'
         Assert-Equal $http.Calls.Count 0
     }
-    foreach ($ref in @('', $commit)) {
-        Invoke-Test "official signing accepts the reviewed release via selector '$ref'" {
-            $source = & $workflowPath @workflow -SigningMode official -Ref $ref
-            Assert-Equal $source.resolvedCommit $commit
+    foreach ($mode in @('official', 'store')) {
+        foreach ($ref in @('', $commit)) {
+            Invoke-Test "$mode release accepts the reviewed release via selector '$ref'" {
+                $source = & $workflowPath @workflow -SigningMode $mode -Ref $ref
+                Assert-Equal $source.resolvedCommit $commit
+            }
         }
     }
-    Invoke-Test 'a valid newer stable channel is not official signing authority' {
-        Add-Release '2026.9.5' ('a' * 40) ('b' * 40)
-        $http.Responses['Registry:latest'].version = '2026.9.5'
-        Assert-Throws { & $workflowPath @workflow -SigningMode official } 'reviewed approvedCommit'
-        Assert-Equal (Test-Path -LiteralPath $workflow.OutputPath) $false
+    foreach ($mode in @('official', 'store')) {
+        Invoke-Test "a valid newer stable channel is not $mode release authority" {
+            Add-Release '2026.9.5' ('a' * 40) ('b' * 40)
+            $http.Responses['Registry:latest'].version = '2026.9.5'
+            Assert-Throws { & $workflowPath @workflow -SigningMode $mode } 'reviewed approvedCommit'
+            Assert-Equal (Test-Path -LiteralPath $workflow.OutputPath) $false
+        }
     }
     foreach ($field in @('approvedCommit', 'payloadPackageVersion', 'gatewayTag')) {
-        Invoke-Test "official signing still requires the reviewed $field" {
-            $policy.$field = @{ approvedCommit = 'a' * 40; payloadPackageVersion = '2026.9.3'; gatewayTag = 'v2026.9.3' }[$field]
-            Save-Policy
-            Assert-Throws { & $workflowPath @workflow -SigningMode official } 'reviewed approvedCommit'
+        foreach ($mode in @('official', 'store')) {
+            Invoke-Test "$mode release still requires the reviewed $field" {
+                $policy.$field = @{ approvedCommit = 'a' * 40; payloadPackageVersion = '2026.9.3'; gatewayTag = 'v2026.9.3' }[$field]
+                Save-Policy
+                Assert-Throws { & $workflowPath @workflow -SigningMode $mode } 'reviewed approvedCommit'
+            }
         }
     }
-    Invoke-Test 'official explicit inputs must be the full approved SHA, not a tag or branch' {
-        foreach ($ref in @("v$version", 'main', ('a' * 40))) {
-            Assert-Throws { & $workflowPath @workflow -SigningMode official -Ref $ref } 'full reviewed approvedCommit'
+    foreach ($mode in @('official', 'store')) {
+        Invoke-Test "$mode explicit inputs must be the full approved SHA, not a tag or branch" {
+            foreach ($ref in @("v$version", 'main', ('a' * 40))) {
+                Assert-Throws { & $workflowPath @workflow -SigningMode $mode -Ref $ref } 'full reviewed approvedCommit'
+            }
+            Assert-Equal $http.Calls.Count 0
         }
-        Assert-Equal $http.Calls.Count 0
     }
     Write-Host "Passed $testCount OpenClaw source tests."
 }

@@ -179,7 +179,7 @@ if (
     $normalizedRequestedRef -ne $approvedCommit
 ) {
     throw (
-        'Official signing requires the approved immutable OpenClaw commit: ' +
+        'Release authorization requires the approved immutable OpenClaw commit: ' +
         $approvedCommit
     )
 }
@@ -575,7 +575,7 @@ foreach ($architecture in @('x64', 'arm64')) {
 
 $resolvedBundlePath = (Resolve-Path -LiteralPath $BundlePath).Path
 if ([IO.Path]::GetExtension($resolvedBundlePath) -ine '.msixbundle') {
-    throw 'The official signing bundle must use the .msixbundle extension.'
+    throw 'The authorized release bundle must use the .msixbundle extension.'
 }
 
 $bundleArchive = [IO.Compression.ZipFile]::OpenRead($resolvedBundlePath)
@@ -671,7 +671,7 @@ finally {
 }
 
 Write-Host (
-    "Authorized official signing for OpenClaw commit $approvedCommit " +
+    "Authorized release for OpenClaw commit $approvedCommit " +
     "and Gateway MSIX version $expectedPackageVersion " +
     "(bundle version $bundleVersion)."
 )
