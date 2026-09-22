@@ -49,7 +49,7 @@ Use options for a concrete reason:
 | `-PayloadRunId <id>` | You need a specific successful workflow payload instead of the latest one. Use the current branch's successful workflow run when that branch changes packaged application content. |
 | `-RefreshPayload` | A cached payload must be downloaded again; the previous payload remains available until the replacement registers successfully. |
 | `-Force` | You intentionally need to re-register although the recorded inputs have not changed. |
-| `-SkipSetup` | You only need the registration. Run `clawctl setup` before attempting to run OpenClaw, because the bundled Node.js runtime has not yet been extracted. |
+| `-SkipSetup` | You only need the registration and intentionally want to defer setup. If setup state is absent, the next `openclaw` invocation performs setup automatically unless `CLAWCTL_AUTO_SETUP` suppresses it; run `clawctl setup` when you want to provision or recover explicitly. |
 | `-ReplaceExistingInstall` | You explicitly accept removal of an installed MSIX or a registration owned by another checkout. This is destructive because app data cannot survive the loose/installed transition. |
 
 The command is idempotent, not timestamp-driven. `LocalPackage.psm1` records a
