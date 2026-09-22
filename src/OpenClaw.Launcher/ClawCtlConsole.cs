@@ -321,21 +321,27 @@ internal static class ClawCtlConsole
     internal static async Task<T> NarrateWithStatusAsync<T>(
         IAnsiConsole console,
         ClawCtlProgress initial,
-        Func<IProgress<ClawCtlProgress>, Task<T>> operation)
+        Func<IProgress<ClawCtlProgress>, Task<T>> operation,
+        Func<bool, Spinner>? selectSpinner = null)
     {
         ArgumentNullException.ThrowIfNull(console);
         ArgumentNullException.ThrowIfNull(initial);
         ArgumentNullException.ThrowIfNull(operation);
         ArgumentException.ThrowIfNullOrWhiteSpace(initial.Message);
 
+        selectSpinner ??= ClawCtlSpinner.Select;
+        bool supportsUnicode = console.Profile.Capabilities.Unicode;
         T result = default!;
         await console.Status()
-            .Spinner(Spinner.Known.Dots)
+            .Spinner(selectSpinner(supportsUnicode))
             .SpinnerStyle(AccentStyle)
             .StartAsync(Markup.Escape(initial.Message), async context =>
             {
                 result = await operation(new InlineProgress(progress =>
-                    context.Status(Markup.Escape(progress.Message))))
+                {
+                    context.Spinner(selectSpinner(supportsUnicode));
+                    context.Status(Markup.Escape(progress.Message));
+                }))
                     .ConfigureAwait(false);
             }).ConfigureAwait(false);
         return result;
