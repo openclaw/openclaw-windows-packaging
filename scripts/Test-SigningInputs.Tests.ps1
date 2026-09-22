@@ -7,6 +7,29 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path $PSScriptRoot -Parent
 $policyPath = Join-Path $repositoryRoot 'release-policy.json'
 $policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
+if (
+    [string]$policy.packageIdentityName -cne
+        'OpenClawFoundation.OpenClawGateway' -or
+    [string]$policy.packageFamilyName -cne
+        'OpenClawFoundation.OpenClawGateway_rfcbke2p71se2' -or
+    [string]$policy.publisher -cne
+        'CN=4BA40A7A-B719-4C40-BF91-84AF4F1136FC'
+) {
+    throw 'Release policy does not contain the Partner Center-reserved identity.'
+}
+[xml]$sourceManifest = Get-Content `
+    -LiteralPath (Join-Path `
+        $repositoryRoot `
+        'src\OpenClaw.Launcher\Package.appxmanifest') `
+    -Raw
+if (
+    [string]$sourceManifest.Package.Identity.Name -cne
+        [string]$policy.packageIdentityName -or
+    [string]$sourceManifest.Package.Identity.Publisher -cne
+        [string]$policy.publisher
+) {
+    throw 'The source package manifest does not match release policy.'
+}
 $approvedCommit = [string]$policy.approvedCommit
 $unapprovedCommit = 'b' * 40
 $releaseIdentity = & (
@@ -120,7 +143,7 @@ function New-TestArtifact {
     @"
 <?xml version="1.0" encoding="utf-8"?>
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
-  <Identity Name="OpenClaw.Gateway"
+  <Identity Name="$($policy.packageIdentityName)"
             Publisher="$($policy.publisher)"
             Version="$approvedPackageVersion"
             ProcessorArchitecture="$Architecture" />
@@ -259,6 +282,8 @@ function New-TestArtifact {
         sha256 = $msixHash
         signed = $false
         packageVersion = $approvedPackageVersion
+        packageIdentityName = $policy.packageIdentityName
+        packageFamilyName = $policy.packageFamilyName
         publisher = $policy.publisher
     } |
         ConvertTo-Json |
@@ -327,7 +352,7 @@ function New-TestBundle {
     @"
 <?xml version="1.0" encoding="utf-8"?>
 <Bundle xmlns="http://schemas.microsoft.com/appx/2013/bundle">
-  <Identity Name="OpenClaw.Gateway"
+  <Identity Name="$($policy.packageIdentityName)"
             Publisher="$($policy.publisher)"
             Version="$BundleVersion" />
   <Packages>
@@ -451,6 +476,30 @@ try {
     New-TestArtifact -Root $testRoot -Architecture arm64 -NodeRuntimeVersion '26.1.0'
     Assert-Fails `
         -MessagePattern 'Node.js runtime versions do not match' `
+        -Action { Invoke-PolicyValidation -Root $testRoot }
+
+    Reset-TestArtifacts
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        $manifestPath = Join-Path $Expanded 'AppxManifest.xml'
+        [xml]$manifest = Get-Content -LiteralPath $manifestPath -Raw
+        $manifest.Package.Identity.Name = 'OpenClaw.Gateway'
+        $manifest.Save($manifestPath)
+    }
+    Assert-Fails `
+        -MessagePattern 'manifest identity is unexpected' `
+        -Action { Invoke-PolicyValidation -Root $testRoot }
+
+    Reset-TestArtifacts
+    $x64MetadataPath = Join-Path $testRoot 'x64\msix-metadata.json'
+    $x64Metadata = Get-Content -LiteralPath $x64MetadataPath -Raw |
+        ConvertFrom-Json
+    $x64Metadata.packageFamilyName = 'OpenClaw.Gateway_kaa03rpbbqef6'
+    $x64Metadata |
+        ConvertTo-Json |
+        Set-Content -LiteralPath $x64MetadataPath -Encoding utf8
+    Assert-Fails `
+        -MessagePattern 'metadata is not eligible' `
         -Action { Invoke-PolicyValidation -Root $testRoot }
 
     Reset-TestArtifacts

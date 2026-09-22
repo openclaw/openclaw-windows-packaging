@@ -136,7 +136,7 @@ internal static class GatewayLauncherScript
             $"$applicationId = '{ControlApplicationId}'",
             $"$arguments = '{controlArguments}'",
             $"$applicationUserModelId = '{QuotePowerShell(applicationUserModelId)}'",
-            "$package = Get-AppxPackage -Name 'OpenClaw.Gateway' | " +
+            "$package = Get-AppxPackage -Name 'OpenClawFoundation.OpenClawGateway' | " +
             "Where-Object { $_.PackageFamilyName -eq $packageFamilyName } | " +
             "Select-Object -First 1",
             "if ($null -eq $package) { throw \"Package '$packageFamilyName' is not registered for the current user.\" }",

@@ -1,7 +1,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:PackageName = 'OpenClaw.Gateway'
+$script:PackageName = 'OpenClawFoundation.OpenClawGateway'
 $script:StateSchema = 1
 $script:ControlApplicationId = 'Control'
 

@@ -27,10 +27,25 @@ $repositoryRoot = Split-Path $PSScriptRoot -Parent
 $projectPath = Join-Path `
     $repositoryRoot `
     'src\OpenClaw.Launcher\OpenClaw.Launcher.csproj'
-$publisher = (
-    'CN=OpenClaw Foundation, O=OpenClaw Foundation, L=Mill Valley, ' +
-    'S=California, C=US'
-)
+$policy = Get-Content `
+    -LiteralPath (Join-Path $repositoryRoot 'release-policy.json') `
+    -Raw |
+    ConvertFrom-Json
+$manifestPath = Join-Path `
+    $repositoryRoot `
+    'src\OpenClaw.Launcher\Package.appxmanifest'
+[xml]$packageManifest = Get-Content -LiteralPath $manifestPath -Raw
+$manifestIdentity = $packageManifest.Package.Identity
+if (
+    [string]::IsNullOrWhiteSpace([string]$policy.packageFamilyName) -or
+    [string]$manifestIdentity.Name -cne [string]$policy.packageIdentityName -or
+    [string]$manifestIdentity.Publisher -cne [string]$policy.publisher
+) {
+    throw 'The package manifest identity does not match release policy.'
+}
+$packageIdentityName = [string]$policy.packageIdentityName
+$packageFamilyName = [string]$policy.packageFamilyName
+$publisher = [string]$policy.publisher
 
 function Invoke-CheckedCommand {
     param(
@@ -652,6 +667,8 @@ try {
         sha256 = $msixHash
         signed = $false
         packageVersion = $PackageVersion
+        packageIdentityName = $packageIdentityName
+        packageFamilyName = $packageFamilyName
         publisher = $publisher
     } | ConvertTo-Json |
         Set-Content `

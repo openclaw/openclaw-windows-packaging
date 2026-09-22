@@ -31,6 +31,25 @@ if (-not $IsWindows) {
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
+$policy = Get-Content `
+    -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'release-policy.json') `
+    -Raw |
+    ConvertFrom-Json
+$candidatePackageName = [string]$policy.packageIdentityName
+$candidatePackageFamilyName = [string]$policy.packageFamilyName
+$previousPackageName = [string]$policy.previousPackageIdentity.name
+$previousPackageFamilyName = [string]$policy.previousPackageIdentity.familyName
+$previousPublisher = [string]$policy.previousPackageIdentity.publisher
+if (
+    [string]::IsNullOrWhiteSpace($candidatePackageName) -or
+    [string]::IsNullOrWhiteSpace($candidatePackageFamilyName) -or
+    [string]::IsNullOrWhiteSpace($previousPackageName) -or
+    [string]::IsNullOrWhiteSpace($previousPackageFamilyName) -or
+    [string]::IsNullOrWhiteSpace($previousPublisher)
+) {
+    throw 'The release policy does not define the package identity reset.'
+}
+
 function Read-MSIXIdentity {
     param([Parameter(Mandatory)][string]$Path)
 
@@ -90,20 +109,29 @@ function Read-MSIXIdentity {
 }
 
 function Get-GatewayPackages {
-    @(Get-AppxPackage -Name 'OpenClaw.Gateway' -ErrorAction SilentlyContinue)
+    @(
+        foreach ($name in @($candidatePackageName, $previousPackageName)) {
+            Get-AppxPackage -Name $name -ErrorAction SilentlyContinue
+        }
+    )
 }
 
 $testOwnsPackage = $false
 $testPackageFamilyName = $null
+$testPackageName = $null
 
 function Remove-TestPackage {
     if (-not $script:testOwnsPackage) {
         return
     }
 
-    $packages = @(Get-GatewayPackages)
+    $packages = @(
+        Get-AppxPackage `
+            -Name $script:testPackageName `
+            -ErrorAction SilentlyContinue
+    )
     if ($packages.Count -gt 1) {
-        throw 'More than one OpenClaw.Gateway registration exists during cleanup.'
+        throw 'More than one owned Gateway registration exists during cleanup.'
     }
     if ($packages.Count -eq 1) {
         if (
@@ -120,10 +148,15 @@ function Remove-TestPackage {
 
     $script:testOwnsPackage = $false
     $script:testPackageFamilyName = $null
+    $script:testPackageName = $null
 }
 
 function Install-TestPackage {
-    param([Parameter(Mandatory)][string]$Path)
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$ExpectedName,
+        [Parameter(Mandatory)][string]$ExpectedFamilyName
+    )
 
     if (@(Get-GatewayPackages).Count -ne 0) {
         throw 'Refusing to install over an OpenClaw package not owned by this test.'
@@ -131,12 +164,21 @@ function Install-TestPackage {
     # The clean-machine guard above establishes ownership before installation,
     # allowing finally cleanup even if installation only partially succeeds.
     $script:testOwnsPackage = $true
+    $script:testPackageName = $ExpectedName
     Add-AppxPackage -Path $Path -ErrorAction Stop
-    $packages = @(Get-GatewayPackages)
+    $packages = @(
+        Get-AppxPackage -Name $ExpectedName -ErrorAction SilentlyContinue
+    )
     if ($packages.Count -ne 1) {
-        throw 'Windows did not create exactly one OpenClaw.Gateway registration.'
+        throw 'Windows did not create exactly one expected Gateway registration.'
     }
     $script:testPackageFamilyName = [string]$packages[0].PackageFamilyName
+    if ($script:testPackageFamilyName -cne $ExpectedFamilyName) {
+        throw (
+            'Windows registered an unexpected package family: ' +
+            $script:testPackageFamilyName
+        )
+    }
     $packages[0]
 }
 
@@ -156,7 +198,7 @@ $resolvedCertificatePath = (
 $candidateIdentity = Read-MSIXIdentity -Path $resolvedCandidatePath
 $candidateBundleIdentity = Read-MSIXIdentity -Path $resolvedCandidateBundlePath
 if (
-    $candidateIdentity.Name -cne 'OpenClaw.Gateway' -or
+    $candidateIdentity.Name -cne $candidatePackageName -or
     $candidateIdentity.Architecture -cne 'x64' -or
     $candidateIdentity.Version -cne $ExpectedCandidateVersion
 ) {
@@ -172,10 +214,6 @@ if (
     throw 'The candidate MSIX bundle identity is unexpected.'
 }
 
-$policy = Get-Content `
-    -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'release-policy.json') `
-    -Raw |
-    ConvertFrom-Json
 if ($candidateIdentity.Publisher -cne [string]$policy.publisher) {
     throw 'The candidate MSIX publisher does not match release policy.'
 }
@@ -187,7 +225,7 @@ if ($baselineManifest.baselines.Count -ne 6) {
 }
 if (@(Get-GatewayPackages).Count -ne 0) {
     throw (
-        'Refusing to run MSIX upgrade validation while OpenClaw.Gateway is ' +
+        'Refusing to run MSIX identity-transition validation while a Gateway package is ' +
         'already installed. Use an isolated clean test account.'
     )
 }
@@ -220,8 +258,8 @@ try {
         }
         $baselineIdentity = Read-MSIXIdentity -Path $baselinePath
         if (
-            $baselineIdentity.Name -cne $candidateIdentity.Name -or
-            $baselineIdentity.Publisher -cne $candidateIdentity.Publisher -or
+            $baselineIdentity.Name -cne $previousPackageName -or
+            $baselineIdentity.Publisher -cne $previousPublisher -or
             $baselineIdentity.Architecture -cne 'x64' -or
             $baselineIdentity.Version -cne [string]$baseline.packageVersion -or
             $baselineIdentity.DeliveryType -cne $deliveryType
@@ -235,7 +273,10 @@ try {
             throw 'The candidate MSIX must be newer than every upgrade baseline.'
         }
 
-        $installedBaseline = Install-TestPackage -Path $baselinePath
+        $installedBaseline = Install-TestPackage `
+            -Path $baselinePath `
+            -ExpectedName $previousPackageName `
+            -ExpectedFamilyName $previousPackageFamilyName
         if (
             $null -eq $installedBaseline -or
             [string]$installedBaseline.Version -cne $baselineIdentity.Version -or
@@ -258,17 +299,17 @@ try {
         else {
             $resolvedCandidatePath
         }
-        Add-AppxPackage `
+        Remove-TestPackage
+        $installedCandidate = Install-TestPackage `
             -Path $candidatePath `
-            -ForceApplicationShutdown `
-            -ErrorAction Stop
-        $installedCandidate = Get-AppxPackage -Name $candidateIdentity.Name
+            -ExpectedName $candidatePackageName `
+            -ExpectedFamilyName $candidatePackageFamilyName
         if (
             $null -eq $installedCandidate -or
             [string]$installedCandidate.Version -cne $candidateIdentity.Version -or
             [string]$installedCandidate.Status -cne 'Ok'
         ) {
-            throw "Windows did not upgrade from '$($baseline.assetName)'."
+            throw "Windows did not install after '$($baseline.assetName)' was removed."
         }
         $candidateLocalState = Join-Path `
             $env:LOCALAPPDATA `
@@ -277,12 +318,11 @@ try {
             $candidateLocalState `
             'msix-upgrade-proof.txt'
         if (
-            $installedCandidate.PackageFamilyName -cne
+            $installedCandidate.PackageFamilyName -ceq
                 $installedBaseline.PackageFamilyName -or
-            -not (Test-Path -LiteralPath $retainedMarkerPath -PathType Leaf) -or
-            (Get-Content -LiteralPath $retainedMarkerPath -Raw).Trim() -cne $marker
+            (Test-Path -LiteralPath $retainedMarkerPath -PathType Leaf)
         ) {
-            throw "LocalState was not retained across the $($baseline.packageVersion) upgrade."
+            throw 'The Partner Center identity reset did not create isolated LocalState.'
         }
 
         $results.Add([pscustomobject]@{
@@ -292,7 +332,9 @@ try {
             candidateVersion = $candidateIdentity.Version
             packageFamilyName = [string]$installedCandidate.PackageFamilyName
             status = [string]$installedCandidate.Status
-            localStateRetained = $true
+            previousPackageFamilyName = [string]$installedBaseline.PackageFamilyName
+            identityTransition = 'remove-and-reinstall'
+            localStateRetained = $false
         })
     }
 
@@ -308,7 +350,10 @@ try {
         }
     )) {
         Remove-TestPackage
-        $installedFresh = Install-TestPackage -Path $candidate.path
+        $installedFresh = Install-TestPackage `
+            -Path $candidate.path `
+            -ExpectedName $candidatePackageName `
+            -ExpectedFamilyName $candidatePackageFamilyName
         if (
             $null -eq $installedFresh -or
             [string]$installedFresh.Version -cne $candidateIdentity.Version -or
@@ -349,4 +394,7 @@ if (-not [string]::IsNullOrWhiteSpace($evidenceDirectory)) {
     ConvertTo-Json -Depth 4 |
     Set-Content -LiteralPath $EvidencePath -Encoding utf8
 
-Write-Host "MSIX upgrade compatibility passed for $($results.Count) proof-release paths."
+Write-Host (
+    'MSIX identity-reset validation passed for ' +
+    "$($results.Count) proof-release paths."
+)

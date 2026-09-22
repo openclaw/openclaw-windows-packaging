@@ -2,7 +2,7 @@
 
 Use this guide to prepare and publish an official OpenClaw Gateway MSIX
 release. It is a maintainer how-to: the release starts with a reviewed policy
-change and ends when the signed GitHub Release and its upgrade evidence are
+change and ends when the signed GitHub Release and its transition evidence are
 available. For signing prerequisites, MSIX identity rules, and the identity
 examples, see the [official signing setup](../README.md#official-signing-setup)
 in the README.
@@ -19,12 +19,16 @@ pull request when accepting a new upstream release:
 | `msixRevision` | The packaging rebuild number used to derive the MSIX and GitHub release identity. |
 | `payloadPackageVersion` | The expected version in the validated upstream payload. |
 | `approvedCommit` | The immutable upstream commit approved for official signing. |
+| `packageIdentityName` | The Partner Center-reserved MSIX identity name. |
+| `packageFamilyName` | The expected Windows package family name for that identity and publisher. |
 | `publisher` | The expected MSIX publisher subject used by packaging and signing validation. |
+| `previousPackageIdentity` | The legacy GitHub-release identity used only to prove the approved remove-and-reinstall reset. |
 
 For a new upstream tag, change `gatewayTag`, `approvedCommit`, and
 `payloadPackageVersion` together after verifying that the tag resolves to that
 commit and that its payload reports that version. Keep `repository` and
-`publisher` aligned with the reviewed release trust boundary. Set
+package identity fields and `publisher` aligned with the reviewed release
+trust boundary. Set
 `msixRevision` to `0` for the tag's first package. Do not assign a release tag
 or MSIX version by hand: `scripts\Get-MSIXReleaseIdentity.ps1` derives them
 from `gatewayTag` and `msixRevision`.
@@ -55,7 +59,7 @@ Complete this checklist after the policy pull request has merged to `main`.
    are generated from merged pull request titles; `CONTRIBUTING.md` owns the
    required title format.
 5. Confirm the policy pull request's `test-msix-upgrades` job succeeded and
-   retained its upgrade-evidence artifact. That job runs only on pull requests
+   retained its identity-transition evidence artifact. That job runs only on pull requests
    that change versioning inputs or source-selection scripts; it does not run
    during the later official dispatch.
 6. Do not reuse or alter an accepted GitHub release tag, and do not edit an
@@ -94,10 +98,13 @@ The policy pull request's upgrade job uses `scripts\Test-MSIXUpgrade.ps1` with
 the immutable, hash-pinned proof-release fixtures in
 `scripts\msix-upgrade-baselines.json`. It requires an isolated clean Windows
 account and refuses to run when an OpenClaw Gateway package is already
-registered. It installs every standalone and bundle baseline, upgrades each to
-the candidate, proves LocalState is retained, and proves both candidate
-delivery formats install cleanly. Do not substitute a developer profile or
-weaken those fixtures to make the check pass.
+registered. The Partner Center identity differs from the legacy GitHub-release
+identity, so Windows cannot perform an in-place update or retain packaged
+LocalState. The job installs every standalone and bundle baseline, verifies the
+reviewed legacy identity, removes it, installs the candidate under the reserved
+identity, proves the package family and LocalState are isolated, and proves
+both candidate delivery formats install cleanly. Do not substitute a developer
+profile or weaken those fixtures to make the check pass.
 
 ## Publication and completion
 
@@ -108,7 +115,7 @@ bundle plus signed x64 and ARM64 standalone MSIX assets.
 
 After publication, verify the release has the derived permanent tag, generated
 notes, and all three signed assets. Reconcile the release with the successful
-upgrade evidence from the policy pull request. Verify the bundle and both
+identity-transition evidence from the policy pull request. Verify the bundle and both
 standalone packages are present; the bundle is the multi-architecture delivery,
 while the standalone packages support explicit architecture deployment. Keep
 both the release workflow run and the policy pull request's evidence available

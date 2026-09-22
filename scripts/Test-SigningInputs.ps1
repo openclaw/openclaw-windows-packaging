@@ -158,6 +158,8 @@ if (
     [string]::IsNullOrWhiteSpace([string]$policy.payloadPackageVersion) -or
     $policy.gatewayTag -ne "v$($policy.payloadPackageVersion)" -or
     $policy.approvedCommit -notmatch '^[0-9a-fA-F]{40}$' -or
+    [string]::IsNullOrWhiteSpace([string]$policy.packageIdentityName) -or
+    [string]::IsNullOrWhiteSpace([string]$policy.packageFamilyName) -or
     [string]::IsNullOrWhiteSpace([string]$policy.publisher)
 ) {
     throw 'The Gateway MSIX release policy is invalid.'
@@ -229,6 +231,8 @@ foreach ($architecture in @('x64', 'arm64')) {
         $metadata.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
         $metadata.signed -ne $false -or
         $metadata.packageVersion -ne $approvedPackageVersion -or
+        $metadata.packageIdentityName -ne $policy.packageIdentityName -or
+        $metadata.packageFamilyName -ne $policy.packageFamilyName -or
         $metadata.publisher -ne $policy.publisher
     ) {
         throw "The $architecture MSIX metadata is not eligible for signing."
@@ -459,6 +463,7 @@ foreach ($architecture in @('x64', 'arm64')) {
         )
         if (
             $null -eq $identity -or
+            $identity.Name -ne $policy.packageIdentityName -or
             $identity.Publisher -ne $policy.publisher -or
             $identity.ProcessorArchitecture -ne $architecture -or
             $identity.Version -ne $metadata.packageVersion
@@ -603,7 +608,7 @@ try {
     }
     if (
         $null -eq $bundleIdentity -or
-        $bundleIdentity.Name -ne 'OpenClaw.Gateway' -or
+        $bundleIdentity.Name -ne $policy.packageIdentityName -or
         $bundleIdentity.Publisher -ne $policy.publisher -or
         -not $bundleVersionIsValid -or
         $bundleVersion -ne $approvedPackageVersion

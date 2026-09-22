@@ -1,6 +1,6 @@
 # Contributing
 
-This repository builds the `OpenClaw.Gateway` MSIX package and the
+This repository builds the OpenClaw Gateway MSIX package and the
 `openclaw.exe` NativeAOT launcher it ships. It is Windows-focused and pins the
 .NET SDK through `global.json`. Run every command below from the repository
 root in PowerShell 7 (`pwsh`).
@@ -234,11 +234,13 @@ bypassable, and required CI checks remain authoritative.
   hand.
 - Treat published proof releases in `scripts/msix-upgrade-baselines.json` as
   immutable transition fixtures. Keep their release asset names and SHA-256
-  digests pinned. Version-policy changes must pass the installed-package
-  upgrade job from every standalone and bundle baseline, retain package
-  LocalState, and prove both candidate delivery formats install fresh. Run the
-  harness only on an isolated clean Windows account; it refuses pre-existing
-  OpenClaw Gateway registrations and cleans up only its own installation.
+  digests pinned. The approved Partner Center identity reset must prove every
+  legacy standalone and bundle identity, remove it, install the candidate with
+  the reserved family name and isolated LocalState, and prove both candidate
+  delivery formats install fresh. Once reserved-identity baselines exist,
+  restore in-place upgrade and LocalState-retention proof. Run the harness only
+  on an isolated clean Windows account; it refuses pre-existing OpenClaw
+  Gateway registrations and cleans up only its own installation.
 - Use contract-specific source-generated `JsonSerializerContext` metadata.
   The launcher and session host are NativeAOT and must not introduce
   reflection-based serialization.

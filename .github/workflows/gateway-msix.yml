@@ -663,7 +663,7 @@ jobs:
           retention-days: 7
 
   test-msix-upgrades:
-    name: Test proof-release MSIX upgrades
+    name: Test proof-release MSIX identity transition
     if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.versioning == 'true' }}
     needs:
       - changes
@@ -718,7 +718,7 @@ jobs:
             }
           }
 
-      - name: Test installed-package upgrades and retained LocalState
+      - name: Test installed-package identity reset and isolated LocalState
         shell: pwsh
         env:
           GATEWAY_TAG: ${{ needs.build-package.outputs.source_tag }}
@@ -737,7 +737,7 @@ jobs:
             -ExpectedCandidateVersion $identity.PackageVersion `
             -EvidencePath evidence\msix-upgrade-evidence.json
 
-      - name: Upload upgrade evidence
+      - name: Upload identity-transition evidence
         uses: actions/upload-artifact@v7
         with:
           name: openclaw-gateway-msix-upgrade-evidence
@@ -895,7 +895,9 @@ jobs:
       - name: Verify signatures and refresh metadata
         shell: pwsh
         run: |
-          $expectedSubject = 'CN=OpenClaw Foundation, O=OpenClaw Foundation, L=Mill Valley, S=California, C=US'
+          $policy = Get-Content -LiteralPath release-policy.json -Raw |
+            ConvertFrom-Json
+          $expectedSubject = [string]$policy.publisher
           foreach ($architecture in @('x64', 'arm64')) {
             $directory = Join-Path 'artifacts' $architecture
             $msix = Get-ChildItem -LiteralPath $directory -Filter '*.msix' -File

@@ -77,7 +77,7 @@ function New-Fixture {
     [IO.File]::WriteAllText((Join-Path $project 'Package.appxmanifest'), @'
 <?xml version="1.0" encoding="utf-8"?>
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
-  <Identity Name="OpenClaw.Gateway" Publisher="CN=Fixture" Version="0.0.0.0" />
+  <Identity Name="OpenClawFoundation.OpenClawGateway" Publisher="CN=Fixture" Version="0.0.0.0" />
 </Package>
 '@)
 
@@ -196,8 +196,8 @@ function New-Fixture {
             [xml]$m = Get-Content -LiteralPath $manifestPath -Raw
             $state.Installed = [pscustomobject]@{
                 Version = if ($state.BadRegistration) { '9.9.9.9' } else { $m.Package.Identity.Version }
-                PackageFullName = "OpenClaw.Gateway_$($m.Package.Identity.Version)_fixture"
-                PackageFamilyName = 'OpenClaw.Gateway_fixture'
+                PackageFullName = "OpenClawFoundation.OpenClawGateway_$($m.Package.Identity.Version)_fixture"
+                PackageFamilyName = 'OpenClawFoundation.OpenClawGateway_fixture'
                 InstallLocation = Split-Path $manifestPath -Parent
                 IsDevelopmentMode = $true
                 Status = 'Ok'
@@ -247,7 +247,7 @@ try {
             Get-LocalPackageCheckoutCommit -FindGit { $null }
         }) -eq ''
     ) 'Missing Git should leave optional checkout metadata empty.'
-    Assert-True (@($f.SetupPackageFamilyNames)[0] -eq 'OpenClaw.Gateway_fixture') 'Setup did not target the owning package family.'
+    Assert-True (@($f.SetupPackageFamilyNames)[0] -eq 'OpenClawFoundation.OpenClawGateway_fixture') 'Setup did not target the owning package family.'
     Assert-True (@($first).Count -eq 1 -and $first.PackageFullName) 'Deployment did not return a single registration record.'
     $layout = $first.LayoutDirectory
     Assert-True ((Get-Content (Join-Path $layout 'app\openclaw.mjs') -Raw) -eq 'first payload') 'Layout does not expose the payload application.'
@@ -322,14 +322,14 @@ try {
     # Conflicting packaged install.
     $g = New-Fixture
     $g.Installed = [pscustomobject]@{
-        Version = '1.2.3.4'; PackageFullName = 'OpenClaw.Gateway_1.2.3.4_x64__pkg'
-        PackageFamilyName = 'OpenClaw.Gateway_pkg'
+        Version = '1.2.3.4'; PackageFullName = 'OpenClawFoundation.OpenClawGateway_1.2.3.4_x64__pkg'
+        PackageFamilyName = 'OpenClawFoundation.OpenClawGateway_pkg'
         InstallLocation = 'C:\Program Files\WindowsApps\fake'; IsDevelopmentMode = $false; Status = 'Ok'
     }
     Assert-Fails { Invoke-Fixture $g } 'already installed from a package'
     Assert-True ($g.Registrations -eq 0 -and @($g.Removals).Count -eq 0) 'A conflicting packaged install was touched without consent.'
     $replaced = Invoke-Fixture $g @{ ReplaceExistingInstall = $true }
-    Assert-True ($g.Removals -contains 'OpenClaw.Gateway_1.2.3.4_x64__pkg' -and $replaced.Changed) 'Explicit replacement did not remove the packaged install.'
+    Assert-True ($g.Removals -contains 'OpenClawFoundation.OpenClawGateway_1.2.3.4_x64__pkg' -and $replaced.Changed) 'Explicit replacement did not remove the packaged install.'
     # Removal happens first, so the dev build need not out-version the package it
     # replaced; staying on 0.1.x keeps a later real release installable.
     Assert-True ([version]$replaced.Version -lt [version]'1.0.0.0') 'A replacement build should not claim a release-range version.'
@@ -453,7 +453,7 @@ try {
     Assert-True (Test-Path (Join-Path $k.Root 'artifacts\local-package\x64\payloads')) 'Unregister discarded the payload cache.'
     $k.Installed = [pscustomobject]@{
         Version = '1.0.0.0'; PackageFullName = 'pkg'; InstallLocation = 'x'
-        PackageFamilyName = 'OpenClaw.Gateway_pkg'
+        PackageFamilyName = 'OpenClawFoundation.OpenClawGateway_pkg'
         IsDevelopmentMode = $false; Status = 'Ok'
     }
     Assert-Fails { Remove-LocalPackageRegistration -RepositoryRoot $k.Root -Operations $k.Operations } 'not a local layout'
@@ -510,8 +510,8 @@ try {
     # A development registration owned by another location is not taken over.
     $o = New-Fixture
     $o.Installed = [pscustomobject]@{
-        Version = '0.1.0.0'; PackageFullName = 'OpenClaw.Gateway_0.1.0.0_x64__other'
-        PackageFamilyName = 'OpenClaw.Gateway_other'
+        Version = '0.1.0.0'; PackageFullName = 'OpenClawFoundation.OpenClawGateway_0.1.0.0_x64__other'
+        PackageFamilyName = 'OpenClawFoundation.OpenClawGateway_other'
         InstallLocation = (Join-Path $testRoot 'someone elses layout')
         IsDevelopmentMode = $true; Status = 'Ok'
     }
@@ -532,8 +532,8 @@ try {
     New-Item -Path $foreignLayout -ItemType Directory -Force | Out-Null
     $fo.Installed = [pscustomobject]@{
         Version = $mine.Version
-        PackageFullName = "OpenClaw.Gateway_$($mine.Version)_x64__other"
-        PackageFamilyName = 'OpenClaw.Gateway_other'
+        PackageFullName = "OpenClawFoundation.OpenClawGateway_$($mine.Version)_x64__other"
+        PackageFamilyName = 'OpenClawFoundation.OpenClawGateway_other'
         InstallLocation = $foreignLayout
         IsDevelopmentMode = $true
         Status = 'Ok'

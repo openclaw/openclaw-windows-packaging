@@ -11,9 +11,10 @@ This repository builds a Windows MSIX package containing:
 
 The package is independent from the
 [OpenClaw Windows Node and Companion](https://github.com/openclaw/openclaw-windows-node)
-and uses a separate `OpenClaw.Gateway` package identity. Both packages use the
-OpenClaw Foundation publisher metadata established for OpenClaw's Windows
-packages.
+and uses the Partner Center-reserved
+`OpenClawFoundation.OpenClawGateway` package identity. Its package family is
+`OpenClawFoundation.OpenClawGateway_rfcbke2p71se2` and its publisher is
+`CN=4BA40A7A-B719-4C40-BF91-84AF4F1136FC`.
 
 ## Contributor guides
 
@@ -500,7 +501,8 @@ nor duplicate hundreds of megabytes.
 
 **Requires Developer Mode**, which the script checks before doing any work.
 
-**It cannot coexist with an MSIX-installed `OpenClaw.Gateway`.** Windows
+**It cannot coexist with an MSIX-installed
+`OpenClawFoundation.OpenClawGateway`.** Windows
 refuses to replace a packaged install with a local layout, and it cannot
 preserve that package's app data across the switch, so the script stops and
 explains rather than removing anything implicitly. Pass
@@ -590,23 +592,25 @@ and diagnostic copies.
 The same identity can be used for direct distribution and Microsoft Store
 submission; the fourth component is always `0`.
 
-The signed `v0.0.0.0` and `v0.0.0.1` proof releases are not production version
-identities, but they are retained as transition baselines. The latest production
-release is also retained as a migration baseline. Pull requests that change
-release versioning download the hash-pinned standalone x64 and recommended
+The signed `v0.0.0.0` and `v0.0.0.1` proof releases and the latest production
+release retain the former `OpenClaw.Gateway` identity and remain immutable
+transition baselines. Partner Center requires the reserved
+`OpenClawFoundation.OpenClawGateway` identity, so Windows cannot update those
+packages in place or retain their packaged LocalState. Pull requests that
+change release policy download the hash-pinned standalone x64 and recommended
 `.msixbundle` assets, install each one on a clean GitHub-hosted Windows runner,
-upgrade it in place through the same delivery format, and
-verify that the package family remains stable and a LocalState marker is
-retained. Changes to source-selection scripts also trigger this check against
-the selected release. The gate also proves fresh installation of both the
-standalone and bundle candidates. It refuses to run when an OpenClaw Gateway package is
+verify the legacy identity, remove it, install the candidate through the same
+delivery format, and prove that Windows registered the reserved package family
+with isolated LocalState. Changes to source-selection scripts also trigger this
+check against the selected release. The gate additionally proves fresh
+installation of both candidate formats. It refuses to run when a Gateway package is
 already registered and removes only packages installed by that test
 invocation. It temporarily trusts the ephemeral test-signing certificate in
 the local-machine Trusted People store, as required by Windows deployment, and
 removes that certificate in `finally`. The resulting JSON evidence is retained
-as a workflow artifact for 90 days. Future versioning schemes must keep this
-transition gate green or explicitly document and obtain approval for a
-breaking reset.
+as a workflow artifact for 90 days. This identity change is the explicitly
+approved breaking reset; future releases under the reserved identity must
+return to in-place upgrade and LocalState-retention proof.
 
 An `.msixbundle` is a single installable container for the x64 and ARM64 MSIX
 packages; Windows selects the package appropriate for the device. An
@@ -641,7 +645,9 @@ The service principal must have `Artifact Signing Certificate Profile Signer`
 on the `openclaw` certificate profile (or a containing scope). The workflow
 uses account `openclaw`, certificate profile `openclaw`, and endpoint
 `https://eus.codesigning.azure.net/`. The expected public certificate subject
-is recorded in `release-policy.json`.
+is recorded in `release-policy.json`. Before an official dispatch, the
+certificate profile must issue that exact Partner Center publisher subject;
+signature verification fails closed when it does not.
 
 ## Installed data
 
