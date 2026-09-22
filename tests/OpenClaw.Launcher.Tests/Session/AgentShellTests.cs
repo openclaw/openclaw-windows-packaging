@@ -54,32 +54,29 @@ public sealed class AgentShellTests : IDisposable
     }
 
     [Fact]
-    public void ShellPreparationPutsToolsThenAgentNodeAheadOfExistingPath()
+    public void InteractiveShellPreparationSetsTheWorkspaceAndPrompt()
     {
-        IReadOnlyList<string> arguments = AgentShellResolver.BuildArguments(
+        IReadOnlyList<string> arguments = AgentShellResolver.BuildInteractiveArguments(
             @"C:\shared workspace",
-            "agent's name",
-            @"C:\shared workspace\.openclaw-tools",
-            @"C:\Users\agent\AppData\Local\OpenClaw\NodeJS\node-v24");
+            "agent's name");
 
         Assert.Equal(["-NoLogo", "-NoProfile", "-NoExit", "-Command"], arguments.Take(4));
         string preparation = arguments[4];
         Assert.Contains(
-            @"C:\shared workspace\.openclaw-tools' + [IO.Path]::PathSeparator + 'C:\Users\agent",
+            "Set-Location -LiteralPath 'C:\\shared workspace'",
             preparation,
             StringComparison.Ordinal);
         Assert.Contains("agent''s name", preparation, StringComparison.Ordinal);
+        Assert.DoesNotContain("$env:PATH", preparation, StringComparison.Ordinal);
     }
 
     [Fact]
     public void ShellPreparationLoadsOnlyTheSharedCompletionProjection()
     {
         string projection = @"C:\shared workspace\.openclaw\cache\completion.ps1";
-        IReadOnlyList<string> arguments = AgentShellResolver.BuildArguments(
+        IReadOnlyList<string> arguments = AgentShellResolver.BuildInteractiveArguments(
             @"C:\shared workspace",
             "agent",
-            @"C:\tools",
-            @"C:\node",
             projection);
 
         Assert.Contains(
@@ -87,6 +84,38 @@ public sealed class AgentShellTests : IDisposable
             arguments[4],
             StringComparison.Ordinal);
         Assert.DoesNotContain("LocalState", arguments[4], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CommandTextRemainsOnePowerShellArgument()
+    {
+        const string command = "Get-Content ~/foo.txt; Write-Output '%PATH%'";
+
+        IReadOnlyList<string> arguments =
+            AgentShellResolver.BuildCommandArguments(command);
+
+        Assert.Equal(["-NoLogo", "-NoProfile", "-Command", command], arguments);
+    }
+
+    [Fact]
+    public void ScriptPathAndArgumentsKeepTheirBoundaries()
+    {
+        IReadOnlyList<string> arguments = AgentShellResolver.BuildFileArguments(
+            @".\scripts\diagnose.ps1",
+            ["hello world", "--name", "%PATH%", string.Empty]);
+
+        Assert.Equal(
+            [
+                "-NoLogo",
+                "-NoProfile",
+                "-File",
+                @".\scripts\diagnose.ps1",
+                "hello world",
+                "--name",
+                "%PATH%",
+                string.Empty
+            ],
+            arguments);
     }
 
     [Fact]

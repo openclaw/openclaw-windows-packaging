@@ -45,11 +45,22 @@ The payload build asks the pinned OpenClaw application to generate its
 PowerShell completion script, validates the result, and includes those
 immutable bytes in the application inventory and signed package. Installation
 copies that trusted package asset into host LocalState. Before `clawctl pwsh`
-starts, the launcher refreshes an installed cache from the current package,
-then projects it through a generation-checked `SessionWorkspaceOperation`,
-which rejects guest-controlled path redirection. The workspace copy is
-disposable and is removed rather than loaded when the authoritative host cache
-is absent.
+opens an interactive shell, the launcher refreshes an installed cache from the
+current package, then projects it through a generation-checked
+`SessionWorkspaceOperation`, which rejects guest-controlled path redirection.
+The workspace copy is disposable and is removed rather than loaded when the
+authoritative host cache is absent. One-shot `--command` and `--file` execution
+does not project or load completion.
+
+All three `pwsh` modes use the attached session-command path. The request keeps
+PowerShell's executable, argument vector, shared-workspace working directory,
+environment, and PATH prefix as data through the guest helper. Interactive
+mode supplies `-NoExit` plus prompt and completion preparation. Command mode
+supplies one explicit `-Command` string; it does not reconstruct that string
+from multiple caller arguments. File mode supplies `-File`, the agent-visible
+path, and each script argument separately. Relative paths therefore start in
+the shared workspace, while `~` and absolute paths belong to the agent
+identity. The host does not stage arbitrary script content.
 
 ```mermaid
 flowchart LR

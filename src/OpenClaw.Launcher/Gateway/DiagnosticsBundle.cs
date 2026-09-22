@@ -80,11 +80,9 @@ internal sealed partial class GatewayRuntime
             new SessionCommandRequest(
                 helperPath,
                 shell.ExecutablePath,
-                AgentShellResolver.BuildArguments(
+                AgentShellResolver.BuildInteractiveArguments(
                     record.WorkspacePath!,
-                    record.AgentUserName ?? "agent",
-                    string.Empty,
-                    string.Empty),
+                    record.AgentUserName ?? "agent"),
                 record.WorkspacePath!),
             $"Opening {shell.DisplayName} in the isolated session.",
             shell.DisplayName,

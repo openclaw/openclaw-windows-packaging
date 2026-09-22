@@ -33,27 +33,18 @@ internal static class AgentShellResolver
         return new AgentShell(WindowsPowerShellPath, "Windows PowerShell");
     }
 
-    public static IReadOnlyList<string> BuildArguments(
+    public static IReadOnlyList<string> BuildInteractiveArguments(
         string workspacePath,
         string agentName,
-        string toolsDirectory,
-        string nodeDirectory,
         string? completionScriptPath = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspacePath);
-        ArgumentException.ThrowIfNullOrWhiteSpace(toolsDirectory);
-        ArgumentException.ThrowIfNullOrWhiteSpace(nodeDirectory);
 
         string prompt =
             "function prompt { " +
             $"Write-Host '[openclaw {Escape(agentName)}]' -NoNewline -ForegroundColor Cyan; " +
             "return ' ' + $ExecutionContext.SessionState.Path.CurrentLocation + '> ' }";
-        string path =
-            "$env:PATH = " +
-            $"'{Escape(toolsDirectory)}' + [IO.Path]::PathSeparator + " +
-            $"'{Escape(nodeDirectory)}' + [IO.Path]::PathSeparator + $env:PATH; ";
         string preparation =
-            path +
             $"Set-Location -LiteralPath '{Escape(workspacePath)}' -ErrorAction SilentlyContinue; " +
             prompt +
             (string.IsNullOrWhiteSpace(completionScriptPath)
@@ -61,6 +52,23 @@ internal static class AgentShellResolver
                 : $"; if (Test-Path -LiteralPath '{Escape(completionScriptPath)}') {{ . '{Escape(completionScriptPath)}' }}");
 
         return ["-NoLogo", "-NoProfile", "-NoExit", "-Command", preparation];
+    }
+
+    public static IReadOnlyList<string> BuildCommandArguments(string command)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(command);
+
+        return ["-NoLogo", "-NoProfile", "-Command", command];
+    }
+
+    public static IReadOnlyList<string> BuildFileArguments(
+        string file,
+        IReadOnlyList<string> arguments)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(file);
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        return ["-NoLogo", "-NoProfile", "-File", file, .. arguments];
     }
 
     private static string Escape(string value) =>

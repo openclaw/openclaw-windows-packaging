@@ -807,9 +807,10 @@ internal static class Program
                         "Opened the Control UI in the default browser.",
                         0));
                 },
-                PowerShell = cancellationToken => RunPowerShellAsync(
+                PowerShell = (powerShellOptions, cancellationToken) => RunPowerShellAsync(
                     options,
                     GetSessionRuntime(),
+                    powerShellOptions,
                     cancellationToken),
                 Completion = (completionOptions, _) =>
                 {
@@ -1026,6 +1027,7 @@ internal static class Program
     private static async Task<int> RunPowerShellAsync(
         HostOptions options,
         Session.SessionRuntime runtime,
+        PowerShellOptions powerShellOptions,
         CancellationToken cancellationToken)
     {
         Session.SessionRecord record = runtime.RequireSetup();
@@ -1047,19 +1049,20 @@ internal static class Program
                 ?? throw new Session.SessionException(
                     "The installed agent command shim has no parent directory."),
             installedTools.ShimPath!);
-        if (File.Exists(runtime.Paths.CompletionCachePath))
+        bool interactive = powerShellOptions.Command is null && powerShellOptions.File is null;
+        string? completionScriptPath = null;
+        if (interactive && File.Exists(runtime.Paths.CompletionCachePath))
         {
             PowerShellCompletion.SynchronizeCacheIfInstalled(
                 runtime.Paths.CompletionCachePath,
                 PowerShellCompletion.ReadPackagedOpenClawScript(applicationDirectory));
         }
-        string? completionScriptPath;
-        using (Session.SessionWorkspaceOperation operation =
-            runtime.Executor.CreateWorkspaceOperation(record))
+        if (interactive)
         {
+            using Session.SessionWorkspaceOperation operation =
+                runtime.Executor.CreateWorkspaceOperation(record);
             completionScriptPath = Session.SessionCompletionProjection.Project(
-                operation,
-                runtime.Paths.CompletionCachePath);
+                operation, runtime.Paths.CompletionCachePath);
         }
         Session.AgentShell shell = Session.AgentShellResolver.Resolve(File.Exists);
         string? nativeRootPath = runtime.GetAgentNativeRoot();
@@ -1072,14 +1075,16 @@ internal static class Program
             new Session.SessionCommandRequest(
                 helperPath,
                 shell.ExecutablePath,
-                Session.AgentShellResolver.BuildArguments(
-                    record.WorkspacePath!,
-                    record.AgentUserName ?? "agent",
-                    tools.DirectoryPath,
-                    nodeDirectory,
+                BuildPowerShellArguments(
+                    powerShellOptions,
+                    record,
                     completionScriptPath),
                 record.WorkspacePath!)
             {
+                PathPrefix = string.Join(
+                    Path.PathSeparator,
+                    tools.DirectoryPath,
+                    nodeDirectory),
                 AdditionalEnvironment = Session.SessionExecutor.MergeEnvironment(
                     OpenClawRuntimeEnvironment.Build(
                         WindowsHostConsole.Instance.IsInteractive,
@@ -1095,6 +1100,30 @@ internal static class Program
             shell.DisplayName,
             cancellationToken).ConfigureAwait(false);
     }
+
+    private static IReadOnlyList<string> BuildPowerShellArguments(
+        PowerShellOptions options,
+        Session.SessionRecord record,
+        string? completionScriptPath)
+    {
+        if (options.Command is not null)
+        {
+            return Session.AgentShellResolver.BuildCommandArguments(options.Command);
+        }
+
+        if (options.File is not null)
+        {
+            return Session.AgentShellResolver.BuildFileArguments(
+                options.File,
+                options.Arguments);
+        }
+
+        return Session.AgentShellResolver.BuildInteractiveArguments(
+            record.WorkspacePath!,
+            record.AgentUserName ?? "agent",
+            completionScriptPath);
+    }
+
     private static void DeleteCompletionCache(string cachePath)
     {
         if (File.Exists(cachePath))

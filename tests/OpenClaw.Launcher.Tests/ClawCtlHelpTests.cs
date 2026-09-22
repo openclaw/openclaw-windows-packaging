@@ -12,7 +12,7 @@ public sealed class ClawCtlHelpTests
         Status = _ => Task.FromResult(0),
         CollectLogs = (_, _) => Task.FromResult(0),
         Teardown = (_, _) => Task.FromResult(0),
-        PowerShell = _ => Task.FromResult(0),
+        PowerShell = (_, _) => Task.FromResult(0),
         GatewayStart = (_, _) => Task.FromResult(0),
         GatewayStatus = _ => Task.FromResult(0),
         GatewayStop = _ => Task.FromResult(0),

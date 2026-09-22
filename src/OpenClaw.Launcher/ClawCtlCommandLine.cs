@@ -12,7 +12,7 @@ internal sealed record ClawCtlHandlers
     public required Func<bool, CancellationToken, Task<int>> Teardown { get; init; }
     public Func<CancellationToken, Task<int>> Open { get; init; } = _ => Task.FromResult(1);
     public Func<CompletionOptions, CancellationToken, Task<int>> Completion { get; init; } = (_, _) => Task.FromResult(1);
-    public required Func<CancellationToken, Task<int>> PowerShell { get; init; }
+    public required Func<PowerShellOptions, CancellationToken, Task<int>> PowerShell { get; init; }
     public required Func<bool, CancellationToken, Task<int>> GatewayStart { get; init; }
     public required Func<CancellationToken, Task<int>> GatewayStatus { get; init; }
     public required Func<CancellationToken, Task<int>> GatewayStop { get; init; }
@@ -21,6 +21,10 @@ internal sealed record ClawCtlHandlers
 
 internal sealed record SetupOptions(bool Fresh, bool Force);
 internal sealed record CompletionOptions(bool Install, bool Uninstall, string? ProfilePath);
+internal sealed record PowerShellOptions(
+    string? Command,
+    string? File,
+    IReadOnlyList<string> Arguments);
 
 internal sealed class ClawCtlOutputOptions
 {
@@ -204,20 +208,64 @@ internal static class ClawCtlCommandLine
         });
         Command powerShell = new(
             "pwsh",
-            "Open PowerShell inside the isolated agent. `openclaw` and `node` " +
-            "are available there; `clawctl` manages the session from outside it.");
+            "Open PowerShell or run PowerShell inside the isolated agent. " +
+            "`openclaw` and `node` are available there; `clawctl` manages the " +
+            "session from outside it.");
+        Option<string?> powerShellCommand = new("--command")
+        {
+            Description = "Run one PowerShell command string and exit.",
+            HelpName = "text"
+        };
+        Option<string?> powerShellFile = new("--file")
+        {
+            Description = "Run an agent-visible PowerShell script and exit.",
+            HelpName = "path"
+        };
+        Argument<string[]> powerShellArguments = new("arguments")
+        {
+            Description = "Arguments passed to the script selected by --file.",
+            Arity = ArgumentArity.ZeroOrMore
+        };
+        powerShell.Options.Add(powerShellCommand);
+        powerShell.Options.Add(powerShellFile);
+        powerShell.Arguments.Add(powerShellArguments);
         powerShell.Validators.Add(result =>
         {
             if (result.GetValue(json))
             {
                 result.AddError(
-                    "'--json' is not supported for 'pwsh', which opens an interactive shell.");
+                    "'--json' is not supported for 'pwsh', which preserves PowerShell streams.");
+            }
+
+            string? command = result.GetValue(powerShellCommand);
+            string? file = result.GetValue(powerShellFile);
+            string[] arguments = result.GetValue(powerShellArguments) ?? [];
+            if (command is not null && file is not null)
+            {
+                result.AddError("'--command' and '--file' cannot be used together.");
+            }
+            if (command is not null && string.IsNullOrWhiteSpace(command))
+            {
+                result.AddError("'--command' requires non-empty PowerShell text.");
+            }
+            if (file is not null && string.IsNullOrWhiteSpace(file))
+            {
+                result.AddError("'--file' requires a non-empty script path.");
+            }
+            if (arguments.Length > 0 && file is null)
+            {
+                result.AddError("PowerShell script arguments require '--file'.");
             }
         });
         powerShell.SetAction((parsed, cancellationToken) =>
         {
             outputOptions.NoColor = parsed.GetValue(noColor);
-            return handlers.PowerShell(cancellationToken);
+            return handlers.PowerShell(
+                new PowerShellOptions(
+                    parsed.GetValue(powerShellCommand),
+                    parsed.GetValue(powerShellFile),
+                    parsed.GetValue(powerShellArguments) ?? []),
+                cancellationToken);
         });
         Command gateway = new(
             "gateway-service",

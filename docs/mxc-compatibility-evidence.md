@@ -90,20 +90,24 @@ On the local win-x64 NativeAOT publish, ten direct helper invocations took
 53.5-108.9 ms (59.15 ms median), including process startup and file inspection
 but excluding the MXC round trip. No invocation started Node.js or OpenClaw.
 
-Opening the agent shell with `clawctl pwsh` installs an ASCII `openclaw.cmd`
-shim in the shared workspace: `RunPowerShellAsync` calls `InstallToolsAsync`.
-Setup alone does not guarantee that shim exists. The shim reads its Node.js and
-entry-point paths from environment variables rather than embedding profile
-paths, which avoids batch-file code-page corruption.
+Opening the agent shell or using `clawctl pwsh --command` or `--file` installs
+an ASCII `openclaw.cmd` shim in the shared workspace:
+`RunPowerShellAsync` calls `InstallToolsAsync`. Setup alone does not guarantee
+that shim exists. The shim reads its Node.js and entry-point paths from
+environment variables rather than embedding profile paths, which avoids
+batch-file code-page corruption.
 The agent's persistent user PATH is prefixed with its bundled Node.js runtime
 for independently started processes; each helper launch also supplies a
 request-level PATH prefix. Together these ensure the agent resolves its own
 bundled `node`, `npm`, and `npx`, not a device-installed Node.js.
 
-`clawctl pwsh` starts an interactive shell in the owned session. Its
-environment is built using the interactive runtime policy so terminal-related
-variables are retained when appropriate; redirected output does not synthesize
-interactive defaults.
+`clawctl pwsh` starts an interactive shell in the owned session.
+`--command` runs one PowerShell command string, while `--file` passes an
+agent-visible script path and its argument vector without host-shell
+flattening. All modes use the shared workspace as the child working directory
+and build their environment using the interactive runtime policy so
+terminal-related variables are retained when appropriate; redirected output
+does not synthesize interactive defaults.
 
 ## Gateway lifecycle and recovery
 

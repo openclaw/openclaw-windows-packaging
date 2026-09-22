@@ -576,8 +576,15 @@ public sealed class ProgramTests : IDisposable
         Assert.NotNull(launched);
         Assert.Equal(nativeRoot, launched.NativeRootPath);
         Assert.Null(launched.NodeOptionsSuffix);
+        string[] pathPrefix = launched.PathPrefix!.Split(Path.PathSeparator);
+        Assert.Equal(
+            @"C:\Users\agent\Shared\.openclaw-tools",
+            pathPrefix[0]);
+        Assert.Equal(
+            Path.GetDirectoryName(launched.Environment![AgentToolShim.NodeVariable]),
+            pathPrefix[1]);
         Assert.False(
-            launched.Environment!.ContainsKey(
+            launched.Environment.ContainsKey(
                 OpenClawRuntimeEnvironment.NativeApplicationRootVariable));
         Assert.False(
             launched.Environment.ContainsKey(
@@ -592,6 +599,121 @@ public sealed class ProgramTests : IDisposable
             OpenClawRuntimeEnvironment.NativeRedirectFileName,
             launched.Environment[AgentToolShim.NativePreloadUrlVariable],
             StringComparison.Ordinal);
+    }
+
+    public static TheoryData<string[], string[]> PowerShellOneShotCases => new()
+    {
+        {
+            ["pwsh", "--command", "Get-Content ~/foo.txt; Write-Output '%PATH%'"],
+            [
+                "-NoLogo",
+                "-NoProfile",
+                "-Command",
+                "Get-Content ~/foo.txt; Write-Output '%PATH%'"
+            ]
+        },
+        {
+            [
+                "pwsh",
+                "--file",
+                @".\scripts\diagnose.ps1",
+                "--",
+                "--name",
+                "hello world",
+                "%PATH%"
+            ],
+            [
+                "-NoLogo",
+                "-NoProfile",
+                "-File",
+                @".\scripts\diagnose.ps1",
+                "--name",
+                "hello world",
+                "%PATH%"
+            ]
+        }
+    };
+
+    [Theory]
+    [MemberData(nameof(PowerShellOneShotCases))]
+    public async Task PowerShellOneShotModePreservesArgumentsAndExitCode(
+        string[] commandLine,
+        string[] expectedArguments)
+    {
+        string applicationDirectory = await CreateApplicationAsync().ConfigureAwait(true);
+        HostOptions options = CreateSetupOptions(applicationDirectory);
+        SessionRuntime runtime = CreateSessionRuntime();
+        var lifecycle = new FailingFreshLifecycle(runtime) { TeardownSucceeds = true };
+        int setupExitCode = await Program.RunControlAsync(
+            options,
+            ["setup"],
+            _ => { },
+            TextWriter.Null,
+            TextWriter.Null,
+            installationLifecycle: lifecycle);
+        Assert.Equal(0, setupExitCode);
+        Directory.CreateDirectory(Path.GetDirectoryName(runtime.Paths.CompletionCachePath)!);
+        File.WriteAllText(runtime.Paths.CompletionCachePath, "cached completion");
+        SessionRecord sessionRecord = new SessionStateStore(runtime.Paths.SessionStatePath)
+            .Read(runtime.ApplicationId).Record!;
+        _lastSessionBackend!.ExecuteBehavior = _ =>
+        {
+            string requestPath = Directory.GetFiles(
+                _lastSessionBackend.Metadata!.EphemeralWorkspacePath,
+                "tools-*.json").Single();
+            SessionToolInstallRequest request = SessionRuntimeProtocol.ReadToolInstallRequest(
+                File.ReadAllText(requestPath));
+            File.WriteAllText(
+                SessionLaunchProtocol.ResultPathFor(requestPath),
+                SessionRuntimeProtocol.SerializeToolInstallResult(new SessionToolInstallResult
+                {
+                    RequestId = request.RequestId,
+                    ShimPath = @"C:\Users\agent\Shared\.openclaw-tools\openclaw.cmd"
+                }));
+            return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
+        };
+        SessionLaunchRequest? launched = null;
+        _lastSessionBackend.AttachedBehavior = _ =>
+        {
+            string requestPath = Directory.GetFiles(
+                _lastSessionBackend.Metadata!.EphemeralWorkspacePath,
+                "launch-*.json").Single();
+            launched = SessionLaunchProtocol.ReadRequest(File.ReadAllText(requestPath));
+            File.WriteAllText(
+                SessionLaunchProtocol.ResultPathFor(requestPath),
+                SessionLaunchProtocol.SerializeResult(new SessionLaunchResult
+                {
+                    RequestId = launched.RequestId,
+                    Launched = true,
+                    ExitCode = 23
+                }));
+            return Task.FromResult(0);
+        };
+
+        int exitCode = await Program.RunControlAsync(
+            options,
+            commandLine,
+            _ => { },
+            TextWriter.Null,
+            TextWriter.Null,
+            installationLifecycle: lifecycle);
+
+        Assert.Equal(23, exitCode);
+        Assert.NotNull(launched);
+        Assert.Equal(expectedArguments, launched.Arguments);
+        Assert.Equal(sessionRecord.WorkspacePath, launched.WorkingDirectory);
+        Assert.False(File.Exists(Path.Combine(
+            sessionRecord.WorkspacePath!,
+            ".openclaw",
+            "cache",
+            "completion.ps1")));
+        string[] pathPrefix = launched.PathPrefix!.Split(Path.PathSeparator);
+        Assert.Equal(
+            @"C:\Users\agent\Shared\.openclaw-tools",
+            pathPrefix[0]);
+        Assert.Equal(
+            Path.GetDirectoryName(launched.Environment![AgentToolShim.NodeVariable]),
+            pathPrefix[1]);
     }
 
     [Fact]

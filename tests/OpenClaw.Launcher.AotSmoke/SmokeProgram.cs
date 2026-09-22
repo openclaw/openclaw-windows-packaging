@@ -41,6 +41,8 @@ internal static class SmokeProgram
             ("setup --help prints command help", SetupHelpPrintsCommandHelpAsync),
             ("gateway-service help includes restart", GatewayServiceHelpIncludesRestartAsync),
             ("completion --help prints command help", CompletionHelpPrintsCommandHelpAsync),
+            ("pwsh help includes execution modes", PowerShellHelpIncludesExecutionModesAsync),
+            ("pwsh rejects conflicting execution modes", PowerShellRejectsConflictingModesAsync),
             ("--version reports the launcher", VersionReportsLauncherAssemblyAsync),
             ("--version wins over trailing arguments", VersionWinsOverTrailingAsync),
             ("unknown command fails", UnknownCommandFailsAsync),
@@ -181,6 +183,31 @@ internal static class SmokeProgram
         AssertContains(fixture.Output.ToString(), "--install", fixture);
         AssertContains(fixture.Output.ToString(), "--uninstall", fixture);
         AssertContains(fixture.Output.ToString(), "--profile", fixture);
+        fixture.AssertNoInstallationWorkStarted();
+    }
+
+    private static async Task PowerShellHelpIncludesExecutionModesAsync()
+    {
+        using Fixture fixture = Fixture.CreateWithoutApplication();
+
+        int exitCode = await fixture.RunAsync(["pwsh", "--help"]).ConfigureAwait(false);
+
+        AssertExitCode(0, exitCode, fixture);
+        AssertContains(fixture.Output.ToString(), "--command", fixture);
+        AssertContains(fixture.Output.ToString(), "--file", fixture);
+        fixture.AssertNoInstallationWorkStarted();
+    }
+
+    private static async Task PowerShellRejectsConflictingModesAsync()
+    {
+        using Fixture fixture = Fixture.CreateWithoutApplication();
+
+        int exitCode = await fixture
+            .RunAsync(["pwsh", "--command", "Get-Date", "--file", "test.ps1"])
+            .ConfigureAwait(false);
+
+        AssertExitCode(1, exitCode, fixture);
+        AssertContains(fixture.Error.ToString(), "cannot be used together", fixture);
         fixture.AssertNoInstallationWorkStarted();
     }
 

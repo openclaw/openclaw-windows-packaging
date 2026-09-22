@@ -134,6 +134,8 @@ it enabled.
 | `clawctl open` | Open the running managed gateway's Control UI in the default browser. Requires completed `clawctl setup` and an already-running gateway; it probes those prerequisites and fails rather than starting the gateway. Packaged OpenClaw resolves the endpoint, TLS, Control UI base path, and authenticated one-time browser handoff. Authenticated URLs and tokens are not printed. |
 | `clawctl teardown --force` | Confirm deletion, then stop and deprovision the owned session and remove its data and setup state. The MSIX remains installed. |
 | `clawctl pwsh` | Open an interactive PowerShell session inside the agent session. |
+| `clawctl pwsh --command <text>` | Run one quoted PowerShell command string inside the agent session and return its exit code. |
+| `clawctl pwsh --file <path> [-- <arguments>]` | Run an agent-visible PowerShell script and return its exit code. Relative paths start in the shared folder reported by `clawctl status`; use `--` before script arguments that begin with `-`. |
 | `clawctl collect-logs [--output <path>]` | Create a redacted host-and-agent diagnostics ZIP. |
 | `clawctl gateway-service start` | Start the OpenClaw gateway in the isolated session and wait for it to listen. Requires setup. |
 | `clawctl gateway-service status` | Inspect the gateway without starting it. When the gateway is not running, it may start/probe only the already-recorded isolated session to report file-only config readiness; it never provisions a replacement or starts the gateway. |
@@ -150,10 +152,23 @@ command added to the parser is documented without a separate help edit.
 Invalid management input is rejected with exit code `1` and a parse diagnostic
 on standard error; no readiness check runs.
 
-All non-interactive commands accept `--json` and emit a versioned JSON document
+All commands except `pwsh` accept `--json` and emit a versioned JSON document
 on standard output. Human diagnostics remain on standard error, and command
-exit codes do not change. `clawctl pwsh --json` is rejected because the command
-hands the terminal to an interactive shell.
+exit codes do not change. Every `clawctl pwsh` mode preserves PowerShell's
+standard streams, so `--json` is rejected rather than capturing or wrapping
+script output.
+
+Quote inline PowerShell as one `--command` value:
+
+```powershell
+clawctl pwsh --command 'Get-Content ~/foo.txt'
+clawctl pwsh --file .\diagnose.ps1 -- -Detailed -Name 'test value'
+```
+
+PowerShell evaluates the inline command inside the isolated agent, so `~`
+within `--command` names the agent profile rather than the invoking user's
+profile. A relative `--file` path starts in the recorded shared folder;
+`clawctl` does not copy a host-local script into that folder.
 
 When the gateway is not confirmed running, status JSON includes an optional
 `gateway.readiness` object with `state`, stable `reason`, and failure `detail`

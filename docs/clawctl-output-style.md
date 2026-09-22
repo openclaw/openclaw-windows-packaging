@@ -36,9 +36,11 @@ should describe that environment in terms an operator can act on, while
   cannot break the retry command. Leave the guidance unacknowledged so a later
   eligible launch retries. `CLAWCTL_AUTO_GATEWAY_START=0` (or `false`, `no`,
   or `off`) restores the start hint.
-- Keep a successful `clawctl pwsh` launch silent so the user reaches the shell
-  prompt directly. Its help text explains which commands are available inside
-  the session.
+- Keep `clawctl pwsh` silent on success. Interactive mode reaches the shell
+  prompt directly; `--command` and `--file` leave stdin, stdout, stderr, and the
+  PowerShell exit code transparent. Its help text explains which commands are
+  available inside the session. Reject `--json` in every mode rather than
+  capturing arbitrary PowerShell streams.
 - Treat Windows Ctrl-C termination of an attached foreground command as user
   cancellation: emit no failure guidance and return portable exit code 130.
 
