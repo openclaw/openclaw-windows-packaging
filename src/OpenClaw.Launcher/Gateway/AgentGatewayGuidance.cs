@@ -34,7 +34,7 @@ internal sealed class AgentGatewayGuidance
     private readonly Func<
         IProgress<GatewayStartProgress>,
         Action<GatewayStartResult>,
-        Task<GatewayStartResult>> _startGateway;
+        Task<GatewayStartResult>> _startGatewayUnderLock;
     private readonly Action<TextWriter, string> _writeGatewayStartFailure;
     private readonly Func<string, string?> _readEnvironmentVariable;
 
@@ -69,7 +69,7 @@ internal sealed class AgentGatewayGuidance
         _narrateGatewayStart = narrateGatewayStart ??
             ((TextWriter _, Func<IProgress<GatewayStartProgress>, Task<GatewayStartResult>> start) =>
                 start(new Progress<GatewayStartProgress>()));
-        _startGateway = startGateway ?? ((_, _) => throw new InvalidOperationException(
+        _startGatewayUnderLock = startGateway ?? ((_, _) => throw new InvalidOperationException(
             "Gateway start is not configured."));
         _writeGatewayStartFailure = writeGatewayStartFailure ??
             ((writer, message) =>
@@ -194,9 +194,18 @@ internal sealed class AgentGatewayGuidance
     {
         try
         {
+            using ISessionLockHandle handle =
+                _lifecycleLock.TryAcquire(AdvisoryTimeout)
+                ?? throw new SessionBusyException(AdvisoryTimeout);
+            if (_state.IsAcknowledged(logonSessionId))
+            {
+                _log("Gateway guidance was acknowledged while postflight checks were running.");
+                return;
+            }
+
             GatewayStartResult result = await _narrateGatewayStart(
                 error,
-                progress => _startGateway(
+                progress => _startGatewayUnderLock(
                     progress,
                     _ => AcknowledgeUnderLock(
                         logonSessionId,

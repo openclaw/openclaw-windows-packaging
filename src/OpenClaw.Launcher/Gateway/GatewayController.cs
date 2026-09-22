@@ -181,6 +181,24 @@ internal sealed class GatewayController
         Action<GatewayStartResult>? onRunningUnderLock = null)
     {
         using ISessionLockHandle handle = AcquireLock();
+        return await StartWithLockAlreadyHeldAsync(
+            helperPath,
+            cancellationToken,
+            progress,
+            onRunningUnderLock).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Starts without reacquiring the lifecycle lock so a caller can make a
+    /// related state decision and the launch one atomic transition.
+    /// </summary>
+    /// <remarks>The caller must hold this controller's lifecycle lock.</remarks>
+    internal async Task<GatewayStartResult> StartWithLockAlreadyHeldAsync(
+        string helperPath,
+        CancellationToken cancellationToken,
+        IProgress<GatewayStartProgress>? progress = null,
+        Action<GatewayStartResult>? onRunningUnderLock = null)
+    {
         GatewayStartResult result = await StartUnderLockAsync(
             helperPath,
             cancellationToken,

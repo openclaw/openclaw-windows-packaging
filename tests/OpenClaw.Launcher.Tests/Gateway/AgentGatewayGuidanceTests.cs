@@ -95,6 +95,88 @@ public sealed class AgentGatewayGuidanceTests : IDisposable
     }
 
     [Fact]
+    public async Task EligibleGatewayStartsInsideTheLifecycleLock()
+    {
+        var lifecycleLock = new AlwaysFreeLock();
+        bool startObservedHeldLock = false;
+        AgentGatewayGuidance guidance = Create(
+            SessionConfigReadinessState.StartupEligible,
+            GatewayState.NotStarted,
+            out _,
+            startGateway: (_, onRunningUnderLock) =>
+            {
+                startObservedHeldLock = lifecycleLock.HeldCount == 1;
+                var result = new GatewayStartResult(
+                    GatewayState.Running,
+                    new GatewayRecord(),
+                    AlreadyRunning: false,
+                    "The gateway is running.");
+                onRunningUnderLock(result);
+                return Task.FromResult(result);
+            },
+            lifecycleLock: lifecycleLock);
+
+        await guidance.EvaluateAsync(0, interactive: true, TextWriter.Null);
+
+        Assert.True(startObservedHeldLock);
+        Assert.Equal(1, lifecycleLock.TotalAcquisitions);
+        Assert.Equal(0, lifecycleLock.HeldCount);
+    }
+
+    [Fact]
+    public async Task LateAcknowledgementAfterStopSuppressesPendingAutomaticStart()
+    {
+        var lifecycleLock = new AlwaysFreeLock();
+        var statusStarted =
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowStoppedStatus =
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int starts = 0;
+        AgentGatewayGuidance guidance = Create(
+            SessionConfigReadinessState.StartupEligible,
+            GatewayState.NotStarted,
+            out GatewayGuidanceStateStore store,
+            () => starts++,
+            lifecycleLock: lifecycleLock,
+            getGatewayStatus: async _ =>
+            {
+                statusStarted.TrySetResult();
+                await allowStoppedStatus.Task.ConfigureAwait(false);
+                return new GatewayStatusReport(
+                    GatewayState.NotStarted,
+                    null,
+                    "The gateway was stopped.");
+            });
+
+        Task pending = guidance.EvaluateAsync(
+            0,
+            interactive: true,
+            TextWriter.Null);
+        await statusStarted.Task.ConfigureAwait(true);
+
+        using (ISessionLockHandle handle =
+            lifecycleLock.TryAcquire(TimeSpan.Zero) ??
+            throw new InvalidOperationException("The fixture lock was unexpectedly busy."))
+        {
+            store.Write(
+                "logon-a",
+                GatewayGuidanceAcknowledgement.GatewayObservedRunning,
+                DateTimeOffset.UtcNow);
+        }
+
+        allowStoppedStatus.TrySetResult();
+        await pending.ConfigureAwait(true);
+
+        Assert.Equal(0, starts);
+        Assert.True(store.IsAcknowledged("logon-a"));
+        Assert.Contains(
+            _log,
+            message => message.Contains(
+                "acknowledged while postflight",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task RunningResultWithoutUnderLockCompletionDoesNotAcknowledge()
     {
         AgentGatewayGuidance guidance = Create(

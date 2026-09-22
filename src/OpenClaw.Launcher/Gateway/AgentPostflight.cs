@@ -86,7 +86,7 @@ internal sealed class AgentPostflight
                     interactive,
                     start).ConfigureAwait(false);
             },
-            (progress, onRunningUnderLock) => gateway.StartAsync(
+            (progress, onRunningUnderLock) => gateway.StartWithLockAlreadyHeldAsync(
                 runtime.HelperPath,
                 CancellationToken.None,
                 progress,
