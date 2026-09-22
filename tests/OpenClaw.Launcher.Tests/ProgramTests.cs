@@ -1044,7 +1044,7 @@ public sealed class ProgramTests : IDisposable
         Assert.Contains("Checking isolated-session support.", rendered, StringComparison.Ordinal);
         Assert.Contains("Preparing the isolated session.", rendered, StringComparison.Ordinal);
         Assert.Contains(
-            "Installing Node.js in the isolated session.",
+            "Installing Node.js and preparing the OpenClaw workspace.",
             rendered,
             StringComparison.Ordinal);
         Assert.Contains("Enabling gateway startup at sign-in.", rendered, StringComparison.Ordinal);
@@ -2756,6 +2756,7 @@ public sealed class ProgramTests : IDisposable
                 ExecutablePath = @"C:\Users\agent_1\AppData\Local\OpenClawGatewayMSIX\agent-node\node.exe",
                 Version = "24.20.0",
                 ArchiveName = "node-v24.20.0-win-x64.zip",
+                WorkspacePath = @"C:\Users\agent_1\.openclaw\workspace",
                 Error = exitCode == 0 ? null : "installer failed"
             }));
     }

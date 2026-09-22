@@ -240,7 +240,8 @@ public sealed class SessionExecutorTests : IDisposable
                 RequestId = request.RequestId,
                 ExecutablePath = @"C:\Users\agent_1\AppData\Local\OpenClawGatewayMSIX\agent-node\node.exe",
                 Version = "24.20.0",
-                ArchiveName = "node-v24.20.0-win-x64.zip"
+                ArchiveName = "node-v24.20.0-win-x64.zip",
+                WorkspacePath = @"C:\Users\agent_1\.openclaw\workspace"
             };
         });
 
@@ -249,11 +250,15 @@ public sealed class SessionExecutorTests : IDisposable
             @"C:\Package\session-host\x64\openclaw-session-host.exe",
             @"C:\Package\runtime\node-v24.20.0-win-x64.zip",
             @"C:\Package\app",
+            @"C:\Package\node\native-redirect.mjs",
             CancellationToken.None);
 
         Assert.Equal(
             @"C:\Package\runtime\node-v24.20.0-win-x64.zip",
             delivered!.ArchivePath);
+        Assert.Equal(
+            @"C:\Package\node\native-redirect.mjs",
+            delivered.NativeRedirectPreloadPath);
         Assert.Equal("24.20.0", result.Version);
         Assert.Equal(["execute:iso:sandbox1"], _backend.Calls);
         Assert.Empty(Directory.GetFiles(Workspace));

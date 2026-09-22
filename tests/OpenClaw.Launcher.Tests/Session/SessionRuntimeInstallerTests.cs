@@ -44,6 +44,8 @@ public sealed class SessionRuntimeInstallerTests : IDisposable
                 RequestId = "r1",
                 ArchivePath = archivePath,
                 ApplicationDirectory = ApplicationDirectory,
+                NativeRedirectPreloadPath = Path.Combine(_root, "native-redirect.mjs"),
+                Environment = [],
 
                 // The account running tests is the developer's own, and its PATH
                 // is not this test's to change.
@@ -55,7 +57,9 @@ public sealed class SessionRuntimeInstallerTests : IDisposable
             File.ReadAllText,
             File.WriteAllText,
             () => _root,
-            getRuntimeVersion: ReadFixtureVersion);
+            getRuntimeVersion: ReadFixtureVersion,
+            applyEnvironmentInstructions: (_, _, _, _, _) =>
+                (Path.Combine(_root, "workspace"), true));
         Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode, exitCode);
 
         return SessionRuntimeProtocol.ReadResult(
@@ -71,6 +75,8 @@ public sealed class SessionRuntimeInstallerTests : IDisposable
                 RequestId = "r1",
                 ArchivePath = archivePath,
                 ApplicationDirectory = ApplicationDirectory,
+                NativeRedirectPreloadPath = Path.Combine(_root, "native-redirect.mjs"),
+                Environment = [],
                 UpdateUserPath = false
             }));
 
@@ -79,7 +85,9 @@ public sealed class SessionRuntimeInstallerTests : IDisposable
             File.ReadAllText,
             File.WriteAllText,
             () => _root,
-            getRuntimeVersion: ReadFixtureVersion);
+            getRuntimeVersion: ReadFixtureVersion,
+            applyEnvironmentInstructions: (_, _, _, _, _) =>
+                (Path.Combine(_root, "workspace"), true));
         Assert.Equal(0, exitCode);
 
         return SessionRuntimeProtocol.ReadResult(
@@ -130,7 +138,9 @@ public sealed class SessionRuntimeInstallerTests : IDisposable
             {
                 RequestId = "r1",
                 ArchivePath = archivePath,
-                ApplicationDirectory = ApplicationDirectory
+                ApplicationDirectory = ApplicationDirectory,
+                NativeRedirectPreloadPath = Path.Combine(_root, "native-redirect.mjs"),
+                Environment = []
             }));
         string? persistedDirectory = null;
 
@@ -144,7 +154,9 @@ public sealed class SessionRuntimeInstallerTests : IDisposable
                 persistedDirectory = directory;
                 return true;
             },
-            ReadFixtureVersion);
+            ReadFixtureVersion,
+            applyEnvironmentInstructions: (_, _, _, _, _) =>
+                (Path.Combine(_root, "workspace"), true));
 
         Assert.Equal(0, exitCode);
         Assert.Equal(
@@ -199,6 +211,8 @@ public sealed class SessionRuntimeInstallerTests : IDisposable
                 RequestId = "r1",
                 ArchivePath = archivePath,
                 ApplicationDirectory = ApplicationDirectory,
+                NativeRedirectPreloadPath = Path.Combine(_root, "native-redirect.mjs"),
+                Environment = [],
                 UpdateUserPath = false
             }));
 
@@ -206,7 +220,9 @@ public sealed class SessionRuntimeInstallerTests : IDisposable
             RequestPath,
             File.ReadAllText,
             File.WriteAllText,
-            () => _root);
+            () => _root,
+            applyEnvironmentInstructions: (_, _, _, _, _) =>
+                (Path.Combine(_root, "workspace"), true));
 
         Assert.Equal(0, exitCode);
         Assert.Equal("24.20.0", File.ReadAllText(first.ExecutablePath!));

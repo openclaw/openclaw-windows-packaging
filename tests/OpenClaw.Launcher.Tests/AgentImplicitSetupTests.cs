@@ -262,7 +262,8 @@ public sealed class AgentImplicitSetupTests : IDisposable
                         ExecutablePath =
                             @"C:\Users\agent_1\AppData\Local\OpenClawGatewayMSIX\agent-node\node.exe",
                         Version = "24.20.0",
-                        ArchiveName = "node-v24.20.0-win-x64.zip"
+                        ArchiveName = "node-v24.20.0-win-x64.zip",
+                        WorkspacePath = @"C:\Users\agent_1\.openclaw\workspace"
                     }));
                 return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
             }

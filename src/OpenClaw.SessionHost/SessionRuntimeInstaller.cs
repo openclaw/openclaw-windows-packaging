@@ -34,7 +34,14 @@ internal static class SessionRuntimeInstaller
         Func<string>? getLocalApplicationData = null,
         Func<string, bool>? tryPrependUserPath = null,
         Func<string, string?>? getRuntimeVersion = null,
-        Func<string, string, string?>? stageNativeModules = null)
+        Func<string, string, string?>? stageNativeModules = null,
+        Func<
+            string,
+            string,
+            string,
+            string?,
+            IReadOnlyDictionary<string, string>,
+            (string WorkspacePath, bool Updated)>? applyEnvironmentInstructions = null)
     {
         string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
         string? requestId = null;
@@ -110,6 +117,20 @@ internal static class SessionRuntimeInstaller
             string? nativeRootPath = (stageNativeModules ?? SessionNativeStager.Stage)(
                 request.ApplicationDirectory!,
                 (getLocalApplicationData ?? GetLocalApplicationData)());
+            (string workspacePath, bool instructionsUpdated) =
+                (applyEnvironmentInstructions ??
+                    ((nodePath, applicationPath, preloadPath, nativePath, environment) =>
+                        WorkspaceEnvironmentInstructions.Apply(
+                            nodePath,
+                            applicationPath,
+                            preloadPath,
+                            nativePath,
+                            environment)))(
+                    executablePath,
+                    request.ApplicationDirectory!,
+                    request.NativeRedirectPreloadPath!,
+                    nativeRootPath,
+                    request.Environment!);
 
             writeFile(
                 resultPath,
@@ -120,7 +141,9 @@ internal static class SessionRuntimeInstaller
                     Version = expectedVersion,
                     ArchiveName = Path.GetFileName(request.ArchivePath!),
                     UserPathUpdated = pathUpdated,
-                    NativeRootPath = nativeRootPath
+                    NativeRootPath = nativeRootPath,
+                    WorkspacePath = workspacePath,
+                    EnvironmentInstructionsUpdated = instructionsUpdated
                 }));
             return 0;
         }

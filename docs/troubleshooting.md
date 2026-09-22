@@ -168,6 +168,29 @@ $env:CLAWCTL_AUTO_GATEWAY_START = '0'
 
 The variables are host-side only and are not passed to the OpenClaw child.
 
+## Setup cannot prepare the OpenClaw workspace instructions
+
+**Check.** Read the `clawctl setup` error. It distinguishes an upstream
+`openclaw setup --json` failure, an invalid or outside-profile workspace, and
+malformed package-managed markers in the workspace `AGENTS.md`.
+
+**Likely cause.** The agent's OpenClaw configuration is invalid, upstream setup
+could not initialize its default workspace, or `AGENTS.md` contains a partial
+or duplicated
+`openclaw-windows-packaging:environment` marker pair. Setup deliberately does
+not guess which malformed section it owns.
+
+**Fix.** Repair the reported OpenClaw configuration or marker pair in the
+isolated agent workspace, preserving user-authored instructions, then run:
+
+```powershell
+clawctl setup
+```
+
+Setup creates or refreshes only its marked section. It does not replace the
+rest of `AGENTS.md`, run guided onboarding, or modify workspaces belonging to
+additional configured agents.
+
 ## Status says the default configuration is missing or not ready
 
 **Check.** Look at the readiness state and reason from `clawctl status` or

@@ -66,6 +66,15 @@ session mismatches, and stale agent Node.js runtimes remain explicit recovery
 states with their `clawctl setup` or `clawctl teardown` guidance; automatic
 setup never repairs them.
 
+Setup also runs upstream's non-interactive minimal setup inside the agent
+session. Upstream OpenClaw remains responsible for selecting and initializing
+its default workspace. The package then creates or refreshes a marked
+environment section in that workspace's `AGENTS.md`, preserving all other
+content. It tells the main agent and its subagents that they run under a
+separate non-interactive Windows account on behalf of the signed-in user.
+`openclaw onboard` remains optional. Custom workspaces for additional configured
+agents are not modified automatically.
+
 Before launching, the host resolves the bundled Node.js executable previously
 prepared during setup and checks its PE product version and executable
 architecture against the packaged archive without a separate Node.js process.

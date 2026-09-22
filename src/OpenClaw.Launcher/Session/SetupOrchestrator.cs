@@ -371,12 +371,13 @@ internal static class SetupOrchestrator
         SessionRecord record = session.Record;
         string helperPath = runtime.StageHelper(record);
         progress.Report(new ClawCtlProgress(
-            "Installing Node.js in the isolated session."));
+            "Installing Node.js and preparing the OpenClaw workspace."));
         SessionRuntimeInstallResult agentRuntime = await runtime.Executor.InstallRuntimeAsync(
             record,
             helperPath,
             options.RequirePackagedNodeArchivePath(),
             applicationDirectory,
+            Program.ResolveNativeRedirectPreloadPath(),
             cancellationToken).ConfigureAwait(false);
         progress.Report(new ClawCtlProgress("Enabling gateway startup at sign-in."));
         GatewayPersistenceInstallResult recovery = await lifecycle

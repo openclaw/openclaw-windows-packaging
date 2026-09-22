@@ -982,7 +982,8 @@ internal static class SmokeProgram
                             RequestId = runtimeRequest.RequestId,
                             ExecutablePath = Path.Combine(workspace, "node.exe"),
                             Version = "24.20.0",
-                            ArchiveName = Path.GetFileName(NodeArchivePath)
+                            ArchiveName = Path.GetFileName(NodeArchivePath),
+                            WorkspacePath = Path.Combine(workspace, "agent-workspace")
                         }));
                     return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
                 }

@@ -48,6 +48,20 @@ public sealed record SessionRuntimeInstallRequest
     public string? ApplicationDirectory { get; init; }
 
     /// <summary>
+    /// The packaged Node.js preload that redirects native dependencies to the
+    /// agent-owned staged root.
+    /// </summary>
+    [JsonPropertyName("nativeRedirectPreloadPath")]
+    public string? NativeRedirectPreloadPath { get; init; }
+
+    /// <summary>
+    /// Package-owned environment values the upstream setup process must
+    /// inherit.
+    /// </summary>
+    [JsonPropertyName("environment")]
+    public Dictionary<string, string>? Environment { get; init; }
+
+    /// <summary>
     /// Whether to prepend the installed directory to the agent's persistent
     /// user <c>PATH</c>.
     /// </summary>
@@ -93,6 +107,14 @@ public sealed record SessionRuntimeInstallResult
     /// </summary>
     [JsonPropertyName("nativeRootPath")]
     public string? NativeRootPath { get; init; }
+
+    /// <summary>The upstream-owned workspace initialized for this account.</summary>
+    [JsonPropertyName("workspacePath")]
+    public string? WorkspacePath { get; init; }
+
+    /// <summary>Whether the package-managed instruction section changed.</summary>
+    [JsonPropertyName("environmentInstructionsUpdated")]
+    public bool EnvironmentInstructionsUpdated { get; init; }
 
     /// <summary>Set when the install could not be completed.</summary>
     [JsonPropertyName("error")]
@@ -191,6 +213,20 @@ public static class SessionRuntimeProtocol
         {
             throw new SessionLaunchException(
                 "The runtime install request has no fully qualified application directory.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.NativeRedirectPreloadPath) ||
+            !Path.IsPathFullyQualified(request.NativeRedirectPreloadPath) ||
+            request.NativeRedirectPreloadPath.Contains("..", StringComparison.Ordinal))
+        {
+            throw new SessionLaunchException(
+                "The runtime install request has no fully qualified native redirect preload path.");
+        }
+
+        if (request.Environment is null)
+        {
+            throw new SessionLaunchException(
+                "The runtime install request has no OpenClaw environment.");
         }
 
         return request;

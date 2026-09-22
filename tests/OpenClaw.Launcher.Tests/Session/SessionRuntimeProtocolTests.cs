@@ -11,7 +11,9 @@ public sealed class SessionRuntimeProtocolTests
     {
         RequestId = "r1",
         ArchivePath = @"C:\Package\runtime\node-v24.15.0-win-x64.zip",
-        ApplicationDirectory = @"C:\Package\app"
+        ApplicationDirectory = @"C:\Package\app",
+        NativeRedirectPreloadPath = @"C:\Package\node\native-redirect.mjs",
+        Environment = []
     };
 
     [Fact]
@@ -76,4 +78,3 @@ public sealed class SessionRuntimeProtocolTests
         Assert.Null(parsed.ExecutablePath);
     }
 }
-

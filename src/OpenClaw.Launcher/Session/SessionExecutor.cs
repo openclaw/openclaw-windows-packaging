@@ -427,12 +427,14 @@ internal sealed class SessionExecutor
         string helperPath,
         string archivePath,
         string applicationDirectory,
+        string nativeRedirectPreloadPath,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(record);
         ArgumentException.ThrowIfNullOrWhiteSpace(helperPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(archivePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(applicationDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(nativeRedirectPreloadPath);
 
         string requestId = _createRequestId();
         using var operation = new SessionWorkspaceOperation(record, _isCurrentRecord);
@@ -447,7 +449,9 @@ internal sealed class SessionExecutor
                 {
                     RequestId = requestId,
                     ArchivePath = archivePath,
-                    ApplicationDirectory = applicationDirectory
+                    ApplicationDirectory = applicationDirectory,
+                    NativeRedirectPreloadPath = nativeRedirectPreloadPath,
+                    Environment = new Dictionary<string, string>(_buildEnvironment())
                 }),
                 cancellationToken).ConfigureAwait(false);
 
@@ -490,11 +494,12 @@ internal sealed class SessionExecutor
             }
 
             if (string.IsNullOrWhiteSpace(result.ExecutablePath) ||
-                string.IsNullOrWhiteSpace(result.Version))
+                string.IsNullOrWhiteSpace(result.Version) ||
+                string.IsNullOrWhiteSpace(result.WorkspacePath))
             {
                 throw new SessionException(
                     "The isolated session reported a runtime install without a " +
-                    "Node.js executable path and version.");
+                    "Node.js executable path, version, and OpenClaw workspace.");
             }
 
             return result;
