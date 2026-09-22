@@ -1,107 +1,169 @@
-# Gateway tool bridge design
+# Gateway Tool Runtime Bridge design
 
 ## Status
 
-Draft implementation design. This proposal is intended to be implemented with the companion Windows Hub design in [openclaw/openclaw-windows-node](https://github.com/openclaw/openclaw-windows-node).
+Draft implementation design. This package owns both the authoritative runtime
+bridge and its future Gateway Tools Control UI. The Control UI is a follow-up
+package PR that depends on the bridge; it is not implemented in the legacy
+Windows Hub.
 
 ## Problem
 
-The packaged Gateway runs in an MXC-isolated agent session. A command available in the interactive Windows user's PATH, profile, or Credential Manager is therefore not automatically available to the Gateway. Users need to be able to install a tool using its official distribution, then deliberately make that existing tool available to the isolated Gateway without importing their desktop environment.
+The packaged Gateway runs in an MXC-isolated agent session. A command available
+in the interactive Windows user's `PATH`, profile, or Credential Manager is
+therefore not automatically available to the Gateway. Users need to be able to
+install a tool using its official distribution, then deliberately make that
+existing tool available to the isolated Gateway without importing their desktop
+environment.
 
 ## Scope
 
-This package owns the authoritative tool bridge. It will expose a versioned local broker for the interactive Hub and will:
+This package owns the authoritative tool bridge. It exposes a versioned local
+broker to the package-owned Control UI Adapter and will:
 
 - register a user-approved executable under a safe command alias;
-- support a desktop-installed executable and an executable placed in a stable package-managed **Gateway Tools** location;
-- validate the canonical executable path and command alias, prevent alias collisions, and record the approved registration;
-- create Gateway-only command shims and prepend only their directory to Gateway child-process `PATH`;
-- verify every registration from the actual isolated Gateway session with a bounded, non-mutating command;
-- create a per-registration Gateway runtime profile for tools that support configurable config, state, or credential storage;
-- start a desktop-interactive setup session with that runtime profile, so browser and loopback OAuth can complete in the human session while the resulting supported state is readable by Gateway;
-- return bounded, redacted status to the Hub and restart or refresh Gateway only when a registration change requires it.
+- support a desktop-installed executable and an executable installed for the
+  Gateway-agent user;
+- validate the canonical executable path and command alias, prevent alias
+  collisions, and record the approved registration;
+- create Gateway-only command shims and prepend only their directory to
+  Gateway child-process `PATH`;
+- provision a managed tool profile for tools with a documented supported
+  configuration/state-root override;
+- launch the registered tool's normal interactive setup in the human desktop
+  session with that managed profile configuration;
+- verify each registration from the actual isolated Gateway session with a
+  bounded, non-mutating tool-specific command;
+- return bounded, redacted status and refresh Gateway only when a registration
+  change requires it.
 
-The first expected consumer is `gog`, but this protocol and storage model are provider-neutral.
+The bridge is provider- and tool-neutral. Each tool must have a reviewed
+managed tool profile contract; the generic bridge does not reimplement a
+provider login protocol.
 
 ## Installation sources
 
-The registration record distinguishes executable source from runtime profile ownership:
+The registration record distinguishes executable source from managed profile
+ownership:
 
 | Source | User action | Gateway behavior |
 | --- | --- | --- |
-| Desktop or machine installation | Select an existing executable in Hub | Broker verifies that exact path in the isolated session and creates a shim only if it works. |
-| Gateway Tools | Extract an official provider ZIP into the stable package-managed folder, then scan/register it in Hub | Broker scans and verifies it from the isolated session before creating a shim. |
+| Desktop or machine installation | Select an existing executable in Gateway Tools | Broker verifies that exact path in the isolated session and creates a shim only if it works. |
+| Gateway-agent installation | Select an existing executable installed for the Gateway-agent user | Broker verifies that exact path in the isolated session and creates a shim only if it works. |
 
-The product must not expose the MXC account name or ask users to install into an unstable `C:\Users\<agent>` path. The package owns the physical Gateway Tools location, its lifecycle, and its ACLs.
+The package records the validated absolute executable path but never exposes it
+to the Control UI, plugin, chat, or model context. Dynamic `PATH` resolution is
+not trusted at Gateway invocation time.
 
 ## Broker contract
 
-The launcher and session protocol will define a narrow versioned local contract. The Hub is an authenticated local client, not the policy owner.
+The launcher and session protocol define a narrow, versioned local contract.
+The Control UI Adapter is authenticated and is not the policy owner.
 
 ```text
 listTools
 registerTool
-scanGatewayTools
+scanTools
 verifyTool
 setToolEnabled
 unregisterTool
-createRuntimeProfile
+createManagedProfile
 startInteractiveSetup
 ```
 
-A registration contains only non-secret, bounded state:
+A browser-safe registration summary contains only non-secret bounded state:
 
 ```json
 {
   "registrationId": "toolreg_opaque",
-  "command": "gog",
-  "displayName": "Google Workspace CLI",
+  "command": "tool",
+  "displayName": "User-installed tool",
   "executableSource": "desktop",
   "enabled": true,
-  "runtimeProfileId": "toolprofile_opaque",
+  "managedProfileId": "toolprofile_opaque",
   "gatewayVerification": "ready"
 }
 ```
 
-Raw executable paths remain local broker state and are never sent to agent chat/model context. Verification output is bounded and redacted.
+Raw executable paths remain local broker state. Verification output is bounded
+and redacted.
 
-## Gateway runtime profiles and interactive setup
+## Managed Tool Profile Contract
 
-A runtime profile is optional because tools differ. It provides a package-managed state location readable only by the Gateway identity, the package broker, and the interactive owner where that is needed for setup. It is not a copy of the desktop profile.
+A tool qualifies for this bridge only when it documents a supported way to
+redirect its own profile, configuration, or state location. A reviewed contract
+may declare a process-scoped environment variable, command-line profile option,
+or other documented tool-specific state-root override.
 
-For a tool with a supported configurable file-backed credential store, the Hub requests `startInteractiveSetup`. The broker launches the registered tool in the interactive desktop session with the profile's approved environment. The user follows the tool's official setup flow locally, including browser OAuth. The Gateway then verifies the same registered executable and profile from the isolated session.
+The package provisions persistent integration state under:
 
-For Gog, this supports its documented `GOG_HOME`, file-keyring, and keyring-password configuration. The broker keeps any generated keyring password in protected local storage and passes it only to the relevant desktop setup and Gateway child processes. It must never place the value in Machine PATH/environment, logs, diagnostics, chat, or a PR fixture.
+```text
+C:\ProgramData\OpenClaw\GatewayTools\profiles\<opaque-profile-id>\
+```
 
-A tool that only supports per-user Credential Manager/DPAPI with no supported configurable storage is reported as unsupported for cross-session credential sharing. The bridge must not copy browser data, Credential Manager secrets, OAuth callbacks, or user profiles.
+When the bridge starts the registered tool, it supplies the reviewed profile
+configuration only to that approved child process. The tool writes its own
+state to the managed profile rather than its normal per-user default; the
+bridge does not use filesystem redirection or alter global environment
+variables.
+
+For a reviewed tool that requires a protected runtime secret for its documented
+file-backed profile, the package stores only a protected secret handle and
+injects the secret only into approved setup and Gateway child processes. It
+must not appear in shims, registry JSON, ordinary configuration, User/Machine
+environment variables, browser responses, plugin responses, logs, diagnostics,
+or model context.
+
+Tools limited to an interactive user's Credential Manager/DPAPI, browser
+profile, desktop IPC, hardware binding, or another non-relocatable state model
+require a separate reviewed integration or are unsupported by this bridge.
+
+## Interactive setup and verification
+
+After user registration, the user may select **Start setup**. The broker starts
+only the validated registered executable in the human interactive desktop
+session and applies its reviewed managed-profile configuration. The user then
+uses the tool's normal documented setup. Any external interaction, browser
+activity, callback, code, or token is owned by the tool and external service;
+the bridge does not implement, inspect, proxy, or store it.
+
+The bridge subsequently verifies the same registered executable and managed
+profile from the isolated Gateway-agent identity using a fixed, bounded,
+non-mutating verification policy. The Control UI receives only safe states:
+`not_configured`, `pending`, `verified`, or `failed`.
 
 ## Security invariants
 
 - The user explicitly chooses or approves every executable registration.
-- The Hub cannot directly alter Gateway PATH, ACLs, shims, or scheduled lifecycle state.
-- The broker canonicalizes paths, rejects scripts/directories/disallowed locations, and prevents shim hijacking.
-- Gateway receives only package-generated shims, not the desktop user's complete PATH.
-- ACLs use the minimum identities and permissions required. `Everyone:F` is prohibited.
-- Credential material, OAuth client JSON, callback URIs, authorization codes, tokens, account identity, and tool output are excluded from model/chat state and diagnostics.
-- A tool is `Gateway-ready` only after an isolated-session verification succeeds.
-
-## State model
-
-```text
-Discovered -> Selected -> Registered -> Gateway verification pending
-  -> Gateway-ready -> Runtime profile created -> Authentication required
-  -> Authentication pending -> Authentication verified
-```
-
-Executable availability and authentication are distinct states. Installing a binary in either desktop or Gateway Tools location does not imply that credentials are available to Gateway.
+- The Control UI cannot directly alter Gateway `PATH`, ACLs, shims, or
+  scheduled lifecycle state.
+- The broker canonicalizes paths, rejects scripts/directories/disallowed
+  locations, and prevents shim hijacking.
+- Gateway receives only package-generated shims, not the desktop user's
+  complete `PATH`.
+- ACLs use the minimum identities and permissions required. `Everyone:F` is
+  prohibited.
+- Credential material, external-service setup data, callback data, tokens,
+  account identity, raw executable paths, and raw tool output are excluded from
+  UI/plugin/model/chat state and diagnostics.
+- A tool is Gateway-ready only after isolated-session verification succeeds.
 
 ## Non-goals
 
-- Downloading, installing, updating, bundling, or uninstalling third-party tools.
-- Provider-specific `clawctl` commands.
-- Importing desktop PATH, user profiles, Credential Manager, browser profiles, or token stores.
+- Downloading, installing, updating, bundling, or uninstalling third-party
+  tools.
+- Changing User or Machine `PATH`.
+- Importing desktop profiles, Credential Manager entries, browser profiles, or
+  token stores.
+- Arbitrary command execution or arbitrary environment injection.
 - Reimplementing skill/tool authentication protocols.
+- Allowing the isolated Gateway plugin direct access to the desktop-user
+  broker.
 
 ## Temporary boundary
 
-This package-side bridge is potentially temporary. A future upstream OpenClaw runtime may give skills, plugins, and tools a first-class agent-session model and a supported interactive-login contract. Until that exists, this package provides the narrow Windows/MXC bridge needed to preserve the isolation boundary while making user-installed tools usable.
+This package-side bridge is potentially temporary. A future upstream OpenClaw
+runtime may give skills, plugins, and tools a first-class agent-session model
+and a supported interactive setup contract. Until that exists, this package
+provides the narrow Windows/MXC bridge needed to preserve the isolation boundary
+while making user-installed tools usable.
