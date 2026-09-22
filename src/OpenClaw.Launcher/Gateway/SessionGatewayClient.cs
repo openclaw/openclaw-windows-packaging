@@ -72,12 +72,14 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
     private readonly Func<IReadOnlyList<string>?> _buildNodeArgumentsPrefix;
     private readonly Func<string?> _getNativeRootPath;
     private readonly Func<SessionRecord, bool> _isCurrentRecord;
+    private readonly Func<string, string?>? _getGatewayToolsPathPrefix;
 
     public SessionGatewayClient(IMxcSessionClient backend, Action<string> log,
         Func<IReadOnlyDictionary<string, string>>? buildEnvironment = null,
         Func<IReadOnlyList<string>?>? buildNodeArgumentsPrefix = null,
         Func<string?>? getNativeRootPath = null,
-        Func<SessionRecord, bool>? isCurrentRecord = null)
+        Func<SessionRecord, bool>? isCurrentRecord = null,
+        Func<string, string?>? getGatewayToolsPathPrefix = null)
     {
         ArgumentNullException.ThrowIfNull(backend);
         ArgumentNullException.ThrowIfNull(log);
@@ -88,6 +90,7 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
         _buildNodeArgumentsPrefix = buildNodeArgumentsPrefix ?? (() => null);
         _getNativeRootPath = getNativeRootPath ?? (() => null);
         _isCurrentRecord = isCurrentRecord ?? (_ => true);
+        _getGatewayToolsPathPrefix = getGatewayToolsPathPrefix;
     }
 
     public async Task<GatewayStartOutcome> StartAsync(
@@ -140,9 +143,11 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
             Arguments = arguments,
             WorkingDirectory = request.WorkingDirectory ?? workspace,
             Environment = _buildEnvironment(),
-            PathPrefix = Path.GetDirectoryName(request.NodePath)
+            PathPrefix = BuildPathPrefix(
+                Path.GetDirectoryName(request.NodePath)
                 ?? throw new SessionException(
                     "The agent's Node.js runtime has no parent directory."),
+                workspace),
             NativeRootPath = _getNativeRootPath(),
             LogPath = logPath,
             StatusPath = statusPath
@@ -302,6 +307,14 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
             operation.Delete(requestPath);
             operation.Delete(resultPath);
         }
+    }
+
+    private string BuildPathPrefix(string nodeDirectory, string workspace)
+    {
+        string? gatewayTools = _getGatewayToolsPathPrefix?.Invoke(workspace);
+        return string.IsNullOrWhiteSpace(gatewayTools)
+            ? nodeDirectory
+            : gatewayTools + Path.PathSeparator + nodeDirectory;
     }
 
     private static string RequireWorkspace(SessionRecord session) =>

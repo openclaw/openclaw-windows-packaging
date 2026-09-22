@@ -214,12 +214,26 @@ internal sealed partial class GatewayRuntime
                 buildEnvironment: BuildGatewayEnvironment,
                 buildNodeArgumentsPrefix: BuildGatewayNodeArgumentsPrefix,
                 getNativeRootPath: session.GetAgentNativeRoot,
-                isCurrentRecord: IsCurrentSessionRecord),
+                isCurrentRecord: IsCurrentSessionRecord,
+                getGatewayToolsPathPrefix: PrepareGatewayTools),
             session.GatewayState,
             CreateRequestAsync,
             log,
             session.RequireSetup,
             session.LifecycleLock);
+
+        // The broker builds shims in the session-shared workspace immediately
+        // before every Gateway launch. That directory is prepended only to the
+        // Gateway process PATH; no user or machine environment is changed.
+        string? PrepareGatewayTools(string workspace)
+        {
+            GatewayToolRuntime runtime = new GatewayToolRegistry(paths.GatewayToolRegistryPath)
+                .PrepareRuntime(workspace);
+            return runtime.Tools.Any(tool => tool.Enabled &&
+                tool.Availability == GatewayToolAvailability.Ready)
+                ? runtime.ShimDirectory
+                : null;
+        }
 
         // The gateway is a long-lived Node.js process that loads the same
         // native addons as a foreground launch, so it needs the same redirect.

@@ -5,7 +5,8 @@ namespace OpenClaw.Launcher;
 internal enum HostEntrypoint
 {
     Agent,
-    Control
+    Control,
+    GatewayToolsBroker
 }
 
 internal static class HostEntrypointResolver
@@ -28,6 +29,11 @@ internal static class HostEntrypointResolver
             StringComparison.OrdinalIgnoreCase) == true)
         {
             return HostEntrypoint.Control;
+        }
+
+        if (applicationUserModelId?.EndsWith("!Broker", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return HostEntrypoint.GatewayToolsBroker;
         }
 
         return TryMatch(GetInvokedName(commandLine), out HostEntrypoint invoked)
