@@ -528,6 +528,29 @@ public sealed class ClawCtlCommandLineTests
         }
     }
 
+    [Fact]
+    public void CompletionProfileUninstallSeparatesSurvivingCommands()
+    {
+        string directory = TestDirectory.Create();
+        string profile = Path.Combine(directory, "profile.ps1");
+        try
+        {
+            File.WriteAllText(profile, "Write-Host 'before'");
+
+            PowerShellCompletion.Install(profile);
+            File.AppendAllText(profile, "Write-Host 'after'");
+            PowerShellCompletion.Uninstall(profile);
+
+            Assert.Equal(
+                "Write-Host 'before'\nWrite-Host 'after'",
+                File.ReadAllText(profile));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

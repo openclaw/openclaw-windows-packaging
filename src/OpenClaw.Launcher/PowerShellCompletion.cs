@@ -124,7 +124,16 @@ internal static class PowerShellCompletion
         {
             removeEnd += profile.NewLine.Length;
         }
-        WriteAtomically(profilePath, profile.Encode(profile.Text.Remove(removeStart, removeEnd - removeStart)));
+        string before = profile.Text[..removeStart];
+        string after = profile.Text[removeEnd..];
+        string separator =
+            before.Length > 0 &&
+            after.Length > 0 &&
+            !before.EndsWith(profile.NewLine, StringComparison.Ordinal) &&
+            !after.StartsWith(profile.NewLine, StringComparison.Ordinal)
+                ? profile.NewLine
+                : string.Empty;
+        WriteAtomically(profilePath, profile.Encode(before + separator + after));
         return profilePath;
     }
 
