@@ -25,9 +25,12 @@ internal static class Program
             "with an unhandled-exception crash.")]
     internal static async Task<int> RunAsync(string[] args, HostStartup startup)
     {
-        string commandName = startup.Entrypoint == HostEntrypoint.Control
-            ? HostEntrypointResolver.ControlCommandName
-            : HostEntrypointResolver.AgentCommandName;
+        string commandName = startup.Entrypoint switch
+        {
+            HostEntrypoint.Control => HostEntrypointResolver.ControlCommandName,
+            HostEntrypoint.GatewayToolsBroker => "gateway-tools-broker",
+            _ => HostEntrypointResolver.AgentCommandName
+        };
         HostDiagnosticLog? diagnostics = null;
         bool diagnosticWarningWritten = false;
         bool consoleWarningWritten = false;
@@ -135,16 +138,19 @@ internal static class Program
             }
 
             HostOptions options = HostOptions.Parse(args, startup.BaseDirectory);
-            return startup.Entrypoint == HostEntrypoint.Control
-                ? await RunControlAsync(
+            return startup.Entrypoint switch
+            {
+                HostEntrypoint.Control => await RunControlAsync(
                     options,
                     args,
                     WriteDiagnostic,
                     output,
                     error,
                     startup.InstallationLifecycle,
-                    controlOutputOptions: controlOutputOptions).ConfigureAwait(false)
-                : await RunAgentAsync(
+                    controlOutputOptions: controlOutputOptions).ConfigureAwait(false),
+                HostEntrypoint.GatewayToolsBroker => await RunGatewayToolsBrokerAsync(
+                    WriteDiagnostic).ConfigureAwait(false),
+                _ => await RunAgentAsync(
                     options,
                     WriteDiagnostic,
                     startup.InstallationLifecycle is null
@@ -154,7 +160,8 @@ internal static class Program
                     error: error,
                     errorIsProcessConsoleWriter:
                         startup.UsesProcessConsoleWriters ? () => true : null)
-                    .ConfigureAwait(false);
+                    .ConfigureAwait(false)
+            };
         }
         catch (Exception exception)
         {
@@ -221,6 +228,35 @@ internal static class Program
             consoleRestore?.Dispose();
             diagnostics?.Dispose();
         }
+    }
+
+    private static async Task<int> RunGatewayToolsBrokerAsync(Action<string> log)
+    {
+        HostPaths paths = HostPaths.Create();
+        if (paths.PackageFamilyName is null)
+        {
+            throw new Session.SessionException(
+                "The Gateway Tools broker is only available from the installed package.");
+        }
+
+        Session.SessionRuntime session = Session.SessionRuntime.Create(log);
+        var service = new Gateway.GatewayToolsBrokerService(
+            new Gateway.GatewayToolRegistry(paths.GatewayToolRegistryPath),
+            paths.GatewayToolsDirectory,
+            () => session.Coordinator.GetRecordedStatus().Record?.WorkspacePath);
+        var broker = new Gateway.GatewayToolsBrokerServer(
+            service,
+            Gateway.GatewayToolsBrokerAuthorizer.CreateDefault());
+        try
+        {
+            await broker.RunUntilIdleAsync(TimeSpan.FromMinutes(10), CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            await broker.DisposeAsync().ConfigureAwait(false);
+        }
+        return 0;
     }
 
     private static string ResolveClawCtlCommand(string[] args)

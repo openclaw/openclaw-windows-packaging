@@ -73,6 +73,21 @@
         </uap5:Extension>
       </Extensions>
     </Application>
+    <!-- This is intentionally not an app-execution alias. Only the Windows Hub
+         activates it by AUMID, and its only surface is the authenticated local
+         Gateway Tools pipe. -->
+    <Application
+      Id="Broker"
+      Executable="openclaw.exe"
+      EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="OpenClaw Gateway Tools Broker"
+        Description="OpenClaw local Gateway Tools broker"
+        AppListEntry="none"
+        BackgroundColor="transparent"
+        Square150x150Logo="Images\Square150x150Logo.png"
+        Square44x44Logo="Images\Square44x44Logo.png" />
+    </Application>
   </Applications>
 
   <Capabilities>
