@@ -207,21 +207,40 @@ public sealed class WorkspaceEnvironmentInstructionsTests : IDisposable
     [Fact]
     public void ReparsePointInWorkspacePathIsRejected()
     {
-        string reparseDirectory = Path.Combine(_root, "shared");
-        string workspace = Path.Combine(reparseDirectory, "workspace");
+        string workspace = Path.Combine(_root, "shared", "workspace");
 
         SessionLaunchException exception = Assert.Throws<SessionLaunchException>(
             () => WorkspaceEnvironmentInstructions.EnsureNoReparsePoints(
                 workspace,
                 _ => true,
-                path => string.Equals(
-                    path,
-                    reparseDirectory,
-                    StringComparison.OrdinalIgnoreCase)
-                    ? FileAttributes.Directory | FileAttributes.ReparsePoint
-                    : FileAttributes.Directory));
+                _ => FileAttributes.Directory | FileAttributes.ReparsePoint));
 
         Assert.Contains("reparse point", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EnsureNoReparsePointsIgnoresAncestorReparsePoints()
+    {
+        // Only the resolved workspace directory itself is a write target, so a reparse point on
+        // an ancestor (e.g. a network-mapped or cloud-synced parent folder) must not be rejected
+        // and must not be probed at all, to avoid the multi-hour CI hang a prior ancestor-walk
+        // implementation caused on slow/virtualized filesystem mounts.
+        string reparseAncestor = Path.Combine(_root, "shared");
+        string workspace = Path.Combine(reparseAncestor, "workspace");
+        var probedPaths = new List<string>();
+
+        WorkspaceEnvironmentInstructions.EnsureNoReparsePoints(
+            workspace,
+            path =>
+            {
+                probedPaths.Add(path);
+                return true;
+            },
+            path => string.Equals(path, reparseAncestor, StringComparison.OrdinalIgnoreCase)
+                ? FileAttributes.Directory | FileAttributes.ReparsePoint
+                : FileAttributes.Directory);
+
+        Assert.Equal([Path.GetFullPath(workspace)], probedPaths);
     }
 
     [Fact]

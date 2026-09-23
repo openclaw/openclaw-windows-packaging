@@ -199,23 +199,18 @@ internal static class WorkspaceEnvironmentInstructions
         directoryExists ??= Directory.Exists;
         getAttributes ??= File.GetAttributes;
 
+        // Only the resolved workspace directory itself is a write target for AGENTS.md, so it is
+        // the only path the reparse-point escape check needs to cover. Walking every ancestor
+        // segment up to the filesystem root was tried previously and is unnecessary now that
+        // workspaces are no longer required to live under the agent profile: it inspects
+        // directories entirely outside this package's concern and can hang indefinitely on slow
+        // or virtualized filesystem mounts (observed as a multi-hour CI hang).
         string resolvedWorkspace = Path.GetFullPath(workspacePath);
-        string root = Path.GetPathRoot(resolvedWorkspace)
-            ?? throw new SessionLaunchException(
-                "OpenClaw setup returned a workspace path without a filesystem root.");
-        string relativePath = Path.GetRelativePath(root, resolvedWorkspace);
-        string current = root;
-        foreach (string segment in relativePath.Split(
-            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-            StringSplitOptions.RemoveEmptyEntries))
+        if (directoryExists(resolvedWorkspace) &&
+            getAttributes(resolvedWorkspace).HasFlag(FileAttributes.ReparsePoint))
         {
-            current = Path.Combine(current, segment);
-            if (directoryExists(current) &&
-                getAttributes(current).HasFlag(FileAttributes.ReparsePoint))
-            {
-                throw new SessionLaunchException(
-                    "OpenClaw setup returned a workspace through a reparse point.");
-            }
+            throw new SessionLaunchException(
+                "OpenClaw setup returned a workspace directory that is a reparse point.");
         }
     }
 

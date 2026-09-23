@@ -176,7 +176,7 @@ malformed package-managed markers in the workspace `AGENTS.md`.
 
 **Likely cause.** The agent's OpenClaw configuration is invalid, upstream setup
 could not initialize its default workspace, the selected workspace is relative
-or passes through a reparse point, or `AGENTS.md` contains a partial or duplicated
+or is itself a reparse point, or `AGENTS.md` contains a partial or duplicated
 `openclaw-windows-packaging:environment` marker pair. Setup deliberately does
 not guess which malformed section it owns.
 
