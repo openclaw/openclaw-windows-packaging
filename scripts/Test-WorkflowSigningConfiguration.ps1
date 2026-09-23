@@ -84,11 +84,15 @@ $requiredFragments = @(
     'certificate-profile-name: openclaw'
     'name: Publish signed Gateway MSIX release'
     'name: Submit Gateway bundle to Microsoft Store'
-    "inputs.signing_mode == 'store' && needs.authorize-signing.result == 'success'"
+    "github.event_name == 'workflow_dispatch'"
+    "github.ref == 'refs/heads/main'"
+    "inputs.signing_mode == 'store'"
+    "needs.authorize-signing.result == 'success'"
     'environment: microsoft-store'
     'group: microsoft-store-submission'
     'cancel-in-progress: false'
     'name: Request short-lived Microsoft Store assertion'
+    '.\scripts\New-GitHubOidcRequestUri.ps1'
     'microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4'
     'version: v0.4.3'
     '.\scripts\Submit-MicrosoftStore.ps1'

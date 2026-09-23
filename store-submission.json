@@ -4,7 +4,7 @@
   "oidcAudience": "api://AzureADTokenExchange",
   "msstoreCliVersion": "v0.4.3",
   "commitSubmission": true,
-  "pendingSubmissionPolicy": "replace",
+  "pendingSubmissionPolicy": "reject",
   "packageRolloutPercentage": 100,
   "uploadTimeoutSeconds": 1800
 }

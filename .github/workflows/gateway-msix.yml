@@ -1051,7 +1051,11 @@ jobs:
 
   submit-microsoft-store:
     name: Submit Gateway bundle to Microsoft Store
-    if: ${{ inputs.signing_mode == 'store' && needs.authorize-signing.result == 'success' }}
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/main' &&
+          inputs.signing_mode == 'store' &&
+          needs.authorize-signing.result == 'success' }}
     needs:
       - build-msix-bundle
       - authorize-signing
@@ -1119,11 +1123,12 @@ jobs:
               [string]::IsNullOrWhiteSpace($requestToken)) {
             throw 'GitHub did not provide an OIDC token endpoint.'
           }
-          $separator = if ($requestUrl.Contains('?')) { '&' } else { '?' }
-          $audience = [Uri]::EscapeDataString([string]$policy.oidcAudience)
+          $oidcRequestUri = .\scripts\New-GitHubOidcRequestUri.ps1 `
+            -RequestUri $requestUrl `
+            -Audience ([string]$policy.oidcAudience)
           $response = Invoke-RestMethod `
             -Headers @{ Authorization = "Bearer $requestToken" } `
-            -Uri "$requestUrl$separator`audience=$audience"
+            -Uri $oidcRequestUri
           $assertion = [string]$response.value
           if ([string]::IsNullOrWhiteSpace($assertion)) {
             throw 'GitHub returned an empty OIDC assertion.'
