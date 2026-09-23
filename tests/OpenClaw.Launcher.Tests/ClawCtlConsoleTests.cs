@@ -264,7 +264,7 @@ public sealed class ClawCtlConsoleTests
     [Fact]
     public async Task GatewayNarrationPreservesUnicodeCapabilityForNonConsoleOutput()
     {
-        using var output = new SignalingTextWriter("Launching the gateway.");
+        using var output = new SpinnerObservingTextWriter();
 
         _ = await ClawCtlConsole.NarrateGatewayStartAsync(
             output,
@@ -277,7 +277,7 @@ public sealed class ClawCtlConsoleTests
                 progress.Report(new GatewayStartProgress(
                     GatewayStartStage.Launching,
                     "Launching the gateway."));
-                await output.SignalObserved.ConfigureAwait(false);
+                await output.SpinnerFrameObserved.ConfigureAwait(false);
                 return new GatewayStartResult(
                     GatewayState.Running,
                     new GatewayRecord(),
@@ -478,13 +478,13 @@ public sealed class ClawCtlConsoleTests
             Regex.Replace(colored.ToString(), "\u001b\\[[0-9;]*m", string.Empty));
     }
 
-    private sealed class SignalingTextWriter(string signal) : StringWriter
+    private sealed class SpinnerObservingTextWriter : StringWriter
     {
         private readonly Lock _gate = new();
-        private readonly TaskCompletionSource _signalObserved =
+        private readonly TaskCompletionSource _spinnerFrameObserved =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Task SignalObserved => _signalObserved.Task;
+        public Task SpinnerFrameObserved => _spinnerFrameObserved.Task;
 
         public string GetText()
         {
@@ -523,9 +523,11 @@ public sealed class ClawCtlConsoleTests
 
         private void SignalIfObserved()
         {
-            if (GetStringBuilder().ToString().Contains(signal, StringComparison.Ordinal))
+            string rendered = GetStringBuilder().ToString();
+            if (rendered.Any(static character =>
+                    character is >= '\u2800' and <= '\u28ff' or '-' or '\\' or '|' or '/'))
             {
-                _signalObserved.TrySetResult();
+                _spinnerFrameObserved.TrySetResult();
             }
         }
     }
