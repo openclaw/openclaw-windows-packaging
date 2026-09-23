@@ -271,7 +271,17 @@ public sealed class ClawCtlConsoleTests
     [Fact]
     public async Task GatewayNarrationPreservesUnicodeCapabilityForNonConsoleOutput()
     {
-        using var output = new SpinnerObservingTextWriter();
+        string[] unicodeFrames =
+        [
+            .. ClawCtlSpinner.Scuttle.Frames,
+            .. ClawCtlSpinner.Bubbles.Frames,
+            .. ClawCtlSpinner.TidePulse.Frames,
+        ];
+        using var output = new SpinnerObservingTextWriter(
+        [
+            .. unicodeFrames,
+            .. ClawCtlSpinner.Ascii.Frames,
+        ]);
 
         _ = await ClawCtlConsole.NarrateGatewayStartAsync(
             output,
@@ -292,9 +302,10 @@ public sealed class ClawCtlConsoleTests
                     "The gateway is running.");
             });
 
+        string rendered = output.GetText();
         Assert.Contains(
-            output.GetText(),
-            static character => character is >= '\u2800' and <= '\u28ff');
+            unicodeFrames,
+            frame => rendered.Contains(frame, StringComparison.Ordinal));
     }
 
     [Theory]
@@ -485,7 +496,8 @@ public sealed class ClawCtlConsoleTests
             Regex.Replace(colored.ToString(), "\u001b\\[[0-9;]*m", string.Empty));
     }
 
-    private sealed class SpinnerObservingTextWriter : StringWriter
+    private sealed class SpinnerObservingTextWriter(IReadOnlyCollection<string> spinnerFrames)
+        : StringWriter
     {
         private readonly Lock _gate = new();
         private readonly TaskCompletionSource _spinnerFrameObserved =
@@ -531,8 +543,8 @@ public sealed class ClawCtlConsoleTests
         private void SignalIfObserved()
         {
             string rendered = GetStringBuilder().ToString();
-            if (rendered.Any(static character =>
-                    character is >= '\u2800' and <= '\u28ff' or '-' or '\\' or '|' or '/'))
+            if (spinnerFrames.Any(
+                    frame => rendered.Contains(frame, StringComparison.Ordinal)))
             {
                 _spinnerFrameObserved.TrySetResult();
             }
