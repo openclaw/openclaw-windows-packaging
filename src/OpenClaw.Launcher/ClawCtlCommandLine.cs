@@ -229,6 +229,8 @@ internal static class ClawCtlCommandLine
             Description = "Run an agent-visible PowerShell script and exit.",
             HelpName = "path"
         };
+        Option<bool> powerShellJson = CreateJsonOption();
+        powerShellJson.Hidden = true;
         Argument<string[]> powerShellArguments = new("arguments")
         {
             Description = "Arguments passed to the script selected by --file.",
@@ -236,10 +238,11 @@ internal static class ClawCtlCommandLine
         };
         powerShell.Options.Add(powerShellCommand);
         powerShell.Options.Add(powerShellFile);
+        powerShell.Options.Add(powerShellJson);
         powerShell.Arguments.Add(powerShellArguments);
         powerShell.Validators.Add(result =>
         {
-            if (result.GetValue(rootJson))
+            if (result.GetValue(rootJson) || result.GetValue(powerShellJson))
             {
                 result.AddError(
                     "'--json' is not supported for 'pwsh', which preserves PowerShell streams.");
