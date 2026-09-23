@@ -278,6 +278,8 @@ internal static class ClawCtlCommandLine
         Command gateway = new(
             "gateway-service",
             "Manage the background OpenClaw gateway inside the isolated session.");
+        Option<bool> gatewayJson = CreateJsonOption();
+        gateway.Options.Add(gatewayJson);
         Command gatewayStart = new("start", "Start the gateway if needed.");
         Option<bool> gatewayStartJson = CreateJsonOption();
         Option<bool> recovery = new("--recovery") { Hidden = true };
@@ -285,7 +287,11 @@ internal static class ClawCtlCommandLine
         gatewayStart.Options.Add(gatewayStartJson);
         gatewayStart.SetAction((parsed, token) =>
         {
-            outputOptions.Json = IsJsonRequested(parsed, rootJson, gatewayStartJson);
+            outputOptions.Json = IsJsonRequested(
+                parsed,
+                rootJson,
+                gatewayJson,
+                gatewayStartJson);
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.GatewayStart(parsed.GetValue(recovery), token);
         });
@@ -294,7 +300,11 @@ internal static class ClawCtlCommandLine
         gatewayStatus.Options.Add(gatewayStatusJson);
         gatewayStatus.SetAction((parsed, token) =>
         {
-            outputOptions.Json = IsJsonRequested(parsed, rootJson, gatewayStatusJson);
+            outputOptions.Json = IsJsonRequested(
+                parsed,
+                rootJson,
+                gatewayJson,
+                gatewayStatusJson);
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.GatewayStatus(token);
         });
@@ -303,7 +313,11 @@ internal static class ClawCtlCommandLine
         gatewayStop.Options.Add(gatewayStopJson);
         gatewayStop.SetAction((parsed, token) =>
         {
-            outputOptions.Json = IsJsonRequested(parsed, rootJson, gatewayStopJson);
+            outputOptions.Json = IsJsonRequested(
+                parsed,
+                rootJson,
+                gatewayJson,
+                gatewayStopJson);
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.GatewayStop(token);
         });
@@ -312,7 +326,11 @@ internal static class ClawCtlCommandLine
         gatewayRestart.Options.Add(gatewayRestartJson);
         gatewayRestart.SetAction((parsed, token) =>
         {
-            outputOptions.Json = IsJsonRequested(parsed, rootJson, gatewayRestartJson);
+            outputOptions.Json = IsJsonRequested(
+                parsed,
+                rootJson,
+                gatewayJson,
+                gatewayRestartJson);
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.GatewayRestart(token);
         });
@@ -353,9 +371,18 @@ internal static class ClawCtlCommandLine
 
     private static bool IsJsonRequested(
         ParseResult parsed,
-        Option<bool> rootJson,
-        Option<bool> commandJson) =>
-        parsed.GetValue(rootJson) || parsed.GetValue(commandJson);
+        params Option<bool>[] options)
+    {
+        foreach (Option<bool> option in options)
+        {
+            if (parsed.GetValue(option))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     // The built-in help action is sealed and exposes only a wrap width, so
     // replacing it is the supported way to render help. One replacement covers

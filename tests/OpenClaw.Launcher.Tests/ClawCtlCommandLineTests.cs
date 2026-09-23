@@ -257,10 +257,15 @@ public sealed class ClawCtlCommandLineTests
     [InlineData("teardown --json")]
     [InlineData("open --json")]
     [InlineData("completion --json")]
+    [InlineData("--json gateway-service status")]
     [InlineData("gateway-service start --json")]
+    [InlineData("gateway-service --json start")]
     [InlineData("gateway-service status --json")]
+    [InlineData("gateway-service --json status")]
     [InlineData("gateway-service stop --json")]
+    [InlineData("gateway-service --json stop")]
     [InlineData("gateway-service restart --json")]
+    [InlineData("gateway-service --json restart")]
     public async Task JsonIsAvailableToEveryNonInteractiveCommand(string commandLine)
     {
         var outputOptions = new ClawCtlOutputOptions();

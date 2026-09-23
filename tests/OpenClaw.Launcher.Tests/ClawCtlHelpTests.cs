@@ -111,6 +111,7 @@ public sealed class ClawCtlHelpTests
     [InlineData("teardown")]
     [InlineData("open")]
     [InlineData("completion")]
+    [InlineData("gateway-service")]
     [InlineData("gateway-service start")]
     [InlineData("gateway-service status")]
     [InlineData("gateway-service stop")]

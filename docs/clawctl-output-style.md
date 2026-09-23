@@ -95,9 +95,11 @@ here. Three obligations come with that:
   a blank column.
 - Honor `Hidden`. The library's renderer filters hidden symbols and so must
   this one.
-- Report inherited recursive options. `--json` and `--no-color` are declared
-  once on the root and apply to every command, so subcommand help lists them;
-  `--version` is not recursive and must not appear.
+- Report only options accepted at that command position. `--json` is
+  command-local where structured output is supported, remains valid before a
+  command, and is also valid between `gateway-service` and its subcommand.
+  `--no-color` is recursive and inherited by every command; `--version` is not
+  recursive and must not appear on subcommands.
 
 Never take the command name from `RootCommand.Name`. It defaults to the entry
 assembly, which is the test host under `dotnet test` and the scenario driver
