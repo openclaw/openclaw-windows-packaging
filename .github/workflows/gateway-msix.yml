@@ -146,6 +146,17 @@ jobs:
           dotnet test .\OpenClaw.Gateway.MSIX.slnx
           --configuration Release
           --no-restore
+          --blame-hang-timeout 3min
+          --blame-hang-dump-type mini
+          --results-directory TestResults
+
+      - name: Upload hang diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: gateway-msix-test-hang-diagnostics
+          path: TestResults
+          retention-days: 5
 
       # The xUnit suite runs under a JIT test host, so it cannot prove the
       # native entrypoint alias and root command name, or that
