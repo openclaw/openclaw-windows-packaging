@@ -129,6 +129,17 @@ owned by that process or one of its descendants. A missing record is
 process is `Unhealthy`; and failed inspection is `Unknown` to avoid starting a
 second gateway beside one that could still be healthy.
 
+The helper judges descendant ownership from one process snapshot per
+inspection, taken only when a listener belongs to some other process. Such a
+listener counts only when its owner's snapshot parent chain reaches the
+recorded process, every process on that chain has a readable creation time,
+and every parent started no later than its child. An owner whose chain never
+reaches the recorded process is rejected without being opened. Measured inside
+an isolated session with a live gateway, 26 listeners held by 20 processes, and
+about 450 processes, evaluating each listener with its own snapshot and process
+opens took 2.6-3.8 s; the single-snapshot evaluation returned the same gateway
+port in 50-52 ms.
+
 Both `clawctl status` and `clawctl gateway-service status` add the helper's
 file-only config readiness whenever the managed gateway is not confirmed
 running. The gateway-only command first observes gateway state, then starts

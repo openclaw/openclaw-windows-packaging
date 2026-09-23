@@ -167,11 +167,44 @@ internal static class TcpListenerOwnership
 }
 
 /// <summary>
-/// Answers whether a process is a descendant of another.
+/// One observation of the session's process tree, shared by every ancestry
+/// question a single inspection asks.
 /// </summary>
-internal static class ProcessAncestry
+/// <remarks>
+/// In the isolated session a process snapshot costs tens of milliseconds, and
+/// so does each refused attempt to open a process, while most of the session's
+/// listeners belong to processes the agent may not open. The tree is therefore
+/// read at most once and only when a question needs it, each start time is read
+/// at most once, and a process is opened only after its snapshot parent chain
+/// has reached the ancestor in question.
+/// </remarks>
+internal sealed class ProcessTreeSnapshot
 {
     private const int Th32CsSnapProcess = 2;
+
+    private readonly Func<IReadOnlyDictionary<int, int>> _readParents;
+    private readonly Func<int, DateTimeOffset?> _readStartTime;
+    private readonly Dictionary<int, DateTimeOffset?> _startTimes = [];
+    private IReadOnlyDictionary<int, int>? _parents;
+
+    /// <summary>
+    /// Observes the live session, taking its process snapshot on first use.
+    /// </summary>
+    public ProcessTreeSnapshot()
+        : this(ReadParents, GuestProcessObserver.GetStartTimeUtc)
+    {
+    }
+
+    /// <summary>
+    /// Observes a tree through the supplied readers instead of the live session.
+    /// </summary>
+    public ProcessTreeSnapshot(
+        Func<IReadOnlyDictionary<int, int>> readParents,
+        Func<int, DateTimeOffset?> readStartTime)
+    {
+        _readParents = readParents;
+        _readStartTime = readStartTime;
+    }
 
     /// <summary>
     /// True when <paramref name="candidate"/> is <paramref name="ancestor"/> or
@@ -180,16 +213,48 @@ internal static class ProcessAncestry
     /// <remarks>
     /// The gateway is a child of the supervisor rather than the supervisor
     /// itself, so an ownership check that only compared identifiers would
-    /// reject every real gateway.
+    /// reject every real gateway. Every process on the chain must also have a
+    /// readable creation time, and every parent must have started no later
+    /// than its child: a parent that started later is an unrelated process
+    /// that inherited a reused identifier.
     /// </remarks>
-    public static bool IsSelfOrDescendant(int candidate, int ancestor)
+    public bool IsSelfOrDescendant(int candidate, int ancestor)
     {
         if (candidate == ancestor)
         {
             return true;
         }
 
-        Dictionary<int, int> parents = ReadParents();
+        // Only a chain that reaches the ancestor can pass the start-time
+        // checks, so any other chain is rejected before a process is opened.
+        List<int>? chain = ChainTo(candidate, ancestor);
+        if (chain is null)
+        {
+            return false;
+        }
+
+        for (int index = 1; index < chain.Count; index++)
+        {
+            DateTimeOffset? childStart = StartTimeOf(chain[index - 1]);
+            DateTimeOffset? parentStart = StartTimeOf(chain[index]);
+            if (childStart is null || parentStart is null || parentStart > childStart)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// The snapshot chain from <paramref name="candidate"/> up to the first
+    /// parent that is <paramref name="ancestor"/>, or null when the chain ends
+    /// or loops before reaching it.
+    /// </summary>
+    private List<int>? ChainTo(int candidate, int ancestor)
+    {
+        IReadOnlyDictionary<int, int> parents = _parents ??= _readParents();
+        List<int> chain = [candidate];
         int current = candidate;
         var seen = new HashSet<int>();
 
@@ -197,21 +262,27 @@ internal static class ProcessAncestry
         // contain a cycle once identifiers are reused.
         while (parents.TryGetValue(current, out int parent) && seen.Add(current))
         {
-            DateTimeOffset? childStart = GuestProcessObserver.GetStartTimeUtc(current);
-            DateTimeOffset? parentStart = GuestProcessObserver.GetStartTimeUtc(parent);
-            if (childStart is null || parentStart is null || parentStart > childStart)
-            {
-                return false;
-            }
+            chain.Add(parent);
             if (parent == ancestor)
             {
-                return true;
+                return chain;
             }
 
             current = parent;
         }
 
-        return false;
+        return null;
+    }
+
+    private DateTimeOffset? StartTimeOf(int processId)
+    {
+        if (!_startTimes.TryGetValue(processId, out DateTimeOffset? start))
+        {
+            start = _readStartTime(processId);
+            _startTimes.Add(processId, start);
+        }
+
+        return start;
     }
 
     private static Dictionary<int, int> ReadParents()
@@ -310,28 +381,6 @@ internal static class GuestProcessObserver
     }
 
     /// <summary>
-    /// True when the recorded supervisor, or a descendant of it, is listening
-    /// on the port.
-    /// </summary>
-    public static bool OwnsListenerOn(int port, int supervisorProcessId)
-    {
-        if (port <= 0)
-        {
-            return false;
-        }
-
-        foreach (int owner in TcpListenerOwnership.GetListenerProcessIds(port))
-        {
-            if (ProcessAncestry.IsSelfOrDescendant(owner, supervisorProcessId))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /// <summary>
     /// The ports the recorded supervisor, or a descendant of it, listens on.
     /// </summary>
     /// <remarks>
@@ -340,13 +389,31 @@ internal static class GuestProcessObserver
     /// port from the process is also the stronger ownership proof: a port this
     /// package supplied only ever confirmed its own assumption.
     /// </remarks>
-    public static IReadOnlyList<int> ListeningPortsOwnedBy(int supervisorProcessId)
+    public static IReadOnlyList<int> ListeningPortsOwnedBy(int supervisorProcessId) =>
+        ListeningPortsOwnedBy(
+            TcpListenerOwnership.GetListeners(),
+            new ProcessTreeSnapshot(),
+            supervisorProcessId);
+
+    /// <summary>
+    /// The ports in <paramref name="listeners"/> owned by the supervisor or by
+    /// one of its descendants in <paramref name="tree"/>.
+    /// </summary>
+    /// <remarks>
+    /// Every listener is judged against the same observation of the tree, so
+    /// the whole table costs at most one process snapshot, and none when the
+    /// supervisor owns every listener.
+    /// </remarks>
+    public static IReadOnlyList<int> ListeningPortsOwnedBy(
+        IReadOnlyList<(int Port, int Owner)> listeners,
+        ProcessTreeSnapshot tree,
+        int supervisorProcessId)
     {
         List<int> ports = [];
-        foreach ((int port, int owner) in TcpListenerOwnership.GetListeners())
+        foreach ((int port, int owner) in listeners)
         {
             if (!ports.Contains(port) &&
-                ProcessAncestry.IsSelfOrDescendant(owner, supervisorProcessId))
+                tree.IsSelfOrDescendant(owner, supervisorProcessId))
             {
                 ports.Add(port);
             }
