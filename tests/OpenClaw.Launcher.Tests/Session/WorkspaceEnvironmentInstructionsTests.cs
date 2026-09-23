@@ -52,6 +52,7 @@ public sealed class WorkspaceEnvironmentInstructionsTests : IDisposable
                 new Uri(@"C:\Package\node\native-redirect.mjs").AbsoluteUri,
                 @"C:\Package\app\openclaw.mjs",
                 "setup",
+                "--baseline",
                 "--json"
             ],
             observed.ArgumentList);
@@ -151,10 +152,39 @@ public sealed class WorkspaceEnvironmentInstructionsTests : IDisposable
     }
 
     [Fact]
-    public void ApplyRejectsWorkspaceOutsideTheAgentProfile()
+    public void ApplyPreservesAnExternalWorkspace()
     {
         string profile = Path.Combine(_root, "agent");
         string outside = Path.Combine(_root, "outside");
+        Directory.CreateDirectory(profile);
+        Directory.CreateDirectory(outside);
+        string agentsPath = Path.Combine(outside, "AGENTS.md");
+        File.WriteAllText(agentsPath, "# Existing instructions\n\nKeep this.\n");
+
+        (string workspace, bool updated) = WorkspaceEnvironmentInstructions.Apply(
+            @"C:\agent\node.exe",
+            @"C:\Package\app",
+            @"C:\Package\node\native-redirect.mjs",
+            null,
+            new Dictionary<string, string>(),
+            _ => new OpenClawSetupResult(
+                0,
+                $$"""{"workspaceDir":"{{JsonPath(outside)}}"}""",
+                string.Empty),
+            () => profile);
+
+        Assert.True(updated);
+        Assert.Equal(outside, workspace);
+        Assert.StartsWith(
+            "# Existing instructions\n\nKeep this.\n",
+            File.ReadAllText(agentsPath),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ApplyRejectsRelativeWorkspacePath()
+    {
+        string profile = Path.Combine(_root, "agent");
         Directory.CreateDirectory(profile);
 
         SessionLaunchException exception = Assert.Throws<SessionLaunchException>(
@@ -166,12 +196,32 @@ public sealed class WorkspaceEnvironmentInstructionsTests : IDisposable
                 new Dictionary<string, string>(),
                 _ => new OpenClawSetupResult(
                     0,
-                    $$"""{"workspaceDir":"{{JsonPath(outside)}}"}""",
+                    """{"workspaceDir":"relative-workspace"}""",
                     string.Empty),
                 () => profile));
 
-        Assert.Contains("outside", exception.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.False(Directory.Exists(outside));
+        Assert.Contains("fully qualified", exception.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(Path.Combine(profile, "relative-workspace")));
+    }
+
+    [Fact]
+    public void ReparsePointInWorkspacePathIsRejected()
+    {
+        string reparseDirectory = Path.Combine(_root, "shared");
+        string workspace = Path.Combine(reparseDirectory, "workspace");
+
+        SessionLaunchException exception = Assert.Throws<SessionLaunchException>(
+            () => WorkspaceEnvironmentInstructions.EnsureNoReparsePoints(
+                workspace,
+                _ => true,
+                path => string.Equals(
+                    path,
+                    reparseDirectory,
+                    StringComparison.OrdinalIgnoreCase)
+                    ? FileAttributes.Directory | FileAttributes.ReparsePoint
+                    : FileAttributes.Directory));
+
+        Assert.Contains("reparse point", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

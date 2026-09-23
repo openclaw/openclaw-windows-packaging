@@ -55,6 +55,7 @@ internal static class WorkspaceEnvironmentInstructions
         }
         startInfo.ArgumentList.Add(Path.Combine(applicationDirectory, "openclaw.mjs"));
         startInfo.ArgumentList.Add("setup");
+        startInfo.ArgumentList.Add("--baseline");
         startInfo.ArgumentList.Add("--json");
 
         OpenClawSetupResult setup = (runSetup ?? RunSetup)(startInfo);
@@ -68,17 +69,13 @@ internal static class WorkspaceEnvironmentInstructions
         }
 
         string workspacePath = ReadWorkspacePath(setup.StandardOutput);
-        string resolvedProfile = Path.GetFullPath(profilePath);
-        string resolvedWorkspace = Path.GetFullPath(workspacePath);
-        string profilePrefix = resolvedProfile.EndsWith(Path.DirectorySeparatorChar)
-            ? resolvedProfile
-            : resolvedProfile + Path.DirectorySeparatorChar;
-        if (!resolvedWorkspace.StartsWith(profilePrefix, StringComparison.OrdinalIgnoreCase))
+        if (!Path.IsPathFullyQualified(workspacePath))
         {
             throw new SessionLaunchException(
-                "OpenClaw setup returned a workspace outside the isolated agent profile.");
+                "OpenClaw setup returned a workspace path that is not fully qualified.");
         }
-        EnsureNoReparsePoints(resolvedProfile, resolvedWorkspace);
+        string resolvedWorkspace = Path.GetFullPath(workspacePath);
+        EnsureNoReparsePoints(resolvedWorkspace);
         return (resolvedWorkspace, UpdateAgentsFile(resolvedWorkspace));
     }
 
@@ -90,7 +87,9 @@ internal static class WorkspaceEnvironmentInstructions
                 "OpenClaw setup returned a workspace path that is not fully qualified.");
         }
 
+        EnsureNoReparsePoints(workspacePath);
         Directory.CreateDirectory(workspacePath);
+        EnsureNoReparsePoints(workspacePath);
         string agentsPath = Path.Combine(workspacePath, "AGENTS.md");
         if (File.Exists(agentsPath) &&
             File.GetAttributes(agentsPath).HasFlag(FileAttributes.ReparsePoint))
@@ -192,17 +191,27 @@ internal static class WorkspaceEnvironmentInstructions
         }
     }
 
-    private static void EnsureNoReparsePoints(string profilePath, string workspacePath)
+    internal static void EnsureNoReparsePoints(
+        string workspacePath,
+        Func<string, bool>? directoryExists = null,
+        Func<string, FileAttributes>? getAttributes = null)
     {
-        string relativePath = Path.GetRelativePath(profilePath, workspacePath);
-        string current = profilePath;
+        directoryExists ??= Directory.Exists;
+        getAttributes ??= File.GetAttributes;
+
+        string resolvedWorkspace = Path.GetFullPath(workspacePath);
+        string root = Path.GetPathRoot(resolvedWorkspace)
+            ?? throw new SessionLaunchException(
+                "OpenClaw setup returned a workspace path without a filesystem root.");
+        string relativePath = Path.GetRelativePath(root, resolvedWorkspace);
+        string current = root;
         foreach (string segment in relativePath.Split(
-            Path.DirectorySeparatorChar,
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
             StringSplitOptions.RemoveEmptyEntries))
         {
             current = Path.Combine(current, segment);
-            if (Directory.Exists(current) &&
-                File.GetAttributes(current).HasFlag(FileAttributes.ReparsePoint))
+            if (directoryExists(current) &&
+                getAttributes(current).HasFlag(FileAttributes.ReparsePoint))
             {
                 throw new SessionLaunchException(
                     "OpenClaw setup returned a workspace through a reparse point.");

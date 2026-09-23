@@ -86,14 +86,16 @@ degraded state. The lifecycle lock double-checks an absent marker so concurrent
 first launches provision once.
 
 After installing the agent-owned Node.js runtime, setup invokes the packaged
-upstream application as `openclaw setup --json` inside the session. Upstream
-therefore owns configuration parsing, default-workspace precedence, and initial
-workspace templates. The session host validates the reported workspace remains
-under the isolated account's profile, then atomically creates or replaces one
-marked Windows-environment section in `AGENTS.md`. Existing upstream and
-user-authored content outside that section is preserved. OpenClaw injects
-`AGENTS.md` into the main agent and retains it for subagents; this package does
-not try to project instructions into arbitrary additional agent workspaces.
+upstream application as `openclaw setup --baseline --json` inside the session.
+Upstream therefore owns configuration parsing, default-workspace precedence,
+and initial workspace templates. The session host accepts the absolute
+workspace upstream selects, including an existing agent-accessible workspace
+outside the isolated account's profile, but rejects paths through reparse
+points. It then atomically creates or replaces one marked Windows-environment
+section in `AGENTS.md`. Existing upstream and user-authored content outside
+that section is preserved. OpenClaw injects `AGENTS.md` into the main agent and
+retains it for subagents; this package does not try to project instructions
+into arbitrary additional agent workspaces.
 
 [`SetupStateStore`](../src/OpenClaw.Launcher/Session/SetupStateStore.cs)
 persists the setup phase and its durable outcome. [`SessionRuntime`](../src/OpenClaw.Launcher/Session/SessionRuntime.cs)

@@ -171,12 +171,12 @@ The variables are host-side only and are not passed to the OpenClaw child.
 ## Setup cannot prepare the OpenClaw workspace instructions
 
 **Check.** Read the `clawctl setup` error. It distinguishes an upstream
-`openclaw setup --json` failure, an invalid or outside-profile workspace, and
+`openclaw setup --baseline --json` failure, an invalid or unsafe workspace, and
 malformed package-managed markers in the workspace `AGENTS.md`.
 
 **Likely cause.** The agent's OpenClaw configuration is invalid, upstream setup
-could not initialize its default workspace, or `AGENTS.md` contains a partial
-or duplicated
+could not initialize its default workspace, the selected workspace is relative
+or passes through a reparse point, or `AGENTS.md` contains a partial or duplicated
 `openclaw-windows-packaging:environment` marker pair. Setup deliberately does
 not guess which malformed section it owns.
 
