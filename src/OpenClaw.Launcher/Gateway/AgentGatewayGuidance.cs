@@ -35,6 +35,7 @@ internal sealed class AgentGatewayGuidance
         IProgress<GatewayStartProgress>,
         Action<GatewayStartResult>,
         Task<GatewayStartResult>> _startGatewayUnderLock;
+    private readonly Action<TextWriter, GatewayStartResult> _writeGatewayStartOutcome;
     private readonly Action<TextWriter, string> _writeGatewayStartFailure;
     private readonly Func<string, string?> _readEnvironmentVariable;
 
@@ -55,6 +56,7 @@ internal sealed class AgentGatewayGuidance
             IProgress<GatewayStartProgress>,
             Action<GatewayStartResult>,
             Task<GatewayStartResult>>? startGateway = null,
+        Action<TextWriter, GatewayStartResult>? writeGatewayStartOutcome = null,
         Action<TextWriter, string>? writeGatewayStartFailure = null,
         Func<string, string?>? readEnvironmentVariable = null)
     {
@@ -71,6 +73,7 @@ internal sealed class AgentGatewayGuidance
                 start(new Progress<GatewayStartProgress>()));
         _startGatewayUnderLock = startGateway ?? ((_, _) => throw new InvalidOperationException(
             "Gateway start is not configured."));
+        _writeGatewayStartOutcome = writeGatewayStartOutcome ?? ((_, _) => { });
         _writeGatewayStartFailure = writeGatewayStartFailure ??
             ((writer, message) =>
             {
@@ -211,12 +214,7 @@ internal sealed class AgentGatewayGuidance
                         logonSessionId,
                         GatewayGuidanceAcknowledgement.GatewayObservedRunning)))
                 .ConfigureAwait(false);
-            if (result.State != GatewayState.Running && !result.AlreadyRunning)
-            {
-                WriteGatewayStartFailure(
-                    error,
-                    $"Gateway start finished in {result.State} state: {result.Message}");
-            }
+            _writeGatewayStartOutcome(error, result);
         }
         catch (Exception exception) when (
             exception is MxcException or SessionException or SessionLaunchException or

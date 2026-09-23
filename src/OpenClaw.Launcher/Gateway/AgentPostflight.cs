@@ -93,6 +93,22 @@ internal sealed class AgentPostflight
                 CancellationToken.None,
                 progress,
                 onRunningUnderLock),
+            (target, result) =>
+            {
+                using GatewayOutput output = PrepareGatewayOutput(
+                    target,
+                    interactive,
+                    readEnvironmentVariable,
+                    log,
+                    errorIsProcessConsoleWriter,
+                    errorIsInteractive,
+                    supportsUnicode);
+                ClawCtlConsole.WriteGatewayStartOutcome(
+                    target,
+                    result,
+                    output.UseColor,
+                    output.UseUnicode);
+            },
             (target, detail) =>
             {
                 using GatewayOutput output = PrepareGatewayOutput(
@@ -103,7 +119,7 @@ internal sealed class AgentPostflight
                     errorIsProcessConsoleWriter,
                     errorIsInteractive,
                     supportsUnicode);
-                ClawCtlConsole.WriteGatewayStartWarning(
+                ClawCtlConsole.WriteGatewayStartFailure(
                     target,
                     detail,
                     output.UseColor,

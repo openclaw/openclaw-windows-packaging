@@ -31,7 +31,12 @@ public sealed class AgentGatewayGuidanceTests : IDisposable
         ISessionLock? lifecycleLock = null,
         Func<CancellationToken, Task<SessionConfigReadinessResult>>? checkReadiness = null,
         Func<CancellationToken, Task<GatewayStatusReport>>? getGatewayStatus = null,
-        GatewayGuidanceStateStore? stateOverride = null)
+        GatewayGuidanceStateStore? stateOverride = null,
+        Func<
+            TextWriter,
+            Func<IProgress<GatewayStartProgress>, Task<GatewayStartResult>>,
+            Task<GatewayStartResult>>? narrateGatewayStart = null,
+        Action<TextWriter, GatewayStartResult>? writeGatewayStartOutcome = null)
     {
         store = stateOverride ?? new GatewayGuidanceStateStore(
             Path.Combine(_root, $"gateway-guidance-{Guid.NewGuid():N}.json"));
@@ -62,6 +67,7 @@ public sealed class AgentGatewayGuidanceTests : IDisposable
             _log.Add,
             new FixedTimeProvider(
                 new DateTimeOffset(2026, 9, 18, 18, 0, 0, TimeSpan.Zero)),
+            narrateGatewayStart: narrateGatewayStart,
             startGateway: startGateway ?? ((_, onRunningUnderLock) =>
             {
                 startCalled?.Invoke();
@@ -73,6 +79,7 @@ public sealed class AgentGatewayGuidanceTests : IDisposable
                 onRunningUnderLock(result);
                 return Task.FromResult(result);
             }),
+            writeGatewayStartOutcome: writeGatewayStartOutcome,
             readEnvironmentVariable: readEnvironmentVariable ?? (_ => null));
     }
 
@@ -121,6 +128,92 @@ public sealed class AgentGatewayGuidanceTests : IDisposable
         Assert.True(startObservedHeldLock);
         Assert.Equal(1, lifecycleLock.TotalAcquisitions);
         Assert.Equal(0, lifecycleLock.HeldCount);
+    }
+
+    [Fact]
+    public async Task SuccessfulStartWritesTheReturnedOutcome()
+    {
+        GatewayStartResult? written = null;
+        AgentGatewayGuidance guidance = Create(
+            SessionConfigReadinessState.StartupEligible,
+            GatewayState.NotStarted,
+            out _,
+            writeGatewayStartOutcome: (_, result) => written = result);
+
+        await guidance.EvaluateAsync(0, interactive: true, TextWriter.Null);
+
+        Assert.NotNull(written);
+        Assert.Equal(GatewayState.Running, written.State);
+    }
+
+    [Theory]
+    [InlineData((int)GatewayState.Starting)]
+    [InlineData((int)GatewayState.Unknown)]
+    [InlineData((int)GatewayState.Stopped)]
+    public async Task NonRunningStartWritesOutcomeWithoutAcknowledging(int stateValue)
+    {
+        GatewayState state = (GatewayState)stateValue;
+        GatewayStartResult? written = null;
+        AgentGatewayGuidance guidance = Create(
+            SessionConfigReadinessState.StartupEligible,
+            GatewayState.NotStarted,
+            out GatewayGuidanceStateStore store,
+            startGateway: (_, _) => Task.FromResult(new GatewayStartResult(
+                state,
+                new GatewayRecord(),
+                AlreadyRunning: false,
+                $"The gateway finished in {state} state.")),
+            writeGatewayStartOutcome: (_, result) => written = result);
+
+        await guidance.EvaluateAsync(0, interactive: true, TextWriter.Null);
+
+        Assert.NotNull(written);
+        Assert.Equal(state, written.State);
+        Assert.False(store.IsAcknowledged("logon-a"));
+    }
+
+    [Fact]
+    public async Task SuccessfulNarratedStartLeavesDurableOutcome()
+    {
+        AgentGatewayGuidance guidance = Create(
+            SessionConfigReadinessState.StartupEligible,
+            GatewayState.NotStarted,
+            out _,
+            startGateway: (progress, onRunningUnderLock) =>
+            {
+                progress.Report(new GatewayStartProgress(
+                    GatewayStartStage.Listening,
+                    "The gateway is listening on port 18789."));
+                var result = new GatewayStartResult(
+                    GatewayState.Running,
+                    new GatewayRecord { ObservedPorts = [18789] },
+                    AlreadyRunning: false,
+                    "The gateway is running on port 18789.");
+                onRunningUnderLock(result);
+                return Task.FromResult(result);
+            },
+            narrateGatewayStart: (writer, start) =>
+                ClawCtlConsole.NarrateGatewayStartAsync(
+                    writer,
+                    useColor: false,
+                    narrate: true,
+                    outputIsInteractive: true,
+                    useUnicode: true,
+                    start),
+            writeGatewayStartOutcome: (writer, result) =>
+                ClawCtlConsole.WriteGatewayStartOutcome(
+                    writer,
+                    result,
+                    useColor: false,
+                    useUnicode: true));
+        var error = new StringWriter();
+
+        await guidance.EvaluateAsync(0, interactive: true, error);
+
+        Assert.Contains(
+            "\U0001f980 \u2713 Gateway: running on port 18789.",
+            error.ToString(),
+            StringComparison.Ordinal);
     }
 
     [Fact]

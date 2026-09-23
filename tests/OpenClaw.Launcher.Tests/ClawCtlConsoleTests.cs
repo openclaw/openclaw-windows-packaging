@@ -287,6 +287,107 @@ public sealed class ClawCtlConsoleTests
         Assert.Contains("\u280b", output.ToString(), StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(true, "\U0001f980 \u2713 Gateway: running on port 18789.")]
+    [InlineData(false, "[ok] Gateway: running on port 18789.")]
+    public void GatewayStartOutcomeReportsVerifiedSuccess(
+        bool useUnicode,
+        string expected)
+    {
+        using var output = new StringWriter();
+
+        ClawCtlConsole.WriteGatewayStartOutcome(
+            output,
+            new GatewayStartResult(
+                GatewayState.Running,
+                new GatewayRecord { ObservedPorts = [18789] },
+                AlreadyRunning: false,
+                "The gateway is running."),
+            useUnicode: useUnicode);
+
+        Assert.Equal(expected + Environment.NewLine, output.ToString());
+    }
+
+    [Theory]
+    [InlineData((int)GatewayState.Starting, "still starting")]
+    [InlineData((int)GatewayState.Unknown, "unverified")]
+    public void UncertainGatewayOutcomeDirectsTheUserToStatus(
+        int stateValue,
+        string expectedState)
+    {
+        using var output = new StringWriter();
+
+        ClawCtlConsole.WriteGatewayStartOutcome(
+            output,
+            new GatewayStartResult(
+                (GatewayState)stateValue,
+                new GatewayRecord(),
+                AlreadyRunning: false,
+                "The gateway [state] could not be verified."),
+            useUnicode: true);
+
+        string rendered = output.ToString();
+        Assert.Contains(
+            $"\U0001f980 ! Gateway: {expectedState}. " +
+            "The gateway [state] could not be verified.",
+            rendered,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Check with clawctl gateway-service status.",
+            rendered,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "clawctl gateway-service start",
+            rendered,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StoppedGatewayOutcomeReportsFailureAndRetry()
+    {
+        using var output = new StringWriter();
+
+        ClawCtlConsole.WriteGatewayStartOutcome(
+            output,
+            new GatewayStartResult(
+                GatewayState.Stopped,
+                new GatewayRecord(),
+                AlreadyRunning: false,
+                "The gateway exited during startup."),
+            useUnicode: true);
+
+        string rendered = output.ToString();
+        Assert.Contains(
+            "\U0001f980 \u2717 Gateway: failed. The gateway exited during startup.",
+            rendered,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Retry with clawctl gateway-service start.",
+            rendered,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GatewayStartExceptionReportsFailureAndRetryWithoutParsingMarkup()
+    {
+        using var output = new StringWriter();
+
+        ClawCtlConsole.WriteGatewayStartFailure(
+            output,
+            @"Gateway [launch] failed at C:\work.",
+            useUnicode: false);
+
+        string rendered = output.ToString();
+        Assert.Contains(
+            @"[x] Gateway: failed. Gateway [launch] failed at C:\work.",
+            rendered,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Retry with clawctl gateway-service start.",
+            rendered,
+            StringComparison.Ordinal);
+    }
+
     [Fact]
     public void DiagnosticsBundlePathRemainsAnExactStandaloneLine()
     {

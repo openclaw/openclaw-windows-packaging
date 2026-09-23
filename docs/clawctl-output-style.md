@@ -26,10 +26,17 @@ should describe that environment in terms an operator can act on, while
   gateway start on standard error. Do nothing for non-zero child exits,
   redirected output, non-eligible readiness, or `Starting`, `Unhealthy`, and
   `Unknown` gateway states; acknowledge an observed running gateway.
-- A failed or unverified automatic gateway start must not change the OpenClaw
-  exit code. Write a warning to standard error, followed by
+- After live gateway narration clears, write one durable outcome line. Unicode
+  output starts with the crab identity and uses a check mark for a verified
+  listener, an exclamation mark for a still-starting or unverified launch, and
+  a cross for a definite stop or handled start failure. Non-Unicode output uses
+  `[ok]`, `[!]`, or `[x]` without the crab.
+- A still-starting or unverified automatic gateway start directs the user to
+  `clawctl gateway-service status`; do not encourage a second start while an
+  owned process may still be alive. A definite stop or handled failure writes
   `clawctl gateway-service start` on its own line so width-constrained wrapping
-  cannot break the retry command. Leave the guidance unacknowledged so a later
+  cannot break the retry command. These advisory outcomes must not change the
+  OpenClaw exit code. Leave unsuccessful guidance unacknowledged so a later
   eligible launch retries. `CLAWCTL_AUTO_GATEWAY_START=0` (or `false`, `no`,
   or `off`) restores the start hint.
 - Keep a successful `clawctl pwsh` launch silent so the user reaches the shell
