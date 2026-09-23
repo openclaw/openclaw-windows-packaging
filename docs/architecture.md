@@ -214,10 +214,12 @@ concurrent writers from interleaving records.
 [`GatewayController`](../src/OpenClaw.Launcher/Gateway/GatewayController.cs)
 records how long each gateway status inspection took and the state it
 observed. [`SessionExecutor`](../src/OpenClaw.Launcher/Session/SessionExecutor.cs)
-records the duration and executor exit code of each non-attached session
-exchange, such as the Control UI handoff. Together they show where a slow
-command spent its time without a debugger. They never include captured output,
-arguments, environment, URLs, or tokens.
+records how long each non-attached session exchange, such as the Control UI
+handoff, took and how it ended: the executor exit code or, when the exchange
+throws, the exception type and any MXC error classification. Together they
+show where a slow command spent its time without a debugger. They never
+include captured output, exception messages, arguments, environment, URLs, or
+tokens.
 
 [`DiagnosticsBundle`](../src/OpenClaw.Launcher/Gateway/DiagnosticsBundle.cs)
 collects troubleshooting material through the shared workspace while excluding

@@ -280,10 +280,12 @@ internal sealed class SessionExecutor
     /// Runs one buffered helper exchange and records how long the backend took.
     /// </summary>
     /// <remarks>
-    /// Logged as soon as the backend returns, before the result is validated,
-    /// so a slow exchange that then fails is still visible. Only the subject,
-    /// the duration, and the executor exit code are recorded: the captured
-    /// streams can carry authenticated data.
+    /// Every way the exchange ends is recorded. A returned result is logged as
+    /// soon as the backend returns, before it is validated, and a thrown
+    /// failure, including cancellation, is logged before it is rethrown
+    /// unchanged. Only the subject, the duration, and the executor exit code or
+    /// exception type are recorded: the captured streams can carry
+    /// authenticated data, and MXC failure messages can carry executor stderr.
     /// </remarks>
     private async Task<MxcExecutionResult> ExecuteTimedAsync(
         MxcSandboxId sandboxId,
@@ -292,17 +294,33 @@ internal sealed class SessionExecutor
         CancellationToken cancellationToken)
     {
         long started = _clock.GetTimestamp();
-        MxcExecutionResult execution = await _backend.ExecuteAsync(
-            sandboxId,
-            new MxcExecutionRequest(commandLine),
-            null,
-            cancellationToken).ConfigureAwait(false);
-        long elapsedMilliseconds = (long)_clock.GetElapsedTime(started).TotalMilliseconds;
+        MxcExecutionResult execution;
+        try
+        {
+            execution = await _backend.ExecuteAsync(
+                sandboxId,
+                new MxcExecutionRequest(commandLine),
+                null,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            string failure = exception is MxcException mxc
+                ? $"{nameof(MxcException)} {mxc.Code}"
+                : exception.GetType().Name;
+            _log(string.Create(
+                CultureInfo.InvariantCulture,
+                $"{subject} failed after {ElapsedMilliseconds()} ms ({failure})."));
+            throw;
+        }
 
         _log(string.Create(
             CultureInfo.InvariantCulture,
-            $"{subject} finished in {elapsedMilliseconds} ms (executor exit {execution.ExitCode})."));
+            $"{subject} finished in {ElapsedMilliseconds()} ms (executor exit {execution.ExitCode})."));
         return execution;
+
+        long ElapsedMilliseconds() =>
+            (long)_clock.GetElapsedTime(started).TotalMilliseconds;
     }
 
     /// <summary>

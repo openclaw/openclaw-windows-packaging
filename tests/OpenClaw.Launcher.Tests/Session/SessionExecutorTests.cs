@@ -906,6 +906,76 @@ public sealed class SessionExecutorTests : IDisposable
             _log);
     }
 
+    // The production client throws a structured dispatch failure rather than
+    // returning it, so a slow exchange that fails that way must still be timed.
+    // Its message can carry executor stderr, so only the type and MXC
+    // classification are recorded, and the caller still sees the original.
+    [Fact]
+    public async Task CapturedCommandRecordsItsDurationWhenDispatchThrows()
+    {
+        const string marker = "executor-stderr-marker";
+        var failure = new MxcException(
+            MxcErrorCode.BackendError,
+            $"The backend could not run the command: {marker}",
+            "backend_error");
+        _backend.ExecuteBehavior = _ =>
+        {
+            _clock.Advance(TimeSpan.FromMilliseconds(42000));
+            return Task.FromException<MxcExecutionResult>(failure);
+        };
+
+        MxcException thrown = await Assert.ThrowsAsync<MxcException>(
+            () => Create().ExecuteCommandCaptureAsync(
+                Record(),
+                CaptureRequest("dashboard", "--json"),
+                "Resolving the Control UI handoff in the isolated session.",
+                "OpenClaw dashboard",
+                CancellationToken.None));
+
+        Assert.Same(failure, thrown);
+        Assert.Equal(
+            [
+                "Resolving the Control UI handoff in the isolated session.",
+                "OpenClaw dashboard failed after 42000 ms (MxcException BackendError).",
+            ],
+            _log);
+        Assert.All(
+            _log,
+            entry => Assert.DoesNotContain(marker, entry, StringComparison.Ordinal));
+        Assert.Empty(Directory.GetFiles(Workspace));
+    }
+
+    // Cancellation ends an exchange like any other thrown failure: its time is
+    // recorded by the same rule and the caller still observes the cancellation.
+    [Fact]
+    public async Task CancelledExchangeRecordsItsDurationAndPropagatesUnchanged()
+    {
+        using var cancellation = new CancellationTokenSource();
+        OperationCanceledException? canceled = null;
+        _backend.ExecuteBehavior = _ =>
+        {
+            _clock.Advance(TimeSpan.FromMilliseconds(1250));
+            cancellation.Cancel();
+            canceled = new OperationCanceledException(cancellation.Token);
+            return Task.FromException<MxcExecutionResult>(canceled);
+        };
+
+        OperationCanceledException thrown = await Assert.ThrowsAsync<OperationCanceledException>(
+            () => Create().CheckConfigReadinessAsync(
+                Record(),
+                @"C:\Package\session-host\openclaw-session-host.exe",
+                cancellation.Token));
+
+        Assert.Same(canceled, thrown);
+        Assert.Equal(
+            [
+                "Checking agent-side OpenClaw config readiness.",
+                "Config readiness check failed after 1250 ms (OperationCanceledException).",
+            ],
+            _log);
+        Assert.Empty(Directory.GetFiles(Workspace));
+    }
+
     [Fact]
     public async Task CapturedCommandRejectsMalformedHelperResult()
     {
