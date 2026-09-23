@@ -23,7 +23,9 @@ public sealed class GuestProcessObserverTests
             int port = ((IPEndPoint)listener.LocalEndpoint).Port;
 
             Assert.True(GuestProcessObserver.AnythingListeningOn(port));
-            Assert.True(GuestProcessObserver.OwnsListenerOn(port, Environment.ProcessId));
+            Assert.Contains(
+                port,
+                GuestProcessObserver.ListeningPortsOwnedBy(Environment.ProcessId));
         }
         finally
         {
@@ -46,7 +48,9 @@ public sealed class GuestProcessObserverTests
             try
             {
                 Assert.True(GuestProcessObserver.AnythingListeningOn(port));
-                Assert.False(GuestProcessObserver.OwnsListenerOn(port, unrelated.Id));
+                Assert.DoesNotContain(
+                    port,
+                    GuestProcessObserver.ListeningPortsOwnedBy(unrelated.Id));
             }
             finally
             {
@@ -79,11 +83,11 @@ public sealed class GuestProcessObserverTests
         using Process child = StartLongRunningProcess();
         try
         {
-            Assert.True(ProcessAncestry.IsSelfOrDescendant(child.Id, Environment.ProcessId));
-            Assert.True(ProcessAncestry.IsSelfOrDescendant(
-                Environment.ProcessId,
-                Environment.ProcessId));
-            Assert.False(ProcessAncestry.IsSelfOrDescendant(Environment.ProcessId, child.Id));
+            var tree = new ProcessTreeSnapshot();
+
+            Assert.True(tree.IsSelfOrDescendant(child.Id, Environment.ProcessId));
+            Assert.True(tree.IsSelfOrDescendant(Environment.ProcessId, Environment.ProcessId));
+            Assert.False(tree.IsSelfOrDescendant(Environment.ProcessId, child.Id));
         }
         finally
         {
