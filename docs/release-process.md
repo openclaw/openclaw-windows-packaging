@@ -111,24 +111,31 @@ profile or weaken those fixtures to make the check pass.
 
 ## Publication and completion
 
-After authorization succeeds, `publish-store-release` can create a permanent
-GitHub release containing explicitly labeled unsigned Partner Center submission
-assets. Microsoft signs these packages during Store ingestion; they are not
-intended for direct sideloading. For a compatible Azure publisher certificate,
-`publish-release` runs after signing and creates the permanent GitHub release
-tag derived by `scripts\Get-MSIXReleaseIdentity.ps1`, generates release notes
-from merged pull request titles, and publishes the signed multi-architecture
-bundle plus signed x64 and ARM64 standalone MSIX assets.
+After authorization succeeds, `submit-microsoft-store` downloads only the
+authorized multi-architecture bundle, exchanges a short-lived GitHub OIDC
+assertion for Microsoft Store API access, clones the product's current
+submission, replaces its package, and commits the update. It does not create a
+GitHub Release for unsigned packages. The bundle contains both x64 and ARM64;
+submitting the standalone packages too would duplicate the packages already in
+the bundle. The workflow retains a hash-bound submission-evidence artifact for
+90 days. For a compatible Azure publisher certificate, `publish-release` runs
+after signing and creates the permanent GitHub release tag derived by
+`scripts\Get-MSIXReleaseIdentity.ps1`, generates release notes from merged pull
+request titles, and publishes the signed multi-architecture bundle plus signed
+x64 and ARM64 standalone MSIX assets.
 
-After publication, verify the release has the derived permanent tag, generated
-notes, and all three expected assets. For `official`, verify all signatures; for
-`store`, verify the release labels the packages as unsigned Store-submission
-assets. Reconcile the release with the successful
-identity-transition evidence from the policy pull request. Verify the bundle and both
-standalone packages are present; the bundle is the multi-architecture delivery,
-while the standalone packages support explicit architecture deployment. Keep
-both the release workflow run and the policy pull request's evidence available
-as the release record.
+Store submissions are serialized and authoritative over the pending Partner
+Center draft. Before dispatch, either finish or discard any manual draft edits;
+the reviewed `pendingSubmissionPolicy` replaces them while cloning the latest
+published listing, availability, pricing, and screenshot state.
+
+After publication, verify an `official` release has the derived permanent tag,
+generated notes, all three expected assets, and valid signatures. For `store`,
+verify the `submit-microsoft-store` job committed the update and retained
+`openclaw-gateway-store-submission-evidence`; follow certification and rollout
+in Partner Center. Reconcile either path with the successful identity-transition
+evidence from the policy pull request. Keep both the workflow run and policy
+pull request evidence available as the release record.
 
 ## Failure and rollback boundaries
 
