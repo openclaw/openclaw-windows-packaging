@@ -38,16 +38,16 @@ $requiredFragments = @(
     'OPENCLAW_REF: ${{ inputs.openclaw_ref || needs.build-package.outputs.source_sha }}'
     "retention-days: `${{ github.event_name == 'pull_request' && 1 || 7 }}"
     'name: Restore cached OpenClaw package'
-    "if: `${{ github.event_name != 'workflow_dispatch' || inputs.signing_mode != 'official' }}"
+    "if: `${{ github.event_name != 'workflow_dispatch' || (inputs.signing_mode != 'official' && inputs.signing_mode != 'store') }}"
     'uses: actions/cache/restore@v4'
     'name: Save OpenClaw package cache'
-    "steps.package-cache.outputs.cache-hit != 'true' && (github.event_name != 'workflow_dispatch' || inputs.signing_mode != 'official')"
+    "steps.package-cache.outputs.cache-hit != 'true' && (github.event_name != 'workflow_dispatch' || (inputs.signing_mode != 'official' && inputs.signing_mode != 'store'))"
     'uses: actions/cache/save@v4'
     'name: Restore cached Windows dependency tree'
     'path: ${{ runner.temp }}\openclaw-stage-${{ matrix.architecture }}'
     'key: ${{ steps.payload-key.outputs.key }}'
     'name: Save Windows dependency tree cache'
-    "steps.payload-cache.outputs.cache-hit != 'true' && (github.event_name != 'workflow_dispatch' || inputs.signing_mode != 'official')"
+    "steps.payload-cache.outputs.cache-hit != 'true' && (github.event_name != 'workflow_dispatch' || (inputs.signing_mode != 'official' && inputs.signing_mode != 'store'))"
     'environment: release-signing'
     'id-token: write'
     'uses: azure/login@v3'
@@ -57,7 +57,7 @@ $requiredFragments = @(
     'uses: azure/artifact-signing-action@v2'
     'name: Compose unsigned multi-architecture MSIX bundle'
     'name: Upload unsigned multi-architecture MSIX bundle'
-    'name: Test proof-release MSIX upgrades'
+    'name: Test proof-release MSIX identity transition'
     "needs.changes.outputs.versioning == 'true'"
     'scripts/Test-MSIXReleaseIdentity.Tests.ps1'
     '.\scripts\msix-upgrade-baselines.json'
@@ -69,11 +69,19 @@ $requiredFragments = @(
     '-BundlePath artifacts\bundle\OpenClawGateway.msixbundle'
     'files-folder-recurse: true'
     'files: ${{ github.workspace }}\artifacts\bundle\OpenClawGateway.msixbundle'
+    'publisher: ${{ steps.release.outputs.publisher }}'
+    '"publisher=$($policy.publisher)" >> $env:GITHUB_OUTPUT'
+    'EXPECTED_PUBLISHER: ${{ needs.authorize-signing.outputs.publisher }}'
+    '$expectedSubject = $env:EXPECTED_PUBLISHER'
     'name: Upload signed multi-architecture MSIX bundle'
     'endpoint: https://eus.codesigning.azure.net/'
     'signing-account-name: openclaw'
     'certificate-profile-name: openclaw'
     'name: Publish signed Gateway MSIX release'
+    'name: Publish unsigned Microsoft Store MSIX release'
+    "inputs.signing_mode == 'store' && needs.authorize-signing.result == 'success'"
+    'These packages are **unsigned Microsoft Store submission assets**.'
+    'They are not intended for direct sideloading.'
     '.\scripts\Get-MSIXReleaseIdentity.ps1'
     'contents: write'
     'uses: softprops/action-gh-release@v3'
@@ -121,6 +129,44 @@ if ($identityCalls.Count -ne 3) {
 
 if ($workflow.Contains('AZURE_CLIENT_SECRET', [StringComparison]::Ordinal)) {
     throw 'Signing workflow must use OIDC, not an Azure client secret.'
+}
+
+$signJobMatch = [regex]::Match(
+    $workflow,
+    '(?ms)^  sign-msix:\s*(?<job>.*?)(?=^  [a-z][a-z0-9-]+:)'
+)
+if (-not $signJobMatch.Success) {
+    throw 'Unable to locate the sign-msix workflow job.'
+}
+$signJob = $signJobMatch.Groups['job'].Value
+if ($signJob.Contains('release-policy.json', [StringComparison]::Ordinal)) {
+    throw (
+        'The signing runner must consume the publisher authorized by the ' +
+        'authorize-signing job; it does not check out release policy.'
+    )
+}
+
+$storePublishJobMatch = [regex]::Match(
+    $workflow,
+    '(?ms)^  publish-store-release:\s*(?<job>.*?)(?=^  [a-z][a-z0-9-]+:)'
+)
+if (-not $storePublishJobMatch.Success) {
+    throw 'Unable to locate the publish-store-release workflow job.'
+}
+$storePublishJob = $storePublishJobMatch.Groups['job'].Value
+foreach ($forbidden in @('azure/login', 'artifact-signing-action', 'id-token: write')) {
+    if ($storePublishJob.Contains($forbidden, [StringComparison]::Ordinal)) {
+        throw "Store publication must not request signing capability: $forbidden"
+    }
+}
+foreach ($artifact in @(
+    'openclaw-gateway-msix-unsigned-x64'
+    'openclaw-gateway-msix-unsigned-arm64'
+    'openclaw-gateway-msix-unsigned-bundle'
+)) {
+    if (-not $storePublishJob.Contains($artifact, [StringComparison]::Ordinal)) {
+        throw "Store publication must consume the authorized unsigned artifact: $artifact"
+    }
 }
 
 Write-Host 'Gateway MSIX signing workflow configuration passed.'

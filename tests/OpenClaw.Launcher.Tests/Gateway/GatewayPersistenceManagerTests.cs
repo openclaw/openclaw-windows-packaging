@@ -157,6 +157,7 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
         string activation = await File.ReadAllTextAsync(ActivationScriptPath, CancellationToken.None);
 
         Assert.Contains("PackageFamilyName -eq $packageFamilyName", activation, StringComparison.Ordinal);
+        Assert.Contains("Get-AppxPackage -Name 'OpenClawFoundation.OpenClawGateway'", activation, StringComparison.Ordinal);
         Assert.Contains("does not declare application '$applicationId'", activation, StringComparison.Ordinal);
         Assert.Contains("does not target openclaw.exe", activation, StringComparison.Ordinal);
     }

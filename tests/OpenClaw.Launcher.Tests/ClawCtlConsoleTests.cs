@@ -204,6 +204,7 @@ public sealed class ClawCtlConsoleTests
     public async Task LiveNarrationRequiresAndRendersANonEmptyInitialStage()
     {
         using var output = new StringWriter();
+        int spinnerSelections = 0;
         IAnsiConsole console = AnsiConsole.Create(new AnsiConsoleSettings
         {
             Ansi = AnsiSupport.No,
@@ -219,9 +220,15 @@ public sealed class ClawCtlConsoleTests
             {
                 progress.Report(new ClawCtlProgress("Installing the runtime."));
                 return Task.FromResult(42);
+            },
+            _ =>
+            {
+                spinnerSelections++;
+                return ClawCtlSpinner.Ascii;
             });
 
         Assert.Equal(42, result);
+        Assert.Equal(2, spinnerSelections);
         Assert.Contains("Installing the runtime.", output.ToString(), StringComparison.Ordinal);
         await Assert.ThrowsAsync<ArgumentException>(() =>
             ClawCtlConsole.NarrateWithStatusAsync(

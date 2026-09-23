@@ -22,8 +22,16 @@ NativeAOT publishing and MSIX work.
 | Install a signed local artifact | After removing a loose registration with the deployment script, install the signed package with `Add-AppxPackage -Path <signed-msix>`. |
 
 Loose registration and an installed MSIX are mutually exclusive for the
-`OpenClaw.Gateway` identity. Windows cannot preserve packaged app data while
+`OpenClawFoundation.OpenClawGateway` identity. Windows cannot preserve packaged app data while
 switching between them. Treat a transition as deliberate, not an update.
+
+Checkouts that previously registered the legacy `OpenClaw.Gateway` identity
+need an explicit transition because the old registration may still point at
+this checkout's layout. The deployment script detects both identities before
+changing that layout. Run `-Unregister` to remove an owned loose registration,
+or pass `-ReplaceExistingInstall` to explicitly remove the old registration as
+part of deployment; packaged LocalState does not transfer to the reserved
+package family.
 
 ## Fast, loose-registration inner loop
 
@@ -67,7 +75,7 @@ copied, which is why repeat deploys avoid duplicating it.
 ### Verify the registered package
 
 ```powershell
-Get-AppxPackage -Name OpenClaw.Gateway |
+Get-AppxPackage -Name OpenClawFoundation.OpenClawGateway |
   Select-Object PackageFullName, InstallLocation, IsDevelopmentMode, SignatureKind
 
 clawctl --version

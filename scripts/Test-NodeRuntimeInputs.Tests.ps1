@@ -43,60 +43,9 @@ try {
     @'
 require("node:fs").writeFileSync("installed-architecture.txt", process.arch);
 '@ | Set-Content -LiteralPath "$source\install.cjs"
-    @'
-const fs = await import("node:fs");
-const path = await import("node:path");
-const args = process.argv.slice(2);
-const configPath =
-  process.env.OPENCLAW_CONFIG_PATH ??
-  (process.env.OPENCLAW_STATE_DIR
-    ? path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json")
-    : undefined);
-if (args[0] === "completion" && args[1] === "--shell" && args[2] === "powershell") {
-  console.log("Register-ArgumentCompleter -Native -CommandName openclaw -ScriptBlock {}");
-  process.exit(0);
-}
-if (args[0] === "plugins" && args[1] === "enable") {
-  if (!configPath) {
-    throw new Error("Missing isolated validation configuration path.");
-  }
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(
-    configPath,
-    JSON.stringify({
-      plugins: {
-        entries: {
-          "gateway-isolation": {
-            enabled: true
-          }
-        }
-      }
-    }),
-  );
-  process.exit(0);
-}
-
-const enabled = Boolean(configPath) && fs.existsSync(configPath) &&
-  JSON.parse(fs.readFileSync(configPath, "utf8"))
-    .plugins?.entries?.["gateway-isolation"]?.enabled === true;
-const runtime = args.includes("--runtime");
-console.log(JSON.stringify({
-  plugin: {
-    id: "gateway-isolation",
-    origin: "bundled",
-    enabled,
-    activated: enabled && runtime,
-    status: enabled && runtime ? "loaded" : "disabled",
-    imported: enabled && runtime,
-    httpRoutes: enabled && runtime ? 1 : 0
-  },
-  httpRouteCount: enabled && runtime ? 1 : 0,
-  gatewayMethods: [],
-  tools: [],
-  services: [],
-  diagnostics: []
-}));
-'@ | Set-Content -LiteralPath "$source\openclaw.mjs"
+    Copy-Item `
+        -LiteralPath (Join-Path $PSScriptRoot 'fixtures\openclaw-plugin-inspection.mjs') `
+        -Destination "$source\openclaw.mjs"
     'export {};' | Set-Content -LiteralPath "$source\dist\index.js"
     '{"name":"@openclaw/fixture","version":"1.0.0"}' |
         Set-Content `
@@ -145,6 +94,42 @@ console.log(JSON.stringify({
             (Test-Path -LiteralPath (Join-Path $otherStage 'node_modules'))) {
             throw 'A mismatched Node.js architecture changed staging or output before rejection.'
         }
+    }
+
+    $nodeExecutable = @(Get-Command node -CommandType Application)[0].Source
+    $probeExitCode = 0
+    $invalidTargetOutput = Join-Path $testRoot 'invalid-node-target'
+    function node {
+        if ($args.Count -eq 2 -and
+            $args[0] -ceq '-p' -and
+            $args[1] -ceq 'process.platform + "/" + process.arch') {
+            $global:LASTEXITCODE = $probeExitCode
+            $probeTarget
+            return
+        }
+        & $nodeExecutable @args
+    }
+    try {
+        foreach ($probeTarget in @("linux/$nodeArchitecture", 'unknown', 'win32/ia32')) {
+            Assert-Fails -MessagePattern "requires win32/$nodeArchitecture Node.js" -Action {
+                & "$PSScriptRoot\Build-Payload.ps1" `
+                    -PackageDirectory $package -Architecture $nodeArchitecture `
+                    -OutputDirectory $invalidTargetOutput
+            }
+        }
+        $probeExitCode = 1
+        Assert-Fails -MessagePattern 'Unable to determine.*platform and architecture' -Action {
+            & "$PSScriptRoot\Build-Payload.ps1" `
+                -PackageDirectory $package -Architecture $nodeArchitecture `
+                -OutputDirectory $invalidTargetOutput
+        }
+        if ((Test-Path $invalidTargetOutput) -or
+            (Test-Path (Join-Path $testRoot "openclaw-stage-$nodeArchitecture"))) {
+            throw 'An invalid or failed Node target probe must not produce a payload or stage.'
+        }
+    }
+    finally {
+        Remove-Item Function:\node
     }
 
     & "$PSScriptRoot\Build-Payload.ps1" `

@@ -77,7 +77,7 @@ function New-Fixture {
     [IO.File]::WriteAllText((Join-Path $project 'Package.appxmanifest'), @'
 <?xml version="1.0" encoding="utf-8"?>
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
-  <Identity Name="OpenClaw.Gateway" Publisher="CN=Fixture" Version="0.0.0.0" />
+  <Identity Name="OpenClawFoundation.OpenClawGateway" Publisher="CN=Fixture" Version="0.0.0.0" />
 </Package>
 '@)
 
@@ -96,6 +96,7 @@ function New-Fixture {
         RegisterFailure = $false
         BadRegistration = $false
         Queries = 0
+        PackageQueries = @()
         Downloads = 0
         RuntimeDownloads = 0
         MxcStages = 0
@@ -188,16 +189,24 @@ function New-Fixture {
             }
             return $null
         }.GetNewClosure()
-        GetPackage = { param($name) $state.Installed }.GetNewClosure()
+        GetPackage = {
+            param($name)
+            $state.PackageQueries += $name
+            if ($null -eq $state.Installed -or $state.Installed.Name -cne $name) {
+                return $null
+            }
+            return $state.Installed
+        }.GetNewClosure()
         RegisterPackage = {
             param($manifestPath)
             $state.Registrations++
             if ($state.RegisterFailure) { throw '0x80073CFB: registration blocked.' }
             [xml]$m = Get-Content -LiteralPath $manifestPath -Raw
             $state.Installed = [pscustomobject]@{
+                Name = [string]$m.Package.Identity.Name
                 Version = if ($state.BadRegistration) { '9.9.9.9' } else { $m.Package.Identity.Version }
-                PackageFullName = "OpenClaw.Gateway_$($m.Package.Identity.Version)_fixture"
-                PackageFamilyName = 'OpenClaw.Gateway_fixture'
+                PackageFullName = "OpenClawFoundation.OpenClawGateway_$($m.Package.Identity.Version)_fixture"
+                PackageFamilyName = 'OpenClawFoundation.OpenClawGateway_fixture'
                 InstallLocation = Split-Path $manifestPath -Parent
                 IsDevelopmentMode = $true
                 Status = 'Ok'
@@ -247,7 +256,7 @@ try {
             Get-LocalPackageCheckoutCommit -FindGit { $null }
         }) -eq ''
     ) 'Missing Git should leave optional checkout metadata empty.'
-    Assert-True (@($f.SetupPackageFamilyNames)[0] -eq 'OpenClaw.Gateway_fixture') 'Setup did not target the owning package family.'
+    Assert-True (@($f.SetupPackageFamilyNames)[0] -eq 'OpenClawFoundation.OpenClawGateway_fixture') 'Setup did not target the owning package family.'
     Assert-True (@($first).Count -eq 1 -and $first.PackageFullName) 'Deployment did not return a single registration record.'
     $layout = $first.LayoutDirectory
     Assert-True ((Get-Content (Join-Path $layout 'app\openclaw.mjs') -Raw) -eq 'first payload') 'Layout does not expose the payload application.'
@@ -322,17 +331,69 @@ try {
     # Conflicting packaged install.
     $g = New-Fixture
     $g.Installed = [pscustomobject]@{
-        Version = '1.2.3.4'; PackageFullName = 'OpenClaw.Gateway_1.2.3.4_x64__pkg'
-        PackageFamilyName = 'OpenClaw.Gateway_pkg'
+        Name = 'OpenClawFoundation.OpenClawGateway'
+        Version = '1.2.3.4'; PackageFullName = 'OpenClawFoundation.OpenClawGateway_1.2.3.4_x64__pkg'
+        PackageFamilyName = 'OpenClawFoundation.OpenClawGateway_pkg'
         InstallLocation = 'C:\Program Files\WindowsApps\fake'; IsDevelopmentMode = $false; Status = 'Ok'
     }
     Assert-Fails { Invoke-Fixture $g } 'already installed from a package'
     Assert-True ($g.Registrations -eq 0 -and @($g.Removals).Count -eq 0) 'A conflicting packaged install was touched without consent.'
     $replaced = Invoke-Fixture $g @{ ReplaceExistingInstall = $true }
-    Assert-True ($g.Removals -contains 'OpenClaw.Gateway_1.2.3.4_x64__pkg' -and $replaced.Changed) 'Explicit replacement did not remove the packaged install.'
+    Assert-True ($g.Removals -contains 'OpenClawFoundation.OpenClawGateway_1.2.3.4_x64__pkg' -and $replaced.Changed) 'Explicit replacement did not remove the packaged install.'
     # Removal happens first, so the dev build need not out-version the package it
     # replaced; staying on 0.1.x keeps a later real release installable.
     Assert-True ([version]$replaced.Version -lt [version]'1.0.0.0') 'A replacement build should not claim a release-range version.'
+
+    # The legacy identity must be discovered by name before this checkout
+    # mutates the shared layout. Its removal always requires explicit consent.
+    $legacyLoose = New-Fixture
+    $legacyLayout = Join-Path (
+        $legacyLoose.Root
+    ) 'artifacts\local-package\x64\layout'
+    $legacyLoose.Installed = [pscustomobject]@{
+        Name = 'OpenClaw.Gateway'
+        Version = '0.1.0.0'
+        PackageFullName = 'OpenClaw.Gateway_0.1.0.0_x64__legacy'
+        PackageFamilyName = 'OpenClaw.Gateway_kaa03rpbbqef6'
+        InstallLocation = $legacyLayout
+        IsDevelopmentMode = $true
+        Status = 'Ok'
+    }
+    Assert-Fails { Invoke-Fixture $legacyLoose } 'still registered'
+    Assert-True (
+        $legacyLoose.Downloads -eq 0 -and
+        $legacyLoose.Registrations -eq 0 -and
+        @($legacyLoose.Removals).Count -eq 0
+    ) 'Deployment mutated state before obtaining consent to remove the legacy layout.'
+    $legacyReplaced = Invoke-Fixture $legacyLoose @{
+        ReplaceExistingInstall = $true
+    }
+    Assert-True (
+        $legacyReplaced.Changed -and
+        $legacyLoose.Removals -contains
+            'OpenClaw.Gateway_0.1.0.0_x64__legacy' -and
+        $legacyLoose.PreserveFlags -contains $true
+    ) 'Explicit replacement did not remove the owned legacy loose registration.'
+
+    $legacyPackaged = New-Fixture
+    $legacyPackaged.Installed = [pscustomobject]@{
+        Name = 'OpenClaw.Gateway'
+        Version = '2026.9.403.0'
+        PackageFullName = 'OpenClaw.Gateway_2026.9.403.0_x64__legacy'
+        PackageFamilyName = 'OpenClaw.Gateway_kaa03rpbbqef6'
+        InstallLocation = 'C:\Program Files\WindowsApps\legacy'
+        IsDevelopmentMode = $false
+        Status = 'Ok'
+    }
+    Assert-Fails { Invoke-Fixture $legacyPackaged } 'still registered'
+    Invoke-Fixture $legacyPackaged @{
+        ReplaceExistingInstall = $true
+    } | Out-Null
+    Assert-True (
+        $legacyPackaged.Removals -contains
+            'OpenClaw.Gateway_2026.9.403.0_x64__legacy' -and
+        $legacyPackaged.PreserveFlags -contains $false
+    ) 'Explicit replacement did not remove the legacy packaged install.'
 
     # Failure paths stop before registering.
     $h = New-Fixture
@@ -452,11 +513,46 @@ try {
     Assert-True (-not (Test-Path (Join-Path $k.Root 'artifacts\local-package\x64\state.json'))) 'Unregister left deployment state behind.'
     Assert-True (Test-Path (Join-Path $k.Root 'artifacts\local-package\x64\payloads')) 'Unregister discarded the payload cache.'
     $k.Installed = [pscustomobject]@{
+        Name = 'OpenClawFoundation.OpenClawGateway'
         Version = '1.0.0.0'; PackageFullName = 'pkg'; InstallLocation = 'x'
-        PackageFamilyName = 'OpenClaw.Gateway_pkg'
+        PackageFamilyName = 'OpenClawFoundation.OpenClawGateway_pkg'
         IsDevelopmentMode = $false; Status = 'Ok'
     }
     Assert-Fails { Remove-LocalPackageRegistration -RepositoryRoot $k.Root -Operations $k.Operations } 'not a local layout'
+
+    $legacyUnregister = New-Fixture
+    $legacyUnregisterState = Join-Path (
+        $legacyUnregister.Root
+    ) 'artifacts\local-package\x64'
+    $legacyUnregisterLayout = Join-Path $legacyUnregisterState 'layout'
+    New-Item -Path $legacyUnregisterLayout -ItemType Directory -Force |
+        Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $legacyUnregisterState 'state.json'),
+        '{}')
+    $legacyUnregister.Installed = [pscustomobject]@{
+        Name = 'OpenClaw.Gateway'
+        Version = '0.1.0.0'
+        PackageFullName = 'OpenClaw.Gateway_0.1.0.0_x64__legacy'
+        PackageFamilyName = 'OpenClaw.Gateway_kaa03rpbbqef6'
+        InstallLocation = $legacyUnregisterLayout
+        IsDevelopmentMode = $true
+        Status = 'Ok'
+    }
+    Remove-LocalPackageRegistration `
+        -RepositoryRoot $legacyUnregister.Root `
+        -Operations $legacyUnregister.Operations
+    Assert-True (
+        $legacyUnregister.PackageQueries -contains
+            'OpenClawFoundation.OpenClawGateway' -and
+        $legacyUnregister.PackageQueries -contains 'OpenClaw.Gateway' -and
+        $legacyUnregister.Removals -contains
+            'OpenClaw.Gateway_0.1.0.0_x64__legacy' -and
+        $legacyUnregister.PreserveFlags -contains $true -and
+        -not (Test-Path -LiteralPath (
+            Join-Path $legacyUnregisterState 'state.json'
+        ))
+    ) 'Unregister did not safely remove the owned legacy loose registration.'
 
     # Version selection.
     Assert-True ((Get-LocalPackageNextVersion -InstalledVersion '2026.1.0.65535' -Now ([datetime]'2026-09-14')) -eq '2026.1.1.0') 'Revision rollover failed.'
@@ -510,8 +606,9 @@ try {
     # A development registration owned by another location is not taken over.
     $o = New-Fixture
     $o.Installed = [pscustomobject]@{
-        Version = '0.1.0.0'; PackageFullName = 'OpenClaw.Gateway_0.1.0.0_x64__other'
-        PackageFamilyName = 'OpenClaw.Gateway_other'
+        Name = 'OpenClawFoundation.OpenClawGateway'
+        Version = '0.1.0.0'; PackageFullName = 'OpenClawFoundation.OpenClawGateway_0.1.0.0_x64__other'
+        PackageFamilyName = 'OpenClawFoundation.OpenClawGateway_other'
         InstallLocation = (Join-Path $testRoot 'someone elses layout')
         IsDevelopmentMode = $true; Status = 'Ok'
     }
@@ -531,9 +628,10 @@ try {
     $foreignLayout = Join-Path $testRoot 'other checkout layout'
     New-Item -Path $foreignLayout -ItemType Directory -Force | Out-Null
     $fo.Installed = [pscustomobject]@{
+        Name = 'OpenClawFoundation.OpenClawGateway'
         Version = $mine.Version
-        PackageFullName = "OpenClaw.Gateway_$($mine.Version)_x64__other"
-        PackageFamilyName = 'OpenClaw.Gateway_other'
+        PackageFullName = "OpenClawFoundation.OpenClawGateway_$($mine.Version)_x64__other"
+        PackageFamilyName = 'OpenClawFoundation.OpenClawGateway_other'
         InstallLocation = $foreignLayout
         IsDevelopmentMode = $true
         Status = 'Ok'

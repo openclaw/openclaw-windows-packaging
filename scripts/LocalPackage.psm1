@@ -1,7 +1,8 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:PackageName = 'OpenClaw.Gateway'
+$script:PackageName = 'OpenClawFoundation.OpenClawGateway'
+$script:LegacyPackageName = 'OpenClaw.Gateway'
 $script:StateSchema = 1
 $script:ControlApplicationId = 'Control'
 
@@ -721,21 +722,44 @@ function Remove-LocalPackageRegistration {
     $services = Get-LocalPackageServices $Operations
     $state = Join-Path ([IO.Path]::GetFullPath($RepositoryRoot)) "artifacts\local-package\$Architecture"
     $layoutDirectory = Join-Path $state 'layout'
-    $installed = & $services.GetPackage $script:PackageName
-    if ($null -eq $installed) {
-        Write-Host "$script:PackageName is not registered for the current user."
+    $registrations = @(
+        foreach ($packageName in @(
+            $script:PackageName,
+            $script:LegacyPackageName
+        )) {
+            $installed = & $services.GetPackage $packageName
+            if ($null -ne $installed) {
+                [pscustomobject]@{
+                    Name = $packageName
+                    Package = $installed
+                }
+            }
+        }
+    )
+    if ($registrations.Count -eq 0) {
+        Write-Host 'No Gateway local package is registered for the current user.'
     }
-    elseif (-not $installed.IsDevelopmentMode) {
-        throw "$script:PackageName is installed from a package, not a local layout. Remove it deliberately with Remove-AppxPackage if that is what you want."
+    foreach ($registration in $registrations) {
+        $installed = $registration.Package
+        if (-not $installed.IsDevelopmentMode) {
+            throw (
+                "$($registration.Name) is installed from a package, not a " +
+                'local layout. Remove it deliberately with Remove-AppxPackage ' +
+                'if that is what you want.'
+            )
+        }
+        if (-not (Test-LocalPackageOwnership `
+            -Installed $installed `
+            -LayoutDirectory $layoutDirectory)) {
+            throw (
+                "$($registration.Name) is registered from another location: " +
+                "$($installed.InstallLocation). Run -Unregister from that " +
+                'checkout instead; this one does not own that registration.'
+            )
+        }
     }
-    elseif (-not (Test-LocalPackageOwnership -Installed $installed -LayoutDirectory $layoutDirectory)) {
-        throw (
-            "$script:PackageName is registered from another location: " +
-            "$($installed.InstallLocation). Run -Unregister from that checkout instead; " +
-            'this one does not own that registration.'
-        )
-    }
-    else {
+    foreach ($registration in $registrations) {
+        $installed = $registration.Package
         # Development-mode packages allow preserving app data, so unregistering
         # does not throw away the extracted Node.js runtime.
         & $services.RemovePackage $installed.PackageFullName $true | Out-Null
@@ -775,12 +799,43 @@ function Invoke-LocalPackageDeployment {
 
     try {
         & $services.Preflight $Architecture | Out-Null
-        New-Item -Path $stateRoot -ItemType Directory -Force | Out-Null
         Write-Host "Registering a local development build of $script:PackageName ($Architecture)."
         Write-Host "Layout: $layoutDirectory"
 
         $installed = Invoke-LocalPackagePhase $progress 'Check current registration' {
             & $services.GetPackage $script:PackageName
+        }
+        $legacyInstalled = & $services.GetPackage $script:LegacyPackageName
+        if ($null -ne $legacyInstalled) {
+            $legacyOwned = Test-LocalPackageOwnership `
+                -Installed $legacyInstalled `
+                -LayoutDirectory $layoutDirectory
+            if (-not $ReplaceExistingInstall) {
+                $location = if ($legacyOwned) {
+                    'this checkout layout'
+                }
+                else {
+                    [string]$legacyInstalled.InstallLocation
+                }
+                throw (
+                    "$script:LegacyPackageName is still registered from " +
+                    "$location. The Partner Center identity cannot replace " +
+                    'that registration in place. Run -Unregister from its ' +
+                    'owning checkout, or re-run with -ReplaceExistingInstall ' +
+                    'to remove it explicitly before deployment.'
+                )
+            }
+
+            $preserveLegacyData = [bool]$legacyInstalled.IsDevelopmentMode
+            Write-Warning (
+                "Removing legacy registration $($legacyInstalled.PackageFullName) " +
+                'before deploying the Partner Center identity; its packaged ' +
+                'LocalState does not transfer to the new package family.'
+            )
+            & $services.RemovePackage `
+                $legacyInstalled.PackageFullName `
+                $preserveLegacyData |
+                Out-Null
         }
         if ($null -ne $installed -and -not $installed.IsDevelopmentMode) {
             if (-not $ReplaceExistingInstall) {
@@ -809,6 +864,7 @@ function Invoke-LocalPackageDeployment {
             Write-Warning "Taking over the registration at $($installed.InstallLocation)."
         }
 
+        New-Item -Path $stateRoot -ItemType Directory -Force | Out-Null
         $payload = Invoke-LocalPackagePhase $progress 'Resolve payload' {
             Resolve-LocalPackagePayload -CacheDirectory (Join-Path $stateRoot 'payloads') `
                 -Architecture $Architecture -PayloadDirectory $PayloadDirectory `

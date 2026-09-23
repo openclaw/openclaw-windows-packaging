@@ -9,11 +9,14 @@ This repository builds a Windows MSIX package containing:
 - the official Node.js archive matching the upstream build's runtime version
   and the package architecture.
 
+Builds use .NET SDK 10.0.400 or a later .NET 10 feature band.
+
 The package is independent from the
 [OpenClaw Windows Node and Companion](https://github.com/openclaw/openclaw-windows-node)
-and uses a separate `OpenClaw.Gateway` package identity. Both packages use the
-OpenClaw Foundation publisher metadata established for OpenClaw's Windows
-packages.
+and uses the Partner Center-reserved
+`OpenClawFoundation.OpenClawGateway` package identity. Its package family is
+`OpenClawFoundation.OpenClawGateway_rfcbke2p71se2` and its publisher is
+`CN=4BA40A7A-B719-4C40-BF91-84AF4F1136FC`.
 
 ## Contributor guides
 
@@ -335,12 +338,13 @@ For official signing, the selected source must match `approvedCommit`,
 input selects stable and checks that approval; an explicit input must be the
 full approved commit SHA.
 
-Payload composition validates that the selected OpenClaw
-runtime discovers the packaging-owned Windows Launcher plugin in its
-default-disabled state, then explicitly enables only that plugin in an isolated
-temporary validation profile before using OpenClaw's runtime inspection pass to
-validate its required read-only route shape. The temporary profile is removed
-after inspection and does not modify user configuration. Incompatible older
+Payload composition validates that the selected OpenClaw runtime discovers and
+activates the packaging-owned Windows Launcher plugin by default, both without
+configuration and with an existing profile that has no plugin decision. Runtime
+inspection verifies its read-only route shape without writing enablement or
+allowlist overrides, then verifies that an explicit disable prevents registration.
+The isolated temporary profile is removed after inspection and does not modify
+user configuration. Incompatible older
 refs fail instead of producing a package with an unvalidated plugin.
 
 The source build uses that revision's `.github/actions/setup-node-env` action
@@ -385,44 +389,79 @@ dotnet test .\OpenClaw.Gateway.MSIX.slnx `
 ```
 
 `scripts\Build-Payload.ps1` npm-installs an OpenClaw package into an expanded,
-architecture-specific application tree. Run it with Node.js matching both
+architecture-specific application tree. Run it on Windows with Node.js matching both
 the selected upstream version and target architecture: native install scripts
 can use `process.arch` instead of npm's target-CPU flag. CI builds x64 on
 `windows-latest` and ARM64 on `windows-11-arm`, using matching Node.js binaries.
 Both payloads run their CLI smoke test. Cross-architecture Node.js execution
 is rejected before staging or npm installation, including when reusing a tree.
+These jobs validate payload loading and packaging, not installed agent-session
+E2E on a supported host. `Build-MSIX.ps1` and
+`Build-LocalMSIX.ps1 -PayloadDirectory` can still cross-compose an already-qualified
+payload.
 It validates the Gateway and Control UI
 build identities on the installed tree, including reused staged installs, then
 provisions the packaging-owned Windows Launcher plugin into the payload copy's
 bundled plugin directory. Its internal package, path, and plugin ID remain
-`gateway-isolation`. The plugin is disabled by default, so normal installs do
-not activate it, register its route, or show the **Windows Launcher** tab. When
-explicitly enabled for validation or by the future launcher command
-implementation, it adds the read-only tab to the Control group and serves it
+`gateway-isolation`. The bundled plugin is enabled by default and adds the
+read-only **Windows Launcher** tab to the Control group, serving it
 through an authenticated, sandboxed plugin route. It reads only the launch-time
 `CLAWCTL_GATEWAY_ISOLATION` value and registers no mutation RPC or process
-control.
+control. The informational page shows one **Gateway Isolation** row with an
+**Active** badge only for the exact `enabled` report (HTTP 200). Missing, malformed,
+or unsupported reports, including `disabled`, show **Invalid**
+and neutral status-unavailable text (HTTP 503), never a supported off state.
+The live route establishes Gateway availability; disconnected-Gateway messaging
+belongs to the Control UI. There are no isolation controls.
 
-The page preserves the planned `clawctl gateway-isolation enable|disable`
-command and Copy control for the paired launcher command update. This package
-does not register those `clawctl` commands yet, so the page explicitly tells
-users to run the command only after that support is installed.
+The active page's **Command reference** section provides a brief, copy-only
+cheat sheet grouped under **ClawCtl** and **OpenClaw**. Enter these commands
+in your normal Windows terminal (user session):
 
-The screenshots attached to the pull request are design and behavior proof
-captured with the plugin explicitly enabled in an isolated validation profile;
-they do not represent the default-disabled state of a normal install.
+- **ClawCtl:** `clawctl gateway-service status`, `clawctl gateway-service restart`,
+  `clawctl open`, `clawctl pwsh`, and
+  `clawctl --help`. PowerShell opens inside the isolated agent, where `openclaw`
+  and `node` are available; ClawCtl manages the session from outside it.
+  Restart preserves the session and its data and starts the Gateway if it is
+  not running. An unverified stop prevents a replacement from starting.
+  **Open dashboard** opens the default browser when you run `clawctl open`;
+  it requires completed setup and a running Gateway, and does not print
+  authenticated URLs or tokens.
+- **OpenClaw:** `openclaw tui` and `openclaw --help`. The packaged `openclaw`
+  command forwards to your agent session; inside `clawctl pwsh`, it runs directly.
+
+The page never executes commands or sends mutation requests. Copy controls
+announce success only after a clipboard operation succeeds; otherwise they
+offer manual-copy guidance, leaving the command selected when possible.
+Invalid isolation reports show no command references.
+
+The report is captured once at plugin creation. It is a launcher-provided
+diagnostic, not independent isolation attestation. The launcher now requires an
+isolated session and supplies `CLAWCTL_GATEWAY_ISOLATION=enabled` to its guest
+processes. It no longer supports host execution or the old `OPENCLAW_SESSION`
+routing preference; that variable is not accepted as a substitute report here.
+The default enables the tab, not isolation, and does not alter launcher execution.
+
+Existing profiles without a plugin decision adopt the new default on the next
+normal start of the updated Gateway. No configuration migration or automatic
+restart is added. Explicit user disables, global plugin disablement, denylists,
+and restrictive allowlists retain OpenClaw's standard precedence; the package
+does not rewrite them. Direct-Node UI fixtures verify rendering and interactions,
+not packaged-launcher isolation or installed upgrade behavior.
 
 Full selected-theme cohesion requires the generic plugin-frame theme forwarding
 merged by
 [`openclaw/openclaw#145409`](https://github.com/openclaw/openclaw/pull/145409).
+OpenClaw `v2026.9.5` at `ec9c1a13db8938e5a3eaa51fca2e981cde2395a9`
+includes that forwarding and has been qualified with this default-on plugin.
+Unsigned and test builds follow the stable-source selection above; that
+qualification is not an official runtime approval.
 The official-signing policy remains on the release-approved OpenClaw `v2026.9.4`
-baseline (`3a9d69db306cd7f081e06254cb89c4bcc14a7107`) while this plugin is disabled by
-default. That baseline packages and inspects the plugin safely but does not
-forward selected Control UI themes into plugin frames. The future launcher
-enablement change must also advance and qualify the runtime to the merged theme
-forwarding commit `f65ecca89667b8a55d9f88d76c487f0a0ab11da8` or newer. Until
-then, the page uses the browser or operating system light/dark preference with
-a safe built-in palette.
+baseline (`3a9d69db306cd7f081e06254cb89c4bcc14a7107`); that approval does not
+establish support for this default-on/theme contract. A compatible runtime
+requires separate reviewed approval before an official release. Without theme
+forwarding, the page uses the browser or operating system light/dark preference
+with a safe built-in palette.
 
 `scripts\Build-MSIX.ps1` downloads the official Node.js archive matching the
 payload's recorded build version and architecture, copies both inputs into
@@ -465,7 +504,8 @@ nor duplicate hundreds of megabytes.
 
 **Requires Developer Mode**, which the script checks before doing any work.
 
-**It cannot coexist with an MSIX-installed `OpenClaw.Gateway`.** Windows
+**It cannot coexist with an MSIX-installed
+`OpenClawFoundation.OpenClawGateway`.** Windows
 refuses to replace a packaged install with a local layout, and it cannot
 preserve that package's app data across the switch, so the script stops and
 explains rather than removing anything implicitly. Pass
@@ -490,13 +530,16 @@ to remove the checkout. Local builds are unsigned development artifacts and are
 never official-signing inputs.
 
 Normal pull-request and push workflows publish unsigned packages for
-validation. Manual runs support three signing modes:
+validation. Manual runs support four modes:
 
 - `unsigned` follows stable or a stable-source override and publishes unsigned
   MSIX packages;
 - `test` uses the same source-selection rules and publishes MSIX packages signed with a
   temporary self-signed certificate plus the public `.cer` needed for local
   installation;
+- `store` requires the reviewed immutable commit from `release-policy.json`,
+  may run only from `main`, and publishes permanent unsigned Partner Center
+  submission assets; Microsoft signs them during Store ingestion;
 - `official` requires the approved immutable commit from
   `release-policy.json`, may run only from `main`, and publishes the signed
   packages as permanent assets on a GitHub Release named by the policy.
@@ -542,36 +585,41 @@ reviewed pull request:
    same Gateway tag.
 
 After that pull request merges, manually run **Build OpenClaw Gateway MSIX** on
-`main` with `openclaw_ref` set to the approved commit and `signing_mode` set to
-`official`. The workflow derives the package version and release tag, creates
+`main` with `openclaw_ref` set to the approved commit. Use `signing_mode=store`
+for the Partner Center identity, or `signing_mode=official` only when the Azure
+certificate subject exactly matches the reviewed publisher. The workflow derives
+the package version and release tag, creates
 the tag in this repository, and publishes a GitHub Release with generated
-release notes. Each release contains a signed, multi-architecture
-`OpenClawGateway-<version>.msixbundle` as the recommended download, plus signed
+release notes. Each release contains a multi-architecture
+`OpenClawGateway-<version>.msixbundle` as the recommended Store submission, plus
 `OpenClawGateway-<version>-x64.msix` and
 `OpenClawGateway-<version>-arm64.msix` packages for architecture-specific
-deployment. The duplicate GitHub Actions artifacts remain short-lived transport
-and diagnostic copies.
+deployment. Store-mode assets are intentionally unsigned and are not direct
+sideload downloads; Partner Center signs them during ingestion. The duplicate
+GitHub Actions artifacts remain short-lived transport and diagnostic copies.
 
 The same identity can be used for direct distribution and Microsoft Store
 submission; the fourth component is always `0`.
 
-The signed `v0.0.0.0` and `v0.0.0.1` proof releases are not production version
-identities, but they are retained as transition baselines. The latest production
-release is also retained as a migration baseline. Pull requests that change
-release versioning download the hash-pinned standalone x64 and recommended
+The signed `v0.0.0.0` and `v0.0.0.1` proof releases and the latest production
+release retain the former `OpenClaw.Gateway` identity and remain immutable
+transition baselines. Partner Center requires the reserved
+`OpenClawFoundation.OpenClawGateway` identity, so Windows cannot update those
+packages in place or retain their packaged LocalState. Pull requests that
+change release policy download the hash-pinned standalone x64 and recommended
 `.msixbundle` assets, install each one on a clean GitHub-hosted Windows runner,
-upgrade it in place through the same delivery format, and
-verify that the package family remains stable and a LocalState marker is
-retained. Changes to source-selection scripts also trigger this check against
-the selected release. The gate also proves fresh installation of both the
-standalone and bundle candidates. It refuses to run when an OpenClaw Gateway package is
+verify the legacy identity, remove it, install the candidate through the same
+delivery format, and prove that Windows registered the reserved package family
+with isolated LocalState. Changes to source-selection scripts also trigger this
+check against the selected release. The gate additionally proves fresh
+installation of both candidate formats. It refuses to run when a Gateway package is
 already registered and removes only packages installed by that test
 invocation. It temporarily trusts the ephemeral test-signing certificate in
 the local-machine Trusted People store, as required by Windows deployment, and
 removes that certificate in `finally`. The resulting JSON evidence is retained
-as a workflow artifact for 90 days. Future versioning schemes must keep this
-transition gate green or explicitly document and obtain approval for a
-breaking reset.
+as a workflow artifact for 90 days. This identity change is the explicitly
+approved breaking reset; future releases under the reserved identity must
+return to in-place upgrade and LocalState-retention proof.
 
 An `.msixbundle` is a single installable container for the x64 and ARM64 MSIX
 packages; Windows selects the package appropriate for the device. An
@@ -606,7 +654,9 @@ The service principal must have `Artifact Signing Certificate Profile Signer`
 on the `openclaw` certificate profile (or a containing scope). The workflow
 uses account `openclaw`, certificate profile `openclaw`, and endpoint
 `https://eus.codesigning.azure.net/`. The expected public certificate subject
-is recorded in `release-policy.json`.
+is recorded in `release-policy.json`. Before an official dispatch, the
+certificate profile must issue that exact Partner Center publisher subject;
+signature verification fails closed when it does not.
 
 ## Installed data
 

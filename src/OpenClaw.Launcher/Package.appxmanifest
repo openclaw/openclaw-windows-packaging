@@ -7,8 +7,8 @@
   IgnorableNamespaces="uap uap5 rescap">
 
   <Identity
-    Name="OpenClaw.Gateway"
-    Publisher="CN=OpenClaw Foundation, O=OpenClaw Foundation, L=Mill Valley, S=California, C=US"
+    Name="OpenClawFoundation.OpenClawGateway"
+    Publisher="CN=4BA40A7A-B719-4C40-BF91-84AF4F1136FC"
     Version="0.0.0.0" />
 
   <Properties>

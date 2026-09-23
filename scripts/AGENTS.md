@@ -7,6 +7,7 @@ Read the repository-root `AGENTS.md` before this file. This scope owns build, pa
 - Set `$ErrorActionPreference = 'Stop'` and check `$LASTEXITCODE` after every native command whose failure matters. Preserve the original failure when cleanup also fails.
 - Resolve repository-root paths explicitly and keep documented commands runnable from the root in PowerShell 7.
 - Keep x64 and ARM64 behavior synchronized. Architecture-specific files, runtime identifiers, platform properties, payload metadata, package identity, inventory, and signing validation move together.
+- `Build-Payload.ps1` must install and inspect with matching Windows Node architecture; do not skip activated-plugin checks for cross-builds. Its temporary profile owns `XDG_CACHE_HOME`, which must be restored. Already-qualified payloads can still be cross-composed into MSIX packages.
 - Treat `mxc-runtime.lock.json`, Node archive input, payload metadata, source metadata, application inventories, upgrade baselines, release policy, and emitted hashes as trust inputs. Validate content, not just command exit.
 - Reject unsafe or duplicate archive paths, unexpected files, length/hash mismatches, identity drift, and stale metadata. Never loosen an allowlist merely to accept new output.
 - Ordinary builds leave `IncludePackagingContent` unset. Packaging restores and publishes with the target runtime and platform; restore the session host separately before its `--no-restore` publish.

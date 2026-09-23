@@ -158,6 +158,8 @@ if (
     [string]::IsNullOrWhiteSpace([string]$policy.payloadPackageVersion) -or
     $policy.gatewayTag -ne "v$($policy.payloadPackageVersion)" -or
     $policy.approvedCommit -notmatch '^[0-9a-fA-F]{40}$' -or
+    [string]::IsNullOrWhiteSpace([string]$policy.packageIdentityName) -or
+    [string]::IsNullOrWhiteSpace([string]$policy.packageFamilyName) -or
     [string]::IsNullOrWhiteSpace([string]$policy.publisher)
 ) {
     throw 'The Gateway MSIX release policy is invalid.'
@@ -177,7 +179,7 @@ if (
     $normalizedRequestedRef -ne $approvedCommit
 ) {
     throw (
-        'Official signing requires the approved immutable OpenClaw commit: ' +
+        'Release authorization requires the approved immutable OpenClaw commit: ' +
         $approvedCommit
     )
 }
@@ -229,6 +231,8 @@ foreach ($architecture in @('x64', 'arm64')) {
         $metadata.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
         $metadata.signed -ne $false -or
         $metadata.packageVersion -ne $approvedPackageVersion -or
+        $metadata.packageIdentityName -ne $policy.packageIdentityName -or
+        $metadata.packageFamilyName -ne $policy.packageFamilyName -or
         $metadata.publisher -ne $policy.publisher
     ) {
         throw "The $architecture MSIX metadata is not eligible for signing."
@@ -459,6 +463,7 @@ foreach ($architecture in @('x64', 'arm64')) {
         )
         if (
             $null -eq $identity -or
+            $identity.Name -ne $policy.packageIdentityName -or
             $identity.Publisher -ne $policy.publisher -or
             $identity.ProcessorArchitecture -ne $architecture -or
             $identity.Version -ne $metadata.packageVersion
@@ -570,7 +575,7 @@ foreach ($architecture in @('x64', 'arm64')) {
 
 $resolvedBundlePath = (Resolve-Path -LiteralPath $BundlePath).Path
 if ([IO.Path]::GetExtension($resolvedBundlePath) -ine '.msixbundle') {
-    throw 'The official signing bundle must use the .msixbundle extension.'
+    throw 'The authorized release bundle must use the .msixbundle extension.'
 }
 
 $bundleArchive = [IO.Compression.ZipFile]::OpenRead($resolvedBundlePath)
@@ -603,7 +608,7 @@ try {
     }
     if (
         $null -eq $bundleIdentity -or
-        $bundleIdentity.Name -ne 'OpenClaw.Gateway' -or
+        $bundleIdentity.Name -ne $policy.packageIdentityName -or
         $bundleIdentity.Publisher -ne $policy.publisher -or
         -not $bundleVersionIsValid -or
         $bundleVersion -ne $approvedPackageVersion
@@ -666,7 +671,7 @@ finally {
 }
 
 Write-Host (
-    "Authorized official signing for OpenClaw commit $approvedCommit " +
+    "Authorized release for OpenClaw commit $approvedCommit " +
     "and Gateway MSIX version $expectedPackageVersion " +
     "(bundle version $bundleVersion)."
 )

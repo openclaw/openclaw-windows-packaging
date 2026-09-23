@@ -14,7 +14,11 @@ $testRoot = Join-Path $env:TEMP (
 )
 $artifactsDirectory = Join-Path $testRoot 'artifacts'
 $outputDirectory = Join-Path $testRoot 'signed'
-$publisher = 'CN=OpenClaw Foundation, O=OpenClaw Foundation, L=Mill Valley, S=California, C=US'
+$policy = Get-Content `
+    -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'release-policy.json') `
+    -Raw |
+    ConvertFrom-Json
+$publisher = [string]$policy.publisher
 $thumbprintsBefore = @(
     Get-ChildItem -Path 'Cert:\CurrentUser\My' |
         Where-Object Subject -eq $publisher |

@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory)][string]$PolicyPath,
     [Parameter(Mandatory)][string]$OutputPath,
     [string]$Ref = '',
-    [ValidateSet('unsigned', 'test', 'official')][string]$SigningMode = 'unsigned',
+    [ValidateSet('unsigned', 'test', 'store', 'official')][string]$SigningMode = 'unsigned',
     [Parameter(Mandatory)][ValidatePattern('\A[1-9][0-9]*\z')][string]$WorkflowRunId,
     [Parameter(Mandatory)][ValidatePattern('\A[0-9a-fA-F]{40}\z')][string]$PackagingCommit,
     [switch]$ReuseSnapshot
@@ -14,9 +14,10 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'OpenClawSource.ps1')
 
 $policy = Read-OpenClawReleasePolicy -Path $PolicyPath
-if ($SigningMode -eq 'official' -and $Ref -ne '' -and
+$releaseMode = $SigningMode -in @('official', 'store')
+if ($releaseMode -and $Ref -ne '' -and
     ($Ref -cnotmatch '\A[0-9a-fA-F]{40}\z' -or $Ref -ine $policy.approvedCommit)) {
-    throw 'Official signing requires the full reviewed approvedCommit for an explicit Ref.'
+    throw 'Release publication requires the full reviewed approvedCommit for an explicit Ref.'
 }
 if ($ReuseSnapshot) {
     if (-not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) {
@@ -33,14 +34,14 @@ $expectedRef = if ($Ref -eq '') { Get-OpenClawPolicyRef $policy } else { $Ref }
 if ($source.requestedRef -cne $expectedRef -or (($Ref -eq '') -ne ($source.channel -ceq 'stable'))) {
     throw 'The source snapshot does not match the requested selector.'
 }
-if ($SigningMode -eq 'official') {
+if ($releaseMode) {
     Assert-OpenClawSourceText $policy.approvedCommit 'approvedCommit' -Pattern '\A[0-9a-fA-F]{40}\z'
     Assert-OpenClawSourceText $policy.payloadPackageVersion 'payloadPackageVersion'
     Assert-OpenClawSourceText $policy.gatewayTag 'gatewayTag'
     if ($source.resolvedCommit -ine $policy.approvedCommit -or
         $source.packageVersion -cne $policy.payloadPackageVersion -or
         "v$($source.packageVersion)" -cne $policy.gatewayTag) {
-        throw 'Official signing requires the reviewed approvedCommit, payloadPackageVersion, and gatewayTag.'
+        throw 'Release publication requires the reviewed approvedCommit, payloadPackageVersion, and gatewayTag.'
     }
 }
 $context = [ordered]@{

@@ -12,6 +12,10 @@ $testRoot = Join-Path $env:TEMP (
 $packageSource = Join-Path $testRoot 'package-source'
 $packageDirectory = Join-Path $testRoot 'package'
 $payloadDirectory = Join-Path $testRoot 'payload'
+$fixtureArchitecture = & node -p 'process.arch'
+if ($LASTEXITCODE -ne 0 -or $fixtureArchitecture -notin @('x64', 'arm64')) {
+    throw 'The plugin payload fixture requires x64 or ARM64 Node.js.'
+}
 
 function Assert-Path {
     param(
@@ -31,7 +35,7 @@ try {
         ConvertFrom-Json
     if (
         $manifest.id -ne 'gateway-isolation' -or
-        $manifest.enabledByDefault -ne $false -or
+        $manifest.enabledByDefault -ne $true -or
         (
             $manifest.PSObject.Properties.Name -contains
             'enabledByDefaultOnPlatforms' -and
@@ -40,7 +44,7 @@ try {
         $manifest.activation.onStartup -ne $true -or
         $manifest.configSchema.additionalProperties -ne $false
     ) {
-        throw 'Gateway isolation plugin manifest is not valid for explicit enablement.'
+        throw 'Gateway isolation plugin manifest is not valid for default startup activation.'
     }
 
     $package = Get-Content `
@@ -66,77 +70,9 @@ try {
         -ItemType Directory `
         -Force |
         Out-Null
-    Set-Content `
-        -LiteralPath (Join-Path $packageSource 'openclaw.mjs') `
-        -Value @'
-const args = process.argv.slice(2);
-const fs = await import("node:fs");
-const path = await import("node:path");
-const configPath =
-  process.env.OPENCLAW_CONFIG_PATH ??
-  (process.env.OPENCLAW_STATE_DIR
-    ? path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json")
-    : undefined);
-if (args[0] === "completion" && args[1] === "--shell" && args[2] === "powershell") {
-  console.log("Register-ArgumentCompleter -Native -CommandName openclaw -ScriptBlock {}");
-  process.exit(0);
-}
-if (args[0] === "plugins" && args[1] === "enable") {
-  if (!configPath) {
-    throw new Error("Missing isolated validation configuration path.");
-  }
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(
-    configPath,
-    JSON.stringify({
-      plugins: {
-        entries: {
-          "gateway-isolation": {
-            enabled: true
-          },
-          anthropic: {
-            config: {
-              sessionCatalog: {
-                enabled: false
-              }
-            }
-          },
-          codex: {
-            config: {
-              sessionCatalog: {
-                enabled: false
-              }
-            }
-          }
-        }
-      }
-    }),
-  );
-  process.exit(0);
-}
-
-const enabled = Boolean(configPath) && fs.existsSync(configPath) &&
-  JSON.parse(fs.readFileSync(configPath, "utf8"))
-    .plugins?.entries?.["gateway-isolation"]?.enabled === true;
-const runtime = args.includes("--runtime");
-console.log(JSON.stringify({
-  plugin: {
-    id: "gateway-isolation",
-    origin: "bundled",
-    enabled,
-    activated: enabled && runtime,
-    status: enabled && runtime ? "loaded" : "disabled",
-    imported: enabled && runtime,
-    httpRoutes: enabled && runtime ? 1 : 0
-  },
-  httpRouteCount: enabled && runtime ? 1 : 0,
-  gatewayMethods: [],
-  tools: [],
-  services: [],
-  diagnostics: []
-}));
-'@ `
-        -Encoding utf8
+    Copy-Item `
+        -LiteralPath (Join-Path $PSScriptRoot 'fixtures\openclaw-plugin-inspection.mjs') `
+        -Destination (Join-Path $packageSource 'openclaw.mjs')
     Set-Content `
         -LiteralPath (Join-Path $packageSource 'dist\index.js') `
         -Value 'export {};' `
@@ -194,20 +130,52 @@ console.log(JSON.stringify({
             -LiteralPath (Join-Path $packageDirectory 'source.json') `
             -Encoding utf8
 
-    $nodeArchitecture = & node -p 'process.arch'
-    if ($LASTEXITCODE -ne 0 -or $nodeArchitecture -notin @('x64', 'arm64')) {
-        throw 'Unable to determine the fixture Node.js architecture.'
-    }
     $previousRunnerTemp = $env:RUNNER_TEMP
+    $previousCacheHome = $env:XDG_CACHE_HOME
+    $previousFailureFixture = $env:OPENCLAW_FIXTURE_FAIL_RUNTIME
     try {
         $env:RUNNER_TEMP = $testRoot
+        $env:XDG_CACHE_HOME = Join-Path $testRoot 'caller-cache'
+        $env:OPENCLAW_FIXTURE_FAIL_RUNTIME = $null
         & (Join-Path $PSScriptRoot 'Build-Payload.ps1') `
             -PackageDirectory $packageDirectory `
-            -Architecture $nodeArchitecture `
+            -Architecture $fixtureArchitecture `
             -OutputDirectory $payloadDirectory
+        if ($env:XDG_CACHE_HOME -cne (Join-Path $testRoot 'caller-cache') -or
+            (Test-Path (Join-Path $testRoot 'caller-cache')) -or
+            (Test-Path (Join-Path $testRoot "openclaw-stage-$fixtureArchitecture\gateway-isolation-validation"))) {
+            throw 'Successful payload inspection did not isolate, restore and clean its cache.'
+        }
+        $env:OPENCLAW_FIXTURE_FAIL_RUNTIME = '1'
+        $inspectionFailed = $false
+        try {
+            & (Join-Path $PSScriptRoot 'Build-Payload.ps1') `
+                -PackageDirectory $packageDirectory `
+                -Architecture $fixtureArchitecture `
+                -OutputDirectory (Join-Path $testRoot 'failed-payload') `
+                -ReuseStagedInstall
+        }
+        catch {
+            if ($_.Exception.Message -notmatch 'cannot load the Gateway isolation plugin') {
+                throw
+            }
+            if ($LASTEXITCODE -ne 1) {
+                throw "Expected the runtime fixture to exit 1, received $LASTEXITCODE."
+            }
+            # The Actions pwsh wrapper propagates native exit codes, including expected failures.
+            $global:LASTEXITCODE = 0
+            $inspectionFailed = $true
+        }
+        if (-not $inspectionFailed -or
+            $env:XDG_CACHE_HOME -cne (Join-Path $testRoot 'caller-cache') -or
+            (Test-Path (Join-Path $testRoot "openclaw-stage-$fixtureArchitecture\gateway-isolation-validation"))) {
+            throw 'Failed payload inspection must restore and remove only its isolated cache.'
+        }
     }
     finally {
         $env:RUNNER_TEMP = $previousRunnerTemp
+        $env:XDG_CACHE_HOME = $previousCacheHome
+        $env:OPENCLAW_FIXTURE_FAIL_RUNTIME = $previousFailureFixture
     }
 
     $packagedPlugin = Join-Path `
@@ -221,7 +189,7 @@ console.log(JSON.stringify({
     }
     $stagedPlugin = Join-Path `
         $testRoot `
-        "openclaw-stage-$nodeArchitecture\node_modules\openclaw\dist\extensions\gateway-isolation"
+        "openclaw-stage-$fixtureArchitecture\node_modules\openclaw\dist\extensions\gateway-isolation"
     if (Test-Path -LiteralPath $stagedPlugin) {
         throw 'Plugin provisioning must not mutate the reusable staged install.'
     }
@@ -232,7 +200,7 @@ console.log(JSON.stringify({
         ConvertFrom-Json
     if (
         $packagedManifest.id -ne 'gateway-isolation' -or
-        $packagedManifest.enabledByDefault -ne $false -or
+        $packagedManifest.enabledByDefault -ne $true -or
         (
             $packagedManifest.PSObject.Properties.Name -contains
             'enabledByDefaultOnPlatforms' -and

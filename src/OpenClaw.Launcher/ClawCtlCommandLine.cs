@@ -33,6 +33,8 @@ internal sealed class ClawCtlOutputOptions
 // doctor, gateway, uninstall, and every other OpenClaw command is owned by the
 // bundled CLI and reached through `openclaw`, which forwards its arguments
 // without parsing them.
+// Keep the curated command references in plugins/gateway-isolation/index.js and
+// index.test.js synchronized when exposed commands or their descriptions change.
 internal static class ClawCtlCommandLine
 {
     public const string SetupCommandName = "setup";

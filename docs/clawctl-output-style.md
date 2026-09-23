@@ -16,6 +16,10 @@ should describe that environment in terms an operator can act on, while
 - Narrate long-running human operations at their real lifecycle boundaries.
   Use one updating status in an interactive terminal and durable stage lines
   when output is redirected. Structured output remains exactly one document.
+- Give each interactive Unicode stage a randomly selected crab animation:
+  Scuttle, Bubbles, or Tide Pulse. Select again when the lifecycle stage
+  changes; repeated selections are valid. Use the alternating `v(.-.)v` and
+  `V(.-.)V` crab emoticons when Unicode is unavailable.
 - End successful setup with a tentative `openclaw onboard` suggestion. The
   user may need flags or may choose a different advanced path, so setup neither
   presents onboarding as mandatory nor launches it automatically.
