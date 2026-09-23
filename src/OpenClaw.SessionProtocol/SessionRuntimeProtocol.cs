@@ -119,6 +119,19 @@ public sealed record SessionRuntimeInstallResult
     /// <summary>Set when the install could not be completed.</summary>
     [JsonPropertyName("error")]
     public string? Error { get; init; }
+
+    /// <summary>
+    /// Whether <see cref="Error"/> came from projecting environment
+    /// instructions rather than from installing the Node.js runtime itself.
+    /// </summary>
+    /// <remarks>
+    /// The runtime is already usable at this point; only the newly added
+    /// projection step failed. The launcher uses this to let a plain retry
+    /// start clean instead of leaving setup stuck reporting the same failure
+    /// forever.
+    /// </remarks>
+    [JsonPropertyName("environmentInstructionsFailed")]
+    public bool EnvironmentInstructionsFailed { get; init; }
 }
 
 /// <summary>Asks the guest to install its OpenClaw command shim.</summary>

@@ -44,6 +44,35 @@ internal sealed class SessionCapabilityUnavailableException : SessionException
 }
 
 /// <summary>
+/// Projecting the package-managed environment instructions into the
+/// upstream-selected workspace failed after the Node.js runtime itself was
+/// already installed successfully.
+/// </summary>
+/// <remarks>
+/// Distinguishing this from a general <see cref="SessionException"/> lets
+/// <see cref="SetupOrchestrator"/> clear the explicit setup marker instead of
+/// leaving the installation stuck reporting <c>Preparing</c> forever: a plain
+/// <c>clawctl setup</c> retry (no <c>--fresh</c>) starts a clean attempt once
+/// the underlying cause is fixed, rather than requiring a destructive reset.
+/// </remarks>
+internal sealed class EnvironmentInstructionsInstallException : SessionException
+{
+    public EnvironmentInstructionsInstallException()
+    {
+    }
+
+    public EnvironmentInstructionsInstallException(string message)
+        : base(message)
+    {
+    }
+
+    public EnvironmentInstructionsInstallException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+/// <summary>
 /// The recorded session exists but cannot be used, and replacing it silently
 /// would risk abandoning a live backend session.
 /// </summary>

@@ -482,6 +482,13 @@ internal sealed class SessionExecutor
                 SessionRuntimeProtocol.ReadResult(resultText);
             if (result.Error is { Length: > 0 } error)
             {
+                if (result.EnvironmentInstructionsFailed)
+                {
+                    throw new EnvironmentInstructionsInstallException(
+                        $"The Windows isolation instructions could not be added to the " +
+                        $"OpenClaw workspace: {error}");
+                }
+
                 throw new SessionException(
                     $"The packaged Node.js runtime could not be installed in the session: {error}");
             }

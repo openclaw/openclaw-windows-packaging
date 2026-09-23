@@ -191,6 +191,12 @@ Setup creates or refreshes only its marked section. It does not replace the
 rest of `AGENTS.md`, run guided onboarding, or modify workspaces belonging to
 additional configured agents.
 
+This failure does not require `clawctl setup --fresh`. The Node.js runtime
+install already succeeded before the instructions step ran, so setup clears
+its own explicit marker rather than leaving the installation reporting
+`Preparing` forever; a plain retry starts a clean attempt once the reported
+cause is fixed.
+
 ## Status says the default configuration is missing or not ready
 
 **Check.** Look at the readiness state and reason from `clawctl status` or

@@ -117,20 +117,44 @@ internal static class SessionRuntimeInstaller
             string? nativeRootPath = (stageNativeModules ?? SessionNativeStager.Stage)(
                 request.ApplicationDirectory!,
                 (getLocalApplicationData ?? GetLocalApplicationData)());
-            (string workspacePath, bool instructionsUpdated) =
-                (applyEnvironmentInstructions ??
-                    ((nodePath, applicationPath, preloadPath, nativePath, environment) =>
-                        WorkspaceEnvironmentInstructions.Apply(
-                            nodePath,
-                            applicationPath,
-                            preloadPath,
-                            nativePath,
-                            environment)))(
-                    executablePath,
-                    request.ApplicationDirectory!,
-                    request.NativeRedirectPreloadPath!,
-                    nativeRootPath,
-                    request.Environment!);
+
+            // The runtime is already installed and usable at this point.
+            // Isolate this call so its failure is reported distinctly from a
+            // runtime-install failure: the launcher lets a plain setup retry
+            // start clean after this specific step fails, instead of leaving
+            // setup stuck reporting the same failure forever.
+            string workspacePath;
+            bool instructionsUpdated;
+            try
+            {
+                (workspacePath, instructionsUpdated) =
+                    (applyEnvironmentInstructions ??
+                        ((nodePath, applicationPath, preloadPath, nativePath, environment) =>
+                            WorkspaceEnvironmentInstructions.Apply(
+                                nodePath,
+                                applicationPath,
+                                preloadPath,
+                                nativePath,
+                                environment)))(
+                        executablePath,
+                        request.ApplicationDirectory!,
+                        request.NativeRedirectPreloadPath!,
+                        nativeRootPath,
+                        request.Environment!);
+            }
+            catch (Exception exception) when (
+                exception is SessionLaunchException or IOException or
+                UnauthorizedAccessException or InvalidOperationException or
+                InvalidDataException)
+            {
+                TryWriteFailure(
+                    writeFile,
+                    resultPath,
+                    requestId,
+                    exception.Message,
+                    environmentInstructionsFailed: true);
+                return SessionLaunchProtocol.HelperFailureExitCode;
+            }
 
             writeFile(
                 resultPath,
@@ -344,7 +368,8 @@ internal static class SessionRuntimeInstaller
         Action<string, string> writeFile,
         string resultPath,
         string? requestId,
-        string message)
+        string message,
+        bool environmentInstructionsFailed = false)
     {
         try
         {
@@ -353,7 +378,8 @@ internal static class SessionRuntimeInstaller
                 SessionRuntimeProtocol.SerializeResult(new SessionRuntimeInstallResult
                 {
                     RequestId = requestId,
-                    Error = message
+                    Error = message,
+                    EnvironmentInstructionsFailed = environmentInstructionsFailed
                 }));
         }
         catch (Exception exception) when (

@@ -372,13 +372,28 @@ internal static class SetupOrchestrator
         string helperPath = runtime.StageHelper(record);
         progress.Report(new ClawCtlProgress(
             "Installing Node.js and preparing the OpenClaw workspace."));
-        SessionRuntimeInstallResult agentRuntime = await runtime.Executor.InstallRuntimeAsync(
-            record,
-            helperPath,
-            options.RequirePackagedNodeArchivePath(),
-            applicationDirectory,
-            Program.ResolveNativeRedirectPreloadPath(),
-            cancellationToken).ConfigureAwait(false);
+        SessionRuntimeInstallResult agentRuntime;
+        try
+        {
+            agentRuntime = await runtime.Executor.InstallRuntimeAsync(
+                record,
+                helperPath,
+                options.RequirePackagedNodeArchivePath(),
+                applicationDirectory,
+                Program.ResolveNativeRedirectPreloadPath(),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (EnvironmentInstructionsInstallException)
+        {
+            // The runtime itself installed successfully; only the newly
+            // added instruction projection failed. Clear the marker this
+            // call already wrote so a plain `clawctl setup` retry (or a
+            // future automatic launch) starts a clean attempt instead of
+            // leaving this installation stuck reporting `Preparing` forever
+            // with no non-destructive way out.
+            runtime.SetupState.Clear();
+            throw;
+        }
         progress.Report(new ClawCtlProgress("Enabling gateway startup at sign-in."));
         GatewayPersistenceInstallResult recovery = await lifecycle
             .InstallRecoveryAsync(log, cancellationToken).ConfigureAwait(false);

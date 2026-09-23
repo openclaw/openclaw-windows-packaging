@@ -265,4 +265,46 @@ public sealed class SessionRuntimeInstallerTests : IDisposable
 
         Assert.NotNull(result.Error);
     }
+
+    // A failure projecting environment instructions must be distinguishable
+    // from a runtime-install failure: the runtime is already usable at this
+    // point, and the launcher uses this flag to let a plain setup retry start
+    // clean instead of getting stuck reporting the same failure forever.
+    [Fact]
+    public void AnEnvironmentInstructionsFailureIsReportedDistinctlyFromARuntimeFailure()
+    {
+        string archivePath = CreateArchive("24.20.0");
+        File.WriteAllText(
+            RequestPath,
+            SessionRuntimeProtocol.SerializeRequest(new SessionRuntimeInstallRequest
+            {
+                RequestId = "r1",
+                ArchivePath = archivePath,
+                ApplicationDirectory = ApplicationDirectory,
+                NativeRedirectPreloadPath = Path.Combine(_root, "native-redirect.mjs"),
+                Environment = [],
+                UpdateUserPath = false
+            }));
+
+        int exitCode = SessionRuntimeInstaller.Run(
+            RequestPath,
+            File.ReadAllText,
+            File.WriteAllText,
+            () => _root,
+            getRuntimeVersion: ReadFixtureVersion,
+            applyEnvironmentInstructions: (_, _, _, _, _) =>
+                throw new SessionLaunchException("the AGENTS.md marker is malformed"));
+
+        Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode, exitCode);
+        SessionRuntimeInstallResult result = SessionRuntimeProtocol.ReadResult(
+            File.ReadAllText(SessionLaunchProtocol.ResultPathFor(RequestPath)));
+        Assert.True(result.EnvironmentInstructionsFailed);
+        Assert.Contains(
+            "the AGENTS.md marker is malformed",
+            result.Error,
+            StringComparison.Ordinal);
+        // The runtime itself was never reported, because the result was
+        // written from the failure path rather than the success path.
+        Assert.Null(result.ExecutablePath);
+    }
 }

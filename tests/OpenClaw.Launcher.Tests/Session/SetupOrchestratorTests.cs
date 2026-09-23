@@ -144,6 +144,44 @@ public sealed class SetupOrchestratorTests : IDisposable
     }
 
     [Fact]
+    public async Task AnEnvironmentInstructionsFailureClearsTheMarkerInsteadOfStrandingSetup()
+    {
+        SessionRuntime runtime = CreateRuntime();
+        _backend.ExecuteBehavior = _ =>
+        {
+            string requestPath = Directory
+                .GetFiles(_backend.Metadata!.EphemeralWorkspacePath, "runtime-*.json")
+                .Single();
+            SessionRuntimeInstallRequest request = SessionRuntimeProtocol.ReadRequest(
+                File.ReadAllText(requestPath));
+            File.WriteAllText(
+                SessionLaunchProtocol.ResultPathFor(requestPath),
+                SessionRuntimeProtocol.SerializeResult(new SessionRuntimeInstallResult
+                {
+                    RequestId = request.RequestId,
+                    Error = "the AGENTS.md marker is malformed",
+                    EnvironmentInstructionsFailed = true
+                }));
+            return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
+        };
+        var lifecycle = new StubLifecycle();
+
+        await Assert.ThrowsAsync<EnvironmentInstructionsInstallException>(
+            () => EnsureAsync(runtime, lifecycle)).ConfigureAwait(true);
+
+        // Unlike a general runtime-install or recovery failure, which must
+        // stay "Preparing" so a crash mid-copy is never silently
+        // reprovisioned, this failure is a clean, synchronously reported
+        // result: the runtime already installed successfully, so retrying is
+        // safe. The marker must therefore report absent rather than stuck, so
+        // a plain `clawctl setup` retry (or a future automatic launch) starts
+        // a clean attempt.
+        SetupStateResult state = runtime.SetupState.Read(runtime.ApplicationId);
+        Assert.Null(state.Record);
+        Assert.Equal(SetupStateFault.Missing, state.Fault);
+    }
+
+    [Fact]
     public async Task TheLifecycleLockIsReleasedBeforeReturning()
     {
         SessionRuntime runtime = CreateRuntime();
