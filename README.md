@@ -674,24 +674,19 @@ signature verification fails closed when it does not.
 ### Microsoft Store submission setup
 
 Store submission behavior is reviewable in `store-submission.json`: it pins the
-[Microsoft Store Developer CLI](https://github.com/microsoft/msstore-cli)
-version, OIDC audience, commit behavior, pending-draft ownership, package
-rollout percentage, and upload timeout. The
-workflow pins Microsoft's setup action by commit and uses the repository-owned
-`scripts\Submit-MicrosoftStore.ps1` boundary to validate those inputs, submit
-exactly one bundle, and retain bundle-hash evidence for 90 days. The Store CLI
-clones the current submission before replacing its package, so existing listing,
-availability, pricing, and screenshot state is preserved. It fails closed if
-that state cannot be safely round-tripped. Store deployment jobs are serialized.
-The reviewed `pendingSubmissionPolicy` is `replace`, so automation owns the
-product's draft: do not keep independent Partner Center draft edits when a
-Store dispatch starts.
+packaged-app API origin and scope, OIDC audience, commit behavior, draft
+ownership, package rollout percentage, upload timeout, and minimum access-token
+lifetime. The repository-owned `scripts\Submit-MicrosoftStore.ps1` boundary
+submits exactly one bundle and retains bundle-hash evidence for 90 days. It
+rejects an existing draft, creates a new submission without deleting anything,
+and binds update, verification, cleanup, and commit to that exact submission
+ID. Existing listing, availability, pricing, and screenshot state must survive
+a canonical comparison before commit. A replaced or changed draft fails closed.
 
 Create a protected `microsoft-store` GitHub environment and define these
 environment variables (identifiers, not credentials):
 
 - `MSSTORE_TENANT_ID`: Microsoft Entra tenant ID;
-- `MSSTORE_SELLER_ID`: Partner Center seller ID;
 - `MSSTORE_CLIENT_ID`: dedicated Entra application client ID;
 - `MSSTORE_APPLICATION_ID`: the existing Partner Center product ID.
 

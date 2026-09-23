@@ -114,7 +114,8 @@ profile or weaken those fixtures to make the check pass.
 After authorization succeeds, `submit-microsoft-store` downloads only the
 authorized multi-architecture bundle, exchanges a short-lived GitHub OIDC
 assertion for Microsoft Store API access, clones the product's current
-submission, replaces its package, and commits the update. It does not create a
+submission into a newly created automation-owned draft, replaces its package,
+and commits that exact submission ID. It does not create a
 GitHub Release for unsigned packages. The bundle contains both x64 and ARM64;
 submitting the standalone packages too would duplicate the packages already in
 the bundle. The workflow retains a hash-bound submission-evidence artifact for
@@ -124,10 +125,12 @@ after signing and creates the permanent GitHub release tag derived by
 request titles, and publishes the signed multi-architecture bundle plus signed
 x64 and ARM64 standalone MSIX assets.
 
-Store submissions are serialized and authoritative over the pending Partner
-Center draft. Before dispatch, either finish or discard any manual draft edits;
-the reviewed `pendingSubmissionPolicy` replaces them while cloning the latest
-published listing, availability, pricing, and screenshot state.
+Store submissions are serialized, but automation never owns a draft created by
+another Partner Center user. Before dispatch, finish or discard any manual
+draft edits; the reviewed `pendingSubmissionPolicy` rejects them. If ownership
+changes during upload, the workflow refuses to commit or delete the competing
+draft. Only the automation-created submission ID may be cleaned up after a
+failure.
 
 After publication, verify an `official` release has the derived permanent tag,
 generated notes, all three expected assets, and valid signatures. For `store`,

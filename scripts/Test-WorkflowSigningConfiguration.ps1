@@ -93,9 +93,8 @@ $requiredFragments = @(
     'cancel-in-progress: false'
     'name: Request short-lived Microsoft Store assertion'
     '.\scripts\New-GitHubOidcRequestUri.ps1'
-    'microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4'
-    'version: v0.4.3'
     '.\scripts\Submit-MicrosoftStore.ps1'
+    '& chmod 600 $assertionPath'
     '-BundlePath .\store\OpenClawGateway.msixbundle'
     'name: openclaw-gateway-store-submission-evidence'
     'continue-on-error: true'
@@ -190,7 +189,6 @@ foreach ($required in @(
     'contents: read'
     'id-token: write'
     'MSSTORE_TENANT_ID: ${{ vars.MSSTORE_TENANT_ID }}'
-    'MSSTORE_SELLER_ID: ${{ vars.MSSTORE_SELLER_ID }}'
     'MSSTORE_CLIENT_ID: ${{ vars.MSSTORE_CLIENT_ID }}'
     'MSSTORE_APPLICATION_ID: ${{ vars.MSSTORE_APPLICATION_ID }}'
     'MSSTORE_ASSERTION_FILE: ${{ steps.oidc.outputs.assertion_path }}'
@@ -207,10 +205,10 @@ if ($workflow.Contains(
         [StringComparison]::Ordinal)) {
     throw 'Store mode must not publish unsigned packages as a GitHub Release.'
 }
-if (-not $storeSubmissionJob.Contains(
-        "version: $($storePolicy.msstoreCliVersion)",
-        [StringComparison]::Ordinal)) {
-    throw 'The workflow and Store policy must pin the same MSStore CLI version.'
+foreach ($forbidden in @('microsoft-store-apppublisher', 'MSSTORE_SELLER_ID')) {
+    if ($storeSubmissionJob.Contains($forbidden, [StringComparison]::Ordinal)) {
+        throw "Store submission must use submission-ID-bound API operations: $forbidden"
+    }
 }
 
 Write-Host 'Gateway MSIX signing workflow configuration passed.'

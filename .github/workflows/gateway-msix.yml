@@ -1084,13 +1084,11 @@ jobs:
         shell: pwsh
         env:
           MSSTORE_TENANT_ID: ${{ vars.MSSTORE_TENANT_ID }}
-          MSSTORE_SELLER_ID: ${{ vars.MSSTORE_SELLER_ID }}
           MSSTORE_CLIENT_ID: ${{ vars.MSSTORE_CLIENT_ID }}
           MSSTORE_APPLICATION_ID: ${{ vars.MSSTORE_APPLICATION_ID }}
         run: |
           foreach ($name in @(
             'MSSTORE_TENANT_ID'
-            'MSSTORE_SELLER_ID'
             'MSSTORE_CLIENT_ID'
             'MSSTORE_APPLICATION_ID'
           )) {
@@ -1105,12 +1103,6 @@ jobs:
               throw "$name must be a GUID."
             }
           }
-
-      - name: Set up Microsoft Store Developer CLI
-        uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4
-        with:
-          version: v0.4.3
-
       - name: Request short-lived Microsoft Store assertion
         id: oidc
         shell: pwsh
@@ -1136,13 +1128,16 @@ jobs:
           Write-Output "::add-mask::$assertion"
           $assertionPath = Join-Path $env:RUNNER_TEMP 'msstore-assertion.jwt'
           [IO.File]::WriteAllText($assertionPath, $assertion)
+          & chmod 600 $assertionPath
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Unable to restrict the OIDC assertion file permissions.'
+          }
           "assertion_path=$assertionPath" >> $env:GITHUB_OUTPUT
 
       - name: Submit bundle and commit Store update
         shell: pwsh
         env:
           MSSTORE_TENANT_ID: ${{ vars.MSSTORE_TENANT_ID }}
-          MSSTORE_SELLER_ID: ${{ vars.MSSTORE_SELLER_ID }}
           MSSTORE_CLIENT_ID: ${{ vars.MSSTORE_CLIENT_ID }}
           MSSTORE_APPLICATION_ID: ${{ vars.MSSTORE_APPLICATION_ID }}
           MSSTORE_ASSERTION_FILE: ${{ steps.oidc.outputs.assertion_path }}
@@ -1151,7 +1146,6 @@ jobs:
             -BundlePath .\store\OpenClawGateway.msixbundle `
             -ApplicationId $env:MSSTORE_APPLICATION_ID `
             -TenantId $env:MSSTORE_TENANT_ID `
-            -SellerId $env:MSSTORE_SELLER_ID `
             -ClientId $env:MSSTORE_CLIENT_ID `
             -ClientAssertionFile $env:MSSTORE_ASSERTION_FILE `
             -PolicyPath .\store-submission.json `
