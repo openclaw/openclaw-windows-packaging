@@ -186,6 +186,9 @@ public sealed class ClawCtlConsoleTests
             new ClawCtlProgress("Checking requirements."),
             progress =>
             {
+                Assert.Equal(
+                    $"  Checking requirements.{Environment.NewLine}",
+                    output.ToString());
                 progress.Report(new ClawCtlProgress("Checking requirements."));
                 progress.Report(new ClawCtlProgress("Installing the runtime."));
                 return Task.FromResult(42);

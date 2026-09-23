@@ -322,6 +322,33 @@ public sealed class ProgramTests : IDisposable
                 StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData("start", "Preparing the isolated session.")]
+    [InlineData("restart", "Stopping the gateway.")]
+    public async Task GatewayLifecycleNarratesOnStandardErrorOnly(
+        string action,
+        string firstStage)
+    {
+        SessionRuntime runtime = await SetUpSessionAsync().ConfigureAwait(true);
+        ((FakeMxcSessionClient)runtime.Backend).ExecuteFailure =
+            new SessionException("gateway launch failed");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        await Assert.ThrowsAsync<SessionException>(
+            () => Program.RunControlAsync(
+                CreateSetupOptions(Path.Combine(_testDirectory, "app")),
+                ["gateway-service", action],
+                _ => { },
+                output,
+                error,
+                installationLifecycle: new FailingFreshLifecycle(runtime),
+                getLogonSessionId: () => $"logon-{action}"));
+
+        Assert.Contains(firstStage, error.ToString(), StringComparison.Ordinal);
+        Assert.Equal(string.Empty, output.ToString());
+    }
+
     [Fact]
     public async Task ManualGatewayStartAcknowledgesBeforeAStartFailure()
     {
@@ -755,6 +782,7 @@ public sealed class ProgramTests : IDisposable
         DateTime lastWriteTime = File.GetLastWriteTimeUtc(entryPoint);
         var options = new HostOptions(applicationDirectory, null, []);
         using var output = new StringWriter();
+        using var error = new StringWriter();
 
         // The test host is unpackaged, so production readiness reports a
         // machine that cannot own a session.
@@ -764,19 +792,19 @@ public sealed class ProgramTests : IDisposable
                 ["setup"],
                 _ => { },
                 output,
-                TextWriter.Null));
+                error));
 
         AssertRecommendsNewerWindows(failure.Message);
         Assert.True(File.Exists(entryPoint));
         Assert.Equal(lastWriteTime, File.GetLastWriteTimeUtc(entryPoint));
 
-        // The attempted requirement check is visible, but nothing is reported
-        // as ready on a machine that cannot host a session.
+        // The attempted requirement check is visible on stderr, but nothing is
+        // reported as ready on a machine that cannot host a session.
         Assert.Contains(
             "Checking isolated-session support.",
-            output.ToString(),
+            error.ToString(),
             StringComparison.Ordinal);
-        Assert.DoesNotContain("ready", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(string.Empty, output.ToString());
     }
 
     [Fact]
@@ -1027,29 +1055,33 @@ public sealed class ProgramTests : IDisposable
         SessionRuntime runtime = CreateSessionRuntime();
         var lifecycle = new FailingFreshLifecycle(runtime) { TeardownSucceeds = true };
         using var output = new StringWriter();
+        using var error = new StringWriter();
 
         int exitCode = await Program.RunControlAsync(
             CreateSetupOptions(applicationDirectory),
             ["setup"],
             _ => { },
             output,
-            TextWriter.Null,
+            error,
             installationLifecycle: lifecycle,
             readEnvironmentVariable: name =>
                 name == "OPENCLAW_SESSION" ? "0" : null);
 
         Assert.Equal(0, exitCode);
         Assert.NotNull(runtime.SetupState.Read(runtime.ApplicationId).Record);
-        string rendered = output.ToString();
-        Assert.Contains("Checking isolated-session support.", rendered, StringComparison.Ordinal);
-        Assert.Contains("Preparing the isolated session.", rendered, StringComparison.Ordinal);
+        string narration = error.ToString();
+        Assert.Contains("Checking isolated-session support.", narration, StringComparison.Ordinal);
+        Assert.Contains("Preparing the isolated session.", narration, StringComparison.Ordinal);
         Assert.Contains(
             "Installing Node.js in the isolated session.",
-            rendered,
+            narration,
             StringComparison.Ordinal);
-        Assert.Contains("Enabling gateway startup at sign-in.", rendered, StringComparison.Ordinal);
-        Assert.Contains("Finalizing setup.", rendered, StringComparison.Ordinal);
-        Assert.Contains("openclaw onboard", rendered, StringComparison.Ordinal);
+        Assert.Contains("Enabling gateway startup at sign-in.", narration, StringComparison.Ordinal);
+        Assert.Contains("Finalizing setup.", narration, StringComparison.Ordinal);
+        string result = output.ToString();
+        Assert.Contains("openclaw onboard", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("Checking isolated-session support.", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("Finalizing setup.", result, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1157,12 +1189,17 @@ public sealed class ProgramTests : IDisposable
             ["status"],
             _ => { },
             statusOutput,
-            TextWriter.Null,
+            statusOutput,
             installationLifecycle: lifecycle);
 
         Assert.Equal(0, setupExitCode);
         Assert.Equal(0, statusExitCode);
         string status = statusOutput.ToString();
+        Assert.True(
+            status.IndexOf(
+                "Checking session, gateway, and recovery status.",
+                StringComparison.Ordinal) <
+            status.IndexOf("clawctl status", StringComparison.Ordinal));
         Assert.Contains("Session:", status, StringComparison.Ordinal);
         Assert.Contains("Agent:", status, StringComparison.Ordinal);
         Assert.Contains("agent_1", status, StringComparison.Ordinal);
@@ -2087,13 +2124,14 @@ public sealed class ProgramTests : IDisposable
         var backend = (FakeMxcSessionClient)runtime.Backend;
         bool browserLaunched = false;
         using var output = new StringWriter();
+        using var error = new StringWriter();
 
         int exitCode = await Program.RunControlAsync(
             new HostOptions(null, null, []),
             ["open"],
             _ => { },
             output,
-            TextWriter.Null,
+            error,
             installationLifecycle: lifecycle,
             launchBrowserAsync: _ =>
             {
@@ -2106,6 +2144,7 @@ public sealed class ProgramTests : IDisposable
         Assert.Contains("has not been set up", text, StringComparison.Ordinal);
         Assert.Contains("clawctl setup", text, StringComparison.Ordinal);
         Assert.DoesNotContain("This shouldn't happen", text, StringComparison.Ordinal);
+        Assert.Equal(string.Empty, error.ToString());
         Assert.Empty(backend.Calls);
         Assert.False(browserLaunched);
     }
@@ -2123,13 +2162,14 @@ public sealed class ProgramTests : IDisposable
         var backend = (FakeMxcSessionClient)runtime.Backend;
         bool browserLaunched = false;
         using var output = new StringWriter();
+        using var error = new StringWriter();
 
         int exitCode = await Program.RunControlAsync(
             new HostOptions(null, null, []),
             ["open"],
             _ => { },
             output,
-            TextWriter.Null,
+            error,
             installationLifecycle: lifecycle,
             launchBrowserAsync: _ =>
             {
@@ -2142,6 +2182,7 @@ public sealed class ProgramTests : IDisposable
         Assert.Contains("setup is incomplete", text, StringComparison.Ordinal);
         Assert.Contains("clawctl setup", text, StringComparison.Ordinal);
         Assert.DoesNotContain("This shouldn't happen", text, StringComparison.Ordinal);
+        Assert.Equal(string.Empty, error.ToString());
         Assert.Empty(backend.Calls);
         Assert.False(browserLaunched);
     }

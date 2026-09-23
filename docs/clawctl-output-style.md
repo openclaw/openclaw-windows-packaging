@@ -14,8 +14,17 @@ should describe that environment in terms an operator can act on, while
 - Use a check mark for success, an exclamation mark for attention, and a cross
   for failure. Non-Unicode output uses `[ok]`, `[!]`, and `[x]`.
 - Narrate long-running human operations at their real lifecycle boundaries.
-  Use one updating status in an interactive terminal and durable stage lines
-  when output is redirected. Structured output remains exactly one document.
+  Write narration to standard error so standard output carries only the
+  command's result. Use one updating status when standard error is an
+  interactive terminal and durable stage lines when it is redirected.
+  Structured output remains exactly one document.
+- Begin status probes, diagnostics collection, teardown, Control UI handoff,
+  and gateway lifecycle operations with narration before waiting on the
+  isolated session or another process.
+- Do not add narration to `completion`, whose standard output is the completion
+  script, or `pwsh`, which preserves the launched PowerShell process's streams
+  and may remain attached for the lifetime of an interactive shell. Immediate
+  validation failures also return directly.
 - Give each interactive Unicode stage a randomly selected crab animation:
   Scuttle, Bubbles, or Tide Pulse. Select again when the lifecycle stage
   changes; repeated selections are valid. Use the alternating `v(.-.)v` and
@@ -112,14 +121,47 @@ progress as semantic stages from the operation and let the renderer present
 them; an operation that writes to a console cannot also run from a logon task,
 where nothing is watching.
 
-Use a spinner only on an interactive console that has already been cleared for
-color, and plain stage lines everywhere else, so redirected output and log files
-stay readable. `clawctl` owns both decisions, so its consoles disable Spectre's
-default CI profile enrichers, which would re-decide from variables such as
-`GITHUB_ACTIONS` and `TF_BUILD`, forcing ANSI on and the spinner off. Spectre
-serializes live displays: finish the status before rendering the result, and
-never open a second live surface inside the first. Narration and a JSON
-document share standard output, so narration is off entirely under `--json`.
+Progress is messaging, not output, so it goes to standard error, following the
+[Command Line Interface Guidelines](https://clig.dev/#the-basics). Redirecting
+or piping standard output then captures only the result, and a command that
+fails before producing a result leaves standard output empty. Scripts that need
+to parse `clawctl` should use `--json` rather than human output.
+
+Decide the spinner and color for the stream being written, not for standard
+output: use a spinner only when standard error is an interactive console that
+has already been cleared for color, and plain stage lines everywhere else, so
+redirected output and log files stay readable. `clawctl` owns both decisions,
+so its consoles disable Spectre's default CI profile enrichers, which would
+re-decide from variables such as `GITHUB_ACTIONS` and `TF_BUILD`, forcing ANSI
+on and the spinner off. Spectre serializes live displays: finish the status
+before rendering the result, and never open a second live surface inside the
+first. Narration is off entirely under `--json`, so standard output remains
+exactly one document and standard error does not carry human progress.
+
+### Contributor consistency audit
+
+Audit the complete command tree whenever a `clawctl` command or lifecycle step
+is added or changed:
+
+1. Identify the first call that can wait on the isolated session, another
+   process, filesystem collection, or browser launch.
+2. For human output, start narration before that call. Use the control
+   host's shared narration helper, which calls `ClawCtlConsole.NarrateAsync`
+   on standard error, so interactive terminals get one updating status and
+   redirected output gets a durable stage line.
+3. Report later lifecycle boundaries through the same progress owner instead
+   of starting a second live display.
+4. Keep `--json` output to exactly one document with no narration, and keep
+   human narration off standard output.
+5. Preserve stream-owned commands. `completion` must emit only its script, and
+   `pwsh` must not add host text to the launched process's standard streams.
+6. Add a behavioral test that observes the initial stage on standard error
+   before the operation is allowed to finish, plus coverage that standard
+   output, structured output, and stream-owned output remain unmodified. Do
+   not use sleeps or source-inspection assertions.
+
+An operation that can visibly pause without first explaining what it is doing
+fails this audit unless its output stream is itself the command's payload.
 
 ## Addresses
 

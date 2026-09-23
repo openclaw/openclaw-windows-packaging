@@ -359,14 +359,16 @@ internal static class SmokeProgram
         AssertContains(error, "newer version of Windows", fixture);
         AssertContains(error, "clawctl collect-logs", fixture);
 
-        // The attempted requirement check is visible, but nothing is reported
-        // as ready when the support check refuses.
+        // The attempted requirement check is visible on standard error, and
+        // standard output stays empty when the support check refuses.
         Assert(
-            fixture.Output.ToString().Contains(
+            fixture.Error.ToString().Contains(
                 "Checking isolated-session support.",
-                StringComparison.Ordinal) &&
-            !fixture.Output.ToString().Contains("ready", StringComparison.Ordinal),
-            "A failed support check still reported readiness on standard output.");
+                StringComparison.Ordinal),
+            "The failed support check was not narrated on standard error.");
+        Assert(
+            fixture.Output.ToString().Length == 0,
+            "A failed support check wrote to standard output.");
         fixture.AssertLogRecordsStartupAndExit();
         Assert(
             File.Exists(fixture.EntryPoint),

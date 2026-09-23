@@ -442,8 +442,7 @@ internal static class ClawCtlConsole
     }
 
     private static bool IsInteractiveConsole(TextWriter output) =>
-        (ReferenceEquals(output, Console.Out) || ReferenceEquals(output, Console.Error)) &&
-        WindowsHostConsole.Instance.IsInteractive;
+        WindowsHostConsole.Instance.IsInteractiveOutput(output);
 
     private static void WriteProgressLine(TextWriter output, string message) =>
         output.WriteLine($"{new string(' ', Indent)}{message}");

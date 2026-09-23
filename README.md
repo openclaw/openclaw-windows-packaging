@@ -185,9 +185,11 @@ explicitly disabled. JSON output never contains terminal escape sequences.
 
 `clawctl gateway-service start` waits for the gateway to bind rather than
 returning as soon as the process exists, because a process without a listener
-is not a usable gateway. It reports each stage as it happens — a spinner on an
-interactive terminal, one line per stage anywhere else — and narrates nothing
-at all under `--json`, so standard output carries exactly one document.
+is not a usable gateway. It reports each stage on standard error as it
+happens — a spinner when standard error is an interactive terminal, one line
+per stage anywhere else — so standard output carries only the result. Under
+`--json` it narrates nothing at all, and standard output carries exactly one
+document.
 
 The wait has a fixed budget. A gateway still coming up when the budget is spent
 is reported as starting rather than failed, and `clawctl gateway-service status`
