@@ -252,7 +252,16 @@ clawctl collect-logs [--output <path>]
 The command prints the resulting ZIP path on its own line. Without `--output`,
 it creates the ZIP in package state. It is best effort: if the agent session
 cannot be reached, the ZIP still contains host diagnostics and records that
-agent-side collection failed.
+agent-side collection failed, with the underlying cause.
+
+The ZIP's `manifest.txt` names the collecting build's environment: the Windows
+build and update revision, how the package was installed (a Developer Mode
+loose-layout registration, a Store-signed install, or a developer-signed MSIX,
+with its install path), and the package, OpenClaw payload, MXC runtime, and
+Node.js versions. `host/openclaw.log` records the same `Environment:` line at
+every host start, and records each failure with its type, message, MXC error
+code and failing operation, Windows error code, and inner causes. A failure
+that no handler anticipated also records its stack trace.
 
 **Likely cause.** Partial setup, session reachability problems, and gateway
 failures can prevent collection of some agent files without preventing
@@ -263,15 +272,18 @@ OpenClaw logs and `.openclaw\openclaw.json*` candidates, applies
 credential-shaped-value redaction to JSON, and intentionally excludes SQLite
 databases and authentication-profile files. Redaction is not a substitute for
 review, and the collector does not enumerate arbitrary agent-profile files.
+The host log and manifest also name local paths, such as the install
+location of a loose-layout registration, and the agent account.
 
 ## Bug report collection checklist
 
 Attach the reviewed diagnostics ZIP, the exact command and complete output,
 the `clawctl status` (or `status --json`) result with machine-specific IDs,
-the agent account, and the shared folder path removed, Windows version/build,
-package version, and the observed session, gateway, readiness, recovery, and
-scheduled-task states. For a special-profile registration failure, include the
-policy error.
+the agent account, and the shared folder path removed, and the observed
+session, gateway, readiness, recovery, and scheduled-task states. The ZIP
+already records the Windows build, package provenance, and component versions,
+so they do not need to be copied by hand. For a special-profile registration
+failure, include the policy error.
 
 ## Source authorities
 
@@ -288,4 +300,7 @@ The behavior above is verified against:
 - gateway status, address, persistence, and diagnostics implementations and
   tests under `src\OpenClaw.Launcher\Gateway` and
   `tests\OpenClaw.Launcher.Tests\Gateway`
+- `src\OpenClaw.Launcher\HostEnvironment.cs`, `DiagnosticFailure.cs`, and
+  `tests\OpenClaw.Launcher.Tests\HostEnvironmentTests.cs`,
+  `DiagnosticFailureTests.cs`, and `ProgramStartupTests.cs`
 - [`mxc-compatibility-evidence.md`](mxc-compatibility-evidence.md)

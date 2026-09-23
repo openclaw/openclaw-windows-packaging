@@ -695,6 +695,21 @@ public sealed class SessionExecutorTests : IDisposable
         Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode, exitCode);
     }
 
+    // Without a matching end line, a run whose host was killed looks the same
+    // as one still running, and a guest process left holding OpenClaw's state
+    // lock cannot be attributed to it.
+    [Fact]
+    public async Task EveryRunThatStartsLogsHowItEnded()
+    {
+        RespondLaunched(7);
+
+        await Create().ExecuteAsync(Record(), Request(), CancellationToken.None);
+
+        Assert.Equal(
+            ["Running OpenClaw in the isolated session.", "OpenClaw exited with code 7."],
+            _log);
+    }
+
     [Fact]
     public async Task MissingControlResultIsReportedRatherThanTrusted()
     {
@@ -704,6 +719,42 @@ public sealed class SessionExecutorTests : IDisposable
             () => Create().ExecuteAsync(Record(), Request(), CancellationToken.None));
 
         Assert.Contains("did not report a launch result", exception.Message, StringComparison.Ordinal);
+    }
+
+    // A result that exists but cannot be read is a different fault from one
+    // that was never written; only the retained cause says which happened.
+    [Fact]
+    public async Task AnUnreadableControlResultKeepsWhyItCouldNotBeRead()
+    {
+        FileStream? held = null;
+        _backend.AttachedBehavior = _ =>
+        {
+            string requestPath = Directory.GetFiles(Workspace, "launch-*.json")
+                .Single(path => !path.EndsWith(".result.json", StringComparison.Ordinal));
+            held = new FileStream(
+                SessionLaunchProtocol.ResultPathFor(requestPath),
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None);
+            return Task.FromResult(0);
+        };
+
+        try
+        {
+            SessionException exception = await Assert.ThrowsAsync<SessionException>(
+                () => Create().ExecuteAsync(Record(), Request(), CancellationToken.None));
+
+            IOException cause = Assert.IsAssignableFrom<IOException>(exception.InnerException);
+            Assert.IsNotType<FileNotFoundException>(cause);
+            Assert.Contains(
+                "did not report a launch result",
+                exception.Message,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            held?.Dispose();
+        }
     }
 
     [Fact]

@@ -273,12 +273,26 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
                         .ConfigureAwait(false));
                 if (result.RequestId != requestId || execution.ExitCode != 0)
                 {
+                    // A helper that failed still names its failure in the
+                    // result, so the mismatch is reported alongside it.
+                    string mismatch =
+                        $"The guest result did not match this invocation (executor exit {execution.ExitCode})." +
+                        (result.Error is { Length: > 0 } guestError
+                            ? $" The guest reported: {guestError}"
+                            : string.Empty);
+                    _log($"Gateway {DescribeOperation(option)} failed: {mismatch}");
                     return new SessionInspectResult
                     {
                         RequestId = requestId,
-                        Error = $"The guest result did not match this invocation (executor exit {execution.ExitCode})."
+                        Error = mismatch
                     };
                 }
+
+                if (result.Error is { Length: > 0 } reported)
+                {
+                    _log($"Gateway {DescribeOperation(option)} failed in the session: {reported}");
+                }
+
                 return result;
             }
             catch (Exception exception) when (
@@ -288,6 +302,9 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
                 // An unanswered request is reported as unknown. Treating it as
                 // "not running" would invite starting a second gateway beside a
                 // healthy one, or claiming a stop that never happened.
+                _log(
+                    $"Gateway {DescribeOperation(option)} was not answered: " +
+                    DiagnosticFailure.Describe(exception));
                 return new SessionInspectResult
                 {
                     RequestId = requestId,
@@ -329,7 +346,8 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
             throw new SessionException(
                 "The isolated session did not report a gateway launch result " +
                 $"(executor exit code {execution.ExitCode}). " +
-                Describe(execution));
+                Describe(execution),
+                exception);
         }
 
         SessionLaunchResult result = SessionLaunchProtocol.ReadResult(text);
@@ -348,4 +366,6 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
             ? "The session reported no diagnostics."
             : $"Session diagnostics: {execution.StandardError.Trim()}";
 
+    private static string DescribeOperation(string option) =>
+        option == "--stop" ? "stop" : "inspection";
 }

@@ -143,6 +143,39 @@ public sealed class AgentImplicitSetupTests : IDisposable
         Assert.Empty(_backend.Calls);
     }
 
+    // The refusal names the remedy; the log must keep the evidence it was
+    // based on, because the same message covers several distinct causes.
+    [Fact]
+    public async Task TheSupportDecisionIsLoggedWithTheEvidenceBehindIt()
+    {
+        SessionRuntime runtime = CreateRuntime();
+        List<string> log = [];
+
+        await Assert.ThrowsAsync<SessionException>(
+            () => Program.RunAgentAsync(
+                CreateOptions(["status"]),
+                log.Add,
+                _ => runtime,
+                probeReadiness: _ => Task.FromResult(new MxcReadinessReport(
+                    "runtime",
+                    new MxcRuntimeProvenance("@microsoft/mxc-sdk", "0.8.0", "x64"),
+                    null,
+                    MxcHostSupport.Unsupported,
+                    new MxcHostBuild(26100, 4000),
+                    MxcSupportEvidence.BackendProbe,
+                    new MxcBackendProbe(false, "base-container", ["feature disabled"]))),
+                getPackageFamilyName: () => runtime.Paths.PackageFamilyName,
+                readEnvironmentVariable: _ => null,
+                installationLifecycle: new StubLifecycle(runtime))).ConfigureAwait(true);
+
+        Assert.Contains(
+            "Isolated-session support: Unsupported from BackendProbe evidence; " +
+            "host build 26100.4000; runtime @microsoft/mxc-sdk 0.8.0 x64; " +
+            "backend probe isolation sessions unavailable, tier base-container, " +
+            "warnings feature disabled",
+            log);
+    }
+
     [Fact]
     public async Task AnInterruptedSetupIsReportedRatherThanRepairedImplicitly()
     {
@@ -317,7 +350,9 @@ public sealed class AgentImplicitSetupTests : IDisposable
                 Changed: true));
         }
 
-        public Task EnsureSessionSupportedAsync(CancellationToken cancellationToken) =>
+        public Task EnsureSessionSupportedAsync(
+            Action<string> log,
+            CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
         public PackageRuntimeMetadata ValidatePackageRuntime(

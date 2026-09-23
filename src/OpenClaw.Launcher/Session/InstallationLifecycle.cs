@@ -12,6 +12,7 @@ internal interface IInstallationLifecycle
     SessionRuntime CreateRuntime(Action<string> log);
 
     Task EnsureSessionSupportedAsync(
+        Action<string> log,
         CancellationToken cancellationToken);
 
     PackageRuntimeMetadata ValidatePackageRuntime(HostOptions options, SessionRuntime runtime);
@@ -43,10 +44,14 @@ internal sealed class InstallationLifecycle : IInstallationLifecycle
     public SessionRuntime CreateRuntime(Action<string> log) => SessionRuntime.Create(log);
 
     public async Task EnsureSessionSupportedAsync(
+        Action<string> log,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(log);
+
         MxcReadinessReport readiness = await MxcReadiness.ProbeAsync(cancellationToken)
             .ConfigureAwait(false);
+        log($"Isolated-session support: {readiness.Describe()}");
         SessionSupportPolicy.EnsureSupported(
             HostPaths.Create().PackageFamilyName,
             readiness);

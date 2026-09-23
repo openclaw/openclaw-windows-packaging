@@ -1725,7 +1725,7 @@ public sealed class ProgramTests : IDisposable
             runtime.Paths,
             runtime,
             _ => { })
-            .CollectLogsAsync(bundlePath, CancellationToken.None);
+            .CollectLogsAsync(bundlePath, environment: null, CancellationToken.None);
         Assert.Equal(bundlePath, bundle.BundlePath);
         using ZipArchive archive = ZipFile.OpenRead(bundlePath);
         ZipArchiveEntry report = Assert.Single(
@@ -2722,6 +2722,7 @@ public sealed class ProgramTests : IDisposable
         public SessionRuntime CreateRuntime(Action<string> log) => runtime;
 
         public Task EnsureSessionSupportedAsync(
+            Action<string> log,
             CancellationToken cancellationToken) => Task.CompletedTask;
 
         public PackageRuntimeMetadata ValidatePackageRuntime(
@@ -2895,6 +2896,7 @@ public sealed class ProgramTests : IDisposable
         public SessionRuntime CreateRuntime(Action<string> log) => _runtime;
 
         public Task EnsureSessionSupportedAsync(
+            Action<string> log,
             CancellationToken cancellationToken) => Task.CompletedTask;
 
         public PackageRuntimeMetadata ValidatePackageRuntime(
@@ -2974,7 +2976,7 @@ public sealed class ProgramTests : IDisposable
     {
         public SessionRuntime CreateRuntime(Action<string> log) => runtime;
 
-        public Task EnsureSessionSupportedAsync(CancellationToken cancellationToken)
+        public Task EnsureSessionSupportedAsync(Action<string> log, CancellationToken cancellationToken)
         {
             onProbe();
             return Task.CompletedTask;

@@ -29,7 +29,8 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
 
     private GatewayPersistenceManager CreateManager(
         Func<string, string?>? resolveUserSid = null,
-        Action<string>? deleteFile = null) =>
+        Action<string>? deleteFile = null,
+        Action<string>? log = null) =>
         new(
             _scheduler,
             new GatewayPersistenceOptions(
@@ -40,6 +41,7 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
                 WorkingDirectory: StateRoot,
                 CommandProcessorPath: @"C:\Windows\System32\cmd.exe",
                 DeleteFile: deleteFile),
+            log,
             resolveUserSid: resolveUserSid);
 
     private GatewayTaskSnapshot DesiredSnapshot() =>
@@ -284,6 +286,23 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
         Assert.Equal(GatewayPersistenceLane.StartupFolderFallback, result.Lane);
         Assert.True(File.Exists(manager.FallbackPath));
         Assert.Contains("Access is denied.", result.Detail, StringComparison.Ordinal);
+    }
+
+    // Setup reports the degraded lane on the console; the bundle must still
+    // record why the preferred logon task was refused.
+    [Fact]
+    public async Task AFailedRegistrationIsLoggedWithTheSchedulersReason()
+    {
+        _scheduler.RegisterResult = GatewayTaskOperation.Failure("Access is denied.");
+        List<string> log = [];
+
+        await CreateManager(log: log.Add).InstallAsync(CancellationToken.None);
+
+        Assert.Contains(
+            log,
+            line => line.EndsWith(
+                "could not be registered; trying the Startup-folder fallback: Access is denied.",
+                StringComparison.Ordinal));
     }
 
     [Fact]

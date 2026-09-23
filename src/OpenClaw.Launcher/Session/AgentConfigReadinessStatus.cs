@@ -23,10 +23,12 @@ internal static class AgentConfigReadinessProbe
     public static async Task<AgentConfigReadinessStatus> CheckAsync(
         SessionRuntime runtime,
         SessionStatus session,
+        Action<string> log,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(runtime);
         ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(log);
 
         if (session.Availability == SessionAvailability.None)
         {
@@ -69,6 +71,7 @@ internal static class AgentConfigReadinessProbe
             IOException or UnauthorizedAccessException or
             InvalidOperationException or ObjectDisposedException)
         {
+            log($"Agent config readiness could not be checked: {DiagnosticFailure.Describe(exception)}");
             return new AgentConfigReadinessStatus(
                 AgentConfigReadinessState.Unknown,
                 Detail: exception.Message,

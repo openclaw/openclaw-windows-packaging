@@ -56,6 +56,7 @@ internal static class SmokeProgram
             ("Spectre renders clawctl output under NativeAOT", SpectreOutputRenders),
             ("gateway narration survives NativeAOT", GatewayNarrationRenders),
             ("Windows logon identity survives NativeAOT", WindowsLogonIdentityWorks),
+            ("package provenance reads survive NativeAOT", PackageProvenanceReadsBind),
             ("missing application reports diagnostics", MissingApplicationReportsAsync),
             ("openclaw never parses its arguments", AgentNeverParsesItsArgumentsAsync),
             ("first agent launch provisions and forwards arguments", FirstAgentLaunchProvisionsAsync),
@@ -104,6 +105,20 @@ internal static class SmokeProgram
             id.Length == 17 && id[8] == ':' &&
             id.Where(character => character != ':').All(Uri.IsHexDigit),
             $"Unexpected Windows logon identity '{id}'.");
+        return Task.CompletedTask;
+    }
+
+    // Every host start reads package provenance. The driver is unpackaged, so
+    // each read must report absence; a native entry point that does not bind
+    // would instead throw here, and in a packaged host fail every command.
+    private static Task PackageProvenanceReadsBind()
+    {
+        Assert(PackageIdentity.TryReadProvenance() is null, "An unpackaged driver reported provenance.");
+        Assert(
+            PackageIdentity.TryReadOrigin("OpenClaw.NotInstalled_1.0.0.0_x64__0000000000000") is null,
+            "An uninstalled package reported an origin.");
+        Assert(PackageIdentity.TryReadDevelopmentMode() is null, "An unpackaged driver reported a registration mode.");
+        Assert(PackageIdentity.TryReadInstallPath() is null, "An unpackaged driver reported an install path.");
         return Task.CompletedTask;
     }
 
@@ -955,7 +970,9 @@ internal static class SmokeProgram
                     Changed: true));
             }
 
-            public Task EnsureSessionSupportedAsync(CancellationToken cancellationToken) =>
+            public Task EnsureSessionSupportedAsync(
+                Action<string> log,
+                CancellationToken cancellationToken) =>
                 throw new NotSupportedException();
 
             public PackageRuntimeMetadata ValidatePackageRuntime(
@@ -1130,7 +1147,9 @@ internal static class SmokeProgram
 
             public SessionRuntime CreateRuntime(Action<string> log) => throw Started();
 
-            public Task EnsureSessionSupportedAsync(CancellationToken cancellationToken) =>
+            public Task EnsureSessionSupportedAsync(
+                Action<string> log,
+                CancellationToken cancellationToken) =>
                 throw Started();
 
             public PackageRuntimeMetadata ValidatePackageRuntime(

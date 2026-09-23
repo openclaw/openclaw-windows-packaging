@@ -1,6 +1,37 @@
+using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 
 namespace OpenClaw.Launcher;
+
+/// <summary>
+/// Where the installed package came from, as Windows classified it at
+/// deployment. Values mirror <c>PackageOrigin</c> in appmodel.h.
+/// </summary>
+internal enum PackageOrigin
+{
+    Unknown = 0,
+    Unsigned = 1,
+    Inbox = 2,
+    Store = 3,
+    DeveloperUnsigned = 4,
+    DeveloperSigned = 5,
+    LineOfBusiness = 6
+}
+
+/// <summary>
+/// How the running package was installed. A null member could not be read.
+/// </summary>
+/// <param name="FullName">The package full name, carrying version and architecture.</param>
+/// <param name="Origin">The signature origin Windows recorded for the install.</param>
+/// <param name="DevelopmentMode">
+/// Whether the package was registered from a loose layout in Developer Mode.
+/// </param>
+/// <param name="InstallPath">The directory the package runs from.</param>
+internal sealed record PackageProvenance(
+    string FullName,
+    PackageOrigin? Origin,
+    bool? DevelopmentMode,
+    string? InstallPath);
 
 /// <summary>
 /// The running process's MSIX package identity.
@@ -10,6 +41,8 @@ internal static class PackageIdentity
     private const int ErrorInsufficientBuffer = 122;
     private const int AppModelErrorNoPackage = 15700;
     private const int AppModelErrorNoApplication = 15703;
+    private const uint PackageFilterHead = 0x00000010;
+    private const uint PackagePropertyDevelopmentMode = 0x00010000;
 
     /// <summary>
     /// Prefix required by MXC when a packaged caller provisions a sandbox.
@@ -31,6 +64,77 @@ internal static class PackageIdentity
         }
 
         return TryGetPackageIdentity(GetCurrentPackageFamilyName);
+    }
+
+    /// <summary>
+    /// How the running package was installed, or null when running unpackaged.
+    /// </summary>
+    /// <remarks>
+    /// The family name is the same for a Store install, a locally test-signed
+    /// MSIX, and a loose-layout registration of one checkout, so diagnostics
+    /// need the origin and location to tell them apart. Each detail is read
+    /// independently: one that Windows cannot report is left null rather than
+    /// hiding the others.
+    /// </remarks>
+    public static PackageProvenance? TryReadProvenance()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return null;
+        }
+
+        string? fullName = TryGetPackageIdentity(GetCurrentPackageFullName);
+        if (fullName is null)
+        {
+            return null;
+        }
+
+        return new PackageProvenance(
+            fullName,
+            TryReadOrigin(fullName),
+            TryReadDevelopmentMode(),
+            TryReadInstallPath());
+    }
+
+    internal static PackageOrigin? TryReadOrigin(string packageFullName) =>
+        GetStagedPackageOrigin(packageFullName, out int origin) == 0 &&
+        Enum.IsDefined((PackageOrigin)origin)
+            ? (PackageOrigin)origin
+            : null;
+
+    internal static string? TryReadInstallPath()
+    {
+        try
+        {
+            return TryGetPackageIdentity(GetCurrentPackagePath);
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    internal static bool? TryReadDevelopmentMode()
+    {
+        uint length = 0;
+        int result = GetCurrentPackageInfo(PackageFilterHead, ref length, null, out _);
+        if (result != ErrorInsufficientBuffer || length < sizeof(uint) * 2)
+        {
+            return null;
+        }
+
+        var buffer = new byte[length];
+        result = GetCurrentPackageInfo(PackageFilterHead, ref length, buffer, out uint count);
+        if (result != 0 || count == 0)
+        {
+            return null;
+        }
+
+        // The head PACKAGE_INFO leads the buffer: UINT32 reserved, then UINT32
+        // flags. Only that value is read, so the string pointers that follow,
+        // which point into this buffer, are never dereferenced.
+        uint flags = BinaryPrimitives.ReadUInt32LittleEndian(buffer.AsSpan(sizeof(uint)));
+        return (flags & PackagePropertyDevelopmentMode) != 0;
     }
 
     public static string? TryGetApplicationUserModelId()
@@ -86,6 +190,32 @@ internal static class PackageIdentity
         ref uint packageFamilyNameLength,
         [Out, MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 0)]
         char[]? packageFamilyName);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetCurrentPackageFullName(
+        ref uint packageFullNameLength,
+        [Out, MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 0)]
+        char[]? packageFullName);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetCurrentPackagePath(
+        ref uint pathLength,
+        [Out, MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 0)]
+        char[]? path);
+
+    [DllImport("kernel32.dll")]
+    private static extern int GetCurrentPackageInfo(
+        uint flags,
+        ref uint bufferLength,
+        [Out] byte[]? buffer,
+        out uint count);
+
+    // The AppModel documentation places this export in kernelbase.dll;
+    // kernel32.dll does not forward it.
+    [DllImport("kernelbase.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetStagedPackageOrigin(
+        string packageFullName,
+        out int origin);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetCurrentApplicationUserModelId(

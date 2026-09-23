@@ -71,7 +71,7 @@ internal static class GatewayLauncherScript
         {
             log(
                 "The retained gateway recovery script could not be inspected; " +
-                $"this invocation will be treated as recovery: {exception.Message}");
+                $"this invocation will be treated as recovery: {DiagnosticFailure.Describe(exception)}");
             return true;
         }
 
@@ -99,7 +99,7 @@ internal static class GatewayLauncherScript
         {
             log(
                 "The retained gateway recovery script could not be upgraded; " +
-                $"this invocation will still be treated as recovery: {exception.Message}");
+                $"this invocation will still be treated as recovery: {DiagnosticFailure.Describe(exception)}");
         }
         finally
         {
@@ -112,7 +112,7 @@ internal static class GatewayLauncherScript
             {
                 log(
                     "The temporary gateway recovery script could not be removed: " +
-                    exception.Message);
+                    DiagnosticFailure.Describe(exception));
             }
         }
 

@@ -193,6 +193,17 @@ shared workspace. Missing sources are reported as entries rather than treated
 as a collection failure, which makes a bundle useful for partial or failed
 setup. The collector does not enumerate arbitrary agent-profile files.
 
+MXC failures reach the host log with the backend's own evidence: the error
+code, the failing IsolationSession operation (for example
+`IsoSessionOps.StartSessionAsync`), the native status, and any remediation
+text. When the executor produces no interpretable envelope, the failure keeps
+its exit code, executor diagnostics, and a bounded excerpt of its output.
+Both `clawctl setup` and `openclaw` log the evidence behind the support
+decision (host build, runtime provenance, and backend probe result) before
+acting on it, and `clawctl status` logs the MXC failure when the recorded
+session cannot be started. The collector's manifest records the collecting
+host's Windows build, package provenance, and component versions.
+
 ## Supported operational flow
 
 1. Run `clawctl setup` after installing or updating the package to prepare the

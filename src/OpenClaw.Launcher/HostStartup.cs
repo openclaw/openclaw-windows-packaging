@@ -31,6 +31,10 @@ internal sealed class HostStartup
 
     public Func<bool>? IsInteractive { get; init; }
 
+    // Supplies the recorded Windows build and component versions. Production
+    // reads them from the machine and package; tests supply fixed facts.
+    public Func<HostOptions, HostEnvironment>? ReadEnvironment { get; init; }
+
     public static HostStartup CreateProduction() => new()
     {
         Entrypoint = HostEntrypointResolver.Resolve(),

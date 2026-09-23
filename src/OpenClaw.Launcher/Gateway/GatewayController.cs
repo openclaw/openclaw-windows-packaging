@@ -634,6 +634,7 @@ internal sealed class GatewayController
         catch (Exception exception) when (
             exception is SessionException or Mxc.MxcException or IOException or UnauthorizedAccessException)
         {
+            _log($"Gateway inspection failed: {DiagnosticFailure.Describe(exception)}");
             return new SessionInspectResult { Error = exception.Message };
         }
     }

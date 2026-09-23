@@ -83,6 +83,58 @@ public sealed class SessionGatewayClientTests : IDisposable
         Assert.Equal(workspace, delivered.WorkingDirectory);
     }
 
+    // A failing helper writes its reason into the result but no request id.
+    // Reporting only the mismatch dropped that reason from both the gateway
+    // status detail and the log.
+    [Fact]
+    public async Task AFailedGuestInspectionKeepsTheGuestsOwnReason()
+    {
+        string workspace = Path.Combine(_root, "shared");
+        string helperPath = Path.Combine(_root, "package", "openclaw-session-host.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(helperPath)!);
+        File.WriteAllText(helperPath, string.Empty);
+        string stagedHelperPath = SessionHelperStager.ResolveStagedPath(workspace);
+        Directory.CreateDirectory(Path.GetDirectoryName(stagedHelperPath)!);
+        File.WriteAllText(stagedHelperPath, string.Empty);
+        _backend.ExecuteBehavior = _ =>
+        {
+            string requestPath = Directory.GetFiles(workspace, "inspect-*.json")
+                .Single(path => !path.EndsWith(".result.json", StringComparison.Ordinal));
+            File.WriteAllText(
+                SessionLaunchProtocol.ResultPathFor(requestPath),
+                SessionInspectProtocol.SerializeResult(new SessionInspectResult
+                {
+                    Error = "Access to the gateway status file is denied."
+                }));
+            return Task.FromResult(new MxcExecutionResult(
+                SessionLaunchProtocol.HelperFailureExitCode,
+                string.Empty,
+                string.Empty));
+        };
+        List<string> log = [];
+
+        SessionInspectResult result = await new SessionGatewayClient(_backend, log.Add)
+            .InspectAsync(
+                new SessionRecord
+                {
+                    SandboxId = "iso:sandbox1",
+                    WorkspacePath = workspace,
+                    Generation = "test-generation",
+                },
+                new GatewayRecord { SandboxId = "iso:sandbox1", ProcessId = 1234 },
+                helperPath,
+                CancellationToken.None);
+
+        Assert.Contains(
+            "The guest reported: Access to the gateway status file is denied.",
+            result.Error,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            log,
+            line => line.StartsWith("Gateway inspection failed: ", StringComparison.Ordinal) &&
+                line.Contains("Access to the gateway status file is denied.", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task RuntimeStartUsesSetupRecordedAgentNodeWithoutHostNodeResolution()
     {

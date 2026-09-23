@@ -77,6 +77,7 @@ internal sealed class GatewayPersistenceManager
 
         if (probe.Presence == GatewayTaskPresence.Unreadable)
         {
+            _log($"The logon task '{_identity.Name}' could not be read: {probe.Detail}");
             return new GatewayPersistenceStatus(
                 GatewayPersistenceState.Unknown,
                 GatewayPersistenceLane.None,
@@ -145,6 +146,9 @@ internal sealed class GatewayPersistenceManager
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException)
         {
+            _log(
+                $"The gateway launcher '{_options.LauncherPath}' could not be written: " +
+                DiagnosticFailure.Describe(exception));
             return new GatewayPersistenceInstallResult(
                 GatewayPersistenceState.ActionRequired,
                 GatewayPersistenceLane.None,
@@ -162,6 +166,9 @@ internal sealed class GatewayPersistenceManager
         // unbounded retry: the write is as likely to be refused as the read was.
         if (probe.Presence == GatewayTaskPresence.Unreadable)
         {
+            _log(
+                $"The logon task '{_identity.Name}' could not be read, so it was " +
+                $"left unchanged: {probe.Detail}");
             return new GatewayPersistenceInstallResult(
                 GatewayPersistenceState.Unknown,
                 GatewayPersistenceLane.None,
@@ -201,6 +208,9 @@ internal sealed class GatewayPersistenceManager
                 Changed: true);
         }
 
+        _log(
+            $"The logon task '{_identity.Name}' could not be registered; trying the " +
+            $"Startup-folder fallback: {registration.Detail}");
         return InstallFallback(registration.Detail);
     }
 
@@ -220,6 +230,7 @@ internal sealed class GatewayPersistenceManager
 
         if (!deletion.Succeeded || detail is not null)
         {
+            _log($"Logon recovery could not be fully removed: {detail}");
             return new GatewayPersistenceRemovalResult(
                 Succeeded: false,
                 fallback.Changed || launcher.Changed || activationScript.Changed,
@@ -321,6 +332,9 @@ internal sealed class GatewayPersistenceManager
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException)
         {
+            _log(
+                $"The Startup-folder fallback '{FallbackPath}' could not be written: " +
+                DiagnosticFailure.Describe(exception));
             return new GatewayPersistenceInstallResult(
                 GatewayPersistenceState.ActionRequired,
                 GatewayPersistenceLane.None,
@@ -451,6 +465,9 @@ internal sealed class GatewayPersistenceManager
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException)
         {
+            _log(
+                $"The generated recovery file '{path}' could not be removed: " +
+                DiagnosticFailure.Describe(exception));
             return new GatewayGeneratedFileRemoval(
                 false,
                 $"Could not remove generated recovery file '{path}': {exception.Message}");

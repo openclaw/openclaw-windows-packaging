@@ -99,6 +99,7 @@ internal sealed partial class GatewayRuntime
     /// </remarks>
     public async Task<DiagnosticsBundleResult> CollectLogsAsync(
         string? requestedPath,
+        string? environment,
         CancellationToken cancellationToken)
     {
         string bundlePath = ResolveBundlePath(
@@ -124,7 +125,7 @@ internal sealed partial class GatewayRuntime
 
             try
             {
-                WriteBundle(bundlePath, hostFiles, staged, stagingOperation, notes);
+                WriteBundle(bundlePath, hostFiles, staged, stagingOperation, environment, notes);
             }
             catch (IOException exception) when (File.Exists(bundlePath))
             {
@@ -234,7 +235,7 @@ internal sealed partial class GatewayRuntime
             IOException or UnauthorizedAccessException)
         {
             notes.Add(
-                $"Agent-side logs could not be collected ({exception.Message}). " +
+                $"Agent-side logs could not be collected ({DiagnosticFailure.Describe(exception)}). " +
                 "The bundle contains host-side diagnostics only.");
             TryDeleteStaging(operation, staged);
             operation?.Dispose();
@@ -271,6 +272,7 @@ internal sealed partial class GatewayRuntime
         List<(string Name, string Path)> hostFiles,
         string? staged,
         SessionWorkspaceOperation? stagingOperation,
+        string? environment,
         List<string> notes)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(bundlePath)!);
@@ -307,6 +309,11 @@ internal sealed partial class GatewayRuntime
         ZipArchiveEntry manifest = archive.CreateEntry("manifest.txt");
         using StreamWriter writer = new(manifest.Open());
         writer.WriteLine($"Collected: {DateTimeOffset.UtcNow:u}");
+        if (environment is not null)
+        {
+            writer.WriteLine($"Environment: {environment}");
+        }
+
         writer.WriteLine(
             "Redaction is best-effort and targets credential-shaped values. " +
             "Review before sharing.");
@@ -356,7 +363,7 @@ internal sealed partial class GatewayRuntime
             exception is SessionException or IOException or UnauthorizedAccessException)
         {
             notes.Add(
-                $"Agent-side staging could not be read safely ({exception.Message}).");
+                $"Agent-side staging could not be read safely ({DiagnosticFailure.Describe(exception)}).");
         }
 
         return files;
@@ -401,7 +408,7 @@ internal sealed partial class GatewayRuntime
         catch (Exception exception) when (
             exception is SessionException or IOException or UnauthorizedAccessException)
         {
-            notes.Add($"{name}: unreadable ({exception.Message})");
+            notes.Add($"{name}: unreadable ({DiagnosticFailure.Describe(exception)})");
         }
     }
 

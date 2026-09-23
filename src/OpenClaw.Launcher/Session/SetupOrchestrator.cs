@@ -145,7 +145,7 @@ internal static class SetupOrchestrator
         // Throws with the reason and its remediation when this machine cannot
         // host a session. There is no session-free setup to fall back to, so
         // nothing is reported as ready before this succeeds.
-        await lifecycle.EnsureSessionSupportedAsync(cancellationToken)
+        await lifecycle.EnsureSessionSupportedAsync(log, cancellationToken)
             .ConfigureAwait(false);
 
         FreshSetupWarning? warning = null;
@@ -173,6 +173,7 @@ internal static class SetupOrchestrator
                     setupOptions.Force &&
                     exception is SessionException or MxcException)
                 {
+                    log($"Forced fresh setup continues after a teardown failure: {DiagnosticFailure.Describe(exception)}");
                     teardownResult = new TeardownResult(
                         false,
                         "Teardown failed before external cleanup could be confirmed.",
@@ -265,7 +266,7 @@ internal static class SetupOrchestrator
         }
         catch (SessionException exception)
         {
-            log($"Isolated session setup is unavailable: {exception.Message}");
+            log($"Isolated session setup is unavailable: {DiagnosticFailure.Describe(exception)}");
             return new SetupCommandResult(
                 1,
                 applicationDirectory,
@@ -279,7 +280,7 @@ internal static class SetupOrchestrator
         }
         catch (IOException exception)
         {
-            log($"Fresh setup local cleanup failed: {exception.Message}");
+            log($"Fresh setup local cleanup failed: {DiagnosticFailure.Describe(exception)}");
             return new SetupCommandResult(
                 1,
                 applicationDirectory,
@@ -293,7 +294,7 @@ internal static class SetupOrchestrator
         }
         catch (UnauthorizedAccessException exception)
         {
-            log($"Fresh setup local cleanup was denied: {exception.Message}");
+            log($"Fresh setup local cleanup was denied: {DiagnosticFailure.Describe(exception)}");
             return new SetupCommandResult(
                 1,
                 applicationDirectory,

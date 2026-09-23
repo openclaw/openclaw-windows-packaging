@@ -113,6 +113,28 @@ public sealed class SessionCoordinatorTests : IDisposable
         Assert.Equal(["start:iso:sandbox1"], _backend.Calls);
     }
 
+    // `clawctl status` shows this failure on the console only; a bundle
+    // collected afterwards must still say what MXC reported.
+    [Fact]
+    public async Task StatusProbeLogsWhatTheBackendReported()
+    {
+        await Create().EnsureStartedAsync(CancellationToken.None);
+        _log.Clear();
+        _backend.StartFailure = new MxcException(
+            MxcErrorCode.BackendError,
+            "The session could not be started.",
+            "backend_error",
+            operation: "IsoSessionOps.StartSessionAsync");
+
+        await Create().ProbeRecordedStatusAsync(CancellationToken.None);
+
+        Assert.Contains(
+            "MXC could not start the recorded provision: MxcException: " +
+            "The session could not be started. [code BackendError; " +
+            "backend code backend_error; operation IsoSessionOps.StartSessionAsync]",
+            _log);
+    }
+
     [Fact]
     public async Task ProvisionMetadataIsPersisted()
     {
