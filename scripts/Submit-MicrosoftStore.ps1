@@ -65,6 +65,19 @@ function Get-SubmissionMetadataHash {
     return [Convert]::ToHexString($hash).ToLowerInvariant()
 }
 
+function Get-SubmissionMutationHash {
+    param([Parameter(Mandatory)][psobject]$Submission)
+    $mutationState = [ordered]@{
+        ApplicationPackages = ConvertTo-CanonicalValue (
+            Get-RequiredProperty $Submission 'ApplicationPackages')
+        PackageDeliveryOptions = ConvertTo-CanonicalValue (
+            Get-RequiredProperty $Submission 'PackageDeliveryOptions')
+    }
+    $json = $mutationState | ConvertTo-Json -Depth 100 -Compress
+    $hash = [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($json))
+    return [Convert]::ToHexString($hash).ToLowerInvariant()
+}
+
 Assert-NonEmptyValue -Name 'ApplicationId' -Value $ApplicationId
 if (-not (Test-Path -LiteralPath $BundlePath -PathType Leaf)) {
     throw "MSIX bundle does not exist: $BundlePath"
@@ -227,6 +240,7 @@ try {
     if ([string](Get-RequiredProperty $draft 'Id') -cne $draftId) {
         throw 'Store updated a different draft than the automation owns.'
     }
+    $draftMutationHash = Get-SubmissionMutationHash $draft
     Assert-OwnedDraft -SubmissionId $draftId
 
     $temporaryDirectory = Join-Path ([IO.Path]::GetTempPath()) (
@@ -248,6 +262,10 @@ try {
     if ($draftMetadataHash -cne $publishedMetadataHash) {
         throw 'The Store draft did not preserve published product metadata.'
     }
+    $verifiedMutationHash = Get-SubmissionMutationHash $verifiedDraft
+    if ($verifiedMutationHash -cne $draftMutationHash) {
+        throw 'The Store draft package mutation state changed after upload.'
+    }
     Assert-OwnedDraft -SubmissionId $draftId
     $commit = Invoke-StoreApi -Method Post `
         -Path "/v1.0/my/applications/$encodedApplicationId/submissions/$encodedDraftId/Commit"
@@ -267,6 +285,8 @@ try {
             draftSubmissionId = $draftId
             publishedMetadataSha256 = $publishedMetadataHash
             draftMetadataSha256 = $draftMetadataHash
+            preparedMutationSha256 = $draftMutationHash
+            verifiedMutationSha256 = $verifiedMutationHash
             commitStatus = $commitStatus
             packageRolloutPercentage = $rollout
             submittedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
