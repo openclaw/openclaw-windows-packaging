@@ -21,6 +21,9 @@ native call. Attached commands use the SDK's console attachment only when
 standard input and output are both consoles; redirected or piped invocations
 run through the SDK's streaming execution with the launcher relaying each
 stream, because the SDK refuses an attached execution without a terminal.
+Redirected standard input reaches the workload, but the IsolationSession
+platform does not yet deliver end of input, so a workload that reads standard
+input to its end keeps waiting until it is cancelled.
 
 `OpenClaw.SessionProtocol` is separate from that backend seam. It is the
 versioned, launcher-to-guest request/result contract used for execution,

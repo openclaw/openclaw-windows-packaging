@@ -298,7 +298,10 @@ internal sealed class MxcSdkSessionClient : IMxcSessionClient
         }
         finally
         {
-            // End of host input is end of workload input.
+            // End of host input is end of workload input. IsolationSession
+            // currently keeps its own stdin write handle open, so a workload
+            // that reads to end of input does not observe it until that
+            // platform defect is fixed.
             try
             {
                 destination.Dispose();
