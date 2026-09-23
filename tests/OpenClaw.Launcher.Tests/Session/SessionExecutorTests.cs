@@ -9,6 +9,7 @@ public sealed class SessionExecutorTests : IDisposable
     private readonly string _root = TestDirectory.Create();
     private readonly FakeMxcSessionClient _backend = new();
     private readonly List<string> _log = [];
+    private readonly ManualMonotonicTimeProvider _clock = new();
 
     private string Workspace => _root;
 
@@ -45,7 +46,7 @@ public sealed class SessionExecutorTests : IDisposable
             @"C:\work");
 
     private SessionExecutor Create(Func<string>? createRequestId = null) =>
-        new(_backend, _log.Add, createRequestId: createRequestId);
+        new(_backend, _log.Add, createRequestId: createRequestId, clock: _clock);
 
     [Fact]
     public async Task IsolatedLaunchRetainsTheHostInteractiveEnvironment()
@@ -112,10 +113,12 @@ public sealed class SessionExecutorTests : IDisposable
 
     private void RespondAsCapturedHelper(
         Func<SessionLaunchRequest, SessionLaunchResult> respond,
-        MxcExecutionResult? execution = null)
+        MxcExecutionResult? execution = null,
+        TimeSpan elapsed = default)
     {
         _backend.ExecuteBehavior = _ =>
         {
+            _clock.Advance(elapsed);
             string requestPath = Directory.GetFiles(Workspace, "launch-*.json")
                 .Single(path => !path.EndsWith(".result.json", StringComparison.Ordinal));
             SessionLaunchRequest request = SessionLaunchProtocol.ReadRequest(
@@ -147,10 +150,12 @@ public sealed class SessionExecutorTests : IDisposable
     }
 
     private void RespondAsRuntimeInstaller(
-        Func<SessionRuntimeInstallRequest, SessionRuntimeInstallResult> respond)
+        Func<SessionRuntimeInstallRequest, SessionRuntimeInstallResult> respond,
+        TimeSpan elapsed = default)
     {
         _backend.ExecuteBehavior = _ =>
         {
+            _clock.Advance(elapsed);
             string requestPath = Directory.GetFiles(Workspace, "runtime-*.json")
                 .Single(path => !path.EndsWith(".result.json", StringComparison.Ordinal));
             SessionRuntimeInstallRequest request = SessionRuntimeProtocol.ReadRequest(
@@ -257,6 +262,36 @@ public sealed class SessionExecutorTests : IDisposable
         Assert.Equal("24.20.0", result.Version);
         Assert.Equal(["execute:iso:sandbox1"], _backend.Calls);
         Assert.Empty(Directory.GetFiles(Workspace));
+    }
+
+    // Setup's in-session runtime install is one of the slow phases a user can
+    // locate only from the diagnostic log.
+    [Fact]
+    public async Task RuntimeInstallRecordsHowLongTheExchangeTook()
+    {
+        RespondAsRuntimeInstaller(
+            request => new SessionRuntimeInstallResult
+            {
+                RequestId = request.RequestId,
+                ExecutablePath = @"C:\Users\agent_1\AppData\Local\OpenClawGatewayMSIX\agent-node\node.exe",
+                Version = "24.20.0",
+                ArchiveName = "node-v24.20.0-win-x64.zip"
+            },
+            TimeSpan.FromMilliseconds(5310));
+
+        await Create().InstallRuntimeAsync(
+            Record(),
+            @"C:\Package\session-host\x64\openclaw-session-host.exe",
+            @"C:\Package\runtime\node-v24.20.0-win-x64.zip",
+            @"C:\Package\app",
+            CancellationToken.None);
+
+        Assert.Equal(
+            [
+                "Installing the packaged Node.js runtime in the isolated session.",
+                "Node.js runtime installation finished in 5310 ms (executor exit 0).",
+            ],
+            _log);
     }
 
     [Fact]
@@ -807,6 +842,137 @@ public sealed class SessionExecutorTests : IDisposable
         Assert.All(
             _log,
             entry => Assert.DoesNotContain("secret", entry, StringComparison.Ordinal));
+        Assert.Empty(Directory.GetFiles(Workspace));
+    }
+
+    // The dashboard exchange is where `clawctl open` spends most of its time.
+    // Its duration belongs in the log; its output, which carries the
+    // authenticated Control UI URL, never does.
+    [Fact]
+    public async Task CapturedCommandRecordsItsDurationButNotItsOutput()
+    {
+        RespondAsCapturedHelper(
+            request => new SessionLaunchResult
+            {
+                RequestId = request.RequestId,
+                Launched = true,
+                ExitCode = 0,
+            },
+            elapsed: TimeSpan.FromMilliseconds(18042));
+
+        await Create().ExecuteCommandCaptureAsync(
+            Record(),
+            CaptureRequest("dashboard", "--json"),
+            "Resolving the Control UI handoff in the isolated session.",
+            "OpenClaw dashboard",
+            CancellationToken.None);
+
+        Assert.Equal(
+            [
+                "Resolving the Control UI handoff in the isolated session.",
+                "OpenClaw dashboard finished in 18042 ms (executor exit 0).",
+            ],
+            _log);
+    }
+
+    // A slow exchange that then fails is the one most worth finding, so its
+    // duration is recorded before the result is judged.
+    [Fact]
+    public async Task CapturedCommandRecordsItsDurationWhenTheBackendFails()
+    {
+        RespondAsCapturedHelper(
+            request => new SessionLaunchResult
+            {
+                RequestId = request.RequestId,
+                Launched = true,
+                ExitCode = 0,
+            },
+            new MxcExecutionResult(23, "secret", "more secret"),
+            TimeSpan.FromMilliseconds(90000));
+
+        await Assert.ThrowsAsync<SessionException>(
+            () => Create().ExecuteCommandCaptureAsync(
+                Record(),
+                CaptureRequest("dashboard", "--json"),
+                "Resolving the Control UI handoff in the isolated session.",
+                "OpenClaw dashboard",
+                CancellationToken.None));
+
+        Assert.Equal(
+            [
+                "Resolving the Control UI handoff in the isolated session.",
+                "OpenClaw dashboard finished in 90000 ms (executor exit 23).",
+            ],
+            _log);
+    }
+
+    // The production client throws a structured dispatch failure rather than
+    // returning it, so a slow exchange that fails that way must still be timed.
+    // Its message can carry executor stderr, so only the type and MXC
+    // classification are recorded, and the caller still sees the original.
+    [Fact]
+    public async Task CapturedCommandRecordsItsDurationWhenDispatchThrows()
+    {
+        const string marker = "executor-stderr-marker";
+        var failure = new MxcException(
+            MxcErrorCode.BackendError,
+            $"The backend could not run the command: {marker}",
+            "backend_error");
+        _backend.ExecuteBehavior = _ =>
+        {
+            _clock.Advance(TimeSpan.FromMilliseconds(42000));
+            return Task.FromException<MxcExecutionResult>(failure);
+        };
+
+        MxcException thrown = await Assert.ThrowsAsync<MxcException>(
+            () => Create().ExecuteCommandCaptureAsync(
+                Record(),
+                CaptureRequest("dashboard", "--json"),
+                "Resolving the Control UI handoff in the isolated session.",
+                "OpenClaw dashboard",
+                CancellationToken.None));
+
+        Assert.Same(failure, thrown);
+        Assert.Equal(
+            [
+                "Resolving the Control UI handoff in the isolated session.",
+                "OpenClaw dashboard failed after 42000 ms (MxcException BackendError).",
+            ],
+            _log);
+        Assert.All(
+            _log,
+            entry => Assert.DoesNotContain(marker, entry, StringComparison.Ordinal));
+        Assert.Empty(Directory.GetFiles(Workspace));
+    }
+
+    // Cancellation ends an exchange like any other thrown failure: its time is
+    // recorded by the same rule and the caller still observes the cancellation.
+    [Fact]
+    public async Task CancelledExchangeRecordsItsDurationAndPropagatesUnchanged()
+    {
+        using var cancellation = new CancellationTokenSource();
+        OperationCanceledException? canceled = null;
+        _backend.ExecuteBehavior = _ =>
+        {
+            _clock.Advance(TimeSpan.FromMilliseconds(1250));
+            cancellation.Cancel();
+            canceled = new OperationCanceledException(cancellation.Token);
+            return Task.FromException<MxcExecutionResult>(canceled);
+        };
+
+        OperationCanceledException thrown = await Assert.ThrowsAsync<OperationCanceledException>(
+            () => Create().CheckConfigReadinessAsync(
+                Record(),
+                @"C:\Package\session-host\openclaw-session-host.exe",
+                cancellation.Token));
+
+        Assert.Same(canceled, thrown);
+        Assert.Equal(
+            [
+                "Checking agent-side OpenClaw config readiness.",
+                "Config readiness check failed after 1250 ms (OperationCanceledException).",
+            ],
+            _log);
         Assert.Empty(Directory.GetFiles(Workspace));
     }
 

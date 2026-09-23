@@ -1,3 +1,4 @@
+using System.Globalization;
 using OpenClaw.Launcher.Session;
 using OpenClaw.SessionProtocol;
 
@@ -112,8 +113,14 @@ internal sealed class GatewayController
 
     /// <summary>
     /// Reports the gateway without starting one, provisioning a session, or
-    /// writing anything.
+    /// writing any state.
     /// </summary>
+    /// <remarks>
+    /// An inspection that runs records only its duration and resulting state in
+    /// the diagnostic log, or, when it throws, including on cancellation, its
+    /// duration and exception type before the exception propagates unchanged.
+    /// A report decided without inspecting records nothing.
+    /// </remarks>
     public async Task<GatewayStatusReport> GetStatusAsync(
         string helperPath,
         CancellationToken cancellationToken)
@@ -159,10 +166,35 @@ internal sealed class GatewayController
                 "Run `clawctl teardown` to reconcile the owned installation.");
         }
 
-        return Describe(
-            state.Record,
-            await InspectAsync(session.Record, state.Record, helperPath, cancellationToken)
-                .ConfigureAwait(false));
+        long inspectionStarted = _clock.GetTimestamp();
+        SessionInspectResult inspection;
+        try
+        {
+            inspection = await InspectAsync(
+                session.Record,
+                state.Record,
+                helperPath,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            // InspectAsync reports the failures it can classify as Unknown, so
+            // only cancellation and unexpected failures reach here. The type
+            // alone is recorded; a message can carry guest detail.
+            _log(string.Create(
+                CultureInfo.InvariantCulture,
+                $"Gateway inspection failed after {ElapsedMilliseconds()} ms ({exception.GetType().Name})."));
+            throw;
+        }
+
+        GatewayStatusReport report = Describe(state.Record, inspection);
+        _log(string.Create(
+            CultureInfo.InvariantCulture,
+            $"Gateway inspection finished in {ElapsedMilliseconds()} ms: {report.State}."));
+        return report;
+
+        long ElapsedMilliseconds() =>
+            (long)_clock.GetElapsedTime(inspectionStarted).TotalMilliseconds;
     }
 
     /// <summary>
