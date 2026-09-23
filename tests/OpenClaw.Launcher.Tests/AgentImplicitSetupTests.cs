@@ -130,7 +130,6 @@ public sealed class AgentImplicitSetupTests : IDisposable
                 probeReadiness: _ => Task.FromResult(new MxcReadinessReport(
                     "runtime",
                     null,
-                    null,
                     MxcHostSupport.Unsupported,
                     null,
                     MxcSupportEvidence.HostBuild)),
@@ -210,7 +209,6 @@ public sealed class AgentImplicitSetupTests : IDisposable
     private static Task<MxcReadinessReport> SupportedHost(CancellationToken cancellationToken) =>
         Task.FromResult(new MxcReadinessReport(
             "runtime",
-            null,
             null,
             MxcHostSupport.Supported,
             null,

@@ -5,124 +5,77 @@ namespace OpenClaw.Launcher.Tests.Mxc;
 public sealed class MxcRuntimeLocatorTests : IDisposable
 {
     private readonly string _testDirectory = TestDirectory.Create();
-
-    private static string? NoEnvironment(string name) => null;
+    private readonly List<string> _cleared = [];
 
     [Fact]
-    public void RuntimeIsResolvedFromTheArchitectureSpecificPackageDirectory()
+    public void NativeUnitBesideTheLauncherIsResolved()
     {
-        string runtimeDirectory = StageRuntime(
-            Path.Combine(
-                _testDirectory,
-                MxcRuntimeLocator.RuntimeDirectoryName,
-                MxcRuntimeLocator.CurrentArchitectureName()));
-        File.WriteAllText(
-            Path.Combine(runtimeDirectory, MxcRuntimeLocator.ProvenanceFileName),
-            """
-            {"package":"@microsoft/mxc-sdk","version":"0.8.0","architecture":"x64"}
-            """);
+        StageNativeUnit(
+            MxcRuntimeLocator.NativeLibraryFileName,
+            MxcRuntimeLocator.PackageLifecycleFileName);
 
-        MxcRuntimeLocation location = MxcRuntimeLocator.Locate(
-            _testDirectory,
-            NoEnvironment);
+        MxcRuntimeLocation location = MxcRuntimeLocator.Locate(_testDirectory, _cleared.Add);
 
-        Assert.Equal(runtimeDirectory, location.Directory);
+        Assert.Equal(Path.GetFullPath(_testDirectory), location.Directory);
         Assert.Equal(
-            Path.Combine(runtimeDirectory, MxcRuntimeLocator.ExecutorFileName),
-            location.ExecutorPath);
-        Assert.Equal("@microsoft/mxc-sdk", location.Provenance?.Package);
-        Assert.Equal("0.8.0", location.Provenance?.Version);
+            Path.Combine(_testDirectory, MxcRuntimeLocator.NativeLibraryFileName),
+            location.NativeLibraryPath);
+        Assert.Equal(
+            Path.Combine(_testDirectory, MxcRuntimeLocator.PackageLifecycleFileName),
+            location.PackageLifecyclePath);
     }
 
     [Fact]
-    public void AnExplicitRuntimeDirectoryOverridesThePackagedLayout()
+    public void ResolvingTheNativeUnitRemovesTheSdkLoadOverride()
     {
-        string runtimeDirectory = StageRuntime(
-            Path.Combine(_testDirectory, "experiment"));
+        // The SDK probes MXC_FFI_DIR ahead of the application base, so leaving
+        // it set would let any directory service a managed session.
+        StageNativeUnit(
+            MxcRuntimeLocator.NativeLibraryFileName,
+            MxcRuntimeLocator.PackageLifecycleFileName);
 
-        MxcRuntimeLocation location = MxcRuntimeLocator.Locate(
-            _testDirectory,
-            name => name == MxcRuntimeLocator.RuntimeDirectoryVariable
-                ? runtimeDirectory
-                : null);
+        _ = MxcRuntimeLocator.Locate(_testDirectory, _cleared.Add);
 
-        Assert.Equal(runtimeDirectory, location.Directory);
+        Assert.Equal([MxcRuntimeLocator.NativeDirectoryOverrideVariable], _cleared);
     }
 
     [Fact]
-    public void AMissingRuntimeNamesTheExpectedExecutorPath()
+    public void AMissingNativeLibraryNamesTheExpectedPath()
     {
         MxcException exception = Assert.Throws<MxcException>(
-            () => MxcRuntimeLocator.Locate(_testDirectory, NoEnvironment));
+            () => MxcRuntimeLocator.Locate(_testDirectory, _cleared.Add));
 
         Assert.Equal(MxcErrorCode.RuntimeUnavailable, exception.Code);
         Assert.Contains(
-            MxcRuntimeLocator.ExecutorFileName,
+            Path.Combine(_testDirectory, MxcRuntimeLocator.NativeLibraryFileName),
             exception.Message,
             StringComparison.Ordinal);
     }
 
     [Fact]
-    public void AnIncompleteRuntimeIsRejectedRatherThanPartiallyUsed()
+    public void AnIncompleteNativeUnitIsRejectedRatherThanPartiallyUsed()
     {
-        string runtimeDirectory = Path.Combine(_testDirectory, "experiment");
-        Directory.CreateDirectory(runtimeDirectory);
-        File.WriteAllText(
-            Path.Combine(runtimeDirectory, MxcRuntimeLocator.ExecutorFileName),
-            string.Empty);
+        // The engine resolves plm.exe beside the loaded library, so a library
+        // without it would fail later and further from the cause.
+        StageNativeUnit(MxcRuntimeLocator.NativeLibraryFileName);
 
         MxcException exception = Assert.Throws<MxcException>(
-            () => MxcRuntimeLocator.Locate(
-                _testDirectory,
-                name => name == MxcRuntimeLocator.RuntimeDirectoryVariable
-                    ? runtimeDirectory
-                    : null));
+            () => MxcRuntimeLocator.Locate(_testDirectory, _cleared.Add));
 
         Assert.Equal(MxcErrorCode.RuntimeUnavailable, exception.Code);
         Assert.Contains(
             MxcRuntimeLocator.PackageLifecycleFileName,
             exception.Message,
             StringComparison.Ordinal);
+        Assert.Empty(_cleared);
     }
 
-    [Theory]
-    [InlineData("not json")]
-    [InlineData("{}")]
-    [InlineData("""{"package":"@microsoft/mxc-sdk"}""")]
-    public void DamagedProvenanceLeavesTheVerifiedRuntimeUsable(string provenance)
+    private void StageNativeUnit(params string[] fileNames)
     {
-        // Provenance is descriptive. The binaries were verified at staging
-        // time, so an unreadable record must not disable isolated sessions.
-        string runtimeDirectory = StageRuntime(
-            Path.Combine(_testDirectory, "experiment"));
-        File.WriteAllText(
-            Path.Combine(runtimeDirectory, MxcRuntimeLocator.ProvenanceFileName),
-            provenance);
-
-        MxcRuntimeLocation location = MxcRuntimeLocator.Locate(
-            _testDirectory,
-            name => name == MxcRuntimeLocator.RuntimeDirectoryVariable
-                ? runtimeDirectory
-                : null);
-
-        Assert.Null(location.Provenance);
-    }
-
-    private static string StageRuntime(string runtimeDirectory)
-    {
-        Directory.CreateDirectory(runtimeDirectory);
-        foreach (string fileName in new[]
+        foreach (string fileName in fileNames)
         {
-            MxcRuntimeLocator.ExecutorFileName,
-            MxcRuntimeLocator.PackageLifecycleFileName
-        })
-        {
-            File.WriteAllText(
-                Path.Combine(runtimeDirectory, fileName),
-                string.Empty);
+            File.WriteAllText(Path.Combine(_testDirectory, fileName), string.Empty);
         }
-
-        return runtimeDirectory;
     }
 
     public void Dispose()

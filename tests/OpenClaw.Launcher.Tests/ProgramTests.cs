@@ -761,7 +761,6 @@ public sealed class ProgramTests : IDisposable
                 probeReadiness: _ => Task.FromResult(new MxcReadinessReport(
                     "runtime",
                     null,
-                    null,
                     MxcHostSupport.Unsupported,
                     null,
                     MxcSupportEvidence.HostBuild)),
@@ -878,7 +877,6 @@ public sealed class ProgramTests : IDisposable
             _ => Task.FromResult(new MxcReadinessReport(
                 "runtime",
                 null,
-                null,
                 MxcHostSupport.Supported,
                 null,
                 MxcSupportEvidence.HostBuild)),
@@ -906,7 +904,6 @@ public sealed class ProgramTests : IDisposable
                 _ => { },
                 _ => runtime,
                 _ => Task.FromResult(new MxcReadinessReport(
-                    null,
                     null,
                     "backend unavailable",
                     MxcHostSupport.Unsupported,
@@ -938,7 +935,6 @@ public sealed class ProgramTests : IDisposable
                     return CreateSessionRuntime();
                 },
                 probeReadiness: _ => Task.FromResult(new MxcReadinessReport(
-                    null,
                     null,
                     "backend unavailable",
                     MxcHostSupport.Unsupported,
@@ -2066,7 +2062,6 @@ public sealed class ProgramTests : IDisposable
                 probeReadiness: _ => Task.FromResult(new MxcReadinessReport(
                     "runtime",
                     null,
-                    null,
                     MxcHostSupport.Unsupported,
                     null,
                     MxcSupportEvidence.HostBuild)),
@@ -2096,7 +2091,6 @@ public sealed class ProgramTests : IDisposable
             },
             probeReadiness: _ => Task.FromResult(new MxcReadinessReport(
                 "runtime",
-                null,
                 null,
                 MxcHostSupport.Unsupported,
                 null,
@@ -2481,7 +2475,6 @@ public sealed class ProgramTests : IDisposable
             probeReadiness: _ => Task.FromResult(new MxcReadinessReport(
                 "runtime",
                 null,
-                null,
                 MxcHostSupport.Unknown,
                 null,
                 MxcSupportEvidence.None,
@@ -2508,7 +2501,6 @@ public sealed class ProgramTests : IDisposable
                 _ => Task.FromResult(new MxcReadinessReport(
                     "runtime",
                     null,
-                    null,
                     MxcHostSupport.Supported,
                     null,
                     MxcSupportEvidence.HostBuild)),
@@ -2529,7 +2521,6 @@ public sealed class ProgramTests : IDisposable
     private static Task<MxcReadinessReport> SupportedHost(CancellationToken _) =>
         Task.FromResult(new MxcReadinessReport(
             "runtime",
-            null,
             null,
             MxcHostSupport.Supported,
             null,

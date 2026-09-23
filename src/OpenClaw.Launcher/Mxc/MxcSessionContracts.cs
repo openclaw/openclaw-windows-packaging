@@ -168,8 +168,7 @@ internal sealed record MxcProvisionRequest(string AppId);
 
 internal sealed record MxcProvisionResult(
     MxcSandboxId SandboxId,
-    MxcProvisionMetadata? Metadata,
-    string? CorrelationVector);
+    MxcProvisionMetadata? Metadata);
 
 /// <summary>
 /// A command to run inside a started sandbox.
@@ -187,9 +186,9 @@ internal sealed record MxcExecutionResult(
     string StandardError);
 
 /// <summary>
-/// The MXC lifecycle operations this package requires, shaped after the
-/// upcoming <c>Microsoft.Mxc.Sdk</c> state-aware API so the published SDK can
-/// replace the transport without changing session or gateway behavior.
+/// The MXC lifecycle operations this package requires. The rest of the
+/// launcher depends on this project-owned contract, so session and gateway
+/// behavior does not change with the <c>Microsoft.Mxc.Sdk</c> surface behind it.
 /// </summary>
 internal interface IMxcSessionClient
 {
@@ -199,13 +198,11 @@ internal interface IMxcSessionClient
 
     Task StartAsync(
         MxcSandboxId sandboxId,
-        string? correlationVector,
         CancellationToken cancellationToken);
 
     Task<MxcExecutionResult> ExecuteAsync(
         MxcSandboxId sandboxId,
         MxcExecutionRequest request,
-        string? correlationVector,
         CancellationToken cancellationToken);
 
     /// <summary>
@@ -215,24 +212,21 @@ internal interface IMxcSessionClient
     /// <remarks>
     /// Interactive OpenClaw requires this: a buffered execution only returns
     /// after the child exits, so prompts would never reach the terminal and
-    /// typed input would never reach the child. Because nothing is captured, a
-    /// dispatch failure cannot be read back as a structured envelope, and the
-    /// caller must establish the outcome from the guest helper's control
-    /// result instead.
+    /// typed input would never reach the child. Because nothing is captured,
+    /// the caller must establish the outcome from the guest helper's control
+    /// result, which distinguishes an application exit code from a command
+    /// that never started.
     /// </remarks>
     Task<int> ExecuteAttachedAsync(
         MxcSandboxId sandboxId,
         MxcExecutionRequest request,
-        string? correlationVector,
         CancellationToken cancellationToken);
 
     Task StopAsync(
         MxcSandboxId sandboxId,
-        string? correlationVector,
         CancellationToken cancellationToken);
 
     Task DeprovisionAsync(
         MxcSandboxId sandboxId,
-        string? correlationVector,
         CancellationToken cancellationToken);
 }

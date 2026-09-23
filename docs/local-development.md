@@ -41,10 +41,12 @@ From a clean checkout, register an x64 layout and prepare the runtime:
 .\scripts\Deploy-LocalPackage.ps1 -Architecture x64
 ```
 
-The script resolves a payload, stages MXC and the bundled Node.js runtime,
+The script resolves a payload and the bundled Node.js runtime,
 publishes both the NativeAOT `openclaw.exe` launcher and the NativeAOT session
 host, assembles the layout, registers it with `Add-AppxPackage -Register`, and
-runs `clawctl setup`. The layout lives under
+runs `clawctl setup`. The launcher publish carries the MXC native unit
+(`mxc_ffi.dll` and `plm.exe`) from its `Microsoft.Mxc.Sdk` package reference,
+and the layout places both beside `openclaw.exe`. The layout lives under
 `artifacts\local-package\<architecture>\layout`.
 
 Use options for a concrete reason:

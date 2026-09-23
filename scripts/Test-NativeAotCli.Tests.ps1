@@ -28,6 +28,12 @@
     injects is fixture-owned, including an explicit temporary diagnostic path
     and Node/launch delegates that cannot start a real process.
 
+    The driver also loads the MXC native unit that the publish places beside
+    it, runs the SDK's read-only host capability probe, and dry-runs the
+    launcher's provision request. A dry run validates without creating a
+    sandbox, so this proves native loading and trimmed request serialization
+    without touching isolated-session state.
+
     Scenarios that require a real bundled Node.js runtime are
     deliberately excluded. Those stay in the xUnit suite, where the runtime is
     injected, so this gate does not depend on the agent's installed Node

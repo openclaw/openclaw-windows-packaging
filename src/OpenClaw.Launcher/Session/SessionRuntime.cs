@@ -16,7 +16,7 @@ internal sealed class SessionRuntime
 {
     /// <summary>
     /// Directory under the application base holding the guest helper, staged
-    /// per architecture exactly like the MXC runtime.
+    /// per architecture.
     /// </summary>
     public const string HelperDirectoryName = "session-host";
 
@@ -128,7 +128,7 @@ internal sealed class SessionRuntime
         string applicationId =
             PackageIdentity.ToApplicationId(paths.PackageFamilyName);
         IMxcSessionClient client = backend ?? new LazyMxcSessionClient(
-            () => new MxcCliSessionClient(locateRuntime()));
+            () => new MxcSdkSessionClient(locateRuntime()));
 
         var coordinator = new SessionCoordinator(
             client,

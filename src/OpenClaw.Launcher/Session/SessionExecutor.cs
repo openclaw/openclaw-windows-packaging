@@ -195,7 +195,6 @@ internal sealed class SessionExecutor
             int executorExitCode = await _backend.ExecuteAttachedAsync(
                 record.ToSandboxIdOrThrow(),
                 new MxcExecutionRequest(commandLine),
-                null,
                 cancellationToken).ConfigureAwait(false);
 
             operation.EnsureCurrent();
@@ -244,7 +243,6 @@ internal sealed class SessionExecutor
             MxcExecutionResult execution = await _backend.ExecuteAsync(
                 record.ToSandboxIdOrThrow(),
                 new MxcExecutionRequest(BuildGuestCommandLine(request.HelperPath, requestPath)),
-                null,
                 cancellationToken).ConfigureAwait(false);
 
             operation.EnsureCurrent();
@@ -315,7 +313,6 @@ internal sealed class SessionExecutor
                 record.ToSandboxIdOrThrow(),
                 new MxcExecutionRequest(
                     BuildGuestCommandLine(helperPath, requestPath, "--collect")),
-                null,
                 cancellationToken).ConfigureAwait(false);
 
             string resultText;
@@ -381,7 +378,6 @@ internal sealed class SessionExecutor
                 record.ToSandboxIdOrThrow(),
                 new MxcExecutionRequest(
                     BuildGuestCommandLine(helperPath, requestPath, "--check-config")),
-                null,
                 cancellationToken).ConfigureAwait(false);
 
             string resultText;
@@ -457,7 +453,6 @@ internal sealed class SessionExecutor
                 record.ToSandboxIdOrThrow(),
                 new MxcExecutionRequest(
                     BuildGuestCommandLine(helperPath, requestPath, "--install-runtime")),
-                null,
                 cancellationToken).ConfigureAwait(false);
 
             string resultText;
@@ -555,7 +550,6 @@ internal sealed class SessionExecutor
                 record.ToSandboxIdOrThrow(),
                 new MxcExecutionRequest(
                     BuildGuestCommandLine(helperPath, requestPath, "--install-tools")),
-                null,
                 cancellationToken).ConfigureAwait(false);
             string resultText;
             try

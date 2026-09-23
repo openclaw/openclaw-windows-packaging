@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using Sdk = Microsoft.Mxc.Sdk;
 
 namespace OpenClaw.Launcher.Mxc;
 
@@ -74,17 +75,49 @@ internal sealed class MxcException : Exception
     /// </summary>
     public string? BackendCode { get; }
 
-    // Codes observed from @microsoft/mxc-sdk 0.8.0 wxc-exec.exe against the
-    // Windows IsolationSession backend. Anything unlisted stays Unknown and
-    // keeps its verbatim text rather than being guessed into a recovery path.
-    internal static MxcErrorCode Classify(string? backendCode) => backendCode switch
+    /// <summary>
+    /// Translates an SDK failure into the classification this package acts on.
+    /// </summary>
+    /// <remarks>
+    /// The backend's own remediation text names the recovery step more
+    /// precisely than this package can infer from the code alone, so it is
+    /// appended verbatim rather than replaced with a generic hint.
+    /// </remarks>
+    internal static MxcException FromSdk(Sdk.MxcException exception)
     {
-        "malformed_id" => MxcErrorCode.MalformedId,
-        "stale_id" => MxcErrorCode.StaleId,
-        "policy_validation" => MxcErrorCode.PolicyValidation,
-        "malformed_request" => MxcErrorCode.MalformedRequest,
-        "unsupported_containment" => MxcErrorCode.UnsupportedContainment,
-        "backend_error" => MxcErrorCode.BackendError,
+        ArgumentNullException.ThrowIfNull(exception);
+
+        string message = exception.Message;
+        if (exception.Remediation is { Length: > 0 } remediation)
+        {
+            message = $"{message} {remediation}";
+        }
+
+        if (exception.NativeCode is { Length: > 0 } nativeCode)
+        {
+            message = $"{message} (native code {nativeCode})";
+        }
+
+        return new MxcException(
+            Classify(exception.Code),
+            message,
+            exception.Code.ToString(),
+            exception);
+    }
+
+    // Anything unlisted stays Unknown and keeps its SDK code name rather than
+    // being guessed into a recovery path the backend did not report.
+    internal static MxcErrorCode Classify(Sdk.ErrorCode code) => code switch
+    {
+        Sdk.ErrorCode.MalformedId => MxcErrorCode.MalformedId,
+        Sdk.ErrorCode.StaleId => MxcErrorCode.StaleId,
+        Sdk.ErrorCode.PolicyValidation => MxcErrorCode.PolicyValidation,
+        Sdk.ErrorCode.MalformedRequest or
+        Sdk.ErrorCode.NullArgument or
+        Sdk.ErrorCode.InvalidUtf8 => MxcErrorCode.MalformedRequest,
+        Sdk.ErrorCode.UnsupportedContainment => MxcErrorCode.UnsupportedContainment,
+        Sdk.ErrorCode.BackendError => MxcErrorCode.BackendError,
+        Sdk.ErrorCode.BackendUnavailable => MxcErrorCode.RuntimeUnavailable,
         _ => MxcErrorCode.Unknown
     };
 }

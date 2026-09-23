@@ -41,7 +41,6 @@ internal enum MxcSupportEvidence
 
 internal sealed record MxcReadinessReport(
     string? RuntimeDirectory,
-    MxcRuntimeProvenance? Provenance,
     string? RuntimeUnavailableReason,
     MxcHostSupport HostSupport,
     MxcHostBuild? HostBuild,
@@ -53,18 +52,17 @@ internal sealed record MxcReadinessReport(
 }
 
 /// <summary>
-/// Read-only MXC prerequisite probe. It inspects the staged runtime, asks the
-/// runtime's own capability detector about the host, and falls back to the
+/// Read-only MXC prerequisite probe. It verifies the packaged native unit, asks
+/// the SDK's own capability detector about the host, and falls back to the
 /// documented minimum build when that detector cannot run. It never provisions,
-/// starts, or otherwise mutates state.
+/// starts, or otherwise mutates sessions.
 /// </summary>
 internal static class MxcReadiness
 {
     /// <summary>
-    /// Minimum Windows build documented by the pinned runtime for the
-    /// IsolationSession backend. Used only when the backend probe is
-    /// unavailable, because a build number predicts support rather than
-    /// measuring it.
+    /// Minimum Windows build documented for the IsolationSession backend. Used
+    /// only when the backend probe is unavailable, because a build number
+    /// predicts support rather than measuring it.
     /// </summary>
     public static readonly MxcHostBuild MinimumHostBuild = new(26340, 9212);
 
@@ -75,7 +73,6 @@ internal static class MxcReadiness
     public static MxcReadinessReport Unavailable(string reason) =>
         new(
             null,
-            null,
             reason,
             MxcHostSupport.Unknown,
             null,
@@ -84,11 +81,9 @@ internal static class MxcReadiness
     public static Task<MxcReadinessReport> ProbeAsync(
         CancellationToken cancellationToken) =>
         ProbeAsync(
-            AppContext.BaseDirectory,
-            Environment.GetEnvironmentVariable,
+            MxcRuntimeLocator.Locate,
             WindowsHostBuild.TryRead,
-            static (location, token) =>
-                new MxcCliSessionClient(location).ProbeBackendAsync(token),
+            MxcSdkSessionClient.ProbeBackendAsync,
             cancellationToken);
 
     [SuppressMessage(
@@ -102,24 +97,19 @@ internal static class MxcReadiness
             "this would instead make `clawctl setup` fail on a machine it was " +
             "only being asked to describe.")]
     internal static async Task<MxcReadinessReport> ProbeAsync(
-        string baseDirectory,
-        Func<string, string?> readEnvironmentVariable,
+        Func<MxcRuntimeLocation> locateRuntime,
         Func<MxcHostBuild?> readHostBuild,
         Func<MxcRuntimeLocation, CancellationToken, Task<MxcBackendProbe>> probeBackend,
         CancellationToken cancellationToken)
     {
         string? runtimeDirectory = null;
-        MxcRuntimeProvenance? provenance = null;
         string? unavailableReason = null;
         MxcRuntimeLocation? location = null;
 
         try
         {
-            location = MxcRuntimeLocator.Locate(
-                baseDirectory,
-                readEnvironmentVariable);
+            location = locateRuntime();
             runtimeDirectory = location.Directory;
-            provenance = location.Provenance;
         }
         catch (MxcException exception)
         {
@@ -168,7 +158,6 @@ internal static class MxcReadiness
 
         return new MxcReadinessReport(
             runtimeDirectory,
-            provenance,
             unavailableReason,
             support,
             hostBuild,

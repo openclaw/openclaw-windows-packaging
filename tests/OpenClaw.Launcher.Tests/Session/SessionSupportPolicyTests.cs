@@ -13,8 +13,7 @@ public sealed class SessionSupportPolicyTests
         MxcHostSupport hostSupport = MxcHostSupport.Supported,
         string? probeFailureReason = null) =>
         new(
-            runtimeUnavailableReason is null ? @"C:\Package\mxc\x64" : null,
-            null,
+            runtimeUnavailableReason is null ? @"C:\Package" : null,
             runtimeUnavailableReason,
             hostSupport,
             null,

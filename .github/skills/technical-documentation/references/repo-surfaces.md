@@ -28,7 +28,7 @@ Use only these documentation surfaces in this repository.
 | CI behavior, signing, and release notes | `.github\workflows\gateway-msix.yml` |
 | Build and packaging steps | `scripts\*.ps1`; `scripts\LocalPackage.psm1` |
 | Analyzer and format policy | `Directory.Build.props`; `.editorconfig` |
-| Node and mxc runtime | `mxc-runtime.lock.json`; `scripts\Get-MxcRuntime.ps1` |
+| Node and mxc runtime | `Directory.Packages.props` (`Microsoft.Mxc.Sdk`); `src\OpenClaw.Launcher\Mxc\MxcRuntimeLocator.cs`; release lane: `mxc-runtime.lock.json`; `scripts\Get-MxcRuntime.ps1` |
 
 ## Validation commands
 

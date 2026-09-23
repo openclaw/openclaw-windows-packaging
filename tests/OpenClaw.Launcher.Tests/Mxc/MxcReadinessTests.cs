@@ -6,8 +6,6 @@ public sealed class MxcReadinessTests : IDisposable
 {
     private readonly string _testDirectory = TestDirectory.Create();
 
-    private static string? NoEnvironment(string name) => null;
-
     /// <summary>
     /// Stands in for a host whose backend detector cannot run, which is the
     /// case whenever the runtime itself is missing.
@@ -24,37 +22,25 @@ public sealed class MxcReadinessTests : IDisposable
         BackendReports(bool available, string? tier = "base-container") =>
         (_, _) => Task.FromResult(new MxcBackendProbe(available, tier, []));
 
+    private MxcRuntimeLocation LocateInTestDirectory() =>
+        MxcRuntimeLocator.Locate(_testDirectory, _ => { });
+
     private string StageRuntime()
     {
-        string runtimeDirectory = Path.Combine(_testDirectory, "runtime");
-        Directory.CreateDirectory(runtimeDirectory);
         File.WriteAllText(
-            Path.Combine(runtimeDirectory, MxcRuntimeLocator.ExecutorFileName),
+            Path.Combine(_testDirectory, MxcRuntimeLocator.NativeLibraryFileName),
             string.Empty);
         File.WriteAllText(
-            Path.Combine(
-                runtimeDirectory,
-                MxcRuntimeLocator.PackageLifecycleFileName),
+            Path.Combine(_testDirectory, MxcRuntimeLocator.PackageLifecycleFileName),
             string.Empty);
-        File.WriteAllText(
-            Path.Combine(runtimeDirectory, MxcRuntimeLocator.ProvenanceFileName),
-            """
-            {"package":"@microsoft/mxc-sdk","version":"0.8.0","architecture":"x64"}
-            """);
-        return runtimeDirectory;
+        return Path.GetFullPath(_testDirectory);
     }
-
-    private static Func<string, string?> RuntimeAt(string runtimeDirectory) =>
-        name => name == MxcRuntimeLocator.RuntimeDirectoryVariable
-            ? runtimeDirectory
-            : null;
 
     [Fact]
     public async Task ProbeReportsAMissingRuntimeWithoutFailing()
     {
         MxcReadinessReport report = await MxcReadiness.ProbeAsync(
-            _testDirectory,
-            NoEnvironment,
+            LocateInTestDirectory,
             () => new MxcHostBuild(27000, 1),
             BackendUnreachable,
             CancellationToken.None);
@@ -70,20 +56,18 @@ public sealed class MxcReadinessTests : IDisposable
     }
 
     [Fact]
-    public async Task ProbeReportsAStagedRuntimeAndItsProvenance()
+    public async Task ProbeReportsAStagedRuntime()
     {
         string runtimeDirectory = StageRuntime();
 
         MxcReadinessReport report = await MxcReadiness.ProbeAsync(
-            _testDirectory,
-            RuntimeAt(runtimeDirectory),
+            LocateInTestDirectory,
             () => MxcReadiness.MinimumHostBuild,
             BackendReports(available: true),
             CancellationToken.None);
 
         Assert.True(report.RuntimeAvailable);
         Assert.Equal(runtimeDirectory, report.RuntimeDirectory);
-        Assert.Equal("0.8.0", report.Provenance?.Version);
     }
 
     [Fact]
@@ -95,8 +79,7 @@ public sealed class MxcReadinessTests : IDisposable
         string runtimeDirectory = StageRuntime();
 
         MxcReadinessReport report = await MxcReadiness.ProbeAsync(
-            _testDirectory,
-            RuntimeAt(runtimeDirectory),
+            LocateInTestDirectory,
             () => new MxcHostBuild(27000, 1),
             BackendReports(available: false),
             CancellationToken.None);
@@ -111,8 +94,7 @@ public sealed class MxcReadinessTests : IDisposable
         string runtimeDirectory = StageRuntime();
 
         MxcReadinessReport report = await MxcReadiness.ProbeAsync(
-            _testDirectory,
-            RuntimeAt(runtimeDirectory),
+            LocateInTestDirectory,
             () => new MxcHostBuild(19045, 1),
             BackendReports(available: true),
             CancellationToken.None);
@@ -127,15 +109,14 @@ public sealed class MxcReadinessTests : IDisposable
         string runtimeDirectory = StageRuntime();
 
         MxcReadinessReport report = await MxcReadiness.ProbeAsync(
-            _testDirectory,
-            RuntimeAt(runtimeDirectory),
+            LocateInTestDirectory,
             () => new MxcHostBuild(27000, 1),
-            (_, _) => throw new InvalidOperationException("executor crashed"),
+            (_, _) => throw new InvalidOperationException("native probe crashed"),
             CancellationToken.None);
 
         Assert.Equal(MxcHostSupport.Supported, report.HostSupport);
         Assert.Equal(MxcSupportEvidence.HostBuild, report.SupportEvidence);
-        Assert.Contains("executor crashed", report.BackendProbeFailureReason, StringComparison.Ordinal);
+        Assert.Contains("native probe crashed", report.BackendProbeFailureReason, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -150,8 +131,7 @@ public sealed class MxcReadinessTests : IDisposable
         string expectedName)
     {
         MxcReadinessReport report = await MxcReadiness.ProbeAsync(
-            _testDirectory,
-            NoEnvironment,
+            LocateInTestDirectory,
             () => new MxcHostBuild(build, updateBuildRevision),
             BackendUnreachable,
             CancellationToken.None);
@@ -165,8 +145,7 @@ public sealed class MxcReadinessTests : IDisposable
         // Reporting unsupported would tell a capable machine's user that
         // isolated sessions can never work there.
         MxcReadinessReport report = await MxcReadiness.ProbeAsync(
-            _testDirectory,
-            NoEnvironment,
+            LocateInTestDirectory,
             () => null,
             BackendUnreachable,
             CancellationToken.None);
@@ -180,8 +159,7 @@ public sealed class MxcReadinessTests : IDisposable
     public async Task ProbeDoesNotCreateOrModifyAnything()
     {
         await MxcReadiness.ProbeAsync(
-            _testDirectory,
-            NoEnvironment,
+            LocateInTestDirectory,
             () => null,
             BackendUnreachable,
             CancellationToken.None);

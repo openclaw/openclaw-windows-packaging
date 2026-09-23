@@ -59,6 +59,19 @@ internal sealed class WindowsHostConsole : IHostConsole
 
     public bool IsInteractive => IsInteractiveOutput(Console.Out);
 
+    /// <summary>
+    /// Whether standard input and standard output are both console handles.
+    /// </summary>
+    internal bool HasConsoleInputAndOutput =>
+        IsConsoleHandle(StdInput) && IsConsoleHandle(StdOutput);
+
+    private bool IsConsoleHandle(uint standardHandle)
+    {
+        nint handle = _native.GetStdHandle(standardHandle);
+        return handle != 0 && handle != InvalidHandle &&
+            _native.GetConsoleMode(handle, out _);
+    }
+
     internal bool IsInteractiveOutput(TextWriter output)
     {
         ArgumentNullException.ThrowIfNull(output);
@@ -73,9 +86,7 @@ internal sealed class WindowsHostConsole : IHostConsole
             return false;
         }
 
-        nint handle = _native.GetStdHandle(standardHandle);
-        return handle != 0 && handle != InvalidHandle &&
-            _native.GetConsoleMode(handle, out _);
+        return IsConsoleHandle(standardHandle);
     }
 
     public void InitializeUtf8()

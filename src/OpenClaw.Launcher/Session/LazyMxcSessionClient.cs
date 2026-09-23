@@ -24,44 +24,28 @@ internal sealed class LazyMxcSessionClient(Func<IMxcSessionClient> create)
 
     public Task StartAsync(
         MxcSandboxId sandboxId,
-        string? correlationVector,
         CancellationToken cancellationToken) =>
-        _inner.Value.StartAsync(sandboxId, correlationVector, cancellationToken);
+        _inner.Value.StartAsync(sandboxId, cancellationToken);
 
     public Task<MxcExecutionResult> ExecuteAsync(
         MxcSandboxId sandboxId,
         MxcExecutionRequest request,
-        string? correlationVector,
         CancellationToken cancellationToken) =>
-        _inner.Value.ExecuteAsync(
-            sandboxId,
-            request,
-            correlationVector,
-            cancellationToken);
+        _inner.Value.ExecuteAsync(sandboxId, request, cancellationToken);
 
     public Task<int> ExecuteAttachedAsync(
         MxcSandboxId sandboxId,
         MxcExecutionRequest request,
-        string? correlationVector,
         CancellationToken cancellationToken) =>
-        _inner.Value.ExecuteAttachedAsync(
-            sandboxId,
-            request,
-            correlationVector,
-            cancellationToken);
+        _inner.Value.ExecuteAttachedAsync(sandboxId, request, cancellationToken);
 
     public Task StopAsync(
         MxcSandboxId sandboxId,
-        string? correlationVector,
         CancellationToken cancellationToken) =>
-        _inner.Value.StopAsync(sandboxId, correlationVector, cancellationToken);
+        _inner.Value.StopAsync(sandboxId, cancellationToken);
 
     public Task DeprovisionAsync(
         MxcSandboxId sandboxId,
-        string? correlationVector,
         CancellationToken cancellationToken) =>
-        _inner.Value.DeprovisionAsync(
-            sandboxId,
-            correlationVector,
-            cancellationToken);
+        _inner.Value.DeprovisionAsync(sandboxId, cancellationToken);
 }

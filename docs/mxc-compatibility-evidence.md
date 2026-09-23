@@ -7,12 +7,20 @@ as a stable public API.
 ## Runtime boundary and MXC seam
 
 The launcher owns a small session contract in
-`OpenClaw.Launcher\Mxc\IMxcSessionClient`. `MxcCliSessionClient` is the current
-implementation: it invokes the pinned `@microsoft/mxc-sdk` CLI and confines
-its preview wire details to `MxcWireProtocol` and `MxcWireModels`. The rest of
-the launcher depends on the project-owned contract, so the CLI transport can
-be replaced by the official .NET SDK without changing lifecycle, routing, or
-gateway callers.
+`OpenClaw.Launcher\Mxc\IMxcSessionClient`. `MxcSdkSessionClient` is the current
+implementation: it calls the `Microsoft.Mxc.Sdk` state-aware lifecycle in
+process and translates SDK types and failures into the launcher's own
+contract and error classification. The rest of the launcher depends on the
+project-owned contract, so lifecycle, routing, and gateway callers do not
+depend on the SDK surface.
+
+The SDK loads `mxc_ffi.dll` and its `plm.exe` helper from the launcher's
+application base. `MxcRuntimeLocator` refuses a package that lacks either
+file and clears the SDK's `MXC_FFI_DIR` developer override before the first
+native call. Attached commands use the SDK's console attachment only when
+standard input and output are both consoles; redirected or piped invocations
+run through the SDK's streaming execution with the launcher relaying each
+stream, because the SDK refuses an attached execution without a terminal.
 
 `OpenClaw.SessionProtocol` is separate from that backend seam. It is the
 versioned, launcher-to-guest request/result contract used for execution,

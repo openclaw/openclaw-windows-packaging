@@ -384,7 +384,7 @@ function New-LocalPackageLayout {
         [string]$RepositoryRoot,
         [string]$HostExecutable,
         [string]$SessionHostExecutable,
-        [string]$MxcRuntimeDirectory,
+        [string[]]$NativeUnitFiles,
         [string]$PayloadDirectory,
         [string]$RuntimeArchive,
         [string]$Architecture,
@@ -462,13 +462,15 @@ function New-LocalPackageLayout {
         -Destination (Join-Path $sessionHost 'openclaw-session-host.exe') `
         -Force
 
-    $mxc = Join-Path (Join-Path $LayoutDirectory 'mxc') $Architecture
-    if (Test-Path -LiteralPath $mxc) {
-        Remove-Item -LiteralPath $mxc -Recurse -Force
+    # The MXC SDK loads its native unit from the application base, and the
+    # engine resolves plm.exe beside mxc_ffi.dll, so both sit at the root. A
+    # layout from an earlier deployment may still hold the retired CLI runtime.
+    $retiredMxc = Join-Path $LayoutDirectory 'mxc'
+    if (Test-Path -LiteralPath $retiredMxc) {
+        Remove-Item -LiteralPath $retiredMxc -Recurse -Force
     }
-    New-Item -Path $mxc -ItemType Directory -Force | Out-Null
-    foreach ($item in Get-ChildItem -LiteralPath $MxcRuntimeDirectory -Force) {
-        Copy-Item -LiteralPath $item.FullName -Destination $mxc -Recurse -Force
+    foreach ($file in $NativeUnitFiles) {
+        Copy-Item -LiteralPath $file -Destination $LayoutDirectory -Force
     }
 
     return $manifestPath
@@ -516,9 +518,8 @@ function Test-LocalPackageLayout {
         'openclaw.exe',
         "runtime\$RuntimeArchiveName",
         "session-host\$Architecture\openclaw-session-host.exe",
-        "mxc\$Architecture\wxc-exec.exe",
-        "mxc\$Architecture\plm.exe",
-        "mxc\$Architecture\mxc-runtime.json",
+        'mxc_ffi.dll',
+        'plm.exe',
         'node\native-redirect.mjs'
     )) {
         if (-not (Test-Path -LiteralPath (Join-Path $LayoutDirectory $relative) -PathType Leaf)) {
@@ -613,13 +614,6 @@ function Get-LocalPackageOperations {
                 }
             }
             finally { $archive.Dispose() }
-            return $null
-        }
-        StageMxcRuntime = {
-            param($repositoryRoot, $architecture, $output)
-            & (Join-Path $repositoryRoot 'scripts\Get-MxcRuntime.ps1') `
-                -Architecture $architecture `
-                -OutputDirectory $output
             return $null
         }
         Publish = {
@@ -908,10 +902,6 @@ function Invoke-LocalPackageDeployment {
             Resolve-LocalPackageRuntime -RuntimeDirectory (Join-Path $stateRoot 'runtime') `
                 -Architecture $Architecture -NodeVersion $payload.NodeVersion -Operations $services
         }
-        $mxcRuntimeDirectory = Join-Path $stateRoot 'mxc'
-        Invoke-LocalPackagePhase $progress 'Stage MXC runtime' {
-            & $services.StageMxcRuntime $root $Architecture $mxcRuntimeDirectory
-        } | Out-Null
         $hostDirectory = Join-Path $stateRoot 'host'
         Invoke-LocalPackagePhase $progress 'Build launcher (NativeAOT)' {
             & $services.Publish (Join-Path $root 'src\OpenClaw.Launcher\OpenClaw.Launcher.csproj') `
@@ -930,6 +920,17 @@ function Invoke-LocalPackageDeployment {
         if (-not (& $services.TestPath $sessionHostExecutable)) {
             throw "The publish did not produce $sessionHostExecutable."
         }
+        # The launcher's Microsoft.Mxc.Sdk package reference supplies the MXC
+        # native unit as runtime assets beside the published executable.
+        $nativeUnitFiles = @(
+            foreach ($name in 'mxc_ffi.dll', 'plm.exe') {
+                $path = Join-Path $hostDirectory $name
+                if (-not (& $services.TestPath $path)) {
+                    throw "The launcher publish did not produce the MXC native unit file $path."
+                }
+                $path
+            }
+        )
 
         $hostInfo = Get-Item -LiteralPath $hostExecutable
         $sessionHostInfo = Get-Item -LiteralPath $sessionHostExecutable
@@ -942,11 +943,9 @@ function Invoke-LocalPackageDeployment {
             Get-FileHash -LiteralPath $sessionHostExecutable -Algorithm SHA256
         ).Hash
         $mxcHashes = @(
-            Get-ChildItem -LiteralPath $mxcRuntimeDirectory -File -Recurse |
-                Sort-Object FullName |
-                ForEach-Object {
-                    "$($_.Name):$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
-                }
+            foreach ($file in $nativeUnitFiles) {
+                "$([IO.Path]::GetFileName($file)):$((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash)"
+            }
         )
         $imageHashes = @(
             Get-ChildItem -LiteralPath (Join-Path $root 'src\OpenClaw.Launcher\Images') -File -Recurse |
@@ -1017,7 +1016,7 @@ function Invoke-LocalPackageDeployment {
         $manifestPath = Invoke-LocalPackagePhase $progress 'Assemble layout' {
             New-LocalPackageLayout -LayoutDirectory $layoutDirectory -RepositoryRoot $root `
                 -HostExecutable $hostExecutable -SessionHostExecutable $sessionHostExecutable `
-                -MxcRuntimeDirectory $mxcRuntimeDirectory -PayloadDirectory $payload.Directory `
+                -NativeUnitFiles $nativeUnitFiles -PayloadDirectory $payload.Directory `
                 -RuntimeArchive $runtimeArchive -Architecture $Architecture -Version $version
         }
         Invoke-LocalPackagePhase $progress 'Register package' {

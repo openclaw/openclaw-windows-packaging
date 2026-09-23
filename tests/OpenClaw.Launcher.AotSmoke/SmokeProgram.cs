@@ -56,6 +56,7 @@ internal static class SmokeProgram
             ("Spectre renders clawctl output under NativeAOT", SpectreOutputRenders),
             ("gateway narration survives NativeAOT", GatewayNarrationRenders),
             ("Windows logon identity survives NativeAOT", WindowsLogonIdentityWorks),
+            ("MXC SDK loads and builds requests under NativeAOT", MxcSdkRunsUnderNativeAotAsync),
             ("missing application reports diagnostics", MissingApplicationReportsAsync),
             ("openclaw never parses its arguments", AgentNeverParsesItsArgumentsAsync),
             ("first agent launch provisions and forwards arguments", FirstAgentLaunchProvisionsAsync),
@@ -105,6 +106,23 @@ internal static class SmokeProgram
             id.Where(character => character != ':').All(Uri.IsHexDigit),
             $"Unexpected Windows logon identity '{id}'.");
         return Task.CompletedTask;
+    }
+
+    // The MXC SDK loads a native library and serializes every request with
+    // System.Text.Json; both fail only at run time in a trimmed NativeAOT
+    // binary. This proves the published launcher finds the native unit beside
+    // itself, runs the read-only host probe, and that the backend accepts the
+    // exact provision request production sends. A dry run validates without
+    // creating a sandbox.
+    private static async Task MxcSdkRunsUnderNativeAotAsync()
+    {
+        MxcRuntimeLocation runtime = MxcRuntimeLocator.Locate();
+
+        _ = await MxcSdkSessionClient.ProbeBackendAsync(runtime, CancellationToken.None)
+            .ConfigureAwait(false);
+        Microsoft.Mxc.Sdk.MxcLifecycle.DryRunProvisionSandbox(
+            Microsoft.Mxc.Sdk.StateAwareContainment.IsolationSession,
+            MxcSdkSessionClient.CreateProvisionOptions("PFN:OpenClaw.AotSmoke_fixture"));
     }
 
     // The management entrypoint is selected from the native command line. This
@@ -802,7 +820,6 @@ internal static class SmokeProgram
                     : _ => Task.FromResult(new MxcReadinessReport(
                         "fixture",
                         null,
-                        null,
                         MxcHostSupport.Supported,
                         null,
                         MxcSupportEvidence.BackendProbe)),
@@ -1058,13 +1075,11 @@ internal static class SmokeProgram
                 _provisionCount++;
                 return Task.FromResult(new MxcProvisionResult(
                     MxcSandboxId.Parse($"iso:fixture{_provisionCount}"),
-                    Metadata,
-                    null));
+                    Metadata));
             }
 
             public Task StartAsync(
                 MxcSandboxId sandboxId,
-                string? correlationVector,
                 CancellationToken cancellationToken)
             {
                 Calls.Add("start");
@@ -1074,7 +1089,6 @@ internal static class SmokeProgram
             public Task<MxcExecutionResult> ExecuteAsync(
                 MxcSandboxId sandboxId,
                 MxcExecutionRequest request,
-                string? correlationVector,
                 CancellationToken cancellationToken)
             {
                 Calls.Add("execute");
@@ -1087,7 +1101,6 @@ internal static class SmokeProgram
             public Task<int> ExecuteAttachedAsync(
                 MxcSandboxId sandboxId,
                 MxcExecutionRequest request,
-                string? correlationVector,
                 CancellationToken cancellationToken) =>
                 ExecuteAttachedCoreAsync(request);
 
@@ -1105,12 +1118,10 @@ internal static class SmokeProgram
 
             public Task StopAsync(
                 MxcSandboxId sandboxId,
-                string? correlationVector,
                 CancellationToken cancellationToken) => Task.CompletedTask;
 
             public Task DeprovisionAsync(
                 MxcSandboxId sandboxId,
-                string? correlationVector,
                 CancellationToken cancellationToken) => Task.CompletedTask;
         }
 
