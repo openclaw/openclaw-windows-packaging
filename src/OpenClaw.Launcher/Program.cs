@@ -678,19 +678,19 @@ internal static class Program
                 },
                 CollectLogs = async (requestedPath, cancellationToken) =>
                 {
+                    Session.SessionRuntime runtime = GetSessionRuntime();
+                    Gateway.GatewayRuntime gateway = Gateway.GatewayRuntime.Create(
+                        options,
+                        runtime.Paths,
+                        runtime,
+                        log);
                     Gateway.DiagnosticsBundleResult result = await NarrateOperationAsync(
                         new ClawCtlProgress("Collecting redacted diagnostics."),
-                        async _ =>
-                        {
-                            HostPaths paths = HostPaths.Create();
-                            return await Gateway.GatewayRuntime.Create(
-                                    options,
-                                    paths,
-                                    GetSessionRuntime(),
-                                    log)
-                                .CollectLogsAsync(requestedPath, environment, cancellationToken)
-                                .ConfigureAwait(false);
-                        }).ConfigureAwait(false);
+                        progress => gateway.CollectLogsAsync(
+                            requestedPath,
+                            environment,
+                            progress,
+                            cancellationToken)).ConfigureAwait(false);
                     return WriteResult(new CollectLogsCommandResult(result));
                 },
                 Teardown = async (force, cancellationToken) =>

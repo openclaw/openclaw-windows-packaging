@@ -249,10 +249,15 @@ that policy; use the organization's managed-policy process.
 clawctl collect-logs [--output <path>]
 ```
 
-The command prints the resulting ZIP path on its own line. Without `--output`,
-it creates the ZIP in package state. It is best effort: if the agent session
-cannot be reached, the ZIP still contains host diagnostics and records that
-agent-side collection failed, with the underlying cause.
+The command narrates each source on standard error as it gathers it: the
+isolated session, the OpenClaw logs and configuration collected inside it, and
+each host record. An interactive terminal shows one updating status line,
+redirected standard error keeps one line per source, and `--json` narrates
+nothing. Standard output carries only the result, which ends with the ZIP path
+on its own line. Without `--output`, it creates the ZIP in package state. It is
+best effort: if the agent session cannot be reached, the ZIP still contains
+host diagnostics and records that agent-side collection failed, with the
+underlying cause.
 
 The ZIP's `manifest.txt` names the collecting build's environment: the Windows
 build and update revision, how the package was installed (a Developer Mode

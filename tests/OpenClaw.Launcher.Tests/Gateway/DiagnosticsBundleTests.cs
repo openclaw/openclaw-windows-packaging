@@ -23,6 +23,7 @@ public sealed class DiagnosticsBundleTests : IDisposable
         DiagnosticsBundleResult result = await runtime.CollectLogsAsync(
             bundlePath,
             environment: null,
+            new RecordingProgress(),
             CancellationToken.None);
 
         Assert.Equal(bundlePath, result.BundlePath);
@@ -58,6 +59,7 @@ public sealed class DiagnosticsBundleTests : IDisposable
         DiagnosticsBundleResult result = await runtime.CollectLogsAsync(
             bundlePath,
             environment: null,
+            new RecordingProgress(),
             CancellationToken.None);
 
         Assert.Equal(bundlePath, result.BundlePath);
@@ -76,6 +78,7 @@ public sealed class DiagnosticsBundleTests : IDisposable
         DiagnosticsBundleResult result = await runtime.CollectLogsAsync(
             bundlePath,
             environment: null,
+            new RecordingProgress(),
             CancellationToken.None);
 
         Assert.Equal(bundlePath, result.BundlePath);
@@ -102,6 +105,7 @@ public sealed class DiagnosticsBundleTests : IDisposable
         DiagnosticsBundleResult result = await runtime.CollectLogsAsync(
             bundlePath,
             environment: null,
+            new RecordingProgress(),
             CancellationToken.None);
 
         Assert.Equal(bundlePath, result.BundlePath);
@@ -129,6 +133,7 @@ public sealed class DiagnosticsBundleTests : IDisposable
         DiagnosticsBundleResult result = await runtime.CollectLogsAsync(
             bundlePath,
             "Windows 10.0.26340.9212 (X64 OS, X64 process); fixture",
+            new RecordingProgress(),
             CancellationToken.None);
 
         Assert.False(result.SessionReached);
@@ -193,7 +198,7 @@ public sealed class DiagnosticsBundleTests : IDisposable
         await File.WriteAllTextAsync(bundlePath, "existing");
 
         IOException exception = await Assert.ThrowsAsync<IOException>(
-            () => runtime.CollectLogsAsync(bundlePath, environment: null, CancellationToken.None));
+            () => runtime.CollectLogsAsync(bundlePath, environment: null, new RecordingProgress(), CancellationToken.None));
 
         Assert.Contains(bundlePath, exception.Message, StringComparison.Ordinal);
         Assert.Contains("--output", exception.Message, StringComparison.Ordinal);

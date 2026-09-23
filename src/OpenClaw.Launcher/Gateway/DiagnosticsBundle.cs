@@ -33,6 +33,9 @@ internal sealed partial class GatewayRuntime
     /// <summary>Directory in the shared workspace used to stage guest files.</summary>
     internal const string StagingDirectoryName = "openclaw-diagnostics";
 
+    /// <summary>A host file the bundle includes, and how narration names it.</summary>
+    private sealed record HostSource(string Name, string Description, string Path);
+
     /// <summary>
     /// Opens an interactive shell inside the recorded session.
     /// </summary>
@@ -95,13 +98,19 @@ internal sealed partial class GatewayRuntime
     /// <remarks>
     /// Producing a file is the point of the command, so reaching the session is
     /// best-effort: someone runs this because something is broken, and a
-    /// host-only bundle is still worth handing over.
+    /// host-only bundle is still worth handing over. Each source is reported
+    /// to <paramref name="progress"/> as it is gathered. The session is reached
+    /// first and the host files are read last, so the bundled host log also
+    /// records how this collection went.
     /// </remarks>
     public async Task<DiagnosticsBundleResult> CollectLogsAsync(
         string? requestedPath,
         string? environment,
+        IProgress<ClawCtlProgress> progress,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(progress);
+
         string bundlePath = ResolveBundlePath(
             requestedPath,
             _paths,
@@ -109,14 +118,15 @@ internal sealed partial class GatewayRuntime
             _clock);
 
         List<string> notes = [];
-        List<(string Name, string Path)> hostFiles = CollectHostFiles();
+        List<HostSource> hostFiles = CollectHostFiles();
         string? staged = null;
         SessionWorkspaceOperation? stagingOperation = null;
 
         try
         {
             (staged, stagingOperation, bool sessionReached) =
-                await TryStageAgentFilesAsync(notes, cancellationToken).ConfigureAwait(false);
+                await TryStageAgentFilesAsync(notes, progress, cancellationToken)
+                    .ConfigureAwait(false);
 
             if (hostFiles.Count == 0 && staged is null)
             {
@@ -125,7 +135,14 @@ internal sealed partial class GatewayRuntime
 
             try
             {
-                WriteBundle(bundlePath, hostFiles, staged, stagingOperation, environment, notes);
+                WriteBundle(
+                    bundlePath,
+                    hostFiles,
+                    staged,
+                    stagingOperation,
+                    environment,
+                    notes,
+                    progress);
             }
             catch (IOException exception) when (File.Exists(bundlePath))
             {
@@ -158,23 +175,23 @@ internal sealed partial class GatewayRuntime
             : Path.GetFullPath(requestedPath, currentDirectory);
     }
 
-    private List<(string Name, string Path)> CollectHostFiles()
+    private List<HostSource> CollectHostFiles()
     {
-        List<(string Name, string Path)> files = [];
-        Add("host/openclaw.log", _paths.LogPath);
-        Add("host/pre-reset.log", _paths.PreResetReportPath);
-        Add("host/setup.json", _paths.SetupStatePath);
-        Add("host/session.json", _paths.SessionStatePath);
-        Add("host/gateway-config.json", _paths.GatewayConfigurationPath);
-        Add("host/gateway-state.json", _paths.GatewayStatePath);
-        Add("host/gateway-launcher.cmd", _paths.GatewayLauncherPath);
+        List<HostSource> files = [];
+        Add("host/openclaw.log", "the host diagnostic log", _paths.LogPath);
+        Add("host/pre-reset.log", "the pre-reset report", _paths.PreResetReportPath);
+        Add("host/setup.json", "the setup record", _paths.SetupStatePath);
+        Add("host/session.json", "the session record", _paths.SessionStatePath);
+        Add("host/gateway-config.json", "the gateway configuration", _paths.GatewayConfigurationPath);
+        Add("host/gateway-state.json", "the gateway record", _paths.GatewayStatePath);
+        Add("host/gateway-launcher.cmd", "the gateway recovery launcher", _paths.GatewayLauncherPath);
         return files;
 
-        void Add(string name, string? path)
+        void Add(string name, string description, string? path)
         {
             if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
             {
-                files.Add((name, path));
+                files.Add(new HostSource(name, description, path));
             }
         }
     }
@@ -185,6 +202,7 @@ internal sealed partial class GatewayRuntime
         bool Reached)>
         TryStageAgentFilesAsync(
         List<string> notes,
+        IProgress<ClawCtlProgress> progress,
         CancellationToken cancellationToken)
     {
         SessionStatus status = Session.Coordinator.GetRecordedStatus();
@@ -203,10 +221,13 @@ internal sealed partial class GatewayRuntime
         try
         {
             string helperPath = Session.RequireStagedHelper(status.Record);
+            progress.Report(new ClawCtlProgress("Starting the isolated session."));
             SessionRecord record = await Session.Coordinator
                 .StartRecordedAsync(cancellationToken).ConfigureAwait(false);
             operation = Session.Executor.CreateWorkspaceOperation(record);
 
+            progress.Report(new ClawCtlProgress(
+                "Collecting OpenClaw logs and configuration from the isolated session."));
             SessionCollectResult result = await Session.Executor
                 .CollectAsync(
                     record,
@@ -269,11 +290,12 @@ internal sealed partial class GatewayRuntime
 
     private static void WriteBundle(
         string bundlePath,
-        List<(string Name, string Path)> hostFiles,
+        List<HostSource> hostFiles,
         string? staged,
         SessionWorkspaceOperation? stagingOperation,
         string? environment,
-        List<string> notes)
+        List<string> notes,
+        IProgress<ClawCtlProgress> progress)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(bundlePath)!);
 
@@ -281,15 +303,18 @@ internal sealed partial class GatewayRuntime
             bundlePath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
         using ZipArchive archive = new(stream, ZipArchiveMode.Create);
 
-        foreach ((string name, string path) in hostFiles)
+        foreach (HostSource source in hostFiles)
         {
-            AddEntry(archive, name, path, notes);
+            progress.Report(new ClawCtlProgress($"Collecting {source.Description}."));
+            AddEntry(archive, source.Name, source.Path, notes);
         }
 
         if (staged is not null &&
             stagingOperation is not null &&
             Directory.Exists(staged))
         {
+            progress.Report(new ClawCtlProgress(
+                "Adding the OpenClaw logs and configuration from the isolated session."));
             stagingOperation.EnsureCurrent();
             foreach (string file in EnumerateStagedFiles(
                 stagingOperation.WorkspacePath,
