@@ -47,10 +47,9 @@ internal static class ClawCtlHelp
             options);
     }
 
-    // A command's own options, then the recursive options it inherits. The
-    // inherited ones are real: --json and --no-color are declared on the root
-    // and apply to every command, so omitting them would under-report the
-    // command line the user can actually type.
+    // A command's own options, then the recursive options it inherits.
+    // Omitting inherited options would under-report the command line the user
+    // can actually type.
     private static List<ClawCtlHelpEntry> CollectOptions(Command command)
     {
         List<ClawCtlHelpEntry> entries = [];

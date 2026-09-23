@@ -81,17 +81,14 @@ internal static class ClawCtlCommandLine
     {
         ArgumentNullException.ThrowIfNull(handlers);
         outputOptions ??= new ClawCtlOutputOptions();
-        Option<bool> json = new("--json")
-        {
-            Description = "Write a machine-readable JSON result.",
-            Recursive = true
-        };
+        Option<bool> rootJson = CreateJsonOption();
         Option<bool> noColor = new("--no-color")
         {
             Description = "Disable colored output.",
             Recursive = true
         };
         Command setup = new(SetupCommandName, SetupDescription);
+        Option<bool> setupJson = CreateJsonOption();
         Option<bool> fresh = new("--fresh")
         {
             Description = "Remove this installation's owned session and local state before setting it up again."
@@ -102,6 +99,7 @@ internal static class ClawCtlCommandLine
         };
         setup.Options.Add(fresh);
         setup.Options.Add(force);
+        setup.Options.Add(setupJson);
         setup.Validators.Add(result =>
         {
             if (result.GetValue(force) && !result.GetValue(fresh))
@@ -111,7 +109,7 @@ internal static class ClawCtlCommandLine
         });
         setup.SetAction((parsed, cancellationToken) =>
         {
-            outputOptions.Json = parsed.GetValue(json);
+            outputOptions.Json = IsJsonRequested(parsed, rootJson, setupJson);
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.Setup(
                 new SetupOptions(
@@ -122,9 +120,11 @@ internal static class ClawCtlCommandLine
         Command status = new(
             StatusCommandName,
             "Show whether the session, gateway, and sign-in recovery are ready.");
+        Option<bool> statusJson = CreateJsonOption();
+        status.Options.Add(statusJson);
         status.SetAction((parsed, cancellationToken) =>
         {
-            outputOptions.Json = parsed.GetValue(json);
+            outputOptions.Json = IsJsonRequested(parsed, rootJson, statusJson);
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.Status(cancellationToken);
         });
@@ -135,10 +135,12 @@ internal static class ClawCtlCommandLine
         Command collectLogs = new(
             CollectLogsCommandName,
             "Gather redacted diagnostics into one ZIP file for troubleshooting.");
+        Option<bool> collectLogsJson = CreateJsonOption();
         collectLogs.Options.Add(outputPath);
+        collectLogs.Options.Add(collectLogsJson);
         collectLogs.SetAction((parsed, cancellationToken) =>
         {
-            outputOptions.Json = parsed.GetValue(json);
+            outputOptions.Json = IsJsonRequested(parsed, rootJson, collectLogsJson);
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.CollectLogs(parsed.GetValue(outputPath), cancellationToken);
         });
@@ -147,19 +149,23 @@ internal static class ClawCtlCommandLine
             Description = "Remove the session without asking for confirmation."
         };
         Command teardown = new("teardown", "Remove OpenClaw's isolated session and gateway.");
+        Option<bool> teardownJson = CreateJsonOption();
         teardown.Options.Add(teardownForce);
+        teardown.Options.Add(teardownJson);
         teardown.SetAction((parsed, cancellationToken) =>
         {
-            outputOptions.Json = parsed.GetValue(json);
+            outputOptions.Json = IsJsonRequested(parsed, rootJson, teardownJson);
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.Teardown(parsed.GetValue(teardownForce), cancellationToken);
         });
         Command open = new(
             OpenCommandName,
             "Open the running gateway's Control UI in the default browser.");
+        Option<bool> openJson = CreateJsonOption();
+        open.Options.Add(openJson);
         open.SetAction((parsed, cancellationToken) =>
         {
-            outputOptions.Json = parsed.GetValue(json);
+            outputOptions.Json = IsJsonRequested(parsed, rootJson, openJson);
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.Open(cancellationToken);
         });
@@ -178,9 +184,11 @@ internal static class ClawCtlCommandLine
         Command completion = new(
             CompletionCommandName,
             "Write PowerShell completion for clawctl.");
+        Option<bool> completionJson = CreateJsonOption();
         completion.Options.Add(installCompletion);
         completion.Options.Add(uninstallCompletion);
         completion.Options.Add(completionProfile);
+        completion.Options.Add(completionJson);
         completion.Validators.Add(result =>
         {
             bool install = result.GetValue(installCompletion);
@@ -197,7 +205,7 @@ internal static class ClawCtlCommandLine
         });
         completion.SetAction((parsed, cancellationToken) =>
         {
-            outputOptions.Json = parsed.GetValue(json);
+            outputOptions.Json = IsJsonRequested(parsed, rootJson, completionJson);
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.Completion(
                 new CompletionOptions(
@@ -231,7 +239,7 @@ internal static class ClawCtlCommandLine
         powerShell.Arguments.Add(powerShellArguments);
         powerShell.Validators.Add(result =>
         {
-            if (result.GetValue(json))
+            if (result.GetValue(rootJson))
             {
                 result.AddError(
                     "'--json' is not supported for 'pwsh', which preserves PowerShell streams.");
@@ -271,32 +279,40 @@ internal static class ClawCtlCommandLine
             "gateway-service",
             "Manage the background OpenClaw gateway inside the isolated session.");
         Command gatewayStart = new("start", "Start the gateway if needed.");
+        Option<bool> gatewayStartJson = CreateJsonOption();
         Option<bool> recovery = new("--recovery") { Hidden = true };
         gatewayStart.Options.Add(recovery);
+        gatewayStart.Options.Add(gatewayStartJson);
         gatewayStart.SetAction((parsed, token) =>
         {
-            outputOptions.Json = parsed.GetValue(json);
+            outputOptions.Json = IsJsonRequested(parsed, rootJson, gatewayStartJson);
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.GatewayStart(parsed.GetValue(recovery), token);
         });
         Command gatewayStatus = new("status", "Show whether the gateway is running.");
+        Option<bool> gatewayStatusJson = CreateJsonOption();
+        gatewayStatus.Options.Add(gatewayStatusJson);
         gatewayStatus.SetAction((parsed, token) =>
         {
-            outputOptions.Json = parsed.GetValue(json);
+            outputOptions.Json = IsJsonRequested(parsed, rootJson, gatewayStatusJson);
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.GatewayStatus(token);
         });
         Command gatewayStop = new("stop", "Stop the gateway but keep the session and its data.");
+        Option<bool> gatewayStopJson = CreateJsonOption();
+        gatewayStop.Options.Add(gatewayStopJson);
         gatewayStop.SetAction((parsed, token) =>
         {
-            outputOptions.Json = parsed.GetValue(json);
+            outputOptions.Json = IsJsonRequested(parsed, rootJson, gatewayStopJson);
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.GatewayStop(token);
         });
         Command gatewayRestart = new("restart", "Stop the gateway and start it again.");
+        Option<bool> gatewayRestartJson = CreateJsonOption();
+        gatewayRestart.Options.Add(gatewayRestartJson);
         gatewayRestart.SetAction((parsed, token) =>
         {
-            outputOptions.Json = parsed.GetValue(json);
+            outputOptions.Json = IsJsonRequested(parsed, rootJson, gatewayRestartJson);
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.GatewayRestart(token);
         });
@@ -316,18 +332,30 @@ internal static class ClawCtlCommandLine
             powerShell,
             gateway
         };
-        root.Options.Add(json);
+        root.Options.Add(rootJson);
         root.Options.Add(noColor);
 
         // Bare `clawctl` is a discovery request, not a usage error, so the root
         // prints help and succeeds instead of reporting a missing command.
         var helpAction = new ClawCtlHelpAction(noColor);
         root.SetAction((parseResult, _) => Task.FromResult(helpAction.Invoke(parseResult)));
-        UseLauncherVersion(root, json, noColor);
+        UseLauncherVersion(root, rootJson, noColor);
         UseClawCtlHelp(root, helpAction);
 
         return root;
     }
+
+    private static Option<bool> CreateJsonOption() =>
+        new("--json")
+        {
+            Description = "Write a machine-readable JSON result."
+        };
+
+    private static bool IsJsonRequested(
+        ParseResult parsed,
+        Option<bool> rootJson,
+        Option<bool> commandJson) =>
+        parsed.GetValue(rootJson) || parsed.GetValue(commandJson);
 
     // The built-in help action is sealed and exposes only a wrap width, so
     // replacing it is the supported way to render help. One replacement covers

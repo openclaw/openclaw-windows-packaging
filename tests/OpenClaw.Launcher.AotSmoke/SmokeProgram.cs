@@ -43,6 +43,7 @@ internal static class SmokeProgram
             ("completion --help prints command help", CompletionHelpPrintsCommandHelpAsync),
             ("pwsh help includes execution modes", PowerShellHelpIncludesExecutionModesAsync),
             ("pwsh rejects conflicting execution modes", PowerShellRejectsConflictingModesAsync),
+            ("pwsh help omits unsupported JSON", PowerShellHelpOmitsJsonAsync),
             ("--version reports the launcher", VersionReportsLauncherAssemblyAsync),
             ("--version wins over trailing arguments", VersionWinsOverTrailingAsync),
             ("unknown command fails", UnknownCommandFailsAsync),
@@ -208,6 +209,19 @@ internal static class SmokeProgram
 
         AssertExitCode(1, exitCode, fixture);
         AssertContains(fixture.Error.ToString(), "cannot be used together", fixture);
+        fixture.AssertNoInstallationWorkStarted();
+    }
+
+    private static async Task PowerShellHelpOmitsJsonAsync()
+    {
+        using Fixture fixture = Fixture.CreateWithoutApplication();
+
+        int exitCode = await fixture.RunAsync(["pwsh", "--help"]).ConfigureAwait(false);
+
+        AssertExitCode(0, exitCode, fixture);
+        Assert(
+            !fixture.Output.ToString().Contains("--json", StringComparison.Ordinal),
+            "PowerShell help advertised unsupported JSON output.");
         fixture.AssertNoInstallationWorkStarted();
     }
 

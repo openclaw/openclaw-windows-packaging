@@ -255,6 +255,8 @@ public sealed class ClawCtlCommandLineTests
     [InlineData("status --json")]
     [InlineData("collect-logs --json")]
     [InlineData("teardown --json")]
+    [InlineData("open --json")]
+    [InlineData("completion --json")]
     [InlineData("gateway-service start --json")]
     [InlineData("gateway-service status --json")]
     [InlineData("gateway-service stop --json")]
@@ -268,6 +270,8 @@ public sealed class ClawCtlCommandLineTests
             Status = _ => Task.FromResult(0),
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
+            Open = _ => Task.FromResult(0),
+            Completion = (_, _) => Task.FromResult(0),
             PowerShell = (_, _) => Task.FromResult(0),
             GatewayStart = (_, _) => Task.FromResult(0),
             GatewayStatus = _ => Task.FromResult(0),
@@ -281,17 +285,16 @@ public sealed class ClawCtlCommandLineTests
         Assert.True(outputOptions.Json);
     }
 
-    [Fact]
-    public async Task JsonIsRejectedForInteractivePowerShell()
+    [Theory]
+    [InlineData("pwsh --json")]
+    [InlineData("--json pwsh")]
+    public async Task JsonIsRejectedForInteractivePowerShell(string commandLine)
     {
         (int exitCode, _, string error) =
-            await RunAsync("pwsh", "--json").ConfigureAwait(true);
+            await RunAsync(commandLine.Split(' ')).ConfigureAwait(true);
 
         Assert.Equal(1, exitCode);
-        Assert.Contains(
-            "'--json' is not supported for 'pwsh'",
-            error,
-            StringComparison.Ordinal);
+        Assert.Contains("--json", error, StringComparison.Ordinal);
     }
 
     [Fact]
