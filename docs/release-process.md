@@ -132,6 +132,14 @@ changes during upload, the workflow refuses to commit or delete the competing
 draft. Only the automation-created submission ID may be cleaned up after a
 failure.
 
+The dedicated Entra application is an exclusive writer: it has exactly the
+documented GitHub-environment federated credential, no client secret or
+certificate, no other federated subject, and no other publisher uses it. Do not
+edit an API-created draft in Partner Center; Microsoft documents that doing so
+invalidates further API update or commit operations. Together with the workflow
+concurrency group, this is the final-commit single-writer boundary recorded by
+`submissionWriterPolicy`.
+
 After publication, verify an `official` release has the derived permanent tag,
 generated notes, all three expected assets, and valid signatures. For `store`,
 verify the `submit-microsoft-store` job committed the update and retained

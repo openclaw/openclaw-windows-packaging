@@ -699,6 +699,14 @@ client secret. Add this federated identity credential to the Entra application:
   `repo:openclaw@252820863/openclaw-windows-packaging@1347889239:environment:microsoft-store`;
 - audience: `api://AzureADTokenExchange`.
 
+This must be the Entra application's only credential: do not add client
+secrets, certificates, or additional federated subjects, and do not share the
+application with another publisher. The Store identity is an exclusive writer;
+only this serialized GitHub environment may use it. Do not edit an API-created
+draft in Partner Center. Microsoft documents that such an edit invalidates
+further API update or commit operations; let the workflow clean up its own
+failed draft before retrying.
+
 The protected environment binds that assertion to the Store deployment job and
 can require maintainer approval independently of repository branch protection.
 GitHub issues a short-lived assertion for each run; the workflow passes it by a
