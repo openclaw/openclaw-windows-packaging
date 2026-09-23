@@ -264,7 +264,7 @@ public sealed class ClawCtlConsoleTests
     [Fact]
     public async Task GatewayNarrationPreservesUnicodeCapabilityForNonConsoleOutput()
     {
-        using var output = new StringWriter();
+        using var output = new SignalingTextWriter("Launching the gateway.");
 
         _ = await ClawCtlConsole.NarrateGatewayStartAsync(
             output,
@@ -272,19 +272,22 @@ public sealed class ClawCtlConsoleTests
             narrate: true,
             outputIsInteractive: true,
             useUnicode: true,
-            progress =>
+            async progress =>
             {
                 progress.Report(new GatewayStartProgress(
                     GatewayStartStage.Launching,
                     "Launching the gateway."));
-                return Task.FromResult(new GatewayStartResult(
+                await output.SignalObserved.ConfigureAwait(false);
+                return new GatewayStartResult(
                     GatewayState.Running,
                     new GatewayRecord(),
                     AlreadyRunning: false,
-                    "The gateway is running."));
+                    "The gateway is running.");
             });
 
-        Assert.Contains("\u280b", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains(
+            output.GetText(),
+            static character => character is >= '\u2800' and <= '\u28ff');
     }
 
     [Theory]
@@ -473,6 +476,58 @@ public sealed class ClawCtlConsoleTests
         Assert.Equal(
             plain.ToString(),
             Regex.Replace(colored.ToString(), "\u001b\\[[0-9;]*m", string.Empty));
+    }
+
+    private sealed class SignalingTextWriter(string signal) : StringWriter
+    {
+        private readonly Lock _gate = new();
+        private readonly TaskCompletionSource _signalObserved =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task SignalObserved => _signalObserved.Task;
+
+        public string GetText()
+        {
+            lock (_gate)
+            {
+                return base.ToString();
+            }
+        }
+
+        public override void Write(char value)
+        {
+            lock (_gate)
+            {
+                base.Write(value);
+                SignalIfObserved();
+            }
+        }
+
+        public override void Write(string? value)
+        {
+            lock (_gate)
+            {
+                base.Write(value);
+                SignalIfObserved();
+            }
+        }
+
+        public override void Write(char[] buffer, int index, int count)
+        {
+            lock (_gate)
+            {
+                base.Write(buffer, index, count);
+                SignalIfObserved();
+            }
+        }
+
+        private void SignalIfObserved()
+        {
+            if (GetStringBuilder().ToString().Contains(signal, StringComparison.Ordinal))
+            {
+                _signalObserved.TrySetResult();
+            }
+        }
     }
 
 }
