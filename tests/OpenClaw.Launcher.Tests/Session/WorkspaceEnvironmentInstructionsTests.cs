@@ -30,7 +30,8 @@ public sealed class WorkspaceEnvironmentInstructionsTests : IDisposable
             @"C:\agent\native",
             new Dictionary<string, string>
             {
-                ["OPENCLAW_SUPERVISOR_MODE"] = "external"
+                ["OPENCLAW_SUPERVISOR_MODE"] = "external",
+                ["PATH"] = @"C:\agent\tools;C:\Windows\System32"
             },
             startInfo =>
             {
@@ -56,6 +57,9 @@ public sealed class WorkspaceEnvironmentInstructionsTests : IDisposable
             observed.ArgumentList);
         Assert.Equal("external", observed.Environment["OPENCLAW_SUPERVISOR_MODE"]);
         Assert.Equal(@"C:\agent\native", observed.Environment["OPENCLAW_NATIVE_STAGED_ROOT"]);
+        Assert.Equal(
+            @"C:\agent;C:\agent\tools;C:\Windows\System32",
+            observed.Environment["PATH"]);
 
         string agents = File.ReadAllText(Path.Combine(workspace, "AGENTS.md"));
         Assert.Contains(

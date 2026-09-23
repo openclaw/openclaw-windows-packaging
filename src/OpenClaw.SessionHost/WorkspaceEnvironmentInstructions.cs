@@ -45,6 +45,7 @@ internal static class WorkspaceEnvironmentInstructions
         {
             startInfo.Environment[name] = value;
         }
+        SessionProcessLauncher.PrependPath(startInfo, Path.GetDirectoryName(nodePath));
         if (!string.IsNullOrWhiteSpace(nativeRootPath))
         {
             startInfo.ArgumentList.Add("--import");
