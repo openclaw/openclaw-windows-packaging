@@ -117,7 +117,9 @@ internal sealed class GatewayController
     /// </summary>
     /// <remarks>
     /// An inspection that runs records only its duration and resulting state in
-    /// the diagnostic log; a report decided without inspecting records nothing.
+    /// the diagnostic log, or, when it throws, including on cancellation, its
+    /// duration and exception type before the exception propagates unchanged.
+    /// A report decided without inspecting records nothing.
     /// </remarks>
     public async Task<GatewayStatusReport> GetStatusAsync(
         string helperPath,
@@ -165,19 +167,34 @@ internal sealed class GatewayController
         }
 
         long inspectionStarted = _clock.GetTimestamp();
-        SessionInspectResult inspection = await InspectAsync(
-            session.Record,
-            state.Record,
-            helperPath,
-            cancellationToken).ConfigureAwait(false);
-        long elapsedMilliseconds =
-            (long)_clock.GetElapsedTime(inspectionStarted).TotalMilliseconds;
+        SessionInspectResult inspection;
+        try
+        {
+            inspection = await InspectAsync(
+                session.Record,
+                state.Record,
+                helperPath,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            // InspectAsync reports the failures it can classify as Unknown, so
+            // only cancellation and unexpected failures reach here. The type
+            // alone is recorded; a message can carry guest detail.
+            _log(string.Create(
+                CultureInfo.InvariantCulture,
+                $"Gateway inspection failed after {ElapsedMilliseconds()} ms ({exception.GetType().Name})."));
+            throw;
+        }
 
         GatewayStatusReport report = Describe(state.Record, inspection);
         _log(string.Create(
             CultureInfo.InvariantCulture,
-            $"Gateway inspection finished in {elapsedMilliseconds} ms: {report.State}."));
+            $"Gateway inspection finished in {ElapsedMilliseconds()} ms: {report.State}."));
         return report;
+
+        long ElapsedMilliseconds() =>
+            (long)_clock.GetElapsedTime(inspectionStarted).TotalMilliseconds;
     }
 
     /// <summary>

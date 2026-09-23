@@ -25,7 +25,8 @@ internal sealed class FakeSessionGatewayClient : ISessionGatewayClient
     public Queue<SessionInspectResult> InspectionSequence { get; } = new();
 
     /// <summary>
-    /// Runs inside each inspection, so a test can make the exchange take time.
+    /// Runs inside each inspection, so a test can make the exchange take time
+    /// or end by throwing.
     /// </summary>
     public Action? DuringInspection { get; set; }
 
@@ -445,6 +446,33 @@ public sealed class GatewayControllerTests : IDisposable
             .GetStatusAsync("helper.exe", CancellationToken.None);
 
         Assert.Equal([expected], _log);
+    }
+
+    // Cancelling a slow `clawctl status` or `clawctl open` during the
+    // inspection still spent that time, and the caller must still observe the
+    // original cancellation.
+    [Fact]
+    public async Task ACancelledInspectionRecordsItsDurationAndPropagatesUnchanged()
+    {
+        RecordGateway();
+        var clock = new ManualMonotonicTimeProvider();
+        using var cancellation = new CancellationTokenSource();
+        var canceled = new OperationCanceledException(cancellation.Token);
+        _client.DuringInspection = () =>
+        {
+            clock.Advance(TimeSpan.FromMilliseconds(4100));
+            cancellation.Cancel();
+            throw canceled;
+        };
+
+        OperationCanceledException thrown = await Assert.ThrowsAsync<OperationCanceledException>(
+            () => CreateController(clock: clock)
+                .GetStatusAsync("helper.exe", cancellation.Token));
+
+        Assert.Same(canceled, thrown);
+        Assert.Equal(
+            ["Gateway inspection failed after 4100 ms (OperationCanceledException)."],
+            _log);
     }
 
     // A report decided before any inspection spent no time in the session, so
