@@ -235,6 +235,24 @@ backends. Raw-model and settled-finalization operations omit prompt hooks.
 Do not treat successful registration as universal context coverage. Repeat
 the request-boundary proof when the approved runtime changes.
 
+### Native dependency redirect
+
+Run `.\scripts\Test-NativeRedirect.Tests.ps1` when you change
+`src\OpenClaw.Launcher\node\native-redirect.mjs`. It requires Node.js and runs
+`tests\node\native-redirect.test.mjs` with `node --test`. Each test starts
+Node.js with the preload against temporary application and staged roots, then
+checks where CommonJS, ESM, child-process, and worker-thread resolution lands.
+It also checks the preload's `NODE_OPTIONS` entry and its startup failure when
+`module.registerHooks()` is unavailable. The suite creates only temporary
+fixtures. It never touches an isolated session, a package registration, or
+installed OpenClaw data.
+
+The loose-registration layout does not exercise the redirect. Its `app`
+directory is a junction to the payload, and Node.js resolves modules through
+real paths, which never fall under the configured application root. To prove
+redirection inside the isolated session, use a package installed as described
+in [Compose, sign, and install an artifact](#compose-sign-and-install-an-artifact).
+
 ### Managed code and packaging
 
 For ordinary managed-code changes, use the contributor quality and test lanes:

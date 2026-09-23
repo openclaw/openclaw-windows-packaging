@@ -248,6 +248,11 @@ jobs:
         run: >
           .\scripts\Test-GatewayIsolationPlugin.Tests.ps1
 
+      - name: Test native dependency redirect
+        shell: pwsh
+        run: >
+          .\scripts\Test-NativeRedirect.Tests.ps1
+
   build-package:
     name: Build OpenClaw npm package
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.packaging == 'true' }}

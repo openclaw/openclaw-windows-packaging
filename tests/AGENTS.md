@@ -1,6 +1,6 @@
 # Test implementation guide
 
-Read the repository-root `AGENTS.md` before this file. This scope owns JIT xUnit tests and the NativeAOT CLI scenario driver.
+Read the repository-root `AGENTS.md` before this file. This scope owns JIT xUnit tests, the NativeAOT CLI scenario driver, and the `node --test` suite for the packaged Node.js preload in `tests\node`.
 
 ## Test standard
 
@@ -23,3 +23,4 @@ Read the repository-root `AGENTS.md` before this file. This scope owns JIT xUnit
 
 - Run targeted tests while iterating, then the smallest complete owning lane. Use the full Release suite when a shared fixture, protocol, command tree, or startup path changes.
 - Run `scripts\Test-NativeAotCli.Tests.ps1` when the native driver or any entrypoint, startup, CLI, help, version, color, JSON, trimming, reflection, or interop behavior changes.
+- Run `scripts\Test-NativeRedirect.Tests.ps1` when `tests\node` or the packaged preload in `src\OpenClaw.Launcher\node` changes.
