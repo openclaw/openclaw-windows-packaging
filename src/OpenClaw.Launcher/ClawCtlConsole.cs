@@ -974,6 +974,12 @@ internal static class ClawCtlConsole
             ColorSystem = useColor ? ColorSystemSupport.TrueColor : ColorSystemSupport.NoColors,
             Interactive = interaction,
             Out = new AnsiConsoleOutput(target),
+
+            // The callers already resolved color, interactivity, width, and
+            // Unicode, including the CI policy. Spectre's default CI enrichers
+            // would re-decide from ambient variables such as GITHUB_ACTIONS and
+            // TF_BUILD, forcing ANSI on and live rendering off after the fact.
+            Enrichment = new ProfileEnrichment { UseDefaultEnrichers = false },
         });
         console.Profile.Width = width;
         console.Profile.Capabilities.Unicode = unicode;

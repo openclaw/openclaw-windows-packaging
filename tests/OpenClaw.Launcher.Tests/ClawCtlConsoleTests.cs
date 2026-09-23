@@ -277,11 +277,7 @@ public sealed class ClawCtlConsoleTests
             .. ClawCtlSpinner.Bubbles.Frames,
             .. ClawCtlSpinner.TidePulse.Frames,
         ];
-        using var output = new SpinnerObservingTextWriter(
-        [
-            .. unicodeFrames,
-            .. ClawCtlSpinner.Ascii.Frames,
-        ]);
+        using var output = new StageObservingTextWriter("Launching the gateway.");
 
         _ = await ClawCtlConsole.NarrateGatewayStartAsync(
             output,
@@ -294,7 +290,12 @@ public sealed class ClawCtlConsoleTests
                 progress.Report(new GatewayStartProgress(
                     GatewayStartStage.Launching,
                     "Launching the gateway."));
-                await output.SpinnerFrameObserved.ConfigureAwait(false);
+
+                // Every renderer writes the reported stage, and the live status
+                // draws its spinner ahead of it on the same row. Waiting for the
+                // stage therefore ends even when live rendering is lost, which
+                // the frame assertion then reports instead of the test hanging.
+                await output.StageRendered.ConfigureAwait(false);
                 return new GatewayStartResult(
                     GatewayState.Running,
                     new GatewayRecord(),
@@ -496,14 +497,13 @@ public sealed class ClawCtlConsoleTests
             Regex.Replace(colored.ToString(), "\u001b\\[[0-9;]*m", string.Empty));
     }
 
-    private sealed class SpinnerObservingTextWriter(IReadOnlyCollection<string> spinnerFrames)
-        : StringWriter
+    private sealed class StageObservingTextWriter(string stage) : StringWriter
     {
         private readonly Lock _gate = new();
-        private readonly TaskCompletionSource _spinnerFrameObserved =
+        private readonly TaskCompletionSource _stageRendered =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Task SpinnerFrameObserved => _spinnerFrameObserved.Task;
+        public Task StageRendered => _stageRendered.Task;
 
         public string GetText()
         {
@@ -542,11 +542,9 @@ public sealed class ClawCtlConsoleTests
 
         private void SignalIfObserved()
         {
-            string rendered = GetStringBuilder().ToString();
-            if (spinnerFrames.Any(
-                    frame => rendered.Contains(frame, StringComparison.Ordinal)))
+            if (GetStringBuilder().ToString().Contains(stage, StringComparison.Ordinal))
             {
-                _spinnerFrameObserved.TrySetResult();
+                _stageRendered.TrySetResult();
             }
         }
     }

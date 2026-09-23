@@ -211,11 +211,15 @@ public sealed class ClawCtlCommandLineTests
             GatewayRestart = _ => Task.FromResult(0)
         });
 
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
         int exitCode = await root
             .Parse("gateway-service restart --recovery")
-            .InvokeAsync();
+            .InvokeAsync(new InvocationConfiguration { Output = output, Error = error });
 
         Assert.Equal(1, exitCode);
+        Assert.Contains("--recovery", error.ToString(), StringComparison.Ordinal);
     }
 
     [Theory]

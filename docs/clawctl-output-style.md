@@ -114,10 +114,12 @@ where nothing is watching.
 
 Use a spinner only on an interactive console that has already been cleared for
 color, and plain stage lines everywhere else, so redirected output and log files
-stay readable. Spectre serializes live displays: finish the status before
-rendering the result, and never open a second live surface inside the first.
-Narration and a JSON document share standard output, so narration is off
-entirely under `--json`.
+stay readable. `clawctl` owns both decisions, so its consoles disable Spectre's
+default CI profile enrichers, which would re-decide from variables such as
+`GITHUB_ACTIONS` and `TF_BUILD`, forcing ANSI on and the spinner off. Spectre
+serializes live displays: finish the status before rendering the result, and
+never open a second live surface inside the first. Narration and a JSON
+document share standard output, so narration is off entirely under `--json`.
 
 ## Addresses
 
