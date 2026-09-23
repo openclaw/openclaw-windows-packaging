@@ -24,6 +24,11 @@ internal sealed class FakeSessionGatewayClient : ISessionGatewayClient
     /// </summary>
     public Queue<SessionInspectResult> InspectionSequence { get; } = new();
 
+    /// <summary>
+    /// Runs inside each inspection, so a test can make the exchange take time.
+    /// </summary>
+    public Action? DuringInspection { get; set; }
+
     public SessionInspectResult? StopResult { get; set; }
 
     public GatewayStartOutcome StartOutcome { get; set; } = new(
@@ -55,6 +60,7 @@ internal sealed class FakeSessionGatewayClient : ISessionGatewayClient
         CancellationToken cancellationToken)
     {
         Calls.Add($"inspect:{gateway.ProcessId}");
+        DuringInspection?.Invoke();
         return Task.FromResult(
             InspectionSequence.Count > 0 ? InspectionSequence.Dequeue() : Inspection);
     }
@@ -126,6 +132,7 @@ public sealed class GatewayControllerTests : IDisposable
     }
     private readonly FakeSessionGatewayClient _client = new();
     private readonly FakeMxcSessionClient _backend = new();
+    private readonly List<string> _log = [];
     private const string ApplicationId = "PFN:OpenClaw.Gateway_test";
 
     public void Dispose()
@@ -176,7 +183,7 @@ public sealed class GatewayControllerTests : IDisposable
                 NodePath: @"C:\Program Files\nodejs\node.exe",
                 ApplicationDirectory: Path.Combine(_root, "app"),
                 Port: null)),
-            _ => { },
+            _log.Add,
             () => sessions.GetRecordedStatus().Record ?? throw new SessionException("Run setup."),
             lifecycleLock ?? new AlwaysFreeLock(),
             clock);
@@ -416,6 +423,66 @@ public sealed class GatewayControllerTests : IDisposable
             .GetStatusAsync("helper.exe", CancellationToken.None);
 
         Assert.Equal(GatewayState.Unknown, report.State);
+    }
+
+    // The diagnostic log is where a slow `clawctl open` or `clawctl status` is
+    // diagnosed, and an inspection that fails still spent its time.
+    [Theory]
+    [InlineData(true, "Gateway inspection finished in 2873 ms: Running.")]
+    [InlineData(false, "Gateway inspection finished in 2873 ms: Unknown.")]
+    public async Task StatusRecordsHowLongTheInspectionTookAndWhatItFound(
+        bool answered,
+        string expected)
+    {
+        RecordGateway();
+        var clock = new ManualMonotonicTimeProvider();
+        _client.Inspection = answered
+            ? Healthy()
+            : new SessionInspectResult { Error = "no answer" };
+        _client.DuringInspection = () => clock.Advance(TimeSpan.FromMilliseconds(2873));
+
+        await CreateController(clock: clock)
+            .GetStatusAsync("helper.exe", CancellationToken.None);
+
+        Assert.Equal([expected], _log);
+    }
+
+    // A report decided before any inspection spent no time in the session, so
+    // a timing line there would send a slow-command investigation astray.
+    [Theory]
+    [InlineData("no gateway record", "NotStarted")]
+    [InlineData("unreadable gateway record", "Unknown")]
+    [InlineData("unconfirmed launch", "Unknown")]
+    [InlineData("unrecorded session", "Unknown")]
+    [InlineData("different session", "Unknown")]
+    public async Task StatusDecidedWithoutAnInspectionRecordsNoTiming(
+        string condition,
+        string state)
+    {
+        switch (condition)
+        {
+            case "unreadable gateway record":
+                await File.WriteAllTextAsync(Path.Combine(_root, "gateway.json"), "{ not json");
+                break;
+            case "unconfirmed launch":
+                RecordPendingGateway();
+                break;
+            case "unrecorded session":
+                RecordGateway();
+                await File.WriteAllTextAsync(Path.Combine(_root, "session.json"), "{ not json");
+                break;
+            case "different session":
+                RecordGateway();
+                Store.Write(Store.Read().Record! with { SandboxId = "iso:other" });
+                break;
+        }
+
+        GatewayStatusReport report = await CreateController()
+            .GetStatusAsync("helper.exe", CancellationToken.None);
+
+        Assert.Equal(state, report.State.ToString());
+        Assert.Empty(_client.Calls);
+        Assert.Empty(_log);
     }
 
     [Fact]

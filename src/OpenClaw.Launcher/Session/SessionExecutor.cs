@@ -105,11 +105,13 @@ internal sealed class SessionExecutor
     private readonly Func<IReadOnlyDictionary<string, string>> _buildEnvironment;
     private readonly Func<string> _createRequestId;
     private readonly Func<SessionRecord, bool> _isCurrentRecord;
+    private readonly TimeProvider _clock;
 
     public SessionExecutor(IMxcSessionClient backend, Action<string> log,
         Func<IReadOnlyDictionary<string, string>>? buildEnvironment = null,
         Func<string>? createRequestId = null,
-        Func<SessionRecord, bool>? isCurrentRecord = null)
+        Func<SessionRecord, bool>? isCurrentRecord = null,
+        TimeProvider? clock = null)
     {
         ArgumentNullException.ThrowIfNull(backend);
         ArgumentNullException.ThrowIfNull(log);
@@ -118,6 +120,7 @@ internal sealed class SessionExecutor
         _buildEnvironment = buildEnvironment ?? (() => OpenClawRuntimeEnvironment.Build());
         _createRequestId = createRequestId ?? (() => Guid.NewGuid().ToString("N"));
         _isCurrentRecord = isCurrentRecord ?? (_ => true);
+        _clock = clock ?? TimeProvider.System;
     }
 
     internal SessionWorkspaceOperation CreateWorkspaceOperation(SessionRecord record) =>
@@ -241,10 +244,10 @@ internal sealed class SessionExecutor
                 cancellationToken).ConfigureAwait(false);
 
             _log(startingMessage);
-            MxcExecutionResult execution = await _backend.ExecuteAsync(
+            MxcExecutionResult execution = await ExecuteTimedAsync(
                 record.ToSandboxIdOrThrow(),
-                new MxcExecutionRequest(BuildGuestCommandLine(request.HelperPath, requestPath)),
-                null,
+                BuildGuestCommandLine(request.HelperPath, requestPath),
+                subject,
                 cancellationToken).ConfigureAwait(false);
 
             operation.EnsureCurrent();
@@ -272,6 +275,35 @@ internal sealed class SessionExecutor
             NodeOptionsSuffix = request.NodeOptionsSuffix,
             NativeRootPath = request.NativeRootPath,
         };
+
+    /// <summary>
+    /// Runs one buffered helper exchange and records how long the backend took.
+    /// </summary>
+    /// <remarks>
+    /// Logged as soon as the backend returns, before the result is validated,
+    /// so a slow exchange that then fails is still visible. Only the subject,
+    /// the duration, and the executor exit code are recorded: the captured
+    /// streams can carry authenticated data.
+    /// </remarks>
+    private async Task<MxcExecutionResult> ExecuteTimedAsync(
+        MxcSandboxId sandboxId,
+        string commandLine,
+        string subject,
+        CancellationToken cancellationToken)
+    {
+        long started = _clock.GetTimestamp();
+        MxcExecutionResult execution = await _backend.ExecuteAsync(
+            sandboxId,
+            new MxcExecutionRequest(commandLine),
+            null,
+            cancellationToken).ConfigureAwait(false);
+        long elapsedMilliseconds = (long)_clock.GetElapsedTime(started).TotalMilliseconds;
+
+        _log(string.Create(
+            CultureInfo.InvariantCulture,
+            $"{subject} finished in {elapsedMilliseconds} ms (executor exit {execution.ExitCode})."));
+        return execution;
+    }
 
     /// <summary>
     /// Asks the guest to stage diagnostic files into the shared workspace.
@@ -311,11 +343,10 @@ internal sealed class SessionExecutor
 
             _log("Collecting agent-side diagnostics from the isolated session.");
 
-            MxcExecutionResult execution = await _backend.ExecuteAsync(
+            MxcExecutionResult execution = await ExecuteTimedAsync(
                 record.ToSandboxIdOrThrow(),
-                new MxcExecutionRequest(
-                    BuildGuestCommandLine(helperPath, requestPath, "--collect")),
-                null,
+                BuildGuestCommandLine(helperPath, requestPath, "--collect"),
+                "Diagnostic collection",
                 cancellationToken).ConfigureAwait(false);
 
             string resultText;
@@ -377,11 +408,10 @@ internal sealed class SessionExecutor
                 cancellationToken).ConfigureAwait(false);
 
             _log("Checking agent-side OpenClaw config readiness.");
-            MxcExecutionResult execution = await _backend.ExecuteAsync(
+            MxcExecutionResult execution = await ExecuteTimedAsync(
                 record.ToSandboxIdOrThrow(),
-                new MxcExecutionRequest(
-                    BuildGuestCommandLine(helperPath, requestPath, "--check-config")),
-                null,
+                BuildGuestCommandLine(helperPath, requestPath, "--check-config"),
+                "Config readiness check",
                 cancellationToken).ConfigureAwait(false);
 
             string resultText;
@@ -453,11 +483,10 @@ internal sealed class SessionExecutor
 
             _log("Installing the packaged Node.js runtime in the isolated session.");
 
-            MxcExecutionResult execution = await _backend.ExecuteAsync(
+            MxcExecutionResult execution = await ExecuteTimedAsync(
                 record.ToSandboxIdOrThrow(),
-                new MxcExecutionRequest(
-                    BuildGuestCommandLine(helperPath, requestPath, "--install-runtime")),
-                null,
+                BuildGuestCommandLine(helperPath, requestPath, "--install-runtime"),
+                "Node.js runtime installation",
                 cancellationToken).ConfigureAwait(false);
 
             string resultText;
@@ -551,11 +580,10 @@ internal sealed class SessionExecutor
                 cancellationToken).ConfigureAwait(false);
 
             _log("Installing OpenClaw agent tools in the isolated session.");
-            MxcExecutionResult execution = await _backend.ExecuteAsync(
+            MxcExecutionResult execution = await ExecuteTimedAsync(
                 record.ToSandboxIdOrThrow(),
-                new MxcExecutionRequest(
-                    BuildGuestCommandLine(helperPath, requestPath, "--install-tools")),
-                null,
+                BuildGuestCommandLine(helperPath, requestPath, "--install-tools"),
+                "Agent tool installation",
                 cancellationToken).ConfigureAwait(false);
             string resultText;
             try

@@ -211,6 +211,14 @@ host diagnostics beneath packaged LocalState when packaged, or the documented
 per-user fallback otherwise. A named mutex keyed by the log path keeps
 concurrent writers from interleaving records.
 
+[`GatewayController`](../src/OpenClaw.Launcher/Gateway/GatewayController.cs)
+records how long each gateway status inspection took and the state it
+observed. [`SessionExecutor`](../src/OpenClaw.Launcher/Session/SessionExecutor.cs)
+records the duration and executor exit code of each non-attached session
+exchange, such as the Control UI handoff. Together they show where a slow
+command spent its time without a debugger. They never include captured output,
+arguments, environment, URLs, or tokens.
+
 [`DiagnosticsBundle`](../src/OpenClaw.Launcher/Gateway/DiagnosticsBundle.cs)
 collects troubleshooting material through the shared workspace while excluding
 credential stores. [`DiagnosticsRedactor`](../src/OpenClaw.Launcher/Gateway/DiagnosticsRedactor.cs)

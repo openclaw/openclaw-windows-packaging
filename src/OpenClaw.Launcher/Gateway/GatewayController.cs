@@ -1,3 +1,4 @@
+using System.Globalization;
 using OpenClaw.Launcher.Session;
 using OpenClaw.SessionProtocol;
 
@@ -112,8 +113,12 @@ internal sealed class GatewayController
 
     /// <summary>
     /// Reports the gateway without starting one, provisioning a session, or
-    /// writing anything.
+    /// writing any state.
     /// </summary>
+    /// <remarks>
+    /// An inspection that runs records only its duration and resulting state in
+    /// the diagnostic log; a report decided without inspecting records nothing.
+    /// </remarks>
     public async Task<GatewayStatusReport> GetStatusAsync(
         string helperPath,
         CancellationToken cancellationToken)
@@ -159,10 +164,20 @@ internal sealed class GatewayController
                 "Run `clawctl teardown` to reconcile the owned installation.");
         }
 
-        return Describe(
+        long inspectionStarted = _clock.GetTimestamp();
+        SessionInspectResult inspection = await InspectAsync(
+            session.Record,
             state.Record,
-            await InspectAsync(session.Record, state.Record, helperPath, cancellationToken)
-                .ConfigureAwait(false));
+            helperPath,
+            cancellationToken).ConfigureAwait(false);
+        long elapsedMilliseconds =
+            (long)_clock.GetElapsedTime(inspectionStarted).TotalMilliseconds;
+
+        GatewayStatusReport report = Describe(state.Record, inspection);
+        _log(string.Create(
+            CultureInfo.InvariantCulture,
+            $"Gateway inspection finished in {elapsedMilliseconds} ms: {report.State}."));
+        return report;
     }
 
     /// <summary>
