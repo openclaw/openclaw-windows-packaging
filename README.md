@@ -471,15 +471,39 @@ The same plugin supplies agent instructions on Windows when the launcher report
 is exactly `enabled`. Before supported agent runs, it prepends context explaining
 that local GUI is not the user's desktop, user participation needs a supported
 text/headless route, and private work should stay private while only intended
-deliverables are handed off. Remote or user-session nodes require their own
+deliverables are handed off. Authorized agent-only GUI work that needs no human
+viewing or input is allowed; this is not a blanket GUI prohibition.
+Remote or user-session nodes require their own
 capability and authorization checks. This is guidance, not isolation enforcement
 or a file-export feature; it does not install a skill or overwrite workspace
 instructions or configuration.
 
-The plugin does not receive or invent a shared-folder path. Use a supported
-client attachment or discover the real `session.sharedFolder` through
-`clawctl status --json` in the user's normal terminal; that command can start the
-recorded session. Agent-side file access alone does not prove user access.
+The plugin supplies static guidance, not a shared-path environment variable.
+For filesystem handoff, prefer a host-reported or user-selected destination.
+The host reports `session.sharedFolder` through `clawctl status --json` in the
+user's normal terminal; that command can start the recorded session.
+When neither destination is supplied, the guidance assumes the isolated agent
+account has an existing `Shared` folder. Resolve it with a local tool inside
+that agent session, for example:
+
+```powershell
+(Resolve-Path -LiteralPath (Join-Path $env:USERPROFILE 'Shared') -ErrorAction Stop).Path
+```
+
+Verify that the result is an existing directory. `USERPROFILE` must belong to
+the isolated agent, not the interactive user; do not substitute the OpenClaw
+workspace/state directory or hard-code an account path. Before copying, display
+the complete destination in a fenced text code block rather than a filename-only
+chip, and offer another destination. Do not copy to a destination the user declines.
+Copy only intended nonsensitive deliverables, preserving private originals and
+unrelated files. Agent-side access or a successful copy does not prove recipient
+access; verify it where feasible and state what remains unverified.
+If resolution, directory availability, access or copying fails, report the failure
+and ask for a supported destination. Do not fall back to Public Documents or
+`PUBLIC`/`TEMP`, create a replacement shared root, or change permissions.
+For requested in-chat delivery, verify and attach the current file or explain
+the limitation; a saved copy, path, or earlier attachment is not delivery.
+Recipient filesystem access and client delivery require separate verification.
 The prompt hook also respects `hooks.allowPromptInjection=false` and
 `hooks.allowConversationAccess=false` under the plugin's configuration entry.
 Coverage and the local-only runtime proof are described in

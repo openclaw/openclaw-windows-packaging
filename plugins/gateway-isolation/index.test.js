@@ -57,6 +57,8 @@ test("supplies complete local-session guidance before prompt build without readi
   for (const instruction of [
     "separate Windows agent session",
     "not the user's interactive desktop",
+    "Authorized agent-only GUI work is allowed when it requires no human viewing or input",
+    "do not assume GUI automation capabilities are available",
     "Do not launch or offer to launch local GUI for user participation",
     "even when the user asks you to open a window or sign-in dialog",
     "give steps for the user to act on their own desktop",
@@ -69,11 +71,32 @@ test("supplies complete local-session guidance before prompt build without readi
     "MFA/consent",
     "Keep scratch files, dependencies, repositories, and working trees private",
     "does not prove user access",
-    "only intended deliverables",
+    "only intended nonsensitive deliverables",
+    "For requested in-chat delivery, verify the exact current file and use a supported attachment",
+    "or explain why delivery is unavailable",
+    "a saved copy, path, or earlier attachment is not delivery",
     "Preserve private originals",
     "Verify recipient-side access or delivery",
-    "Never invent a shared directory",
+    "distinguish filesystem access from client delivery",
+    "prefer the host-reported or user-selected destination",
+    "If neither is provided, use the isolated agent account's existing Shared folder",
+    "use a local tool inside this Windows agent session",
+    "(Resolve-Path -LiteralPath (Join-Path $env:USERPROFILE 'Shared') -ErrorAction Stop).Path",
+    "Verify that the resolved path is an existing directory",
+    "Do not expand the human user's USERPROFILE",
+    "OpenClaw workspace or state directory",
+    "Before copying there",
+    "show the complete resolved destination in a fenced text code block, not an inline path or file link",
+    "Do not copy to a destination the user declines",
+    "Copy rather than move",
+    "do not overwrite unrelated files",
+    "the user can choose another destination",
+    "A successful copy is not verified recipient access",
+    "State what access remains unverified",
+    "If profile or Shared-folder resolution fails, the directory is missing, or access or copying fails",
+    "report the failure",
     "ask for a supported destination",
+    "Do not fall back to Public Documents or PUBLIC/TEMP",
     "administrator Explorer, broad ACL changes",
     "Remote and user-session nodes",
     "capability, and authorization",
@@ -81,6 +104,8 @@ test("supplies complete local-session guidance before prompt build without readi
   ]) {
     assert.ok(text.includes(instruction), `Missing instruction: ${instruction}`);
   }
+  assert.ok(!text.includes("CommonDocuments"));
+  assert.ok(!text.includes("all local users"));
   assert.deepEqual(hooks[0].handler(), result);
   result.prependContext = "caller mutation";
   result.appendSystemContext = "caller mutation";

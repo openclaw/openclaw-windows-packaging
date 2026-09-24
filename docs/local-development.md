@@ -313,6 +313,35 @@ unchanged user configuration and instruction files. It does not schedule cron
 jobs, spawn remote agents, evaluate model obedience, or prove attachment
 delivery/user-side filesystem access.
 
+In authorized installed-environment tests, pair a human-participation case with
+an agent-only GUI case that needs no human viewing or input. A GUI process is
+not itself a failure; verify its session, intended use, actual operation, and
+cleanup. For files, test recipient filesystem access separately from real
+client open/download behavior and exact bytes. Preserve private originals and
+negative controls, and distinguish the isolated agent's profile from the
+interactive user's profile and OpenClaw workspace/state. Keep live device codes out of
+retained proof.
+Include similar filenames, earlier attachments, and changed contents at the same
+path; compare the actual downloaded bytes with the requested revision. Pair
+missing or misleading sharing hints with an explicit host-reported destination.
+For a filesystem request with no destination, capture the agent's local tool
+invocation and result resolving its own `$env:USERPROFILE\Shared`, for example
+`(Resolve-Path -LiteralPath (Join-Path $env:USERPROFILE 'Shared') -ErrorAction Stop).Path`;
+an independent harness lookup is not a substitute for model-side resolution.
+Verify that the result is an existing directory and the actual client visibly
+displays the complete destination in a fenced text code block, not just a filename
+chip. Check that only the intended file is copied, its bytes match the private
+original, and the requester can read it while private controls remain denied.
+Retain host-reported or user-selected destination precedence and refusal/no-copy
+coverage. Missing profiles/directories and denied access or failed copies must
+produce an explicit explanation and a request for a supported destination, not a
+Public Documents fallback, a newly created shared root or permission changes.
+Separate copy success from verified recipient access. Repeat a representative case
+after observed real-model compaction.
+For in-chat requests, require a new attachment from the tested response before
+checking downloaded bytes; an older card cannot satisfy the case. Record
+corrective prompts and browser reloads separately from first-pass delivery.
+
 The plugin uses `before_prompt_build` with `appendSystemContext` and
 `prependContext`, both derived from the same static instructions. System context
 states the host constraints at instruction priority; real-model testing showed
