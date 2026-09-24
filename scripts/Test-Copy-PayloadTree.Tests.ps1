@@ -299,6 +299,8 @@ try {
         Assert-Fails -MessagePattern '(?s)exit code (8|9|1\d).*0x00000020' -Action {
             & $scriptPath -Source $source -Destination (Join-Path $testRoot 'locked-copy')
         }
+        # The expected robocopy failure must not become this suite's exit code.
+        $global:LASTEXITCODE = 0
     }
     finally {
         $lockedFile.Dispose()
