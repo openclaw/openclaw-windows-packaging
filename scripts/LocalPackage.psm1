@@ -556,6 +556,22 @@ function Test-LocalPackageOwnership {
         [IO.Path]::GetFullPath($LayoutDirectory).TrimEnd('\')
 }
 
+function Get-LocalPackageOtherArchitecture {
+    param($Installed, [string]$StateRoot, [string]$Architecture)
+
+    # The native default means a registration made before it, or with an
+    # explicit -Architecture, can serve this checkout's other layout. Name it
+    # rather than reporting the checkout as a foreign owner.
+    foreach ($candidate in @('x64', 'arm64')) {
+        if ($candidate -ne $Architecture -and (Test-LocalPackageOwnership `
+            -Installed $Installed `
+            -LayoutDirectory (Join-Path $StateRoot "$candidate\layout"))) {
+            return $candidate
+        }
+    }
+    return $null
+}
+
 function Get-LocalPackageFileInventory {
     param([string]$Directory)
 
@@ -612,9 +628,33 @@ function Test-LocalPackageLayout {
     return (Test-Path -LiteralPath (Join-Path $link 'openclaw.mjs') -PathType Leaf)
 }
 
+function ConvertTo-LocalPackageArchitecture {
+    param([Runtime.InteropServices.Architecture]$OSArchitecture)
+
+    switch ($OSArchitecture) {
+        ([Runtime.InteropServices.Architecture]::X64) { return 'x64' }
+        ([Runtime.InteropServices.Architecture]::Arm64) { return 'arm64' }
+    }
+    throw "No local package can be built for this $OSArchitecture device. Pass -Architecture x64 or -Architecture arm64 explicitly."
+}
+
+function Resolve-LocalPackageArchitecture {
+    param([string]$Architecture, [bool]$Supplied, [hashtable]$Services)
+
+    if ($Supplied) { return $Architecture }
+    $native = & $Services.NativeArchitecture
+    if ($native -isnot [string] -or $native -cnotin @('x64', 'arm64')) {
+        throw "The native architecture adapter returned an unsupported value: $native"
+    }
+    return $native
+}
+
 function Get-LocalPackageOperations {
     return @{
         Now = { Get-Date }
+        NativeArchitecture = {
+            ConvertTo-LocalPackageArchitecture ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture)
+        }
         Preflight = {
             param($architecture)
             if (-not $IsWindows) { throw 'Registering a local package requires Windows.' }
@@ -787,7 +827,7 @@ function Remove-LocalPackageRegistration {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepositoryRoot,
-        [ValidateSet('x64', 'arm64')][string]$Architecture = 'x64',
+        [ValidateSet('x64', 'arm64')][string]$Architecture,
         [string]$Patch,
         [hashtable]$Operations = @{}
     )
@@ -796,6 +836,8 @@ function Remove-LocalPackageRegistration {
     if ($PSBoundParameters.ContainsKey('Patch')) { $identityArguments.Patch = $Patch }
     $identity = Get-LocalPackageIdentity @identityArguments
     $services = Get-LocalPackageServices $Operations
+    $Architecture = Resolve-LocalPackageArchitecture $Architecture `
+        $PSBoundParameters.ContainsKey('Architecture') $services
     $state = Join-Path ([IO.Path]::GetFullPath($RepositoryRoot)) "$($identity.StateDirectory)\$Architecture"
     $layoutDirectory = Join-Path $state 'layout'
     # The legacy identity only ever registered the base layout, so a patched
@@ -832,6 +874,15 @@ function Remove-LocalPackageRegistration {
         if (-not (Test-LocalPackageOwnership `
             -Installed $installed `
             -LayoutDirectory $layoutDirectory)) {
+            $otherArchitecture = Get-LocalPackageOtherArchitecture $installed `
+                (Join-Path ([IO.Path]::GetFullPath($RepositoryRoot)) $identity.StateDirectory) $Architecture
+            if ($otherArchitecture) {
+                throw (
+                    "$($registration.Name) is registered from this checkout's " +
+                    "$otherArchitecture layout. Re-run -Unregister with " +
+                    "-Architecture $otherArchitecture."
+                )
+            }
             throw (
                 "$($registration.Name) is registered from another location: " +
                 "$($installed.InstallLocation). Run -Unregister from that " +
@@ -855,7 +906,7 @@ function Invoke-LocalPackageDeployment {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepositoryRoot,
-        [ValidateSet('x64', 'arm64')][string]$Architecture = 'x64',
+        [ValidateSet('x64', 'arm64')][string]$Architecture,
         [string]$PayloadDirectory,
         [long]$PayloadRunId,
         [switch]$RefreshPayload,
@@ -875,6 +926,8 @@ function Invoke-LocalPackageDeployment {
     if ($PSBoundParameters.ContainsKey('Patch')) { $identityArguments.Patch = $Patch }
     $identity = Get-LocalPackageIdentity @identityArguments
     $services = Get-LocalPackageServices $Operations
+    $Architecture = Resolve-LocalPackageArchitecture $Architecture `
+        $PSBoundParameters.ContainsKey('Architecture') $services
     $root = (Resolve-Path -LiteralPath $RepositoryRoot -ErrorAction Stop).Path
     # A patched identity owns its whole state root. Its layout links the payload
     # it was registered with, so sharing a cache would let another identity's
@@ -948,6 +1001,14 @@ function Invoke-LocalPackageDeployment {
             # A development registration from another checkout or tool. Only one
             # registration of this identity can exist, but it is not ours to take.
             if (-not $ReplaceExistingInstall) {
+                $otherArchitecture = Get-LocalPackageOtherArchitecture $installed `
+                    (Join-Path $root $identity.StateDirectory) $Architecture
+                if ($otherArchitecture) {
+                    throw (
+                        "$($identity.Name) is registered from this checkout's $otherArchitecture " +
+                        "layout. Run -Unregister -Architecture $otherArchitecture first, then deploy again."
+                    )
+                }
                 throw (
                     "$($identity.Name) is already registered from another location: " +
                     "$($installed.InstallLocation). Run -Unregister from that checkout, or " +

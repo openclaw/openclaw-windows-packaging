@@ -157,6 +157,7 @@ function New-Fixture {
     }
     $state.Operations = @{
         Now = { $state.Now }.GetNewClosure()
+        NativeArchitecture = { 'x64' }
         Preflight = { param($architecture) return $null }
         LatestRun = {
             if ($state.Offline) { throw 'GitHub is unavailable.' }
@@ -817,6 +818,70 @@ try {
             '<uap5:ExecutionAlias Alias="clawctl.exe" /><uap5:ExecutionAlias Alias="claw.exe" />')))
     Assert-Fails { Invoke-Fixture $extraAlias @{ Patch = 'foo' } } 'cannot rename: claw\.exe'
     Assert-True ($extraAlias.Registrations -eq 0) 'A patched layout with an unrenamed alias was registered.'
+
+    # An omitted -Architecture follows the device; an explicit one wins.
+    $localPackageModule = Get-Module LocalPackage
+    Assert-True ((& $localPackageModule {
+        ConvertTo-LocalPackageArchitecture ([Runtime.InteropServices.Architecture]::X64)
+    }) -ceq 'x64') 'An x64 device did not default to x64.'
+    Assert-True ((& $localPackageModule {
+        ConvertTo-LocalPackageArchitecture ([Runtime.InteropServices.Architecture]::Arm64)
+    }) -ceq 'arm64') 'An ARM64 device did not default to arm64.'
+    Assert-Fails {
+        & $localPackageModule {
+            ConvertTo-LocalPackageArchitecture ([Runtime.InteropServices.Architecture]::X86)
+        }
+    } 'Pass -Architecture x64 or -Architecture arm64'
+
+    $native = New-Fixture
+    $native.Operations.NativeArchitecture = { 'arm64' }
+    $native.PreflightArchitectures = [Collections.Generic.List[string]]::new()
+    $native.Operations.Preflight = {
+        param($architecture)
+        $native.PreflightArchitectures.Add($architecture)
+        return $null
+    }.GetNewClosure()
+    $nativeDeployed = Invoke-Fixture $native
+    $nativeLayout = Join-Path $native.Root 'artifacts\local-package\arm64\layout'
+    [xml]$nativeManifest = Get-Content -LiteralPath (Join-Path $nativeLayout 'AppxManifest.xml') -Raw
+    Assert-True (
+        $nativeDeployed.LayoutDirectory -eq $nativeLayout -and
+        $native.PreflightArchitectures.Count -eq 1 -and
+        $native.PreflightArchitectures[0] -ceq 'arm64' -and
+        $nativeManifest.Package.Identity.ProcessorArchitecture -eq 'arm64' -and
+        (Test-Path -LiteralPath (Join-Path $nativeLayout 'mxc\arm64\wxc-exec.exe'))
+    ) 'An omitted -Architecture did not deploy the native architecture.'
+    Remove-LocalPackageRegistration -RepositoryRoot $native.Root -Operations $native.Operations
+    Assert-True (
+        $native.Removals -contains $nativeDeployed.PackageFullName -and
+        -not (Test-Path -LiteralPath (Join-Path $native.Root 'artifacts\local-package\arm64\state.json'))
+    ) 'An omitted -Architecture did not unregister the native deployment.'
+
+    $explicit = New-Fixture
+    $explicit.Operations.NativeArchitecture = { 'arm64' }
+    $explicitDeployed = Invoke-Fixture $explicit @{ Architecture = 'x64' }
+    Assert-True (
+        $explicitDeployed.LayoutDirectory -eq (Join-Path $explicit.Root 'artifacts\local-package\x64\layout')
+    ) 'An explicit -Architecture did not override the native default.'
+
+    $unsupported = New-Fixture
+    $unsupported.Operations.NativeArchitecture = { 'x86' }
+    Assert-Fails { Invoke-Fixture $unsupported } 'unsupported value: x86'
+    Assert-True ($unsupported.Registrations -eq 0) 'An unsupported native architecture was deployed.'
+
+    # A registration of this checkout's other architecture names the fix
+    # instead of reporting the checkout as a foreign owner.
+    $crossArchitecture = New-Fixture
+    $crossArchitectureDeployed = Invoke-Fixture $crossArchitecture @{ Architecture = 'x64' }
+    $crossArchitecture.Operations.NativeArchitecture = { 'arm64' }
+    Assert-Fails { Invoke-Fixture $crossArchitecture } "this checkout's x64 layout\. Run -Unregister -Architecture x64 first, then deploy again"
+    Assert-Fails {
+        Remove-LocalPackageRegistration -RepositoryRoot $crossArchitecture.Root -Operations $crossArchitecture.Operations
+    } "this checkout's x64 layout\. Re-run -Unregister with -Architecture x64"
+    Assert-True (
+        $crossArchitecture.Registrations -eq 1 -and @($crossArchitecture.Removals).Count -eq 0 -and
+        @($crossArchitecture.Installed)[0].PackageFullName -eq $crossArchitectureDeployed.PackageFullName
+    ) 'A registration of the other architecture was touched without consent.'
 
     Write-Host 'Local package deployment scenarios passed.'
 }

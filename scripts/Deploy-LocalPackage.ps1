@@ -19,8 +19,9 @@ repository, so deleting artifacts\local-package or the checkout breaks it until
 the command runs again. This is a development build and is not an
 official-signing input; use Build-LocalMSIX.ps1 for a verified unsigned MSIX.
 .PARAMETER Architecture
-Build and register x64 (default) or arm64. The selected architecture must be
-runnable on this device.
+Build and register x64 or arm64. Defaults to this device's native architecture.
+An x64 layout registers on an ARM64 device, but its `clawctl setup` fails there
+because the x64 MXC executor exits with 0xC000007B.
 .PARAMETER PayloadDirectory
 Use an existing payload root containing app and payload-metadata.json. The
 directory is read directly and never modified, and no GitHub access is needed.
@@ -82,7 +83,7 @@ Remove the base local registration.
 [CmdletBinding(DefaultParameterSetName = 'Deploy')]
 param(
     [ValidateSet('x64', 'arm64')]
-    [string]$Architecture = 'x64',
+    [string]$Architecture,
 
     [string]$Patch,
 
@@ -113,19 +114,20 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path $PSScriptRoot -Parent
 Import-Module (Join-Path $PSScriptRoot 'LocalPackage.psm1') -Force
 
-# Forward -Patch only when it was supplied, so an explicitly empty value
-# reaches the module's validation instead of silently selecting the base.
+# Forward -Patch and -Architecture only when they were supplied, so an
+# explicitly empty -Patch reaches the module's validation instead of silently
+# selecting the base, and the module owns the native-architecture default.
 $identityArguments = @{}
 if ($PSBoundParameters.ContainsKey('Patch')) { $identityArguments.Patch = $Patch }
+if ($PSBoundParameters.ContainsKey('Architecture')) { $identityArguments.Architecture = $Architecture }
 
 if ($Unregister) {
-    Remove-LocalPackageRegistration -RepositoryRoot $repositoryRoot -Architecture $Architecture @identityArguments
+    Remove-LocalPackageRegistration -RepositoryRoot $repositoryRoot @identityArguments
     return
 }
 
 Invoke-LocalPackageDeployment `
     -RepositoryRoot $repositoryRoot `
-    -Architecture $Architecture `
     -PayloadDirectory $PayloadDirectory `
     -PayloadRunId $PayloadRunId `
     -RefreshPayload:$RefreshPayload `
