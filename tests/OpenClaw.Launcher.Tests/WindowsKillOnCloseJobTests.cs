@@ -44,8 +44,8 @@ public sealed class WindowsKillOnCloseJobTests
     public async Task FastExitRetainsExitCodeAfterDelayedObservation()
     {
         using WindowsKillOnCloseJob job = WindowsKillOnCloseJob.Create();
-        using var stdout = new AnonymousPipeServerStream(
-            PipeDirection.In,
+        using var stdin = new AnonymousPipeServerStream(
+            PipeDirection.Out,
             HandleInheritability.None);
         using Process process = job.StartProcess(
             new ProcessStartInfo
@@ -56,20 +56,31 @@ public sealed class WindowsKillOnCloseJobTests
                 {
                     "/d",
                     "/c",
+                    "(set",
+                    "/p",
+                    "line=)",
+                    "&",
                     "exit",
                     "37"
                 }
             },
-            input: null,
-            output: stdout.ClientSafePipeHandle,
+            stdin.ClientSafePipeHandle,
+            output: null,
             standardError: null);
-        stdout.DisposeLocalCopyOfClientHandle();
+        stdin.DisposeLocalCopyOfClientHandle();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
-        // EOF means the child has exited: its handle table held the only write
-        // end. The test never opens its own handle to the child, so only the
-        // handle StartProcess retained can still report the exit code.
-        await stdout.CopyToAsync(Stream.Null);
-        await process.WaitForExitAsync();
+        // The child waits on stdin while the test opens its watcher handle.
+        // Closing this test-owned write end releases the child; then the watcher
+        // closes, leaving only StartProcess's retained handle to report its exit code.
+        using (Process watcher = Process.GetProcessById(process.Id))
+        {
+            _ = watcher.SafeHandle;
+            stdin.Dispose();
+            await watcher.WaitForExitAsync(timeout.Token);
+        }
+
+        await process.WaitForExitAsync(timeout.Token);
 
         Assert.Equal(37, process.ExitCode);
     }
