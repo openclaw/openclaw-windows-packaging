@@ -25,6 +25,24 @@ function Write-FileList {
     $path
 }
 
+function Write-PathList {
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$Content,
+
+        [string]$Name = 'paths.bin'
+    )
+
+    $path = Join-Path $testRoot $Name
+    [IO.File]::WriteAllText(
+        $path,
+        $Content,
+        [Text.UTF8Encoding]::new($false)
+    )
+    $path
+}
+
 function Assert-Relevance {
     param(
         [Parameter(Mandatory)]
@@ -41,6 +59,24 @@ function Assert-Relevance {
     $actual = & $scriptPath `
         -FileListPath $path `
         -MaximumFiles $MaximumFiles
+    if ($actual -cne $Expected) {
+        throw "Expected packaging relevance $Expected; received $actual."
+    }
+}
+
+function Assert-PathRelevance {
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$Content,
+
+        [Parameter(Mandatory)]
+        [ValidateSet('true', 'false')]
+        [string]$Expected
+    )
+
+    $path = Write-PathList -Content $Content
+    $actual = & $scriptPath -PathListPath $path
     if ($actual -cne $Expected) {
         throw "Expected packaging relevance $Expected; received $actual."
     }
@@ -118,6 +154,22 @@ try {
         -Name 'invalid.json'
     Assert-Fails -MessagePattern 'invalid entry' -Action {
         & $scriptPath -FileListPath $invalidPath
+    }
+
+    Assert-PathRelevance `
+        -Expected false `
+        -Content "README.md$([char]0)docs/a/b.txt$([char]0)LICENSE"
+    Assert-PathRelevance `
+        -Expected true `
+        -Content "README.md$([char]0)src/App.cs$([char]0)docs/setup.md"
+    Assert-PathRelevance `
+        -Expected false `
+        -Content "README.md$([char]0)$([char]0)docs/x.md$([char]0)"
+    Assert-PathRelevance -Expected false -Content ''
+    Assert-PathRelevance -Expected true -Content "src/readme.md.cs$([char]0)"
+
+    Assert-Fails -MessagePattern 'does not exist' -Action {
+        & $scriptPath -PathListPath (Join-Path $testRoot 'missing-paths.bin')
     }
 }
 finally {
