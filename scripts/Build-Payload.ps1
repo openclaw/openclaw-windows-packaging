@@ -148,13 +148,11 @@ foreach ($requiredPath in @('package.json', 'openclaw.mjs', 'dist')) {
     -OpenClawDirectory $installedPackage
 
 $applicationDirectory = Join-Path $OutputDirectory 'app'
-if (Test-Path -LiteralPath $applicationDirectory) {
-    Remove-Item -LiteralPath $applicationDirectory -Recurse -Force
-}
-Copy-Item `
-    -LiteralPath $installedPackage `
-    -Destination $applicationDirectory `
-    -Recurse
+# The staged install stays intact: the workflow caches it after this script,
+# and -ReuseStagedInstall builds from it again.
+& (Join-Path $PSScriptRoot 'Copy-PayloadTree.ps1') `
+    -Source $installedPackage `
+    -Destination $applicationDirectory
 $installedPackage = $applicationDirectory
 
 $pluginSource = Join-Path $repositoryRoot 'plugins\gateway-isolation'

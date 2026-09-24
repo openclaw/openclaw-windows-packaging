@@ -251,16 +251,11 @@ $nodeArchiveTarget = Join-Path `
     $expectedNodeArchiveName
 New-Item -Path $openClawContent -ItemType Directory -Force | Out-Null
 
-if (
-    [IO.Path]::GetFullPath($payloadApplication) -ne
-    [IO.Path]::GetFullPath($applicationTarget)
-) {
-    Remove-DirectoryIfPresent -Path $applicationTarget
-    Copy-Item `
-        -LiteralPath $payloadApplication `
-        -Destination $applicationTarget `
-        -Recurse
-}
+# The payload directory belongs to the caller and must stay unmodified, so it
+# is always copied; the PDB removal below changes only that copy.
+& (Join-Path $PSScriptRoot 'Copy-PayloadTree.ps1') `
+    -Source $payloadApplication `
+    -Destination $applicationTarget
 
 New-Item -Path $runtimeTargetDirectory -ItemType Directory -Force | Out-Null
 if (-not $NodeArchivePath) {

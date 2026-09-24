@@ -242,6 +242,11 @@ jobs:
         run: >
           .\scripts\Test-Build-MSIXBundle.Tests.ps1
 
+      - name: Test payload tree copy
+        shell: pwsh
+        run: >
+          .\scripts\Test-Copy-PayloadTree.Tests.ps1
+
       - name: Test Git hooks
         shell: pwsh
         run: >
