@@ -35,10 +35,6 @@ function Invoke-CheckedCommand {
     }
 }
 
-if ($PayloadDirectory -and ($PayloadRunId -ne 0 -or $RefreshPayload)) {
-    throw '-PayloadDirectory cannot be combined with -PayloadRunId or -RefreshPayload.'
-}
-
 if (-not $PackageVersion) {
     $now = Get-Date
     $days = [int]($now.Date - [datetime]'2020-01-01').TotalDays
@@ -65,78 +61,82 @@ if ($NodeArchivePath) {
     $NodeArchivePath = (Resolve-Path -LiteralPath $NodeArchivePath).Path
 }
 
-if ($PayloadDirectory) {
-    $resolvedPayloadDirectory = (Resolve-Path -LiteralPath $PayloadDirectory).Path
-}
-else {
-    # Kept apart from every deployment's cache: a registered layout links its
-    # payload, which a refresh here would otherwise retire.
-    $resolvedPayloadDirectory = Select-LocalPackagePayload `
-        -CacheDirectory (Join-Path $repositoryRoot "artifacts\local-msix\payloads\$Architecture") `
-        -Architecture $Architecture `
-        -PayloadRunId $PayloadRunId `
-        -RefreshPayload:$RefreshPayload
-}
+$msixPath = Join-Path $OutputDirectory "OpenClawGateway-$Architecture.msix"
+# LocalPackage.psm1 owns payload selection, its cache, and the checkout lock;
+# it records a downloaded payload as the cached selection only after this
+# composition succeeds.
+$compose = {
+    param([string]$resolvedPayloadDirectory)
 
-$payloadApplication = Join-Path $resolvedPayloadDirectory 'app'
-$payloadMetadata = Join-Path $resolvedPayloadDirectory 'payload-metadata.json'
-if (-not (Test-Path -LiteralPath $payloadApplication -PathType Container)) {
-    throw "Required payload input was not found: $payloadApplication"
-}
-if (-not (Test-Path -LiteralPath $payloadMetadata -PathType Leaf)) {
-    throw "Required payload input was not found: $payloadMetadata"
-}
-
-Push-Location $repositoryRoot
-try {
-    Write-Host 'Restoring locked .NET dependencies.'
-    Invoke-CheckedCommand `
-        -FailureMessage 'Locked dependency restore failed.' `
-        -Command {
-            & dotnet restore `
-                .\src\OpenClaw.Launcher\OpenClaw.Launcher.csproj `
-                --runtime "win-$Architecture" `
-                -p:PublishAot=true `
-                -p:IncludePackagingContent=true `
-                "-p:Platform=$Architecture"
-        }
-    Invoke-CheckedCommand `
-        -FailureMessage 'Session host dependency restore failed.' `
-        -Command {
-            & dotnet restore `
-                .\src\OpenClaw.SessionHost\OpenClaw.SessionHost.csproj `
-                --runtime "win-$Architecture" `
-                -p:PublishAot=true `
-                "-p:Platform=$Architecture"
-        }
-
-    $sourceCommit = (& git rev-parse HEAD) -join ''
-    if ($LASTEXITCODE -ne 0 -or
-        $sourceCommit -notmatch '^[0-9a-fA-F]{40}$') {
-        throw 'Unable to resolve the current source commit.'
+    $payloadApplication = Join-Path $resolvedPayloadDirectory 'app'
+    $payloadMetadata = Join-Path $resolvedPayloadDirectory 'payload-metadata.json'
+    if (-not (Test-Path -LiteralPath $payloadApplication -PathType Container)) {
+        throw "Required payload input was not found: $payloadApplication"
     }
-    $sourceTreeDirty = [bool](& git status --porcelain)
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Unable to inspect the current source tree.'
+    if (-not (Test-Path -LiteralPath $payloadMetadata -PathType Leaf)) {
+        throw "Required payload input was not found: $payloadMetadata"
     }
 
-    Write-Host "Building unsigned MSIX version $PackageVersion."
-    & .\scripts\Build-MSIX.ps1 `
-        -PayloadDirectory $resolvedPayloadDirectory `
-        -NodeArchivePath $NodeArchivePath `
-        -Architecture $Architecture `
-        -PackageVersion $PackageVersion `
-        -SourceCommit $sourceCommit `
-        -SourceTreeDirty:$sourceTreeDirty `
-        -OutputDirectory $OutputDirectory
+    Push-Location $repositoryRoot
+    try {
+        Write-Host 'Restoring locked .NET dependencies.'
+        Invoke-CheckedCommand `
+            -FailureMessage 'Locked dependency restore failed.' `
+            -Command {
+                & dotnet restore `
+                    .\src\OpenClaw.Launcher\OpenClaw.Launcher.csproj `
+                    --runtime "win-$Architecture" `
+                    -p:PublishAot=true `
+                    -p:IncludePackagingContent=true `
+                    "-p:Platform=$Architecture"
+            }
+        Invoke-CheckedCommand `
+            -FailureMessage 'Session host dependency restore failed.' `
+            -Command {
+                & dotnet restore `
+                    .\src\OpenClaw.SessionHost\OpenClaw.SessionHost.csproj `
+                    --runtime "win-$Architecture" `
+                    -p:PublishAot=true `
+                    "-p:Platform=$Architecture"
+            }
 
-    $msixPath = Join-Path $OutputDirectory "OpenClawGateway-$Architecture.msix"
-    Write-Host ''
-    Write-Host "Local MSIX is ready: $msixPath"
-    Write-Host (
-        'Sign the package before installing it with Add-AppxPackage.'
-    )
+        $sourceCommit = (& git rev-parse HEAD) -join ''
+        if ($LASTEXITCODE -ne 0 -or
+            $sourceCommit -notmatch '^[0-9a-fA-F]{40}$') {
+            throw 'Unable to resolve the current source commit.'
+        }
+        $sourceTreeDirty = [bool](& git status --porcelain)
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Unable to inspect the current source tree.'
+        }
+
+        Write-Host "Building unsigned MSIX version $PackageVersion."
+        & .\scripts\Build-MSIX.ps1 `
+            -PayloadDirectory $resolvedPayloadDirectory `
+            -NodeArchivePath $NodeArchivePath `
+            -Architecture $Architecture `
+            -PackageVersion $PackageVersion `
+            -SourceCommit $sourceCommit `
+            -SourceTreeDirty:$sourceTreeDirty `
+            -OutputDirectory $OutputDirectory
+        if (-not (Test-Path -LiteralPath $msixPath -PathType Leaf)) {
+            throw "The MSIX build did not produce $msixPath."
+        }
+    }
+    finally {
+        Pop-Location
+    }
 }
-finally {
-    Pop-Location
-}
+Invoke-LocalPackageMsixBuild `
+    -RepositoryRoot $repositoryRoot `
+    -Architecture $Architecture `
+    -PayloadDirectory $PayloadDirectory `
+    -PayloadRunId $PayloadRunId `
+    -RefreshPayload:$RefreshPayload `
+    -Compose $compose
+
+Write-Host ''
+Write-Host "Local MSIX is ready: $msixPath"
+Write-Host (
+    'Sign the package before installing it with Add-AppxPackage.'
+)

@@ -373,9 +373,9 @@ function Resolve-LocalPackagePayload {
     }
 
     # The caller commits the selection and retires the replaced generation
-    # through Complete-LocalPackagePayload. A deployment does so once it
-    # succeeds: committing here would leave a failed run selecting a payload
-    # that was never successfully deployed.
+    # through Complete-LocalPackagePayload once its consumer accepts the
+    # payload: committing here would leave a failed run selecting a payload
+    # that was never successfully deployed or composed.
     $superseded = $null
     if ($null -ne $current) {
     $old = Join-Path $CacheDirectory $current['generation']
@@ -408,26 +408,118 @@ function Complete-LocalPackagePayload {
     }
 }
 
-function Select-LocalPackagePayload {
+function Enter-LocalPackageBuildLock {
+    param([string]$Path)
+
+    New-Item -Path (Split-Path $Path -Parent) -ItemType Directory -Force | Out-Null
+    try {
+        # The open handle is the lock, so the operating system releases it
+        # even when the holder is killed; the file left behind is inert.
+        return [IO.FileStream]::new(
+            $Path,
+            [IO.FileMode]::OpenOrCreate,
+            [IO.FileAccess]::ReadWrite,
+            [IO.FileShare]::None)
+    }
+    catch [IO.IOException] {
+        $failure = @($_.Exception, $_.Exception.InnerException) |
+            Where-Object { $_ -is [IO.IOException] } |
+            Select-Object -First 1
+        # Only a sharing or lock violation means another run holds the file.
+        if (($failure.HResult -band 0xFFFF) -notin @(32, 33)) { throw }
+        throw (
+            "Another Build-LocalMSIX.ps1 run in this checkout holds $Path. " +
+            'Wait for it to finish, or compose from another checkout: runs in one ' +
+            'checkout share content\openclaw and the payload cache.'
+        )
+    }
+}
+
+function Invoke-LocalPackageMsixBuild {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string]$CacheDirectory,
+        [Parameter(Mandatory)][string]$RepositoryRoot,
         [Parameter(Mandatory)][ValidateSet('x64', 'arm64')][string]$Architecture,
+        [string]$PayloadDirectory,
         [long]$PayloadRunId,
         [switch]$RefreshPayload,
+        [Parameter(Mandatory)][scriptblock]$Compose,
         [hashtable]$Operations = @{}
     )
 
     if ($PayloadRunId -lt 0) { throw '-PayloadRunId must be a positive workflow run ID.' }
+    if ($PayloadDirectory -and ($PayloadRunId -ne 0 -or $RefreshPayload)) {
+        throw '-PayloadDirectory cannot be combined with -PayloadRunId or -RefreshPayload.'
+    }
     $services = Get-LocalPackageServices $Operations
-    $payload = Resolve-LocalPackagePayload -CacheDirectory $CacheDirectory `
-        -Architecture $Architecture -PayloadRunId $PayloadRunId `
-        -RefreshPayload:$RefreshPayload -Operations $services
-    # No layout links a payload selected here, so it is committed as soon as it
-    # is validated. A build that then fails retries from the cache instead of
-    # downloading hundreds of megabytes again.
-    Complete-LocalPackagePayload $payload
-    return $payload.Directory
+    $msixRoot = Join-Path ([IO.Path]::GetFullPath($RepositoryRoot)) 'artifacts\local-msix'
+    # Every composition in a checkout rewrites the same content\ staging tree
+    # and reads this cache, so one run holds the checkout at a time. That also
+    # keeps a refresh from retiring a generation another run is still reading.
+    $lock = Enter-LocalPackageBuildLock (Join-Path $msixRoot '.lock')
+    try {
+        if ($PayloadDirectory) {
+            & $Compose (Resolve-Path -LiteralPath $PayloadDirectory -ErrorAction Stop).Path
+            return
+        }
+
+        $cacheDirectory = Join-Path $msixRoot "payloads\$Architecture"
+        $selection = $null
+        try { $selection = Read-LocalPackageRecord (Join-Path $cacheDirectory 'current.json') }
+        catch { $selection = $null }
+        if ($null -ne $selection -and $selection['generation'] -is [string] -and
+            $selection['generation'] -match '^[1-9]\d*-[0-9a-f]{32}$') {
+            # This run holds the checkout and nothing links a composition's
+            # payload, so a generation the selection does not name was left by
+            # an interrupted run and is reclaimed instead of accumulating.
+            foreach ($generation in Get-ChildItem -LiteralPath $cacheDirectory -Directory -Force) {
+                if ($generation.Name -cne $selection['generation'] -and
+                    $generation.Name -match '^[1-9]\d*-[0-9a-f]{32}$' -and
+                    ($generation.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) {
+                    Remove-Item -LiteralPath $generation.FullName -Recurse -Force
+                }
+            }
+        }
+        $runId = $PayloadRunId
+        if ($runId -eq 0) {
+            # An ordinary build composes the latest successful payload, so the
+            # cache only avoids downloading a run it already holds. Falling back
+            # to it here could silently compose a superseded payload.
+            try { $runId = & $services.LatestRun }
+            catch {
+                $pin = if ($null -ne $selection -and $selection['runId'] -is [long] -and $selection['runId'] -gt 0) {
+                    "-PayloadRunId $($selection['runId']) to reuse the cached payload"
+                }
+                else { '-PayloadRunId <id>' }
+                throw (
+                    "Cannot find the latest successful payload run: $($_.Exception.Message) " +
+                    "To compose without querying GitHub, pass $pin, or -PayloadDirectory <path>."
+                )
+            }
+            if ($runId -isnot [long] -or $runId -le 0) {
+                throw 'Payload selection did not return a valid workflow run ID.'
+            }
+        }
+        $payload = Resolve-LocalPackagePayload -CacheDirectory $cacheDirectory `
+            -Architecture $Architecture -PayloadRunId $runId `
+            -RefreshPayload:$RefreshPayload -Operations $services
+        # The composer applies checks this owner does not, so a payload becomes
+        # the cached selection only once composition accepts it, as a deployment
+        # commits only after registering. Nothing links a rejected download, so
+        # it is discarded rather than left for a retry to trip over.
+        $accepted = $false
+        try {
+            & $Compose $payload.Directory
+            $accepted = $true
+        }
+        finally {
+            if ($accepted) { Complete-LocalPackagePayload $payload }
+            elseif (-not $payload.CacheHit) {
+                Remove-Item -LiteralPath $payload.Directory -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    finally { $lock.Dispose() }
 }
 
 function Resolve-LocalPackageRuntime {
@@ -1358,4 +1450,4 @@ function Get-LocalPackageNextVersion {
 }
 
 Export-ModuleMember -Function Invoke-LocalPackageDeployment, Remove-LocalPackageRegistration,
-    Get-LocalPackageNextVersion, Select-LocalPackagePayload
+    Get-LocalPackageNextVersion, Invoke-LocalPackageMsixBuild

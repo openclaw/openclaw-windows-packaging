@@ -216,20 +216,29 @@ $unsignedArtifacts = '.\artifacts\local-msix-input'
   -OutputDirectory "$unsignedArtifacts\x64"
 ```
 
-Without `-PayloadDirectory`, composition uses `gh` to resolve and download the
-latest successful `gateway-msix.yml` payload from `main` into
-`artifacts\local-msix\payloads\<architecture>`. Later runs reuse that cached
-payload without contacting GitHub, so they do not pick up newer `main` runs
-until you pass `-RefreshPayload`. `-PayloadRunId <id>` pins a run and reuses it
-when it is the cached one. This cache is separate from the deployment caches,
-and nothing registered links to it, so deleting the `payloads` directory only
-costs the next run a download. `-PayloadDirectory <path>` instead uses a
-prepared payload and cannot be combined with `-PayloadRunId` or
-`-RefreshPayload`. `-NodeArchivePath <path>` supplies a matching
-already-downloaded Node archive. The script writes a new output directory under
-`artifacts\local-msix\<architecture>\<version>` and builds an unsigned MSIX. It
-refuses to reuse an existing output directory and tells you to select another
-`-PackageVersion` or `-OutputDirectory`.
+Without `-PayloadDirectory`, composition uses `gh` to resolve the latest
+successful `gateway-msix.yml` payload from `main` and composes that run. It
+keeps downloaded payloads in `artifacts\local-msix\payloads\<architecture>` and
+downloads only when the latest run is not the cached one. `-PayloadRunId <id>`
+pins a run instead; when that run is cached, composition needs no GitHub
+access, so pin the cached run to compose offline. If the latest run cannot be
+resolved, the script fails and names both options rather than composing a
+cached payload that may be stale. `-RefreshPayload` downloads the selected run
+again. A downloaded payload becomes the cached selection only after
+composition succeeds; a payload that fails composition is discarded, and the
+next run reclaims a download an interrupted run left behind. This
+cache is separate from the deployment caches, and nothing registered links to
+it, so deleting the `payloads` directory only costs the next run a download.
+`-PayloadDirectory <path>` instead uses a prepared payload and cannot be
+combined with `-PayloadRunId` or `-RefreshPayload`. `-NodeArchivePath <path>`
+supplies a matching already-downloaded Node archive.
+
+Runs in one checkout share `content\openclaw` and the payload cache, so a run
+holds `artifacts\local-msix\.lock` until it exits and a second run in the same
+checkout fails immediately, naming that lock. The script writes a new output
+directory under `artifacts\local-msix\<architecture>\<version>` and builds an
+unsigned MSIX. It refuses to reuse an existing output directory and tells you
+to select another `-PackageVersion` or `-OutputDirectory`.
 
 Test-sign the artifact in a separate step. The signing script requires Windows,
 the Windows SDK `signtool.exe`, an artifact directory containing architecture

@@ -504,6 +504,73 @@ try {
         $ppBaseChanged.Changed -and [version]$ppBaseChanged.Version -gt [version]$ppBase.Version
     ) 'The base identity was reported current after the source it was built from changed.'
 
+    # A checkout that deployed before build-input fingerprints existed has a
+    # state record without one. Its first deployment must take the ordinary
+    # changed-deployment path, removing the registration with its app data
+    # preserved exactly as a source change does, and then settle.
+    $delta = {
+        param($state, $before)
+        [pscustomobject]@{
+            Removals = @($state.Removals | Select-Object -Skip $before.Removals)
+            PreserveFlags = @($state.PreserveFlags | Select-Object -Skip $before.Removals)
+            Registrations = $state.Registrations - $before.Registrations
+            Setups = $state.Setups - $before.Setups
+            LauncherPublishes = @($state.LauncherPublishes | Select-Object -Skip $before.LauncherPublishes)
+        }
+    }
+    $snapshot = {
+        param($state)
+        @{
+            Removals = @($state.Removals).Count; Registrations = $state.Registrations
+            Setups = $state.Setups; LauncherPublishes = @($state.LauncherPublishes).Count
+        }
+    }
+    $control = New-Fixture
+    $controlPrior = Invoke-Fixture $control
+    [IO.File]::WriteAllText((Join-Path $control.Root 'src\OpenClaw.Launcher\Program.cs'), 'control source edit')
+    $control.Now = $control.Now.AddMinutes(1)
+    $controlBefore = & $snapshot $control
+    $controlChanged = Invoke-Fixture $control
+    $controlDelta = & $delta $control $controlBefore
+
+    $pr = New-Fixture
+    $priorDeployment = Invoke-Fixture $pr
+    $priorStatePath = Join-Path $pr.Root 'artifacts\local-package\x64\state.json'
+    $priorRecord = Get-Content -LiteralPath $priorStatePath -Raw | ConvertFrom-Json -AsHashtable
+    $priorRecord.Remove('inputFingerprint')
+    Assert-True (
+        (@($priorRecord.Keys | Sort-Object) -join ',') -ceq
+            'fingerprint,layoutDirectory,packageFullName,payloadDirectory,schemaVersion,setupComplete,version'
+    ) 'The fixture does not reproduce the state record written before this change.'
+    [IO.File]::WriteAllText($priorStatePath, ($priorRecord | ConvertTo-Json -Depth 8) + "`n")
+    $pr.Now = $pr.Now.AddMinutes(1)
+    $priorBefore = & $snapshot $pr
+    $upgraded = Invoke-Fixture $pr
+    $upgradeDelta = & $delta $pr $priorBefore
+    Assert-True (
+        $upgraded.Changed -and [version]$upgraded.Version -gt [version]$priorDeployment.Version -and
+        ($upgradeDelta.LauncherPublishes -join ',') -eq $upgraded.Version
+    ) 'A prior state record did not redeploy once with a new version.'
+    Assert-True (
+        ($upgradeDelta.Removals -join ',') -eq $priorDeployment.PackageFullName -and
+        ($controlDelta.Removals -join ',') -eq $controlPrior.PackageFullName -and
+        ($upgradeDelta.PreserveFlags -join ',') -eq ($controlDelta.PreserveFlags -join ',') -and
+        ($upgradeDelta.PreserveFlags -join ',') -eq 'True' -and
+        $upgradeDelta.Registrations -eq $controlDelta.Registrations -and $upgradeDelta.Registrations -eq 1 -and
+        $upgradeDelta.Setups -eq $controlDelta.Setups -and $upgradeDelta.Setups -eq 1 -and
+        $controlChanged.Changed
+    ) 'Upgrading a prior state record did not use the same registration, removal, and app-data path as a changed deployment.'
+    Assert-True (
+        (Get-Content -LiteralPath $priorStatePath -Raw | ConvertFrom-Json -AsHashtable).ContainsKey('inputFingerprint')
+    ) 'The upgraded deployment did not record its build inputs.'
+    $settledBefore = & $snapshot $pr
+    $upgradeSettled = Invoke-Fixture $pr
+    $settledDelta = & $delta $pr $settledBefore
+    Assert-True (
+        -not $upgradeSettled.Changed -and $upgradeSettled.Version -eq $upgraded.Version -and
+        $settledDelta.Registrations -eq 0 -and @($settledDelta.Removals).Count -eq 0
+    ) 'The deployment after upgrading a prior state record did not settle.'
+
     # Payload refresh replaces content and retires the old generation only on success.
     $f.Offline = $false
     $f.PayloadText = 'refreshed payload'
@@ -659,62 +726,170 @@ try {
         -not (Test-Path -LiteralPath $upgradePayload)
     ) 'Successful recovery did not select the replacement and retire the old payload.'
 
-    # An MSIX build reads its payload from its own cache. Reusing the cache
-    # avoids downloading hundreds of megabytes for every build, while refresh
-    # and pinning still reach the requested run and an unvalidated download is
-    # never selected.
+    # An MSIX composition owns a checkout-wide lock, composes the latest
+    # successful payload by default, and downloads only a run its cache lacks.
+    # A payload becomes the cached selection only after the composer accepts
+    # it, so a rejected or interrupted download never becomes the default.
     $mc = New-Fixture
+    $mc.Composed = @()
+    $mc.ComposeFailure = $false
     $msixCache = Join-Path $mc.Root 'artifacts\local-msix\payloads\x64'
-    $selectMsixPayload = {
+    $msixSelection = Join-Path $msixCache 'current.json'
+    $compose = {
+        param($directory)
+        $mc.Composed += $directory
+        if ($mc.ComposeFailure) { throw 'Payload metadata is not valid for this MSIX package.' }
+    }.GetNewClosure()
+    $composeMsix = {
         param([hashtable]$Arguments = @{})
-        Select-LocalPackagePayload -CacheDirectory $msixCache -Architecture x64 `
-            -Operations $mc.Operations @Arguments
+        $msixArguments = @{ Architecture = 'x64' }
+        foreach ($key in $Arguments.Keys) { $msixArguments[$key] = $Arguments[$key] }
+        Invoke-LocalPackageMsixBuild -RepositoryRoot $mc.Root -Compose $compose `
+            -Operations $mc.Operations @msixArguments
     }
-    $mcFirst = & $selectMsixPayload
+    $selectedRun = { (Get-Content -LiteralPath $msixSelection -Raw | ConvertFrom-Json).runId }
+    $readComposed = { Get-Content -LiteralPath (Join-Path @($mc.Composed)[-1] 'app\openclaw.mjs') -Raw }
+
+    & $composeMsix
+    $mcFirst = @($mc.Composed)[-1]
     Assert-True (
-        $mc.Queries -eq 1 -and $mc.Downloads -eq 1 -and
-        (Get-Content -LiteralPath (Join-Path $mcFirst 'app\openclaw.mjs') -Raw) -eq 'first payload'
-    ) 'The first MSIX payload selection did not download the latest run.'
-    $mc.Offline = $true
-    Assert-True ((& $selectMsixPayload) -eq $mcFirst -and $mc.Downloads -eq 1) `
-        'A cached MSIX payload was downloaded again.'
-    Assert-True ((& $selectMsixPayload @{ PayloadRunId = [long]500 }) -eq $mcFirst -and $mc.Downloads -eq 1) `
-        'A payload pinned to the cached run was downloaded again.'
-    $mc.Offline = $false
+        $mc.Queries -eq 1 -and $mc.Downloads -eq 1 -and (& $readComposed) -eq 'first payload' -and
+        (& $selectedRun) -eq 500
+    ) 'The first composition did not download and select the latest run.'
+    & $composeMsix
+    Assert-True (
+        $mc.Queries -eq 2 -and $mc.Downloads -eq 1 -and @($mc.Composed)[-1] -eq $mcFirst
+    ) 'A composition of the unchanged latest run did not check it and reuse the cache.'
+
     $mc.RunId = [long]501
-    $mc.PayloadText = 'refreshed msix payload'
-    $mcRefreshed = & $selectMsixPayload @{ RefreshPayload = $true }
+    $mc.PayloadText = 'newer main payload'
+    & $composeMsix
+    $mcNewer = @($mc.Composed)[-1]
     Assert-True (
-        $mc.Downloads -eq 2 -and $mcRefreshed -ne $mcFirst -and
-        (Get-Content -LiteralPath (Join-Path $mcRefreshed 'app\openclaw.mjs') -Raw) -eq 'refreshed msix payload'
-    ) '-RefreshPayload did not download the latest run.'
+        $mc.Downloads -eq 2 -and (& $readComposed) -eq 'newer main payload' -and
+        (& $selectedRun) -eq 501
+    ) 'A composition after a newer main run composed the stale cached payload.'
     Assert-True (
         -not (Test-Path -LiteralPath $mcFirst) -and
         @(Get-ChildItem -LiteralPath $msixCache -Directory).Count -eq 1
-    ) '-RefreshPayload did not retire the superseded MSIX payload.'
+    ) 'An accepted newer payload did not retire the superseded generation.'
+
+    # A pinned run the cache holds needs no GitHub. Without a pin, an
+    # unreachable GitHub fails and names that path instead of silently
+    # composing a cached payload that may be stale.
     $mc.Offline = $true
-    Assert-True ((& $selectMsixPayload) -eq $mcRefreshed) 'The refreshed payload was not reused by the next build.'
-    $mc.Offline = $false
-    $mcPinned = & $selectMsixPayload @{ PayloadRunId = [long]499 }
-    Assert-True ($mc.Downloads -eq 3 -and $mcPinned -ne $mcRefreshed) `
-        'A payload pinned to another run reused the cached payload.'
-    $mc.DownloadFailure = $true
-    Assert-Fails { & $selectMsixPayload @{ RefreshPayload = $true } } 'Interrupted payload download'
-    $mc.DownloadFailure = $false
-    $mc.Offline = $true
+    & $composeMsix @{ PayloadRunId = [long]501 }
     Assert-True (
-        (& $selectMsixPayload) -eq $mcPinned -and
+        $mc.Queries -eq 3 -and $mc.Downloads -eq 2 -and @($mc.Composed)[-1] -eq $mcNewer
+    ) 'A composition pinned to the cached run contacted GitHub or downloaded again.'
+    $composedBefore = @($mc.Composed).Count
+    Assert-Fails { & $composeMsix } 'latest successful payload run.*-PayloadRunId 501.*-PayloadDirectory'
+    Assert-True (
+        @($mc.Composed).Count -eq $composedBefore -and (& $selectedRun) -eq 501
+    ) 'An unreachable GitHub fell back to composing the cached payload.'
+    $mc.Offline = $false
+
+    # A payload the composer rejects must not become the cached selection, or
+    # every later composition would repeat the failure.
+    $mc.RunId = [long]502
+    $mc.PayloadText = 'rejected payload'
+    $mc.ComposeFailure = $true
+    $selectionBefore = Get-Content -LiteralPath $msixSelection -Raw
+    Assert-Fails { & $composeMsix } 'not valid for this MSIX package'
+    $mcRejected = @($mc.Composed)[-1]
+    Assert-True (
+        (Get-Content -LiteralPath $msixSelection -Raw) -eq $selectionBefore -and
+        -not (Test-Path -LiteralPath $mcRejected) -and (Test-Path -LiteralPath $mcNewer)
+    ) 'A payload the composer rejected was selected or left in the cache.'
+    $mc.ComposeFailure = $false
+    $mc.PayloadText = 'accepted payload'
+    & $composeMsix
+    Assert-True (
+        $mc.Downloads -eq 4 -and (& $readComposed) -eq 'accepted payload' -and (& $selectedRun) -eq 502 -and
+        -not (Test-Path -LiteralPath $mcNewer)
+    ) 'A retry after a rejected composition did not download, select, and retire as usual.'
+    $mcAccepted = @($mc.Composed)[-1]
+
+    $mc.PayloadText = 'refreshed payload'
+    & $composeMsix @{ RefreshPayload = $true }
+    Assert-True (
+        $mc.Downloads -eq 5 -and (& $readComposed) -eq 'refreshed payload' -and
+        -not (Test-Path -LiteralPath $mcAccepted) -and
         @(Get-ChildItem -LiteralPath $msixCache -Directory).Count -eq 1
-    ) 'An interrupted download replaced the selected MSIX payload or was left beside it.'
-    Assert-Fails { & $selectMsixPayload @{ PayloadRunId = [long]-1 } } 'positive workflow run'
-    # A cached payload is architecture-specific. An arm64 build pointed at the
-    # x64 cache must not silently compose from the x64 application.
-    $mcDownloads = $mc.Downloads
-    Assert-Fails {
-        Select-LocalPackagePayload -CacheDirectory $msixCache -Architecture arm64 -Operations $mc.Operations
-    } 'Invalid payload cache selection'
-    Assert-True ($mc.Downloads -eq $mcDownloads -and (& $selectMsixPayload) -eq $mcPinned) `
-        'A foreign-architecture selection changed the cached x64 payload.'
+    ) '-RefreshPayload did not replace the cached payload.'
+    $mcRefreshed = @($mc.Composed)[-1]
+
+    $mc.DownloadFailure = $true
+    $composedBefore = @($mc.Composed).Count
+    Assert-Fails { & $composeMsix @{ RefreshPayload = $true } } 'Interrupted payload download'
+    $mc.DownloadFailure = $false
+    Assert-True (
+        @($mc.Composed).Count -eq $composedBefore -and (& $selectedRun) -eq 502 -and
+        (@(Get-ChildItem -LiteralPath $msixCache -Directory).FullName -join '|') -eq $mcRefreshed
+    ) 'An interrupted download was composed, selected, or left beside the cached payload.'
+
+    # A run killed mid-download leaves its generation behind without selecting
+    # it. The next run, holding the checkout, reclaims it instead of letting
+    # abandoned payloads accumulate, and leaves anything it did not create.
+    $abandoned = Join-Path $msixCache "503-$([guid]::NewGuid().ToString('N'))"
+    & $mc.WritePayload $abandoned 'x64' 'abandoned download' '24.20.0'
+    $unrelated = Join-Path $msixCache 'not-a-generation'
+    New-Item -Path $unrelated -ItemType Directory | Out-Null
+    $mc.Offline = $true
+    & $composeMsix @{ PayloadRunId = [long]502 }
+    $mc.Offline = $false
+    Assert-True (
+        -not (Test-Path -LiteralPath $abandoned) -and (Test-Path -LiteralPath $unrelated) -and
+        @($mc.Composed)[-1] -eq $mcRefreshed -and (& $selectedRun) -eq 502
+    ) 'An abandoned generation was not reclaimed, or the sweep touched what it did not create.'
+    Remove-Item -LiteralPath $unrelated
+    # Runs in one checkout share content\openclaw and this cache, so a second
+    # run fails before touching either while the first holds the checkout.
+    $mc.RunId = [long]503
+    $downloadsBefore = $mc.Downloads
+    $lockPath = Join-Path $mc.Root 'artifacts\local-msix\.lock'
+    $held = [IO.FileStream]::new($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    try {
+        $selectionBefore = Get-Content -LiteralPath $msixSelection -Raw
+        $queriesBefore = $mc.Queries
+        $composedBefore = @($mc.Composed).Count
+        Assert-Fails { & $composeMsix } 'Another Build-LocalMSIX\.ps1 run in this checkout holds .*\.lock'
+        $suppliedPayload = Join-Path $testRoot 'locked supplied msix payload'
+        & $mc.WritePayload $suppliedPayload 'x64' 'supplied msix payload' '24.20.0'
+        Assert-Fails { & $composeMsix @{ PayloadDirectory = $suppliedPayload } } 'holds .*\.lock'
+        Assert-True (
+            $mc.Queries -eq $queriesBefore -and $mc.Downloads -eq $downloadsBefore -and
+            @($mc.Composed).Count -eq $composedBefore -and
+            (Get-Content -LiteralPath $msixSelection -Raw) -eq $selectionBefore -and
+            (@(Get-ChildItem -LiteralPath $msixCache -Directory).FullName -join '|') -eq $mcRefreshed
+        ) 'A run blocked by the checkout lock queried, downloaded, composed, or changed the cache.'
+    }
+    finally { $held.Dispose() }
+
+    # A supplied payload is composed in place without GitHub or the cache.
+    $mc.Offline = $true
+    & $composeMsix @{ PayloadDirectory = $suppliedPayload }
+    Assert-True (
+        @($mc.Composed)[-1] -eq (Resolve-Path -LiteralPath $suppliedPayload).Path -and
+        $mc.Downloads -eq $downloadsBefore -and (& $selectedRun) -eq 502
+    ) 'A supplied payload was not composed directly or touched the cache.'
+    $mc.Offline = $false
+    Assert-Fails { & $composeMsix @{ PayloadDirectory = $suppliedPayload; RefreshPayload = $true } } 'cannot be combined'
+    Assert-Fails { & $composeMsix @{ PayloadDirectory = $suppliedPayload; PayloadRunId = [long]7 } } 'cannot be combined'
+    Assert-Fails { & $composeMsix @{ PayloadRunId = [long]-1 } } 'positive workflow run'
+
+    # Payloads are architecture-specific, so arm64 composes from its own cache
+    # and never from, or over, the x64 selection.
+    $mc.PayloadText = 'arm64 payload'
+    & $composeMsix @{ Architecture = 'arm64' }
+    $arm64Metadata = Get-Content -LiteralPath (Join-Path @($mc.Composed)[-1] 'payload-metadata.json') -Raw |
+        ConvertFrom-Json
+    Assert-True (
+        @($mc.Composed)[-1].StartsWith(
+            (Join-Path $mc.Root 'artifacts\local-msix\payloads\arm64'), [StringComparison]::OrdinalIgnoreCase) -and
+        $arm64Metadata.architecture -eq 'arm64' -and (& $selectedRun) -eq 502 -and
+        (@(Get-ChildItem -LiteralPath $msixCache -Directory).FullName -join '|') -eq $mcRefreshed
+    ) 'An arm64 composition used or changed the x64 payload cache.'
 
     # Argument guards.
     $j = New-Fixture
