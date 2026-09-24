@@ -50,6 +50,27 @@ internal sealed record MxcReadinessReport(
     string? BackendProbeFailureReason = null)
 {
     public bool RuntimeAvailable => RuntimeUnavailableReason is null;
+
+    /// <summary>
+    /// The evidence behind the support decision, for the diagnostic log.
+    /// </summary>
+    public string Describe()
+    {
+        string runtime = RuntimeUnavailableReason is { } unavailable
+            ? $"unavailable ({unavailable})"
+            : Provenance is { } provenance
+                ? $"{provenance.Package} {provenance.Version} {provenance.Architecture}"
+                : "of unknown provenance";
+        string probe = BackendProbe is { } result
+            ? $"isolation sessions {(result.IsolationSessionAvailable ? "available" : "unavailable")}, " +
+              $"tier {result.Tier ?? "unreported"}, warnings " +
+              (result.Warnings.Count == 0 ? "none" : string.Join(" | ", result.Warnings))
+            : BackendProbeFailureReason is { } failure
+                ? $"failed ({failure})"
+                : "not run";
+        return $"{HostSupport} from {SupportEvidence} evidence; host build " +
+            $"{HostBuild?.ToString() ?? "unknown"}; runtime {runtime}; backend probe {probe}";
+    }
 }
 
 /// <summary>

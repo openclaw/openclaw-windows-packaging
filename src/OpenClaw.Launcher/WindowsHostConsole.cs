@@ -134,7 +134,7 @@ internal sealed class WindowsHostConsole : IHostConsole
         catch (Exception exception) when (exception is InvalidOperationException or
             System.ComponentModel.Win32Exception)
         {
-            log($"Could not enable colored console output: {exception.Message}");
+            log($"Could not enable colored console output: {DiagnosticFailure.Describe(exception)}");
             return false;
         }
     }
@@ -241,7 +241,7 @@ internal sealed class WindowsHostConsole : IHostConsole
                 catch (Exception exception) when (exception is InvalidOperationException or
                     System.ComponentModel.Win32Exception)
                 {
-                    _log($"Console cleanup failed: {exception.Message}");
+                    _log($"Console cleanup failed: {DiagnosticFailure.Describe(exception)}");
                 }
             }
 
@@ -289,7 +289,7 @@ internal sealed class WindowsHostConsole : IHostConsole
             catch (Exception exception) when (exception is IOException or
                 InvalidOperationException or System.ComponentModel.Win32Exception)
             {
-                _log($"Console {name} restoration failed: {exception.Message}");
+                _log($"Console {name} restoration failed: {DiagnosticFailure.Describe(exception)}");
             }
         }
     }
@@ -329,7 +329,7 @@ internal sealed class WindowsHostConsole : IHostConsole
             catch (Exception exception) when (exception is InvalidOperationException or
                 System.ComponentModel.Win32Exception)
             {
-                _log($"Could not restore console output mode: {exception.Message}");
+                _log($"Could not restore console output mode: {DiagnosticFailure.Describe(exception)}");
             }
         }
     }

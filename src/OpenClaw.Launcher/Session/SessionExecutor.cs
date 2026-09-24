@@ -202,7 +202,13 @@ internal sealed class SessionExecutor
                 cancellationToken).ConfigureAwait(false);
 
             operation.EnsureCurrent();
-            return ReadOutcome(operation, resultPath, executorExitCode, requestId, subject);
+            int exitCode = ReadOutcome(operation, resultPath, executorExitCode, requestId, subject);
+
+            // The matching end of the starting message. Its absence means the
+            // host itself was terminated while the command ran, which is what
+            // attributes a lingering guest process to this invocation.
+            _log($"{subject} exited with code {exitCode}.");
+            return exitCode;
         }
         finally
         {
@@ -378,7 +384,8 @@ internal sealed class SessionExecutor
             {
                 throw new SessionException(
                     "The isolated session did not report a collection result " +
-                    DescribeMissingResult(execution));
+                    DescribeMissingResult(execution),
+                    exception);
             }
 
             SessionCollectResult result = SessionCollectProtocol.ReadResult(resultText);
@@ -443,7 +450,8 @@ internal sealed class SessionExecutor
             {
                 throw new SessionException(
                     "The isolated session did not report config readiness " +
-                    DescribeMissingResult(execution));
+                    DescribeMissingResult(execution),
+                    exception);
             }
 
             SessionConfigReadinessResult result =
@@ -518,7 +526,8 @@ internal sealed class SessionExecutor
             {
                 throw new SessionException(
                     "The isolated session did not report a runtime install " +
-                    DescribeMissingResult(execution));
+                    DescribeMissingResult(execution),
+                    exception);
             }
 
             SessionRuntimeInstallResult result =
@@ -614,7 +623,8 @@ internal sealed class SessionExecutor
             {
                 throw new SessionException(
                     "The isolated session did not report a tool install " +
-                    DescribeMissingResult(execution));
+                    DescribeMissingResult(execution),
+                    exception);
             }
 
             SessionToolInstallResult result =
@@ -732,7 +742,8 @@ internal sealed class SessionExecutor
         {
             throw new SessionException(
                 "The isolated session did not report a launch result " +
-                $"(executor exit code {execution.ExitCode}). {subject} may not have started.");
+                $"(executor exit code {execution.ExitCode}). {subject} may not have started.",
+                exception);
         }
 
         SessionLaunchResult result;
@@ -805,7 +816,8 @@ internal sealed class SessionExecutor
             throw new SessionException(
                 "The isolated session did not report a launch result " +
                 $"(executor exit code {executorExitCode}). {subject} may not " +
-                "have started.");
+                "have started.",
+                exception);
         }
 
         SessionLaunchResult result;

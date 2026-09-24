@@ -221,12 +221,38 @@ exception type, and any MXC error classification. Together they show where a
 slow command spent its time without a debugger. They never include captured
 output, exception messages, arguments, environment, URLs, or tokens.
 
+Each host start records an `Environment:` entry from
+[`HostEnvironment`](../src/OpenClaw.Launcher/HostEnvironment.cs): the Windows
+build and update revision, OS and process architecture, the package full name
+with the origin Windows recorded for the install (Developer Mode loose-layout
+registration, Store-signed, or developer-signed MSIX) and its install path, the
+compiled package and payload versions, the staged MXC runtime and wire schema,
+the packaged Node.js version, and the .NET runtime. Reading these facts starts
+no process; the MXC backend probe is logged where support is checked instead.
+The facts are descriptive only and never authorize an operation.
+
+Failure records are separate from those timing records. Users see an
+exception's message; the log records the whole failure through
+[`DiagnosticFailure`](../src/OpenClaw.Launcher/DiagnosticFailure.cs): its type
+and message, any MXC code, backend code, and failing operation, the Windows
+error code behind I/O and native failures, and every inner cause. A message can
+repeat guest-reported detail, such as an agent-profile path, which is why each
+bundle warns to review it before sharing. The process's last-chance handler
+also records the stack trace. The one deliberate omission is a browser launch
+failure, whose message would repeat a Control UI URL that can carry the gateway
+credential.
+
 [`DiagnosticsBundle`](../src/OpenClaw.Launcher/Gateway/DiagnosticsBundle.cs)
 collects troubleshooting material through the shared workspace while excluding
-credential stores. [`DiagnosticsRedactor`](../src/OpenClaw.Launcher/Gateway/DiagnosticsRedactor.cs)
-redacts credential-shaped JSON members in remaining text, but that redaction
-is deliberately best-effort and does not make a bundle safe to share without
-review.
+credential stores, and writes the collecting host's environment into its
+manifest. It also reads every recent gateway launch's output log and supervisor
+status from that workspace. It keeps a bounded tail of each and refuses reparse
+points, because the guest can write there.
+[`DiagnosticsRedactor`](../src/OpenClaw.Launcher/Gateway/DiagnosticsRedactor.cs)
+redacts credential-shaped JSON members, URL parameters, environment-style
+assignments, and authorization header credentials in the remaining text, the
+manifest, and the notes the command returns. That redaction is deliberately
+best-effort and does not make a bundle safe to share without review.
 
 Diagnostics describe runtime evidence; they are not release verification.
 The build path independently creates an inventory of package inputs and hashes
@@ -268,4 +294,4 @@ flowchart LR
 | MXC runtime and wire boundary | [`mxc-runtime.lock.json`](../mxc-runtime.lock.json), [`Get-MxcRuntime.ps1`](../scripts/Get-MxcRuntime.ps1), [`MxcRuntimeLocator.cs`](../src/OpenClaw.Launcher/Mxc/MxcRuntimeLocator.cs), [`MxcCliSessionClient.cs`](../src/OpenClaw.Launcher/Mxc/MxcCliSessionClient.cs), [`MxcWireProtocol.cs`](../src/OpenClaw.Launcher/Mxc/MxcWireProtocol.cs) |
 | Agent runtime installation | [`SessionRuntimeInstaller.cs`](../src/OpenClaw.SessionHost/SessionRuntimeInstaller.cs) |
 | Gateway lifecycle | [`SchTasksGatewayScheduler.cs`](../src/OpenClaw.Launcher/Gateway/SchTasksGatewayScheduler.cs), [`GatewayController.cs`](../src/OpenClaw.Launcher/Gateway/GatewayController.cs), [`GatewayConfigurationStore.cs`](../src/OpenClaw.Launcher/Gateway/GatewayConfigurationStore.cs) |
-| Diagnostics and payload integrity | [`HostDiagnosticLog.cs`](../src/OpenClaw.Launcher/HostDiagnosticLog.cs), [`DiagnosticsBundle.cs`](../src/OpenClaw.Launcher/Gateway/DiagnosticsBundle.cs), [`DiagnosticsRedactor.cs`](../src/OpenClaw.Launcher/Gateway/DiagnosticsRedactor.cs), [`Build-MSIX.ps1`](../scripts/Build-MSIX.ps1) |
+| Diagnostics and payload integrity | [`HostDiagnosticLog.cs`](../src/OpenClaw.Launcher/HostDiagnosticLog.cs), [`HostEnvironment.cs`](../src/OpenClaw.Launcher/HostEnvironment.cs), [`DiagnosticFailure.cs`](../src/OpenClaw.Launcher/DiagnosticFailure.cs), [`DiagnosticsBundle.cs`](../src/OpenClaw.Launcher/Gateway/DiagnosticsBundle.cs), [`DiagnosticsRedactor.cs`](../src/OpenClaw.Launcher/Gateway/DiagnosticsRedactor.cs), [`Build-MSIX.ps1`](../scripts/Build-MSIX.ps1) |

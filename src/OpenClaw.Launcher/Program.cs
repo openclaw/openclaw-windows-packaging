@@ -52,7 +52,7 @@ internal static class Program
                 {
                     consoleWarningWritten = true;
                     WriteDiagnostic(
-                        $"Console error output failed: {exception.GetType().Name}.");
+                        $"Console error output failed: {DiagnosticFailure.Describe(exception)}");
                 }
             }
         }
@@ -107,20 +107,9 @@ internal static class Program
             {
                 WriteDiagnostic(
                     $"Failure output to {destination} failed: " +
-                    $"{exception.GetType().Name}.");
+                    DiagnosticFailure.Describe(exception));
             }
         }
-
-        static string GetDiagnosticFailure(Exception exception) =>
-            exception switch
-            {
-                InvalidDataException or
-                TimeoutException or
-                PlatformNotSupportedException or
-                FileNotFoundException =>
-                    $"{exception.GetType().Name}: {exception.Message}",
-                _ => exception.GetType().Name
-            };
 
         try
         {
@@ -135,6 +124,12 @@ internal static class Program
             }
 
             HostOptions options = HostOptions.Parse(args, startup.BaseDirectory);
+            string environment = (startup.ReadEnvironment ?? (parsed => HostEnvironment.Read(
+                startup.BaseDirectory,
+                parsed.PackagedNodeArchivePath,
+                startup.ReadEnvironmentVariable ?? Environment.GetEnvironmentVariable)))(options)
+                .Describe();
+            WriteDiagnostic($"Environment: {environment}");
             return startup.Entrypoint == HostEntrypoint.Control
                 ? await RunControlAsync(
                     options,
@@ -143,7 +138,8 @@ internal static class Program
                     output,
                     error,
                     startup.InstallationLifecycle,
-                    controlOutputOptions: controlOutputOptions).ConfigureAwait(false)
+                    controlOutputOptions: controlOutputOptions,
+                    environment: environment).ConfigureAwait(false)
                 : await RunAgentAsync(
                     options,
                     WriteDiagnostic,
@@ -162,7 +158,8 @@ internal static class Program
         }
         catch (Exception exception)
         {
-            WriteDiagnostic($"Unhandled failure: {GetDiagnosticFailure(exception)}");
+            WriteDiagnostic(
+                $"Unhandled failure: {DiagnosticFailure.DescribeWithStackTrace(exception)}");
             if (startup.Entrypoint == HostEntrypoint.Control)
             {
                 string command = ResolveClawCtlCommand(args);
@@ -300,6 +297,7 @@ internal static class Program
 
         Mxc.MxcReadinessReport readiness = await (probeReadiness ??
             Mxc.MxcReadiness.ProbeAsync)(CancellationToken.None).ConfigureAwait(false);
+        log($"Isolated-session support: {readiness.Describe()}");
         Session.SessionSupportPolicy.EnsureSupported(
             (getPackageFamilyName ?? (() => HostPaths.Create().PackageFamilyName))(),
             readiness);
@@ -508,7 +506,8 @@ internal static class Program
         Func<string>? getLogonSessionId = null,
         TimeProvider? clock = null,
         Func<string, Task>? launchBrowserAsync = null,
-        Action? beforeBrowserValidation = null)
+        Action? beforeBrowserValidation = null,
+        string? environment = null)
     {
         Session.IInstallationLifecycle lifecycle =
             installationLifecycle ?? Session.InstallationLifecycle.Production;
@@ -623,6 +622,7 @@ internal static class Program
             }
             catch (Session.SessionException exception) when (outputOptions.Json)
             {
+                log($"Setup failed: {DiagnosticFailure.Describe(exception)}");
                 return WriteResult(new SetupCommandResult(
                     1,
                     options.RequirePackagedApplicationDirectory(),
@@ -663,6 +663,7 @@ internal static class Program
                                     : await Session.AgentConfigReadinessProbe.CheckAsync(
                                         runtime,
                                         status,
+                                        log,
                                         cancellationToken).ConfigureAwait(false);
                             Session.SetupStateResult setup =
                                 runtime.SetupState.Read(runtime.ApplicationId);
@@ -677,19 +678,19 @@ internal static class Program
                 },
                 CollectLogs = async (requestedPath, cancellationToken) =>
                 {
+                    Session.SessionRuntime runtime = GetSessionRuntime();
+                    Gateway.GatewayRuntime gateway = Gateway.GatewayRuntime.Create(
+                        options,
+                        runtime.Paths,
+                        runtime,
+                        log);
                     Gateway.DiagnosticsBundleResult result = await NarrateOperationAsync(
                         new ClawCtlProgress("Collecting redacted diagnostics."),
-                        async _ =>
-                        {
-                            HostPaths paths = HostPaths.Create();
-                            return await Gateway.GatewayRuntime.Create(
-                                    options,
-                                    paths,
-                                    GetSessionRuntime(),
-                                    log)
-                                .CollectLogsAsync(requestedPath, cancellationToken)
-                                .ConfigureAwait(false);
-                        }).ConfigureAwait(false);
+                        progress => gateway.CollectLogsAsync(
+                            requestedPath,
+                            environment,
+                            progress,
+                            cancellationToken)).ConfigureAwait(false);
                     return WriteResult(new CollectLogsCommandResult(result));
                 },
                 Teardown = async (force, cancellationToken) =>
@@ -729,6 +730,7 @@ internal static class Program
                     }
                     catch (Session.SessionException exception)
                     {
+                        log($"The Control UI cannot be opened: {DiagnosticFailure.Describe(exception)}");
                         return WriteResult(new OpenCommandResult(null, exception.Message, 1));
                     }
 
@@ -831,7 +833,12 @@ internal static class Program
                             InvalidOperationException or
                             NotSupportedException)
                         {
-                            log($"Browser launch failed: {exception.GetType().Name}");
+                            // The start failure message names the URL it tried to
+                            // open, and a Control UI handoff URL can carry the
+                            // gateway credential, so only the error code is kept.
+                            log(exception is System.ComponentModel.Win32Exception win32
+                                ? $"Browser launch failed: Win32Exception [Win32 error {win32.NativeErrorCode}]"
+                                : $"Browser launch failed: {exception.GetType().Name}");
                             return new OpenCommandResult(
                                 gateway.State,
                                 "The Control UI is ready, but the default browser could not be opened.",
@@ -951,6 +958,7 @@ internal static class Program
                                     await Session.AgentConfigReadinessProbe.CheckAsync(
                                         sessionRuntime,
                                         session,
+                                        log,
                                         cancellationToken).ConfigureAwait(false);
                             }
 

@@ -139,7 +139,7 @@ internal sealed class AgentGatewayGuidance
             IOException or UnauthorizedAccessException or InvalidOperationException or
             ObjectDisposedException or Win32Exception)
         {
-            _log($"Gateway guidance was skipped: {exception.GetType().Name}: {exception.Message}");
+            _log($"Gateway guidance was skipped: {DiagnosticFailure.Describe(exception)}");
         }
     }
 
@@ -158,7 +158,7 @@ internal sealed class AgentGatewayGuidance
         {
             _log(
                 $"Gateway guidance acknowledgement failed: " +
-                $"{exception.GetType().Name}: {exception.Message}");
+                DiagnosticFailure.Describe(exception));
         }
     }
 
@@ -225,7 +225,7 @@ internal sealed class AgentGatewayGuidance
             WriteGatewayStartFailure(
                 error,
                 $"Gateway start failed: {exception.Message}");
-            _log($"Gateway auto-start failed: {exception.GetType().Name}: {exception.Message}");
+            _log($"Gateway auto-start failed: {DiagnosticFailure.Describe(exception)}");
         }
     }
 
@@ -247,7 +247,7 @@ internal sealed class AgentGatewayGuidance
         {
             _log(
                 $"Gateway guidance acknowledgement failed after start: " +
-                $"{exception.GetType().Name}: {exception.Message}");
+                DiagnosticFailure.Describe(exception));
         }
     }
 }

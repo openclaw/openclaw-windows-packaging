@@ -51,6 +51,8 @@ internal static class SmokeProgram
             ("Spectre renders clawctl output under NativeAOT", SpectreOutputRenders),
             ("gateway narration survives NativeAOT", GatewayNarrationRenders),
             ("Windows logon identity survives NativeAOT", WindowsLogonIdentityWorks),
+            ("package provenance reads survive NativeAOT", PackageProvenanceReadsBind),
+            ("diagnostics redaction survives NativeAOT", DiagnosticsRedactionWorks),
             ("missing application reports diagnostics", MissingApplicationReportsAsync),
             ("openclaw never parses its arguments", AgentNeverParsesItsArgumentsAsync),
             ("first agent launch provisions and forwards arguments", FirstAgentLaunchProvisionsAsync),
@@ -99,6 +101,38 @@ internal static class SmokeProgram
             id.Length == 17 && id[8] == ':' &&
             id.Where(character => character != ':').All(Uri.IsHexDigit),
             $"Unexpected Windows logon identity '{id}'.");
+        return Task.CompletedTask;
+    }
+
+    // Every host start reads package provenance. The driver is unpackaged, so
+    // each read must report absence; a native entry point that does not bind
+    // would instead throw here, and in a packaged host fail every command.
+    private static Task PackageProvenanceReadsBind()
+    {
+        Assert(PackageIdentity.TryReadProvenance() is null, "An unpackaged driver reported provenance.");
+        Assert(
+            PackageIdentity.TryReadOrigin("OpenClaw.NotInstalled_1.0.0.0_x64__0000000000000") is null,
+            "An uninstalled package reported an origin.");
+        Assert(PackageIdentity.TryReadDevelopmentMode() is null, "An unpackaged driver reported a registration mode.");
+        Assert(PackageIdentity.TryReadInstallPath() is null, "An unpackaged driver reported an install path.");
+        return Task.CompletedTask;
+    }
+
+    // The redactor's patterns run non-backtracking, which the regex source
+    // generator serves through a runtime-built engine rather than generated
+    // code. Every collect-logs run depends on it, so it must run trimmed.
+    private static Task DiagnosticsRedactionWorks()
+    {
+        const string secret = "ghu_verysecretvalue";
+        string redacted = DiagnosticsRedactor.Redact(
+            $$"""{"apiKey": "{{secret}}"} http://127.0.0.1:18789/#token={{secret}} """ +
+            $"OPENAI_API_KEY={secret} Authorization: Bearer {secret}");
+        Assert(
+            !redacted.Contains(secret, StringComparison.Ordinal),
+            $"A credential survived redaction: {redacted}");
+        Assert(
+            redacted.Split(DiagnosticsRedactor.Placeholder).Length == 5,
+            $"Expected four redactions: {redacted}");
         return Task.CompletedTask;
     }
 
@@ -885,7 +919,9 @@ internal static class SmokeProgram
                     Changed: true));
             }
 
-            public Task EnsureSessionSupportedAsync(CancellationToken cancellationToken) =>
+            public Task EnsureSessionSupportedAsync(
+                Action<string> log,
+                CancellationToken cancellationToken) =>
                 throw new NotSupportedException();
 
             public PackageRuntimeMetadata ValidatePackageRuntime(
@@ -1060,7 +1096,9 @@ internal static class SmokeProgram
 
             public SessionRuntime CreateRuntime(Action<string> log) => throw Started();
 
-            public Task EnsureSessionSupportedAsync(CancellationToken cancellationToken) =>
+            public Task EnsureSessionSupportedAsync(
+                Action<string> log,
+                CancellationToken cancellationToken) =>
                 throw Started();
 
             public PackageRuntimeMetadata ValidatePackageRuntime(

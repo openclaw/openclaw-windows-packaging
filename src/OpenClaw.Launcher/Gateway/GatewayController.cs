@@ -386,7 +386,7 @@ internal sealed class GatewayController
                 ? $"The gateway is listening on {DescribePorts(record)}."
                 : "The gateway is not listening yet.");
 
-        return new GatewayStartResult(
+        var result = new GatewayStartResult(
             resultState,
             record,
             AlreadyRunning: false,
@@ -399,6 +399,13 @@ internal sealed class GatewayController
                 GatewayState.Unknown => $"The gateway launch could not be verified: {observed.Error}",
                 _ => DescribeExitedDuringStartup(record, observed)
             });
+
+        // Every start path funnels through here: `gateway-service start` and
+        // `restart`, and the automatic start after `openclaw`. Logging the
+        // outcome once lets a bundle show what the user was told, including
+        // the supervisor's reason when the gateway exited during startup.
+        _log($"Gateway start finished: {result.State}. {DiagnosticFailure.SingleLine(result.Message)}");
+        return result;
     }
 
     /// <summary>
@@ -634,6 +641,7 @@ internal sealed class GatewayController
         catch (Exception exception) when (
             exception is SessionException or Mxc.MxcException or IOException or UnauthorizedAccessException)
         {
+            _log($"Gateway inspection failed: {DiagnosticFailure.Describe(exception)}");
             return new SessionInspectResult { Error = exception.Message };
         }
     }
@@ -683,10 +691,10 @@ internal sealed class GatewayController
     /// Explains a gateway that is no longer running, in the supervisor's words.
     /// </summary>
     /// <remarks>
-    /// The log lives on a path inside the session that the user cannot open
-    /// from the host, so the bundle is named instead. `clawctl collect-logs`
-    /// collects that same log along with everything needed to read it in
-    /// context.
+    /// The log sits in the shared workspace, which the guest can write, so the
+    /// message names the bundle rather than a path to open. `clawctl
+    /// collect-logs` gathers the launch log and supervisor status of this and
+    /// earlier launches, with reparse-point checks and redaction.
     /// </remarks>
     private static string? DescribeStoppedGateway(
         GatewayRecord record,

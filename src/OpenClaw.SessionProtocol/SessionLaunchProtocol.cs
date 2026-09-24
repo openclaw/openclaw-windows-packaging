@@ -248,7 +248,8 @@ public static class SessionLaunchProtocol
         catch (JsonException exception)
         {
             throw new SessionLaunchException(
-                $"The launch request is not valid JSON: {exception.Message}");
+                $"The launch request is not valid JSON: {exception.Message}",
+                exception);
         }
 
         if (request is null)
@@ -320,7 +321,8 @@ public static class SessionLaunchProtocol
         catch (JsonException exception)
         {
             throw new SessionLaunchException(
-                $"The launch result is not valid JSON: {exception.Message}");
+                $"The launch result is not valid JSON: {exception.Message}",
+                exception);
         }
 
         if (result is null)

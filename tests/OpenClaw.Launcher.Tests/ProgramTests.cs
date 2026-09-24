@@ -1725,7 +1725,7 @@ public sealed class ProgramTests : IDisposable
             runtime.Paths,
             runtime,
             _ => { })
-            .CollectLogsAsync(bundlePath, CancellationToken.None);
+            .CollectLogsAsync(bundlePath, environment: null, new RecordingProgress(), CancellationToken.None);
         Assert.Equal(bundlePath, bundle.BundlePath);
         using ZipArchive archive = ZipFile.OpenRead(bundlePath);
         ZipArchiveEntry report = Assert.Single(
@@ -2661,6 +2661,121 @@ public sealed class ProgramTests : IDisposable
             ".openclaw")));
     }
 
+    // A run that waits on the isolated session must say what it is gathering.
+    // Redirected narration keeps one durable line per source on standard
+    // error, in the order the bundle gathers them, leaving standard output to
+    // carry only the result.
+    [Fact]
+    public async Task CollectLogsNarratesEachSourceAsItGathersIt()
+    {
+        SessionRuntime runtime = await SetUpSessionAsync().ConfigureAwait(true);
+        RespondToCollection(_lastSessionBackend!);
+        Directory.CreateDirectory(Path.GetDirectoryName(runtime.Paths.LogPath)!);
+        await File.WriteAllTextAsync(runtime.Paths.LogPath, "host evidence").ConfigureAwait(true);
+        string bundlePath = Path.Combine(_testDirectory, "narrated.zip");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        int exitCode = await Program.RunControlAsync(
+            CollectionOptions(),
+            ["collect-logs", "--output", bundlePath],
+            _ => { },
+            output,
+            error,
+            new StubbedRecoveryLifecycle(runtime)).ConfigureAwait(true);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(
+            [
+                "Collecting redacted diagnostics.",
+                "Starting the isolated session.",
+                "Collecting OpenClaw logs and configuration from the isolated session.",
+                "Collecting the host diagnostic log.",
+                "Collecting the setup record.",
+                "Collecting the session record.",
+                "Adding the OpenClaw logs and configuration from the isolated session."
+            ],
+            error.ToString()
+                .Split('\n', StringSplitOptions.TrimEntries)
+                .Where(line => line.Length > 0));
+        string text = output.ToString();
+        Assert.StartsWith("clawctl collect-logs", text.TrimStart(), StringComparison.Ordinal);
+        Assert.Contains("host and session diagnostics", text, StringComparison.Ordinal);
+        using ZipArchive archive = ZipFile.OpenRead(bundlePath);
+        Assert.Contains(
+            archive.Entries,
+            entry => entry.FullName == "agent/logs/openclaw-2026-09-23.log");
+    }
+
+    // Narration and the JSON document are separate streams, and a structured
+    // run narrates nothing on either, so a caller parsing standard output and
+    // collecting standard error sees only the document.
+    [Fact]
+    public async Task CollectLogsJsonCarriesNoNarration()
+    {
+        SessionRuntime runtime = await SetUpSessionAsync().ConfigureAwait(true);
+        RespondToCollection(_lastSessionBackend!);
+        string bundlePath = Path.Combine(_testDirectory, "structured.zip");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        int exitCode = await Program.RunControlAsync(
+            CollectionOptions(),
+            ["collect-logs", "--json", "--output", bundlePath],
+            _ => { },
+            output,
+            error,
+            new StubbedRecoveryLifecycle(runtime)).ConfigureAwait(true);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        using JsonDocument document = JsonDocument.Parse(output.ToString());
+        Assert.Equal("collect-logs", document.RootElement.GetProperty("command").GetString());
+        Assert.Equal(
+            "host-and-session",
+            document.RootElement.GetProperty("bundle").GetProperty("included").GetString());
+    }
+
+    private HostOptions CollectionOptions() =>
+        new(
+            Path.Combine(_testDirectory, "app"),
+            Path.Combine(_testDirectory, "node-v24.15.0-win-x64.zip"),
+            []);
+
+    // Stands in for the guest helper's collect mode: stage one log and the
+    // configuration where the request asks, then report both as copied.
+    private static void RespondToCollection(FakeMxcSessionClient backend)
+    {
+        backend.ExecuteBehavior = _ =>
+        {
+            string requestPath = Directory
+                .GetFiles(backend.Metadata!.EphemeralWorkspacePath, "collect-*.json")
+                .Single(path => !path.EndsWith(".result.json", StringComparison.Ordinal));
+            SessionCollectRequest request = SessionCollectProtocol.ReadRequest(
+                File.ReadAllText(requestPath));
+            string logs = Path.Combine(request.DestinationDirectory!, "logs");
+            Directory.CreateDirectory(logs);
+            File.WriteAllText(Path.Combine(logs, "openclaw-2026-09-23.log"), "gateway ready");
+            string config = Path.Combine(request.DestinationDirectory!, "config");
+            Directory.CreateDirectory(config);
+            File.WriteAllText(
+                Path.Combine(config, "openclaw.json"),
+                """{"gateway":{"mode":"local"}}""");
+            File.WriteAllText(
+                SessionLaunchProtocol.ResultPathFor(requestPath),
+                SessionCollectProtocol.SerializeResult(new SessionCollectResult
+                {
+                    RequestId = request.RequestId,
+                    Entries =
+                    [
+                        new SessionCollectEntry { Name = "logs", Copied = true },
+                        new SessionCollectEntry { Name = "config", Copied = true }
+                    ]
+                }));
+            return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
+        };
+    }
+
     private SessionRuntime CreateSessionRuntime()
     {
         string stateRoot = Path.Combine(_testDirectory, "state");
@@ -2726,6 +2841,7 @@ public sealed class ProgramTests : IDisposable
         public SessionRuntime CreateRuntime(Action<string> log) => runtime;
 
         public Task EnsureSessionSupportedAsync(
+            Action<string> log,
             CancellationToken cancellationToken) => Task.CompletedTask;
 
         public PackageRuntimeMetadata ValidatePackageRuntime(
@@ -2899,6 +3015,7 @@ public sealed class ProgramTests : IDisposable
         public SessionRuntime CreateRuntime(Action<string> log) => _runtime;
 
         public Task EnsureSessionSupportedAsync(
+            Action<string> log,
             CancellationToken cancellationToken) => Task.CompletedTask;
 
         public PackageRuntimeMetadata ValidatePackageRuntime(
@@ -2978,7 +3095,7 @@ public sealed class ProgramTests : IDisposable
     {
         public SessionRuntime CreateRuntime(Action<string> log) => runtime;
 
-        public Task EnsureSessionSupportedAsync(CancellationToken cancellationToken)
+        public Task EnsureSessionSupportedAsync(Action<string> log, CancellationToken cancellationToken)
         {
             onProbe();
             return Task.CompletedTask;

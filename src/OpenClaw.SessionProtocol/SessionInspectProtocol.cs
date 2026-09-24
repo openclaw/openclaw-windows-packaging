@@ -267,7 +267,8 @@ public static class SessionInspectProtocol
         catch (JsonException exception)
         {
             throw new SessionLaunchException(
-                $"The {description} is not valid JSON: {exception.Message}");
+                $"The {description} is not valid JSON: {exception.Message}",
+                exception);
         }
     }
 }
