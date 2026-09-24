@@ -36,12 +36,17 @@ package family.
 
 ## Fast, loose-registration inner loop
 
-From a clean checkout, register an x64 layout under a patched identity named
-for the change you are iterating on, and prepare its runtime:
+From a clean checkout, register a layout for this device's architecture under a
+patched identity named for the change you are iterating on, and prepare its
+runtime:
 
 ```powershell
-.\scripts\Deploy-LocalPackage.ps1 -Patch pwsh-exec -Architecture x64
+.\scripts\Deploy-LocalPackage.ps1 -Patch pwsh-exec
 ```
+
+`-Architecture` defaults to the device's native architecture. Pass
+`-Architecture x64` to build an emulated x64 layout on an ARM64 device, and pass
+the same value to `-Unregister`.
 
 The script resolves a payload, stages MXC and the bundled Node.js runtime,
 publishes both the NativeAOT `openclaw.exe` launcher and the NativeAOT session
