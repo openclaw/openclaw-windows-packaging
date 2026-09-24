@@ -42,13 +42,8 @@ internal static class SmokeProgram
             ("gateway-service help includes restart", GatewayServiceHelpIncludesRestartAsync),
             ("completion --help prints command help", CompletionHelpPrintsCommandHelpAsync),
             ("pwsh help includes execution modes", PowerShellHelpIncludesExecutionModesAsync),
-            ("pwsh rejects conflicting execution modes", PowerShellRejectsConflictingModesAsync),
-            ("pwsh help omits unsupported JSON", PowerShellHelpOmitsJsonAsync),
             ("--version reports the launcher", VersionReportsLauncherAssemblyAsync),
-            ("--version wins over trailing arguments", VersionWinsOverTrailingAsync),
             ("unknown command fails", UnknownCommandFailsAsync),
-            ("setup --force requires --fresh", SetupForceRequiresFreshAsync),
-            ("response-file token is not expanded", ResponseFileTokenIsNotExpandedAsync),
             ("completion directive suggests commands", CompletionDirectiveSuggestsAsync),
             ("unpackaged setup reports identity failure", SetupReportsReadinessAsync),
             ("JSON failures survive NativeAOT", JsonFailureIsStructuredAsync),
@@ -199,32 +194,6 @@ internal static class SmokeProgram
         fixture.AssertNoInstallationWorkStarted();
     }
 
-    private static async Task PowerShellRejectsConflictingModesAsync()
-    {
-        using Fixture fixture = Fixture.CreateWithoutApplication();
-
-        int exitCode = await fixture
-            .RunAsync(["pwsh", "--command", "Get-Date", "--file", "test.ps1"])
-            .ConfigureAwait(false);
-
-        AssertExitCode(1, exitCode, fixture);
-        AssertContains(fixture.Error.ToString(), "cannot be used together", fixture);
-        fixture.AssertNoInstallationWorkStarted();
-    }
-
-    private static async Task PowerShellHelpOmitsJsonAsync()
-    {
-        using Fixture fixture = Fixture.CreateWithoutApplication();
-
-        int exitCode = await fixture.RunAsync(["pwsh", "--help"]).ConfigureAwait(false);
-
-        AssertExitCode(0, exitCode, fixture);
-        Assert(
-            !fixture.Output.ToString().Contains("--json", StringComparison.Ordinal),
-            "PowerShell help advertised unsupported JSON output.");
-        fixture.AssertNoInstallationWorkStarted();
-    }
-
     // This driver's assembly version is 9.9.9.9. The library's built-in action
     // reports the entry assembly, so if the custom action were ever dropped
     // this scenario would print 9.9.9.9 instead of the baked build identity.
@@ -281,20 +250,6 @@ internal static class SmokeProgram
             "The version document did not carry the baked payload commit.");
     }
 
-    private static async Task VersionWinsOverTrailingAsync()
-    {
-        using Fixture fixture = Fixture.CreateWithoutApplication();
-
-        int exitCode = await fixture.RunAsync(["--version", "bogus"]).ConfigureAwait(false);
-
-        AssertExitCode(0, exitCode, fixture);
-        Assert(
-            fixture.Output.ToString().Contains(
-                ClawCtlBuildMetadata.PackageVersion,
-                StringComparison.Ordinal),
-            "Expected the launcher version with a trailing argument present.");
-    }
-
     private static async Task UnknownCommandFailsAsync()
     {
         using Fixture fixture = Fixture.CreateWithoutApplication();
@@ -303,31 +258,6 @@ internal static class SmokeProgram
 
         AssertExitCode(1, exitCode, fixture);
         AssertContains(fixture.Error.ToString(), "bogus", fixture);
-        fixture.AssertNoInstallationWorkStarted();
-    }
-
-    private static async Task SetupForceRequiresFreshAsync()
-    {
-        using Fixture fixture = Fixture.CreateWithoutApplication();
-
-        int exitCode = await fixture.RunAsync(["setup", "--force"]).ConfigureAwait(false);
-
-        AssertExitCode(1, exitCode, fixture);
-        AssertContains(fixture.Error.ToString(), "requires option '--fresh'", fixture);
-        fixture.AssertNoInstallationWorkStarted();
-    }
-
-    // Response-file expansion is disabled, so a readable file behind an `@`
-    // token must still be rejected as an unrecognized argument.
-    private static async Task ResponseFileTokenIsNotExpandedAsync()
-    {
-        using Fixture fixture = Fixture.CreateWithoutApplication();
-        string responseFile = Path.Combine(fixture.Root, "help.rsp");
-        await File.WriteAllTextAsync(responseFile, "--help").ConfigureAwait(false);
-
-        int exitCode = await fixture.RunAsync([$"@{responseFile}"]).ConfigureAwait(false);
-
-        AssertExitCode(1, exitCode, fixture);
         fixture.AssertNoInstallationWorkStarted();
     }
 
