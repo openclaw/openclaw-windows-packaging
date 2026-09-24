@@ -91,10 +91,12 @@ function Invoke-Test {
     $http.Responses = @{ 'Registry:latest' = [pscustomobject]@{ name = 'openclaw'; version = $version } }
     Add-Release
     $script:policy = Read-OpenClawReleasePolicy $policyPath
+    $script:policy.PSObject.Properties.Remove('stableVersion')
     $script:workflow = @{
         PolicyPath = $policyPath; OutputPath = Join-Path $testRoot "source-$testCount.json"
         WorkflowRunId = '123456'; PackagingCommit = 'd' * 40
     }
+    Save-Policy
     & $Body
     $script:testCount++
     Write-Host "PASS: $Name"
