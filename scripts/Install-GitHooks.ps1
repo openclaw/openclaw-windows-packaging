@@ -4,8 +4,9 @@
 
 .DESCRIPTION
     The hook runs scripts\Test-DotNetQuality.ps1 before a push so the same
-    checks continuous integration runs are reported locally first. It is
-    deliberately opt in.
+    checks continuous integration runs are reported locally first. It skips
+    them when the push changes only documentation, as classified by
+    scripts\Get-PackagingRelevance.ps1. It is deliberately opt in.
 
     Installation writes hooks\pre-push into the hooks directory Git actually
     consults for this working tree, which Git reports itself. A clone keeps one
@@ -138,6 +139,6 @@ $hookContent = [System.IO.File]::ReadAllText($sourceHook) -replace "`r`n", "`n"
 [System.IO.File]::WriteAllText($targetHook, $hookContent)
 
 Write-Host "Installed the $hookName hook at '$targetHook'."
-Write-Host 'It runs scripts\Test-DotNetQuality.ps1 before every push.'
+Write-Host 'It runs scripts\Test-DotNetQuality.ps1 before every push that changes more than documentation.'
 Write-Host 'Every worktree of this clone shares that hook.'
 Write-Host 'Bypass a single push with `git push --no-verify`.'
