@@ -1758,8 +1758,12 @@ public sealed class ProgramTests : IDisposable
         Directory.CreateDirectory(applicationDirectory);
         Directory.CreateDirectory(runtimeDirectory);
         await File.WriteAllTextAsync(Path.Combine(applicationDirectory, "openclaw.mjs"), "fixture");
+        string architecture = System.Runtime.InteropServices.RuntimeInformation
+            .ProcessArchitecture == System.Runtime.InteropServices.Architecture.X64
+                ? "x64"
+                : "arm64";
         await File.WriteAllTextAsync(
-            Path.Combine(runtimeDirectory, "node-v24.20.0-win-x64.zip"),
+            Path.Combine(runtimeDirectory, $"node-v24.20.0-win-{architecture}.zip"),
             "fixture");
         var lifecycle = new FailingFreshLifecycle(runtime)
         {
