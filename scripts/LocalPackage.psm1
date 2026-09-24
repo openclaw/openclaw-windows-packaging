@@ -9,7 +9,11 @@ $script:ControlApplicationId = 'Control'
 function Get-LocalPackageIdentity {
     param([string]$Patch)
 
-    if (-not $Patch) {
+    # Only an omitted -Patch selects the base identity. An explicitly empty
+    # value, such as an unset variable, must fail: falling back would let a
+    # caller who asked for a patch remove the base registration or, with
+    # -ReplaceExistingInstall, an installed release and its app data.
+    if (-not $PSBoundParameters.ContainsKey('Patch')) {
         return [pscustomobject]@{
             Name = $script:PackageName
             Patch = ''
@@ -18,6 +22,12 @@ function Get-LocalPackageIdentity {
             ControlCommand = 'clawctl'
             StateDirectory = 'artifacts\local-package'
         }
+    }
+    if ([string]::IsNullOrWhiteSpace($Patch)) {
+        throw (
+            '-Patch requires a name. Omit -Patch to deploy the base ' +
+            "$script:PackageName identity."
+        )
     }
 
     # The suffix becomes part of the package name, both execution aliases, and
@@ -782,7 +792,9 @@ function Remove-LocalPackageRegistration {
         [hashtable]$Operations = @{}
     )
 
-    $identity = Get-LocalPackageIdentity $Patch
+    $identityArguments = @{}
+    if ($PSBoundParameters.ContainsKey('Patch')) { $identityArguments.Patch = $Patch }
+    $identity = Get-LocalPackageIdentity @identityArguments
     $services = Get-LocalPackageServices $Operations
     $state = Join-Path ([IO.Path]::GetFullPath($RepositoryRoot)) "$($identity.StateDirectory)\$Architecture"
     $layoutDirectory = Join-Path $state 'layout'
@@ -859,7 +871,9 @@ function Invoke-LocalPackageDeployment {
         throw '-PayloadDirectory cannot be combined with -PayloadRunId or -RefreshPayload.'
     }
 
-    $identity = Get-LocalPackageIdentity $Patch
+    $identityArguments = @{}
+    if ($PSBoundParameters.ContainsKey('Patch')) { $identityArguments.Patch = $Patch }
+    $identity = Get-LocalPackageIdentity @identityArguments
     $services = Get-LocalPackageServices $Operations
     $root = (Resolve-Path -LiteralPath $RepositoryRoot -ErrorAction Stop).Path
     # A patched identity owns its whole state root. Its layout links the payload

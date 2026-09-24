@@ -110,19 +110,24 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path $PSScriptRoot -Parent
 Import-Module (Join-Path $PSScriptRoot 'LocalPackage.psm1') -Force
 
+# Forward -Patch only when it was supplied, so an explicitly empty value
+# reaches the module's validation instead of silently selecting the base.
+$identityArguments = @{}
+if ($PSBoundParameters.ContainsKey('Patch')) { $identityArguments.Patch = $Patch }
+
 if ($Unregister) {
-    Remove-LocalPackageRegistration -RepositoryRoot $repositoryRoot -Architecture $Architecture -Patch $Patch
+    Remove-LocalPackageRegistration -RepositoryRoot $repositoryRoot -Architecture $Architecture @identityArguments
     return
 }
 
 Invoke-LocalPackageDeployment `
     -RepositoryRoot $repositoryRoot `
     -Architecture $Architecture `
-    -Patch $Patch `
     -PayloadDirectory $PayloadDirectory `
     -PayloadRunId $PayloadRunId `
     -RefreshPayload:$RefreshPayload `
     -ReplaceExistingInstall:$ReplaceExistingInstall `
     -Force:$Force `
-    -SkipSetup:$SkipSetup |
+    -SkipSetup:$SkipSetup `
+    @identityArguments |
     Out-Null

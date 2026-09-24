@@ -766,6 +766,48 @@ try {
         ) "An invalid -Patch '$invalid' changed state before it was rejected."
     }
 
+    # An explicitly empty -Patch, such as an unset variable, must fail rather
+    # than fall back to the base identity. Falling back would let deploy with
+    # -ReplaceExistingInstall remove an installed release and its app data,
+    # and let -Unregister remove this checkout's base loose registration.
+    foreach ($empty in @('', $null, ' ')) {
+        $packaged = New-Fixture
+        $packaged.Installed = @(
+            [pscustomobject]@{
+                Name = 'OpenClawFoundation.OpenClawGateway'
+                Version = '1.2.3.4'; PackageFullName = 'OpenClawFoundation.OpenClawGateway_1.2.3.4_x64__pkg'
+                PackageFamilyName = 'OpenClawFoundation.OpenClawGateway_pkg'
+                InstallLocation = 'C:\Program Files\WindowsApps\fake'; IsDevelopmentMode = $false; Status = 'Ok'
+            }
+            [pscustomobject]@{
+                Name = 'OpenClaw.Gateway'
+                Version = '2026.9.403.0'; PackageFullName = 'OpenClaw.Gateway_2026.9.403.0_x64__legacy'
+                PackageFamilyName = 'OpenClaw.Gateway_kaa03rpbbqef6'
+                InstallLocation = 'C:\Program Files\WindowsApps\legacy'; IsDevelopmentMode = $false; Status = 'Ok'
+            }
+        )
+        Assert-Fails {
+            Invoke-Fixture $packaged @{ Patch = $empty; ReplaceExistingInstall = $true }
+        } '-Patch requires a name'
+        Assert-True (
+            @($packaged.Removals).Count -eq 0 -and $packaged.Registrations -eq 0 -and
+            @($packaged.PackageQueries).Count -eq 0 -and @($packaged.Installed).Count -eq 2
+        ) "An empty -Patch '$empty' reached the base or legacy installs."
+
+        $owned = New-Fixture
+        $ownedBase = Invoke-Fixture $owned
+        $queriesBefore = @($owned.PackageQueries).Count
+        Assert-Fails {
+            Remove-LocalPackageRegistration -RepositoryRoot $owned.Root -Patch $empty -Operations $owned.Operations
+        } '-Patch requires a name'
+        Assert-True (
+            @($owned.Removals).Count -eq 0 -and
+            @($owned.PackageQueries).Count -eq $queriesBefore -and
+            @($owned.Installed)[0].PackageFullName -eq $ownedBase.PackageFullName -and
+            (Test-Path -LiteralPath (Join-Path $owned.Root 'artifacts\local-package\x64\state.json'))
+        ) "An empty -Patch '$empty' unregistered the base loose registration."
+    }
+
     # An alias the patch cannot rename would collide with the base command.
     $extraAlias = New-Fixture
     $extraManifest = Join-Path $extraAlias.Root 'src\OpenClaw.Launcher\Package.appxmanifest'
