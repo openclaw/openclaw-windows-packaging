@@ -121,8 +121,11 @@ itself succeeded.
 ### Side-by-side patched identities
 
 `-Patch <name>` registers a separate development identity next to the base
-package. Name it for the work, such as a branch topic, so several iterations
-can coexist and each is easy to identify and remove:
+package. It is a local inner-loop affordance: it lets you keep several
+deployments registered at the same time for development and testing, such as
+parallel branches or agent sessions, or a change beside an installed release.
+It is not a product or release identity. Name it for the work, such as a
+branch topic, so each iteration is easy to identify and remove:
 
 ```powershell
 .\scripts\Deploy-LocalPackage.ps1 -Patch pwsh-exec
@@ -146,10 +149,14 @@ beside an installed MSIX or this checkout's base loose registration. Each
 patch keeps its own payload cache, so its first deployment downloads the
 payload again unless you pass `-PayloadDirectory`.
 
-Known limits:
+Known limits. These are accepted because patched identities exist only for
+local concurrent development and testing:
 
-- Help, errors, and next-step guidance still print `clawctl` and `openclaw`.
-  Substitute the patched command; the base command targets the base package.
+- Help, errors, and next-step guidance, including setup and teardown recovery
+  instructions, still print `clawctl` and `openclaw`. Always substitute the
+  patched command, such as `clawctl-pwsh-exec setup`. Running the printed base
+  command verbatim acts on the base package and its isolated session when one
+  is installed, and leaves the patch unrecovered.
 - Both gateways use OpenClaw's default port unless configured otherwise. Give
   one instance a different `gateway.port` before running both gateways at
   once.

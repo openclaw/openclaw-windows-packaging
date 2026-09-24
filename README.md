@@ -522,8 +522,12 @@ NativeAOT launcher, assembles a Developer Mode layout under
 runs setup so `openclaw-pwsh-exec` is immediately usable. The patch registers
 beside the base package as `openclaw-pwsh-exec` and `clawctl-pwsh-exec`, with
 its own app data and isolated session, so iteration never replaces the base
-`openclaw` and `clawctl`. Omit `-Patch` only to exercise the base identity
-itself, such as its aliases, shell completion, or a loose/MSIX transition.
+`openclaw` and `clawctl`. Patched identities are a local inner-loop affordance
+for keeping several development and test deployments registered at once; they
+are not release identities. Their help and error guidance still names
+`clawctl` and `openclaw`, so run the patched commands instead. Omit `-Patch`
+only to exercise the base identity itself, such as its aliases, shell
+completion, or a loose/MSIX transition.
 
 When you finish, tear down and unregister the patch, in that order:
 

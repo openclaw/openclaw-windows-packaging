@@ -43,12 +43,15 @@ Skip the final `clawctl setup` that extracts the bundled Node.js runtime. The
 package is registered but not runnable until setup is run once.
 .PARAMETER Patch
 Deploy a side-by-side development identity instead of the base package; this
-is the recommended way to iterate. Name it for the work. With -Patch pwsh-exec
+is the recommended way to iterate. It is a local inner-loop affordance for
+keeping several development and test deployments registered at once, not a
+release identity. Name it for the work. With -Patch pwsh-exec
 the package is OpenClawFoundation.OpenClawGateway-pwsh-exec, its commands are
 openclaw-pwsh-exec and clawctl-pwsh-exec, and its state lives under
 artifacts\local-package\patches\pwsh-exec. It gets its own isolated session and
 app data and never touches the base registration. Use 1 to 15 letters, digits,
-or hyphens; the value is lowercased. When finished, run
+or hyphens; the value is lowercased. Its help and error guidance still names
+clawctl and openclaw; run the patched commands instead. When finished, run
 `clawctl-pwsh-exec teardown --force`, then -Unregister with the same -Patch.
 .PARAMETER Unregister
 Remove the local development registration and exit. Cached payloads and
