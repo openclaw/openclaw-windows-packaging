@@ -6,7 +6,8 @@
     The suite creates reusable throwaway Git repository templates under one
     suite-owned temporary root. Each case receives a copied template, so no
     case touches this clone's .git directory, the user's global Git
-    configuration, another case, or the real quality script.
+    configuration, another case, or the real quality script. Because cases
+    share nothing, they run concurrently on thread jobs.
 
     The end-to-end cases replace scripts\Test-DotNetQuality.ps1 in the
     throwaway repository with a stub, then perform a real `git push` to a local
@@ -16,7 +17,10 @@
     The documentation-skip cases start from a template whose branch is already
     on the remote and whose stub fails. A push that succeeds without the stub's
     output proves the hook skipped the quality script; a blocked push that
-    printed the pushing worktree's stub label proves it ran.
+    printed the pushing worktree's stub label proves it ran. Cases whose
+    subject is classification rather than Git's push integration run the real
+    installed hook directly with the ref line Git would send, built from real
+    fixture commits, and skip only the push transport.
 
     Cases run in an ordinary clone and against a linked worktree of that
     clone, because Git keeps one hooks directory per clone but runs the pushing
@@ -39,6 +43,9 @@ $templatesRoot = Join-Path $suiteRoot 'templates'
 $casesRoot = Join-Path $suiteRoot 'cases'
 $testRepositoryTemplates = @{}
 $templateRemoteRefs = @{}
+$hookShell = @{}
+$caseJobs = [System.Collections.Generic.List[object]]::new()
+$caseThrottleLimit = [Math]::Min(8, [Math]::Max(2, [Environment]::ProcessorCount))
 
 New-Item -ItemType Directory -Path $templatesRoot, $casesRoot -Force | Out-Null
 
@@ -76,8 +83,9 @@ function Get-TestRepositoryTemplate {
         With -Layout Worktree the repository also gains a linked worktree on
         its own branch, and that linked worktree becomes the target the case
         operates on. The primary work tree then carries the opposite stub exit
-        code, so a push from the linked worktree can only behave as the case
-        expects if Git ran the pushing worktree's quality script.
+        code and a classifier that always reports code, so a push from the
+        linked worktree can only behave as the case expects if Git ran the
+        pushing worktree's quality script and classifier.
 
         With -Published the target branch is pushed to the remote without a
         hook, and the managed hook is then installed. That is the starting
@@ -104,9 +112,17 @@ function Get-TestRepositoryTemplate {
 
     Invoke-Git init --bare --initial-branch=main $remote | Out-Null
     Invoke-Git init --initial-branch=main $work | Out-Null
-    Invoke-Git -C $work config user.email 'hook-tests@example.invalid' | Out-Null
-    Invoke-Git -C $work config user.name 'Hook Tests' | Out-Null
-    Invoke-Git -C $work remote add origin $remote | Out-Null
+
+    # Written directly rather than through `git config` and `git remote add`,
+    # which would cost one Git process each for every template.
+    [System.IO.File]::AppendAllText(
+        (Join-Path $work '.git\config'),
+        ("[user]`n`temail = hook-tests@example.invalid`n`tname = Hook Tests`n" +
+            "[remote `"origin`"]`n`turl = $($remote.Replace('\', '/'))`n" +
+            "`tfetch = +refs/heads/*:refs/remotes/origin/*`n"))
+
+    # Git's sample hooks are never run; dropping them keeps every case copy small.
+    Remove-Item -Path (Join-Path $work '.git\hooks\*.sample'), (Join-Path $remote 'hooks\*.sample')
 
     New-Item -ItemType Directory -Path (Join-Path $work 'hooks') -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $work 'scripts') -Force | Out-Null
@@ -142,13 +158,19 @@ function Get-TestRepositoryTemplate {
         Invoke-Git -C $linked add --all | Out-Null
         Invoke-Git -C $linked commit -m 'linked stub' | Out-Null
 
+        # Left uncommitted in the primary work tree only: a hook that consulted
+        # the primary work tree's classifier would never skip a push.
+        [System.IO.File]::WriteAllText(
+            (Join-Path $work 'scripts\Get-PackagingRelevance.ps1'),
+            "Write-Output 'true'`n")
+
         $target = $linked
         $branch = 'feature'
     }
 
     if ($Published) {
         Invoke-Git -C $target push origin $branch | Out-Null
-        & $installScript -RepositoryRoot $target | Out-Null
+        & $installScript -RepositoryRoot $target 6>$null | Out-Null
     }
 
     $template = [pscustomobject]@{
@@ -199,6 +221,32 @@ function Update-TemplatePath {
         -Message "The copied Git metadata still points at template '$TemplateRoot'."
 }
 
+function Copy-Directory {
+    <#
+        Copies a template tree, including the hidden .git directory. The .NET
+        file APIs are used because Copy-Item costs several times as much per
+        file, and every case copies a template.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$Source,
+
+        [Parameter(Mandatory)]
+        [string]$Destination
+    )
+
+    [System.IO.Directory]::CreateDirectory($Destination) | Out-Null
+    foreach ($directory in [System.IO.Directory]::EnumerateDirectories(
+            $Source, '*', [System.IO.SearchOption]::AllDirectories)) {
+        [System.IO.Directory]::CreateDirectory(
+            $Destination + $directory.Substring($Source.Length)) | Out-Null
+    }
+    foreach ($file in [System.IO.Directory]::EnumerateFiles(
+            $Source, '*', [System.IO.SearchOption]::AllDirectories)) {
+        [System.IO.File]::Copy($file, $Destination + $file.Substring($Source.Length))
+    }
+}
+
 function New-TestRepository {
     param(
         [int]$StubExitCode = 0,
@@ -215,7 +263,7 @@ function New-TestRepository {
         -Published:$Published
     $root = Join-Path $casesRoot ([System.Guid]::NewGuid().ToString('n'))
 
-    Copy-Item -LiteralPath $template.Root -Destination $root -Recurse -Force
+    Copy-Directory -Source $template.Root -Destination $root
 
     $work = Join-Path $root 'work'
     $remote = Join-Path $root 'remote.git'
@@ -296,6 +344,12 @@ function Assert-True {
 }
 
 function Invoke-Case {
+    <#
+        Prepares a repository for each layout on this thread, so shared
+        templates are built exactly once, then starts the case body on a
+        thread job. Cases share no state, so they run concurrently;
+        Wait-Case reports every result in declaration order.
+    #>
     param(
         [Parameter(Mandatory)]
         [string]$Name,
@@ -316,13 +370,56 @@ function Invoke-Case {
             -StubExitCode $StubExitCode `
             -Layout $layout `
             -Published:$Published
-        try {
-            & $Body $repository
-            Write-Host "PASS $Name [$layout]"
+
+        # A script block stays bound to the runspace that created it, so the
+        # body and its helpers cross into the job as text.
+        $job = Start-ThreadJob `
+            -ThrottleLimit $caseThrottleLimit `
+            -ArgumentList $Body.ToString(), $repository, $caseContext `
+            -ScriptBlock {
+                param($BodyText, $Repository, $Context)
+
+                Set-StrictMode -Version Latest
+                $ErrorActionPreference = 'Stop'
+                foreach ($helper in $Context.Helpers.GetEnumerator()) {
+                    Set-Item `
+                        -LiteralPath "function:global:$($helper.Key)" `
+                        -Value ([scriptblock]::Create($helper.Value))
+                }
+                $installScript = $Context.InstallScript
+                $hookShell = $Context.HookShell
+
+                try {
+                    & ([scriptblock]::Create($BodyText)) $Repository
+                }
+                finally {
+                    Remove-Item -LiteralPath $Repository.Root -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
+        $caseJobs.Add([pscustomobject]@{ Name = $Name; Layout = $layout; Job = $job })
+    }
+}
+
+function Wait-Case {
+    $failures = [System.Collections.Generic.List[string]]::new()
+    foreach ($case in $caseJobs) {
+        $null = Wait-Job -Job $case.Job
+        $caseErrors = $null
+        Receive-Job -Job $case.Job -ErrorAction SilentlyContinue -ErrorVariable caseErrors *> $null
+        if ($case.Job.State -eq 'Completed' -and -not $caseErrors) {
+            Write-Host "PASS $($case.Name) [$($case.Layout)]"
         }
-        finally {
-            Remove-Item -LiteralPath $repository.Root -Recurse -Force -ErrorAction SilentlyContinue
+        else {
+            $reason = @($caseErrors | ForEach-Object { $_.ToString() }) -join ' '
+            Write-Host "FAIL $($case.Name) [$($case.Layout)]: $reason"
+            $failures.Add("$($case.Name) [$($case.Layout)]")
         }
+        Remove-Job -Job $case.Job -Force
+    }
+    $caseJobs.Clear()
+
+    if ($failures.Count -gt 0) {
+        throw "Git hook tests failed: $($failures -join '; ')."
     }
 }
 
@@ -360,10 +457,20 @@ function Invoke-Push {
     }
 }
 
+function Get-HookShell {
+    # The shell Git itself uses to run hooks.
+    if (-not $hookShell.ContainsKey('Path')) {
+        $hookShell.Path = Invoke-Git var GIT_SHELL_PATH
+    }
+    return $hookShell.Path
+}
+
 function Invoke-HookDirectly {
     <#
-        Runs the installed hook the way Git would, but with caller-chosen
-        standard input, so cases can present input a real push never sends.
+        Runs the installed hook the way Git would for a push to origin, with
+        caller-chosen standard input and no push transport. Cases use it both
+        for input a real push never sends and to skip transport cost when a ref
+        line built from real fixture commits proves the same behavior.
     #>
     param(
         [Parameter(Mandatory)]
@@ -371,17 +478,20 @@ function Invoke-HookDirectly {
 
         [Parameter(Mandatory)]
         [AllowEmptyString()]
-        [string]$HookInput
+        [string]$HookInput,
+
+        # The URL Git passes as the hook's second argument; the hook queries it
+        # for the destination's current branches and tags.
+        [string]$RemoteLocation = $Repository.Remote
     )
 
     $inputPath = Join-Path $Repository.Root 'hook-input.txt'
     [System.IO.File]::WriteAllText($inputPath, $HookInput)
-    $shell = Invoke-Git var GIT_SHELL_PATH
-    $output = & $shell -c 'cd "$1" && exec sh "$2" origin "$3" < "$4"' `
+    $output = & (Get-HookShell) -c 'cd "$1" && exec sh "$2" origin "$3" < "$4"' `
         hook-test `
         ($Repository.Target -replace '\\', '/') `
         ($Repository.HookPath -replace '\\', '/') `
-        ($Repository.Remote -replace '\\', '/') `
+        ($RemoteLocation -replace '\\', '/') `
         ($inputPath -replace '\\', '/') 2>&1
     return [pscustomobject]@{
         ExitCode = $LASTEXITCODE
@@ -454,6 +564,19 @@ function Test-RemoteRef {
 }
 
 try {
+# Everything a case body calls, handed to each case's thread job as text.
+$caseContext = @{
+    InstallScript = $installScript
+    HookShell     = @{ Path = Get-HookShell }
+    Helpers       = @{}
+}
+foreach ($helper in @(
+        'Invoke-Git', 'Assert-Fails', 'Assert-True', 'Add-CommittedFile',
+        'Invoke-Push', 'Get-HookShell', 'Invoke-HookDirectly',
+        'Assert-QualityCheckSkipped', 'Assert-QualityCheckRan', 'Test-RemoteRef')) {
+    $caseContext.Helpers[$helper] = (Get-Command -Name $helper -CommandType Function).ScriptBlock.ToString()
+}
+
 Invoke-Case 'installs the managed hook' {
     param($repository)
 
@@ -669,7 +792,7 @@ Invoke-Case 'a push that changes code runs the quality check' -StubExitCode 1 -P
         -Message 'A blocked push still updated the remote.'
 }
 
-Invoke-Case 'a new branch with only documentation commits skips the quality check' -StubExitCode 1 -Published {
+Invoke-Case 'a new branch with only documentation commits skips the quality check' -StubExitCode 1 -Published -Layouts 'Clone' {
     param($repository)
 
     Add-CommittedFile $repository 'docs/new-page.md'
@@ -681,7 +804,7 @@ Invoke-Case 'a new branch with only documentation commits skips the quality chec
         -Message 'The skipped new branch did not reach the remote.'
 }
 
-Invoke-Case 'a new branch with a code commit runs the quality check' -StubExitCode 1 -Published {
+Invoke-Case 'a new branch with a code commit runs the quality check' -StubExitCode 1 -Published -Layouts 'Clone' {
     param($repository)
 
     Add-CommittedFile $repository 'src/App.cs'
@@ -696,7 +819,8 @@ Invoke-Case 'a new branch with a code commit runs the quality check' -StubExitCo
 Invoke-Case 'deleting a remote branch skips the quality check' -StubExitCode 1 -Published -Layouts 'Clone' {
     param($repository)
 
-    Invoke-Git -C $repository.Target push --no-verify origin 'HEAD:refs/heads/topic' | Out-Null
+    $head = Invoke-Git -C $repository.Target rev-parse HEAD
+    Invoke-Git --git-dir=$($repository.Remote) update-ref refs/heads/topic $head | Out-Null
 
     $result = Invoke-Push $repository origin ':refs/heads/topic'
     Assert-QualityCheckSkipped $result 'the push only deletes remote refs' 'branch deletion'
@@ -725,23 +849,33 @@ Invoke-Case 'a multi-ref push runs the quality check when any ref changes code' 
     }
 }
 
+# The remaining cases hand the installed hook the ref line Git would send for
+# a push of real fixture commits, so the real hook and classifier run without
+# the cost of push transport.
+
 Invoke-Case 'renaming a code file into docs runs the quality check' -StubExitCode 1 -Published -Layouts 'Clone' {
     param($repository)
 
+    $published = Invoke-Git -C $repository.Target rev-parse refs/remotes/origin/main
     New-Item -ItemType Directory -Path (Join-Path $repository.Target 'docs') -Force | Out-Null
     Invoke-Git -C $repository.Target mv seed.txt docs/seed.md | Out-Null
     Invoke-Git -C $repository.Target commit -m 'move seed into docs' | Out-Null
+    $head = Invoke-Git -C $repository.Target rev-parse HEAD
 
-    $result = Invoke-Push $repository origin $repository.Branch
+    $result = Invoke-HookDirectly $repository "refs/heads/main $head refs/heads/main $published`n"
     Assert-QualityCheckRan $result $repository 'the push changes more than documentation' 'rename out of code'
 }
 
 Invoke-Case 'an unclassifiable push runs the quality check' -StubExitCode 1 -Published -Layouts 'Clone' {
     param($repository)
 
+    $published = Invoke-Git -C $repository.Target rev-parse refs/remotes/origin/main
     Add-CommittedFile $repository 'README.md'
+    $head = Invoke-Git -C $repository.Target rev-parse HEAD
     $classifier = Join-Path $repository.Target 'scripts\Get-PackagingRelevance.ps1'
 
+    # Missing, failing, and unrecognized-output classifiers reach three
+    # different branches of the hook; each must run the quality script.
     foreach ($replacement in @(
             $null,
             "throw 'classifier failed'`n",
@@ -754,7 +888,7 @@ Invoke-Case 'an unclassifiable push runs the quality check' -StubExitCode 1 -Pub
             [System.IO.File]::WriteAllText($classifier, $replacement)
         }
 
-        $result = Invoke-Push $repository origin $repository.Branch
+        $result = Invoke-HookDirectly $repository "refs/heads/main $head refs/heads/main $published`n"
         Assert-QualityCheckRan $result $repository 'could not classify the pushed files' 'unclassifiable push'
     }
 }
@@ -763,17 +897,28 @@ Invoke-Case 'a documentation-only root commit runs the quality check' -StubExitC
     param($repository)
 
     $blob = Invoke-Git -C $repository.Target rev-parse 'HEAD:seed.txt'
-    $tree = "100644 blob $blob`tREADME.md" | & git -C $repository.Target mktree
+    # printf in Git's shell keeps the tree entry LF-terminated; a PowerShell
+    # pipe would append CR and name the file "README.md`r".
+    $tree = & (Get-HookShell) -c 'printf "100644 blob %s\tREADME.md\n" "$2" | git -C "$1" mktree' `
+        mktree `
+        ($repository.Target -replace '\\', '/') `
+        $blob
     Assert-True -Condition ($LASTEXITCODE -eq 0) -Message 'git mktree failed.'
     $rootCommit = Invoke-Git -C $repository.Target commit-tree $tree -m 'documentation root'
+    $rootFiles = @(Invoke-Git -C $repository.Target ls-tree --name-only $rootCommit)
+    Assert-True `
+        -Condition (($rootFiles.Count -eq 1) -and ($rootFiles[0] -ceq 'README.md')) `
+        -Message "The root commit fixture is not documentation-only: $($rootFiles -join ', ')"
 
-    $result = Invoke-Push $repository origin "$($rootCommit):refs/heads/docs-root"
+    $result = Invoke-HookDirectly $repository "refs/heads/docs-root $rootCommit refs/heads/docs-root $('0' * 40)`n"
     Assert-QualityCheckRan $result $repository 'the push introduces a root commit' 'documentation root commit'
 }
 
 Invoke-Case 'a documentation branch that merges code runs the quality check' -StubExitCode 1 -Published -Layouts 'Clone' {
     param($repository)
 
+    # The code branch is on the remote, so the code commit itself is excluded
+    # and only the merge's first-parent diff can report its change.
     Invoke-Git -C $repository.Target switch -c code | Out-Null
     Add-CommittedFile $repository 'src/App.cs'
     Invoke-Git -C $repository.Target push --no-verify origin code | Out-Null
@@ -781,8 +926,9 @@ Invoke-Case 'a documentation branch that merges code runs the quality check' -St
     Invoke-Git -C $repository.Target switch -c docs main | Out-Null
     Add-CommittedFile $repository 'docs/merge.md'
     Invoke-Git -C $repository.Target merge --no-ff --no-edit code | Out-Null
+    $head = Invoke-Git -C $repository.Target rev-parse HEAD
 
-    $result = Invoke-Push $repository origin docs
+    $result = Invoke-HookDirectly $repository "refs/heads/docs $head refs/heads/docs $('0' * 40)`n"
     Assert-QualityCheckRan $result $repository 'the push changes more than documentation' 'merge of code into documentation'
 }
 
@@ -790,22 +936,58 @@ Invoke-Case 'unexpected hook input runs the quality check' -StubExitCode 1 -Publ
     param($repository)
 
     $head = Invoke-Git -C $repository.Target rev-parse HEAD
-    $zero = '0' * 40
 
-    foreach ($hookInput in @(
-            '',
-            "refs/heads/main $head refs/heads/main`n",
-            "refs/heads/main $head refs/heads/main $zero extra`n",
-            "refs/heads/main $($head.ToUpperInvariant()) refs/heads/main $zero`n"
-        )) {
-        $result = Invoke-HookDirectly $repository $hookInput
-        Assert-QualityCheckRan $result $repository 'unexpected hook input' 'unexpected hook input'
-    }
+    $result = Invoke-HookDirectly $repository ''
+    Assert-QualityCheckRan $result $repository 'unexpected hook input' 'empty hook input'
+
+    $result = Invoke-HookDirectly $repository "refs/heads/main $head refs/heads/main`n"
+    Assert-QualityCheckRan $result $repository 'unexpected hook input' 'malformed hook input'
 
     $unknownObject = 'e' * 40
     $result = Invoke-HookDirectly $repository "refs/heads/main $head refs/heads/main $unknownObject`n"
     Assert-QualityCheckRan $result $repository 'could not determine the pushed commits' 'unknown remote object'
 }
+
+Invoke-Case 'an unreachable destination runs the quality check' -StubExitCode 1 -Published -Layouts 'Clone' {
+    param($repository)
+
+    $published = Invoke-Git -C $repository.Target rev-parse refs/remotes/origin/main
+    Add-CommittedFile $repository 'README.md'
+    $head = Invoke-Git -C $repository.Target rev-parse HEAD
+
+    $result = Invoke-HookDirectly `
+        -Repository $repository `
+        -HookInput "refs/heads/main $head refs/heads/main $published`n" `
+        -RemoteLocation (Join-Path $repository.Root 'missing.git')
+    Assert-QualityCheckRan $result $repository 'could not list the destination refs' 'unreachable destination'
+}
+
+Invoke-Case 'a code commit known only to a stale tracking ref runs the quality check' -StubExitCode 1 -Published -Layouts 'Clone' {
+    param($repository)
+
+    $publishedHead = Invoke-Git --git-dir=$($repository.Remote) rev-parse $($repository.Branch)
+    Add-CommittedFile $repository 'src/App.cs'
+    Invoke-Git -C $repository.Target push --no-verify origin 'HEAD:refs/heads/topic' | Out-Null
+
+    # The branch is deleted on the remote, and this clone has not pruned, so
+    # refs/remotes/origin/topic still claims the code commit is pushed.
+    Invoke-Git --git-dir=$($repository.Remote) update-ref '-d' refs/heads/topic | Out-Null
+    & git -C $repository.Target rev-parse --verify --quiet refs/remotes/origin/topic | Out-Null
+    Assert-True `
+        -Condition ($LASTEXITCODE -eq 0) `
+        -Message 'The stale remote-tracking ref precondition was not set up.'
+    Add-CommittedFile $repository 'README.md'
+
+    $result = Invoke-Push $repository origin $repository.Branch
+    Assert-QualityCheckRan $result $repository 'the push changes more than documentation' 'stale tracking ref'
+
+    $remoteHead = Invoke-Git --git-dir=$($repository.Remote) rev-parse $($repository.Branch)
+    Assert-True `
+        -Condition ($remoteHead -eq $publishedHead) `
+        -Message 'A blocked push still updated the remote.'
+}
+
+    Wait-Case
 
     foreach ($key in $testRepositoryTemplates.Keys) {
         $template = $testRepositoryTemplates[$key]
@@ -818,5 +1000,10 @@ Invoke-Case 'unexpected hook input runs the quality check' -StubExitCode 1 -Publ
     Write-Host 'All Git hook tests passed.'
 }
 finally {
+    # A failure while declaring cases can leave jobs running; stop them before
+    # their repositories are removed.
+    foreach ($case in $caseJobs) {
+        Remove-Job -Job $case.Job -Force -ErrorAction SilentlyContinue
+    }
     Remove-Item -LiteralPath $suiteRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

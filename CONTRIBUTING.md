@@ -180,19 +180,22 @@ remove it:
 The hook skips the quality script when every file the push changes is
 documentation, using the same rule CI uses to skip packaging
 (`scripts\Get-PackagingRelevance.ps1`: `*.md`, `docs/`, and `LICENSE`). The
-changed files are the files each new commit changes against its first parent,
-where a new commit is one that your clone's remote-tracking refs for the
-destination remote do not already contain. A push that only deletes remote
-refs, or whose new commits change no files, checks nothing. A push that
-introduces a root commit, input the hook does not recognize, and any failure to
-determine or classify the changed files run the quality script. The hook prints
-one line saying whether it skipped or ran the quality script and why.
+changed files are the files each new commit changes against its first parent.
+A new commit is one that no branch or tag on the destination contains; the
+hook asks the destination for its current branches and tags with
+`git ls-remote` during the push, which adds one round trip (about 0.5 s to
+GitHub here). A push that only deletes remote refs, or whose new commits
+change no files, checks nothing. A push that introduces a root commit, input
+the hook does not recognize, a failed query of the destination, and any
+failure to determine or classify the changed files run the quality script. The
+hook prints one line saying whether it skipped or ran the quality script and
+why.
 
-The skip trusts your local remote-tracking refs. Stale refs can cause an extra
-run, or a skipped run: a remote-tracking ref left behind after its remote
-branch was deleted, which `git fetch --prune` would remove, makes its commits
-look already pushed. The hook is a latency shortcut; CI remains
-authoritative.
+The hook does not trust your local remote-tracking refs, so a ref left behind
+after its remote branch was deleted cannot hide a commit the destination does
+not have. Commits that exist on the destination only outside its branches and
+tags count as new, which can cause an extra run. The hook is a latency
+shortcut; CI remains authoritative.
 
 A clone has one hooks directory, shared by every linked worktree
 (`git worktree add`). Installing or removing from any worktree therefore
