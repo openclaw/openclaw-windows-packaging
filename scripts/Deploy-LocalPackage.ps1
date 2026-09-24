@@ -19,8 +19,9 @@ repository, so deleting artifacts\local-package or the checkout breaks it until
 the command runs again. This is a development build and is not an
 official-signing input; use Build-LocalMSIX.ps1 for a verified unsigned MSIX.
 .PARAMETER Architecture
-Build and register x64 or arm64. Defaults to this device's native architecture;
-pass x64 explicitly to build an emulated x64 layout on an ARM64 device.
+Build and register x64 or arm64. Defaults to this device's native architecture.
+An x64 layout registers on an ARM64 device, but its `clawctl setup` fails there
+because the x64 MXC executor exits with 0xC000007B.
 .PARAMETER PayloadDirectory
 Use an existing payload root containing app and payload-metadata.json. The
 directory is read directly and never modified, and no GitHub access is needed.

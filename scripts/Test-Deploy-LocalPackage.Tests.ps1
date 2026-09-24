@@ -874,7 +874,7 @@ try {
     $crossArchitecture = New-Fixture
     $crossArchitectureDeployed = Invoke-Fixture $crossArchitecture @{ Architecture = 'x64' }
     $crossArchitecture.Operations.NativeArchitecture = { 'arm64' }
-    Assert-Fails { Invoke-Fixture $crossArchitecture } "this checkout's x64 layout\. Run -Unregister -Architecture x64"
+    Assert-Fails { Invoke-Fixture $crossArchitecture } "this checkout's x64 layout\. Run -Unregister -Architecture x64 first, then deploy again"
     Assert-Fails {
         Remove-LocalPackageRegistration -RepositoryRoot $crossArchitecture.Root -Operations $crossArchitecture.Operations
     } "this checkout's x64 layout\. Re-run -Unregister with -Architecture x64"

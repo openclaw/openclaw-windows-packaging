@@ -44,9 +44,10 @@ runtime:
 .\scripts\Deploy-LocalPackage.ps1 -Patch pwsh-exec
 ```
 
-`-Architecture` defaults to the device's native architecture. Pass
-`-Architecture x64` to build an emulated x64 layout on an ARM64 device, and pass
-the same value to `-Unregister`.
+`-Architecture` defaults to the device's native architecture; pass the same
+value to `-Unregister`. An x64 layout registers on an ARM64 device, but its
+`clawctl setup` fails there because the x64 MXC executor exits with
+`0xC000007B`.
 
 The script resolves a payload, stages MXC and the bundled Node.js runtime,
 publishes both the NativeAOT `openclaw.exe` launcher and the NativeAOT session
@@ -71,7 +72,7 @@ Use options for a concrete reason:
 
 | Option | Use it when |
 | --- | --- |
-| `-Architecture x64` or `arm64` | The target architecture is runnable on this device. `x64` is the default. |
+| `-Architecture x64` or `arm64` | The target architecture is runnable on this device. Omitted, it selects the device's native architecture. |
 | `-PayloadDirectory <path>` | You already have an expanded payload containing `app` and `payload-metadata.json`, or need an offline/reproducible iteration. It is read directly, is not modified, makes no GitHub request, and must be supplied on every run. |
 | no payload option | You want the script to resolve the latest successful `main` payload workflow. |
 | `-PayloadRunId <id>` | You need a specific successful workflow payload instead of the latest one. Use the current branch's successful workflow run when that branch changes packaged application content. |

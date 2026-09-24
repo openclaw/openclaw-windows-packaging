@@ -1006,8 +1006,7 @@ function Invoke-LocalPackageDeployment {
                 if ($otherArchitecture) {
                     throw (
                         "$($identity.Name) is registered from this checkout's $otherArchitecture " +
-                        "layout. Run -Unregister -Architecture $otherArchitecture first, or " +
-                        "pass -Architecture $otherArchitecture to keep deploying it."
+                        "layout. Run -Unregister -Architecture $otherArchitecture first, then deploy again."
                     )
                 }
                 throw (
