@@ -464,22 +464,6 @@ function Invoke-LocalPackageMsixBuild {
         }
 
         $cacheDirectory = Join-Path $msixRoot "payloads\$Architecture"
-        $selection = $null
-        try { $selection = Read-LocalPackageRecord (Join-Path $cacheDirectory 'current.json') }
-        catch { $selection = $null }
-        if ($null -ne $selection -and $selection['generation'] -is [string] -and
-            $selection['generation'] -match '^[1-9]\d*-[0-9a-f]{32}$') {
-            # This run holds the checkout and nothing links a composition's
-            # payload, so a generation the selection does not name was left by
-            # an interrupted run and is reclaimed instead of accumulating.
-            foreach ($generation in Get-ChildItem -LiteralPath $cacheDirectory -Directory -Force) {
-                if ($generation.Name -cne $selection['generation'] -and
-                    $generation.Name -match '^[1-9]\d*-[0-9a-f]{32}$' -and
-                    ($generation.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) {
-                    Remove-Item -LiteralPath $generation.FullName -Recurse -Force
-                }
-            }
-        }
         $runId = $PayloadRunId
         if ($runId -eq 0) {
             # An ordinary build composes the latest successful payload, so the
@@ -487,6 +471,9 @@ function Invoke-LocalPackageMsixBuild {
             # to it here could silently compose a superseded payload.
             try { $runId = & $services.LatestRun }
             catch {
+                $selection = $null
+                try { $selection = Read-LocalPackageRecord (Join-Path $cacheDirectory 'current.json') }
+                catch { $selection = $null }
                 $pin = if ($null -ne $selection -and $selection['runId'] -is [long] -and $selection['runId'] -gt 0) {
                     "-PayloadRunId $($selection['runId']) to reuse the cached payload"
                 }
@@ -513,7 +500,22 @@ function Invoke-LocalPackageMsixBuild {
             $accepted = $true
         }
         finally {
-            if ($accepted) { Complete-LocalPackagePayload $payload }
+            if ($accepted) {
+                Complete-LocalPackagePayload $payload
+                # After a success the cache holds only the selected generation.
+                # This run holds the checkout and nothing links a composition's
+                # payload, so any other generation was left by an interrupted
+                # run, including a first download that never selected one or a
+                # generation an unreadable selection could no longer name.
+                $selected = [IO.Path]::GetFileName($payload.Directory)
+                foreach ($generation in Get-ChildItem -LiteralPath $cacheDirectory -Directory -Force) {
+                    if ($generation.Name -cne $selected -and
+                        $generation.Name -match '^[1-9]\d*-[0-9a-f]{32}$' -and
+                        ($generation.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) {
+                        Remove-Item -LiteralPath $generation.FullName -Recurse -Force -ErrorAction SilentlyContinue
+                    }
+                }
+            }
             elseif (-not $payload.CacheHit) {
                 Remove-Item -LiteralPath $payload.Directory -Recurse -Force -ErrorAction SilentlyContinue
             }

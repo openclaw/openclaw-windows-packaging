@@ -225,8 +225,9 @@ access, so pin the cached run to compose offline. If the latest run cannot be
 resolved, the script fails and names both options rather than composing a
 cached payload that may be stale. `-RefreshPayload` downloads the selected run
 again. A downloaded payload becomes the cached selection only after
-composition succeeds; a payload that fails composition is discarded, and the
-next run reclaims a download an interrupted run left behind. This
+composition succeeds; a payload that fails composition is discarded, and each
+successful run reclaims downloads an interrupted run left behind, including an
+interrupted first download. This
 cache is separate from the deployment caches, and nothing registered links to
 it, so deleting the `payloads` directory only costs the next run a download.
 `-PayloadDirectory <path>` instead uses a prepared payload and cannot be

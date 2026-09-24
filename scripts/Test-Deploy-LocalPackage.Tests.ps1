@@ -891,6 +891,52 @@ try {
         (@(Get-ChildItem -LiteralPath $msixCache -Directory).FullName -join '|') -eq $mcRefreshed
     ) 'An arm64 composition used or changed the x64 payload cache.'
 
+    # A first download killed before anything was selected leaves a generation
+    # and no current.json. The next successful run must still reclaim it, as
+    # must a refresh that replaces a selection too damaged to name its payload.
+    $cold = New-Fixture
+    $coldCache = Join-Path $cold.Root 'artifacts\local-msix\payloads\x64'
+    $coldOrphan = Join-Path $coldCache "500-$([guid]::NewGuid().ToString('N'))"
+    New-Item -Path (Join-Path $coldOrphan 'app') -ItemType Directory -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $coldOrphan 'app\partial.bin'), 'interrupted first download')
+    $coldUnownedDirectory = Join-Path $coldCache 'not-a-generation'
+    New-Item -Path $coldUnownedDirectory -ItemType Directory | Out-Null
+    $coldUnownedFile = Join-Path $coldCache '600-notes.txt'
+    [IO.File]::WriteAllText($coldUnownedFile, 'unowned file')
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $coldCache 'current.json'))) `
+        'The interrupted-first-download fixture must start without a selection.'
+    $coldComposed = @()
+    $coldCompose = { param($directory) $script:coldComposed += $directory }
+    Invoke-LocalPackageMsixBuild -RepositoryRoot $cold.Root -Architecture x64 `
+        -Compose $coldCompose -Operations $cold.Operations
+    $coldSelected = @($coldComposed)[-1]
+    Assert-True (
+        -not (Test-Path -LiteralPath $coldOrphan) -and (Test-Path -LiteralPath $coldSelected) -and
+        (Get-Content -LiteralPath (Join-Path $coldSelected 'app\openclaw.mjs') -Raw) -eq 'first payload' -and
+        (Get-Content -LiteralPath (Join-Path $coldCache 'current.json') -Raw | ConvertFrom-Json).generation -eq
+            [IO.Path]::GetFileName($coldSelected)
+    ) 'A generation left by an interrupted first download was not reclaimed, or the new selection is unusable.'
+    Assert-True (
+        (Test-Path -LiteralPath $coldUnownedDirectory -PathType Container) -and
+        (Test-Path -LiteralPath $coldUnownedFile -PathType Leaf)
+    ) 'Reclaiming abandoned generations removed cache entries this owner did not create.'
+    Remove-Item -LiteralPath $coldUnownedDirectory, $coldUnownedFile
+    [IO.File]::WriteAllText((Join-Path $coldCache 'current.json'), 'not json')
+    Assert-Fails {
+        Invoke-LocalPackageMsixBuild -RepositoryRoot $cold.Root -Architecture x64 `
+            -Compose $coldCompose -Operations $cold.Operations
+    } 'Run with -RefreshPayload'
+    Assert-True (Test-Path -LiteralPath $coldSelected) `
+        'A run refused by an unreadable selection deleted the payload before -RefreshPayload was requested.'
+    Invoke-LocalPackageMsixBuild -RepositoryRoot $cold.Root -Architecture x64 -RefreshPayload `
+        -Compose $coldCompose -Operations $cold.Operations 3>$null
+    Assert-True (
+        -not (Test-Path -LiteralPath $coldSelected) -and
+        (@(Get-ChildItem -LiteralPath $coldCache -Directory).FullName -join '|') -eq @($coldComposed)[-1] -and
+        (Get-Content -LiteralPath (Join-Path $coldCache 'current.json') -Raw | ConvertFrom-Json).generation -eq
+            [IO.Path]::GetFileName(@($coldComposed)[-1])
+    ) 'Refreshing an unreadable selection left the payload it could no longer name.'
+
     # Argument guards.
     $j = New-Fixture
     $external = Join-Path $testRoot 'supplied payload with spaces'
