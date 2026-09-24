@@ -74,6 +74,11 @@ function New-Fixture {
     [IO.File]::WriteAllText((Join-Path $project 'Images\StoreLogo.png'), 'fixture image')
     New-Item -Path (Join-Path $project 'node') -ItemType Directory -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $project 'node\native-redirect.mjs'), 'fixture redirect')
+    [IO.File]::WriteAllText((Join-Path $project 'Program.cs'), 'launcher source')
+    New-Item -Path (Join-Path $root 'src\OpenClaw.SessionHost') -ItemType Directory -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $root 'src\OpenClaw.SessionHost\Program.cs'), 'session host source')
+    New-Item -Path (Join-Path $root 'src\OpenClaw.SessionProtocol') -ItemType Directory -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $root 'src\OpenClaw.SessionProtocol\Protocol.cs'), 'protocol source')
     [IO.File]::WriteAllText((Join-Path $project 'Package.appxmanifest'), @'
 <?xml version="1.0" encoding="utf-8"?>
 <Package
@@ -137,6 +142,8 @@ function New-Fixture {
         Removals = @()
         PreserveFlags = @()
         PublishMetadata = $null
+        LauncherPublishes = @()
+        Commit = '1111111111111111111111111111111111111111'
     }
     $state.WritePayload = {
         param($directory, $architecture, $text, $nodeVersion)
@@ -189,24 +196,41 @@ function New-Fixture {
             [IO.File]::WriteAllText((Join-Path $output 'mxc-runtime.json'), '{}')
             return $null
         }.GetNewClosure()
+        CheckoutCommit = { $state.Commit }.GetNewClosure()
         Publish = {
             param($project, $architecture, $output, $metadata)
             $state.Publishes++
             if ($project -like '*OpenClaw.Launcher.csproj') {
                 $state.PublishMetadata = $metadata
+                $state.LauncherPublishes += $metadata.PackageVersion
             }
             if ($state.PublishFailure) { throw 'NativeAOT publish failed.' }
+            # Like MSBuild, every publish rewrites the project's intermediate
+            # and output directories, whether or not anything changed.
+            $projectDirectory = Split-Path $project -Parent
+            foreach ($buildOutput in @('bin', 'obj')) {
+                New-Item -Path (Join-Path $projectDirectory $buildOutput) -ItemType Directory -Force | Out-Null
+                [IO.File]::WriteAllText(
+                    (Join-Path $projectDirectory "$buildOutput\build.cache"),
+                    [guid]::NewGuid().ToString())
+            }
             New-Item -Path $output -ItemType Directory -Force | Out-Null
+            # The binaries are a pure function of their inputs, as a real
+            # deterministic publish is: the project and protocol sources, the
+            # compile-time identity in metadata, and HostVersion, which models
+            # an input the deployment cannot see, such as an SDK update.
+            $sources = @(
+                Get-Content -LiteralPath (Join-Path $projectDirectory 'Program.cs') -Raw
+                Get-Content -LiteralPath (
+                    Join-Path $state.Root 'src\OpenClaw.SessionProtocol\Protocol.cs') -Raw
+            ) -join '|'
             $isSessionHost = $project -like '*OpenClaw.SessionHost*'
             if ($isSessionHost) {
                 [IO.File]::WriteAllText(
                     (Join-Path $output 'openclaw-session-host.exe'),
-                    "session host $($state.HostVersion)")
+                    "session host $($state.HostVersion) [$sources]")
             }
             elseif (-not $state.SkipHost) {
-                # Unchanged source must produce identical bytes, as a real
-                # incremental publish does; HostVersion models a source edit
-                # and metadata models generated compile-time constants.
                 $identity = if ($null -eq $metadata) {
                     ''
                 }
@@ -215,7 +239,7 @@ function New-Fixture {
                 }
                 [IO.File]::WriteAllText(
                     (Join-Path $output 'openclaw.exe'),
-                    "host $($state.HostVersion) $identity")
+                    "host $($state.HostVersion) [$sources] $identity")
             }
             return $null
         }.GetNewClosure()
@@ -334,9 +358,12 @@ try {
     # the previous one must be removed first, preserving app data.
     Assert-True (@($f.Removals).Count -eq 1 -and @($f.PreserveFlags)[0] -eq $true) 'Re-registration did not first remove the existing development registration.'
 
-    # A source change must reach the registered package.
+    # A changed launcher must reach the registered package even when it changed
+    # through an input the deployment does not hash, such as an SDK update. The
+    # build inputs only predict the version; the published binaries decide.
     $f.Now = $f.Now.AddMinutes(5)
     $f.HostVersion = 2
+    $publishedBefore = @($f.LauncherPublishes).Count
     $changed = Invoke-Fixture $f
     Assert-True ($changed.Changed) 'A launcher change was not detected.'
     $changedLauncher = Get-Content (Join-Path $layout 'openclaw.exe') -Raw
@@ -346,6 +373,136 @@ try {
             "`"PackageVersion`":`"$($changed.Version)`"",
             [StringComparison]::Ordinal)
     ) 'The layout kept a stale launcher or package identity.'
+    Assert-True (
+        (@($f.LauncherPublishes | Select-Object -Skip $publishedBefore) -join ',') -eq
+            "$($forced.Version),$($changed.Version)"
+    ) 'Binaries that changed with unchanged inputs were not verified, then rebuilt with the new version.'
+
+    # A changed deployment must publish the launcher once, with the version it
+    # registers: the package version is compiled in, so every extra publish
+    # is a full NativeAOT compile. Every change must still be deployed, and
+    # the next run must settle although each publish rewrites bin and obj.
+    $sp = New-Fixture
+    $spFirst = Invoke-Fixture $sp
+    Assert-True ((@($sp.LauncherPublishes) -join ',') -eq $spFirst.Version) `
+        'A first deployment did not publish the launcher once with its version.'
+    $spLauncher = Join-Path $spFirst.LayoutDirectory 'openclaw.exe'
+    $spSessionHost = Join-Path $spFirst.LayoutDirectory 'session-host\x64\openclaw-session-host.exe'
+    $sourceEdits = @(
+        @{
+            Name = 'launcher source'; Binary = $spLauncher; Marker = 'edited launcher source'
+            Apply = {
+                [IO.File]::WriteAllText(
+                    (Join-Path $sp.Root 'src\OpenClaw.Launcher\Program.cs'), 'edited launcher source')
+            }
+        }
+        @{
+            Name = 'session host source'; Binary = $spSessionHost; Marker = 'edited session host source'
+            Apply = {
+                [IO.File]::WriteAllText(
+                    (Join-Path $sp.Root 'src\OpenClaw.SessionHost\Program.cs'), 'edited session host source')
+            }
+        }
+        @{
+            Name = 'protocol source'; Binary = $spLauncher; Marker = 'edited protocol source'
+            Apply = {
+                [IO.File]::WriteAllText(
+                    (Join-Path $sp.Root 'src\OpenClaw.SessionProtocol\Protocol.cs'), 'edited protocol source')
+            }
+        }
+        @{
+            Name = 'checkout commit'; Binary = $spLauncher
+            Marker = '"PackageCommit":"2222222222222222222222222222222222222222"'
+            Apply = { $sp.Commit = '2222222222222222222222222222222222222222' }
+        }
+        @{
+            Name = 'central package version'; Binary = $null; Marker = $null
+            Apply = {
+                [IO.File]::WriteAllText((Join-Path $sp.Root 'Directory.Packages.props'), '<Project />')
+            }
+        }
+    )
+    foreach ($edit in $sourceEdits) {
+        $sp.Now = $sp.Now.AddMinutes(1)
+        & $edit.Apply
+        $publishedBefore = @($sp.LauncherPublishes).Count
+        $edited = Invoke-Fixture $sp
+        $published = @($sp.LauncherPublishes | Select-Object -Skip $publishedBefore)
+        [xml]$editedManifest = Get-Content (Join-Path $edited.LayoutDirectory 'AppxManifest.xml') -Raw
+        Assert-True $edited.Changed "A $($edit.Name) change was reported as up to date."
+        Assert-True (($published -join ',') -eq $edited.Version) (
+            "A $($edit.Name) change published the launcher with [$($published -join ', ')] " +
+            "instead of once with $($edited.Version).")
+        Assert-True (
+            $editedManifest.Package.Identity.Version -eq $edited.Version -and
+            (Get-Content $spLauncher -Raw).Contains("`"PackageVersion`":`"$($edited.Version)`"")
+        ) "A $($edit.Name) change registered a launcher compiled with another package version."
+        if ($edit.Binary) {
+            Assert-True ((Get-Content $edit.Binary -Raw).Contains($edit.Marker)) `
+                "A $($edit.Name) change did not reach the registered layout."
+        }
+
+        $registrationsBefore = $sp.Registrations
+        $publishedBefore = @($sp.LauncherPublishes).Count
+        $settled = Invoke-Fixture $sp
+        Assert-True (
+            -not $settled.Changed -and $settled.Version -eq $edited.Version -and
+            $sp.Registrations -eq $registrationsBefore
+        ) "The deployment after a $($edit.Name) change did not settle."
+        Assert-True (
+            (@($sp.LauncherPublishes | Select-Object -Skip $publishedBefore) -join ',') -eq $edited.Version
+        ) "An unchanged deployment after a $($edit.Name) change published the launcher with a new version."
+    }
+
+    # Rebuilding a supplied payload in place changes the identity compiled into
+    # the launcher, so it is a changed input too.
+    $pd = New-Fixture
+    $pdPayload = Join-Path $testRoot "rebuilt supplied payload $([guid]::NewGuid().ToString('N'))"
+    & $pd.WritePayload $pdPayload 'x64' 'supplied' '24.20.0'
+    Invoke-Fixture $pd @{ PayloadDirectory = $pdPayload } | Out-Null
+    $pdMetadataPath = Join-Path $pdPayload 'payload-metadata.json'
+    $pdMetadata = Get-Content -LiteralPath $pdMetadataPath -Raw | ConvertFrom-Json
+    $pdMetadata.packageVersion = '2026.9.5'
+    [IO.File]::WriteAllText($pdMetadataPath, ($pdMetadata | ConvertTo-Json))
+    $pd.Now = $pd.Now.AddMinutes(1)
+    $publishedBefore = @($pd.LauncherPublishes).Count
+    $pdChanged = Invoke-Fixture $pd @{ PayloadDirectory = $pdPayload }
+    Assert-True (
+        $pdChanged.Changed -and
+        (@($pd.LauncherPublishes | Select-Object -Skip $publishedBefore) -join ',') -eq $pdChanged.Version -and
+        $pd.PublishMetadata.PayloadVersion -eq '2026.9.5'
+    ) 'A rebuilt supplied payload was not published once with its new identity.'
+
+    # A patched identity publishes once too, under its own identity and
+    # version, and leaves the base registration from the same checkout alone.
+    $pp = New-Fixture
+    $ppBase = Invoke-Fixture $pp
+    $ppPatch = Invoke-Fixture $pp @{ Patch = 'foo' }
+    [IO.File]::WriteAllText((Join-Path $pp.Root 'src\OpenClaw.Launcher\Program.cs'), 'patched launcher source')
+    $pp.Now = $pp.Now.AddMinutes(1)
+    $publishedBefore = @($pp.LauncherPublishes).Count
+    $ppChanged = Invoke-Fixture $pp @{ Patch = 'foo' }
+    [xml]$ppManifest = Get-Content (Join-Path $ppChanged.LayoutDirectory 'AppxManifest.xml') -Raw
+    Assert-True (
+        $ppChanged.Changed -and
+        (@($pp.LauncherPublishes | Select-Object -Skip $publishedBefore) -join ',') -eq $ppChanged.Version
+    ) 'A changed patched deployment did not publish the launcher once with its version.'
+    Assert-True (
+        $ppManifest.Package.Identity.Name -ceq 'OpenClawFoundation.OpenClawGateway-foo' -and
+        $ppManifest.Package.Identity.Version -eq $ppChanged.Version -and
+        [version]$ppChanged.Version -gt [version]$ppPatch.Version -and
+        (Get-Content (Join-Path $ppChanged.LayoutDirectory 'openclaw.exe') -Raw).Contains(
+            "`"PackageVersion`":`"$($ppChanged.Version)`"")
+    ) 'A changed patch did not keep its identity or register the version it compiled.'
+    Assert-True (
+        (@($pp.Installed) | Where-Object Name -ceq 'OpenClawFoundation.OpenClawGateway').PackageFullName -eq
+            $ppBase.PackageFullName
+    ) 'A patched deployment changed the base registration.'
+    Assert-True (-not (Invoke-Fixture $pp @{ Patch = 'foo' }).Changed) 'A changed patch did not settle.'
+    $ppBaseChanged = Invoke-Fixture $pp
+    Assert-True (
+        $ppBaseChanged.Changed -and [version]$ppBaseChanged.Version -gt [version]$ppBase.Version
+    ) 'The base identity was reported current after the source it was built from changed.'
 
     # Payload refresh replaces content and retires the old generation only on success.
     $f.Offline = $false
@@ -501,6 +658,63 @@ try {
         $upgradeSelectionAfter -ne $upgradeSelectionBefore -and
         -not (Test-Path -LiteralPath $upgradePayload)
     ) 'Successful recovery did not select the replacement and retire the old payload.'
+
+    # An MSIX build reads its payload from its own cache. Reusing the cache
+    # avoids downloading hundreds of megabytes for every build, while refresh
+    # and pinning still reach the requested run and an unvalidated download is
+    # never selected.
+    $mc = New-Fixture
+    $msixCache = Join-Path $mc.Root 'artifacts\local-msix\payloads\x64'
+    $selectMsixPayload = {
+        param([hashtable]$Arguments = @{})
+        Select-LocalPackagePayload -CacheDirectory $msixCache -Architecture x64 `
+            -Operations $mc.Operations @Arguments
+    }
+    $mcFirst = & $selectMsixPayload
+    Assert-True (
+        $mc.Queries -eq 1 -and $mc.Downloads -eq 1 -and
+        (Get-Content -LiteralPath (Join-Path $mcFirst 'app\openclaw.mjs') -Raw) -eq 'first payload'
+    ) 'The first MSIX payload selection did not download the latest run.'
+    $mc.Offline = $true
+    Assert-True ((& $selectMsixPayload) -eq $mcFirst -and $mc.Downloads -eq 1) `
+        'A cached MSIX payload was downloaded again.'
+    Assert-True ((& $selectMsixPayload @{ PayloadRunId = [long]500 }) -eq $mcFirst -and $mc.Downloads -eq 1) `
+        'A payload pinned to the cached run was downloaded again.'
+    $mc.Offline = $false
+    $mc.RunId = [long]501
+    $mc.PayloadText = 'refreshed msix payload'
+    $mcRefreshed = & $selectMsixPayload @{ RefreshPayload = $true }
+    Assert-True (
+        $mc.Downloads -eq 2 -and $mcRefreshed -ne $mcFirst -and
+        (Get-Content -LiteralPath (Join-Path $mcRefreshed 'app\openclaw.mjs') -Raw) -eq 'refreshed msix payload'
+    ) '-RefreshPayload did not download the latest run.'
+    Assert-True (
+        -not (Test-Path -LiteralPath $mcFirst) -and
+        @(Get-ChildItem -LiteralPath $msixCache -Directory).Count -eq 1
+    ) '-RefreshPayload did not retire the superseded MSIX payload.'
+    $mc.Offline = $true
+    Assert-True ((& $selectMsixPayload) -eq $mcRefreshed) 'The refreshed payload was not reused by the next build.'
+    $mc.Offline = $false
+    $mcPinned = & $selectMsixPayload @{ PayloadRunId = [long]499 }
+    Assert-True ($mc.Downloads -eq 3 -and $mcPinned -ne $mcRefreshed) `
+        'A payload pinned to another run reused the cached payload.'
+    $mc.DownloadFailure = $true
+    Assert-Fails { & $selectMsixPayload @{ RefreshPayload = $true } } 'Interrupted payload download'
+    $mc.DownloadFailure = $false
+    $mc.Offline = $true
+    Assert-True (
+        (& $selectMsixPayload) -eq $mcPinned -and
+        @(Get-ChildItem -LiteralPath $msixCache -Directory).Count -eq 1
+    ) 'An interrupted download replaced the selected MSIX payload or was left beside it.'
+    Assert-Fails { & $selectMsixPayload @{ PayloadRunId = [long]-1 } } 'positive workflow run'
+    # A cached payload is architecture-specific. An arm64 build pointed at the
+    # x64 cache must not silently compose from the x64 application.
+    $mcDownloads = $mc.Downloads
+    Assert-Fails {
+        Select-LocalPackagePayload -CacheDirectory $msixCache -Architecture arm64 -Operations $mc.Operations
+    } 'Invalid payload cache selection'
+    Assert-True ($mc.Downloads -eq $mcDownloads -and (& $selectMsixPayload) -eq $mcPinned) `
+        'A foreign-architecture selection changed the cached x64 payload.'
 
     # Argument guards.
     $j = New-Fixture

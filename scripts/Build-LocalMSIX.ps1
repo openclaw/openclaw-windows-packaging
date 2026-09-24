@@ -7,6 +7,8 @@ param(
 
     [long]$PayloadRunId,
 
+    [switch]$RefreshPayload,
+
     [string]$NodeArchivePath,
 
     [string]$PackageVersion,
@@ -16,7 +18,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path $PSScriptRoot -Parent
-$repository = 'openclaw/openclaw-windows-packaging'
+Import-Module (Join-Path $PSScriptRoot 'LocalPackage.psm1') -Force
 
 function Invoke-CheckedCommand {
     param(
@@ -33,6 +35,10 @@ function Invoke-CheckedCommand {
     }
 }
 
+if ($PayloadDirectory -and ($PayloadRunId -ne 0 -or $RefreshPayload)) {
+    throw '-PayloadDirectory cannot be combined with -PayloadRunId or -RefreshPayload.'
+}
+
 if (-not $PackageVersion) {
     $now = Get-Date
     $days = [int]($now.Date - [datetime]'2020-01-01').TotalDays
@@ -47,7 +53,6 @@ if (-not $OutputDirectory) {
         "artifacts\local-msix\$Architecture\$PackageVersion"
 }
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
-$workDirectory = Join-Path $OutputDirectory 'work'
 
 if (Test-Path -LiteralPath $OutputDirectory) {
     throw (
@@ -55,7 +60,6 @@ if (Test-Path -LiteralPath $OutputDirectory) {
         'Choose another -PackageVersion or -OutputDirectory.'
     )
 }
-New-Item -Path $workDirectory -ItemType Directory -Force | Out-Null
 
 if ($NodeArchivePath) {
     $NodeArchivePath = (Resolve-Path -LiteralPath $NodeArchivePath).Path
@@ -65,44 +69,13 @@ if ($PayloadDirectory) {
     $resolvedPayloadDirectory = (Resolve-Path -LiteralPath $PayloadDirectory).Path
 }
 else {
-    $gh = Get-Command gh -ErrorAction SilentlyContinue
-    if ($null -eq $gh) {
-        throw 'GitHub CLI (gh) is required when -PayloadDirectory is omitted.'
-    }
-
-    if ($PayloadRunId -eq 0) {
-        $runJson = & gh run list `
-            --repo $repository `
-            --workflow gateway-msix.yml `
-            --branch main `
-            --status success `
-            --limit 1 `
-            --json databaseId
-        if ($LASTEXITCODE -ne 0) {
-            throw 'Unable to query the latest successful payload workflow.'
-        }
-
-        $runs = @($runJson | ConvertFrom-Json)
-        if ($runs.Count -ne 1) {
-            throw 'No successful payload workflow was found.'
-        }
-        $PayloadRunId = $runs[0].databaseId
-    }
-
-    $resolvedPayloadDirectory = Join-Path $workDirectory 'payload'
-    New-Item -Path $resolvedPayloadDirectory -ItemType Directory -Force |
-        Out-Null
-    Write-Host (
-        "Downloading openclaw-gateway-payload-$Architecture from workflow $PayloadRunId."
-    )
-    Invoke-CheckedCommand `
-        -FailureMessage 'Unable to download the payload artifact.' `
-        -Command {
-            & gh run download $PayloadRunId `
-                --repo $repository `
-                --name "openclaw-gateway-payload-$Architecture" `
-                --dir $resolvedPayloadDirectory
-        }
+    # Kept apart from every deployment's cache: a registered layout links its
+    # payload, which a refresh here would otherwise retire.
+    $resolvedPayloadDirectory = Select-LocalPackagePayload `
+        -CacheDirectory (Join-Path $repositoryRoot "artifacts\local-msix\payloads\$Architecture") `
+        -Architecture $Architecture `
+        -PayloadRunId $PayloadRunId `
+        -RefreshPayload:$RefreshPayload
 }
 
 $payloadApplication = Join-Path $resolvedPayloadDirectory 'app'
@@ -158,7 +131,6 @@ try {
         -OutputDirectory $OutputDirectory
 
     $msixPath = Join-Path $OutputDirectory "OpenClawGateway-$Architecture.msix"
-    Remove-Item -LiteralPath $workDirectory -Recurse -Force
     Write-Host ''
     Write-Host "Local MSIX is ready: $msixPath"
     Write-Host (

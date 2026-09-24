@@ -82,12 +82,26 @@ Use options for a concrete reason:
 | `-ReplaceExistingInstall` | You explicitly accept removal of an installed MSIX or a registration owned by another checkout. This is destructive because app data cannot survive the loose/installed transition. |
 | `-Patch <name>` | You are iterating on a change; this is the recommended default. Name it for the work so its commands, app data, and isolated session stay separate from the base package. See [side-by-side patched identities](#side-by-side-patched-identities). |
 
-The command is idempotent, not timestamp-driven. `LocalPackage.psm1` records a
-fingerprint of the relevant inputs, including the SHA-256 content hash of the
-published launcher. A publish can refresh file timestamps without changing
-code, so timestamps would spuriously redeploy the layout. With an unchanged
-fingerprint, the command reports that the package is current; source or payload
-changes rebuild only the affected work.
+The command is idempotent, not timestamp-driven. `LocalPackage.psm1` records
+two content-hash fingerprints:
+
+- The build-input fingerprint covers the launcher, session-host, and protocol
+  project files other than `bin` and `obj`, `Directory.Build.props`,
+  `Directory.Packages.props`, `global.json`, the checkout commit, the payload
+  identity, and the manifest, images, Node.js scripts, and staged MXC runtime.
+  The package version is compiled into the launcher, so this fingerprint picks
+  the version before publishing: a changed deployment publishes the NativeAOT
+  launcher once, with the version it registers.
+- The output fingerprint, which includes the SHA-256 hashes of the published
+  launcher and session host, alone decides that the package is current. A
+  publish can refresh timestamps without changing code, so timestamps would
+  spuriously redeploy the layout. When the build inputs match but the binaries
+  changed anyway, for example after an SDK update, the command rebuilds the
+  launcher with a new version instead of reporting the package as current.
+
+With both fingerprints unchanged, the command reports that the package is
+current. Any change to a covered input redeploys with a new version, even an
+edit, such as a comment, that leaves the binaries unchanged.
 
 **Never delete `artifacts\local-package` or the checkout while it is
 registered.** The Developer Mode package reads those live files, so either
@@ -203,14 +217,19 @@ $unsignedArtifacts = '.\artifacts\local-msix-input'
 ```
 
 Without `-PayloadDirectory`, composition uses `gh` to resolve and download the
-latest successful `gateway-msix.yml` payload from `main`; use
-`-PayloadRunId <id>` to pin that selection. `-PayloadDirectory <path>` instead
-uses a prepared payload, and `-NodeArchivePath <path>` supplies a matching
+latest successful `gateway-msix.yml` payload from `main` into
+`artifacts\local-msix\payloads\<architecture>`. Later runs reuse that cached
+payload without contacting GitHub, so they do not pick up newer `main` runs
+until you pass `-RefreshPayload`. `-PayloadRunId <id>` pins a run and reuses it
+when it is the cached one. This cache is separate from the deployment caches,
+and nothing registered links to it, so deleting the `payloads` directory only
+costs the next run a download. `-PayloadDirectory <path>` instead uses a
+prepared payload and cannot be combined with `-PayloadRunId` or
+`-RefreshPayload`. `-NodeArchivePath <path>` supplies a matching
 already-downloaded Node archive. The script writes a new output directory under
-`artifacts\local-msix\<architecture>\<version>`, builds an unsigned MSIX, then
-removes its temporary work directory. It refuses to reuse an existing output
-directory and tells you to select another `-PackageVersion` or
-`-OutputDirectory`.
+`artifacts\local-msix\<architecture>\<version>` and builds an unsigned MSIX. It
+refuses to reuse an existing output directory and tells you to select another
+`-PackageVersion` or `-OutputDirectory`.
 
 Test-sign the artifact in a separate step. The signing script requires Windows,
 the Windows SDK `signtool.exe`, an artifact directory containing architecture
