@@ -256,3 +256,6 @@ finally {
 }
 
 Write-Host 'Documentation reference tests passed.'
+# The non-git case leaves a failing native exit code behind, and the GitHub
+# Actions pwsh step exits with $LASTEXITCODE.
+exit 0

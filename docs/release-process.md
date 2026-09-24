@@ -93,7 +93,7 @@ the already-composed bundle; signing the bundle covers its contained packages.
 Observe these workflow outcomes:
 
 - `build-msix` succeeds for **both** x64 and ARM64.
-- `build-msix-bundle` succeeds before `authorize-signing`.
+- `test-host` and `build-msix-bundle` succeed before `authorize-signing`.
 - `authorize-signing` succeeds before Azure login and signing begins.
 - `sign-msix` verifies signatures and refreshes package metadata.
 

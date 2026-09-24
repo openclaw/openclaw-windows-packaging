@@ -110,8 +110,12 @@ jobs:
         shell: pwsh
         run: ./scripts/Test-DocReferences.ps1 -Advisory
 
+  # Documentation-only pull requests skip the host tests; the classification
+  # lives in scripts\Get-PackagingRelevance.ps1.
   test-host:
     name: Test Gateway MSIX host
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.packaging == 'true' }}
+    needs: changes
     runs-on: windows-latest
     steps:
       - name: Check out repository
@@ -242,6 +246,11 @@ jobs:
         shell: pwsh
         run: >
           .\scripts\Test-GitHooks.Tests.ps1
+
+      - name: Test documentation reference checker
+        shell: pwsh
+        run: >
+          .\scripts\Test-DocReferences.Tests.ps1
 
       - name: Test Gateway isolation plugin
         shell: pwsh
@@ -421,11 +430,13 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # Unsigned packaging overlaps the host tests instead of waiting for them.
+  # Every job that signs or publishes needs test-host directly or through
+  # authorize-signing.
   build-msix:
     name: Build unsigned ${{ matrix.architecture }} Gateway MSIX
     needs:
       - changes
-      - test-host
       - build-package
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -573,7 +584,9 @@ jobs:
   test-sign-msix:
     name: Test-sign Gateway MSIX packages
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode == 'test' }}
-    needs: build-msix
+    needs:
+      - test-host
+      - build-msix
     runs-on: windows-latest
     permissions:
       actions: read
@@ -688,6 +701,7 @@ jobs:
     if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.versioning == 'true' }}
     needs:
       - changes
+      - test-host
       - build-package
       - build-msix
       - build-msix-bundle
@@ -783,6 +797,7 @@ jobs:
     name: Authorize Gateway MSIX release
     if: ${{ github.event_name == 'workflow_dispatch' && (inputs.signing_mode == 'official' || inputs.signing_mode == 'store') && github.ref == 'refs/heads/main' }}
     needs:
+      - test-host
       - build-package
       - build-msix
       - build-msix-bundle

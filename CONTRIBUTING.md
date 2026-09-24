@@ -281,7 +281,12 @@ resolves paths through `git ls-files` rather than the filesystem, because a
 stale untracked build directory can make a renamed project path look valid.
 Findings exit nonzero locally. Continuous integration runs the same script with
 `-Advisory`, which annotates the pull request without failing the build, so a
-documentation change is never blocked by it.
+documentation change is never blocked by it. When every changed path in a pull
+request is Markdown, under `docs\`, or `LICENSE`, as classified by
+`scripts\Get-PackagingRelevance.ps1`, CI skips the host test and packaging
+jobs, so this advisory check is the pull request's only documentation
+validation. Every other run executes the checker's own suite,
+`scripts\Test-DocReferences.Tests.ps1`, in the host test job.
 
 Three project skills in `.github\skills\` support this work:
 
