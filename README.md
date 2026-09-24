@@ -508,17 +508,32 @@ archive, but its version and architecture must match the payload metadata.
 
 ### Running a local development build
 
-To go from a clean checkout to a registered, runnable package:
+To go from a clean checkout to a registered, runnable package, deploy under a
+patched identity named for the change you are iterating on:
 
 ```powershell
-.\scripts\Deploy-LocalPackage.ps1
+.\scripts\Deploy-LocalPackage.ps1 -Patch pwsh-exec
 ```
 
 This is the development inner loop. It does not build, sign, or install an
 MSIX. It acquires the payload and the bundled Node.js runtime, publishes the
 NativeAOT launcher, assembles a Developer Mode layout under
 `artifacts\local-package`, registers it with `Add-AppxPackage -Register`, and
-runs `clawctl setup` so `openclaw` is immediately usable.
+runs setup so `openclaw-pwsh-exec` is immediately usable. The patch registers
+beside the base package as `openclaw-pwsh-exec` and `clawctl-pwsh-exec`, with
+its own app data and isolated session, so iteration never replaces the base
+`openclaw` and `clawctl`. Omit `-Patch` only to exercise the base identity
+itself, such as its aliases, shell completion, or a loose/MSIX transition.
+
+When you finish, tear down and unregister the patch, in that order:
+
+```powershell
+clawctl-pwsh-exec teardown --force
+.\scripts\Deploy-LocalPackage.ps1 -Unregister -Patch pwsh-exec
+```
+
+See [side-by-side patched identities](docs/local-development.md#side-by-side-patched-identities)
+for naming rules, limits, and recovery.
 
 The command is idempotent: re-running with nothing changed reports that the
 package is already up to date and does nothing, and re-running after a source
@@ -535,18 +550,21 @@ nor duplicate hundreds of megabytes.
 | `-ReplaceExistingInstall` | Remove a conflicting MSIX-installed package first (see below) |
 | `-SkipSetup` | Register without extracting the Node.js runtime |
 | `-Force` | Re-register even when nothing changed |
-| `-Unregister` | Remove the local registration, preserving app data and caches |
+| `-Patch <name>` | Register a side-by-side `OpenClawFoundation.OpenClawGateway-<name>` identity run as `openclaw-<name>` and `clawctl-<name>`; recommended for iteration |
+| `-Unregister` | Remove the local registration, preserving app data and caches; pass the same `-Patch` to remove a patch |
 
 **Requires Developer Mode**, which the script checks before doing any work.
 
-**It cannot coexist with an MSIX-installed
+**Without `-Patch`, it cannot coexist with an MSIX-installed
 `OpenClawFoundation.OpenClawGateway`.** Windows
 refuses to replace a packaged install with a local layout, and it cannot
 preserve that package's app data across the switch, so the script stops and
 explains rather than removing anything implicitly. Pass
-`-ReplaceExistingInstall` to accept that trade.
+`-ReplaceExistingInstall` to accept that trade. A patched identity has a
+different package name, so it sits beside an installed release instead.
 
-**Run `-Unregister` before installing a released package.** Windows will not
+**Run `-Unregister` on a base registration before installing a released
+package.** Windows will not
 replace a loose registration with a packaged install: `Add-AppxPackage` fails
 with `0x80073CFB`, reporting that an unpackaged version is already installed
 and a packaged version cannot replace it. This is the same mutual exclusion as

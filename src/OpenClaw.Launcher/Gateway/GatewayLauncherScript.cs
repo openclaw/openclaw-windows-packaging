@@ -136,7 +136,7 @@ internal static class GatewayLauncherScript
             $"$applicationId = '{ControlApplicationId}'",
             $"$arguments = '{controlArguments}'",
             $"$applicationUserModelId = '{QuotePowerShell(applicationUserModelId)}'",
-            "$package = Get-AppxPackage -Name 'OpenClawFoundation.OpenClawGateway' | " +
+            $"$package = Get-AppxPackage -Name '{QuotePowerShell(GetPackageName(packageFamilyName))}' | " +
             "Where-Object { $_.PackageFamilyName -eq $packageFamilyName } | " +
             "Select-Object -First 1",
             "if ($null -eq $package) { throw \"Package '$packageFamilyName' is not registered for the current user.\" }",
@@ -270,4 +270,23 @@ internal static class GatewayLauncherScript
 
     private static string QuotePowerShell(string value) =>
         value.Replace("'", "''", StringComparison.Ordinal);
+
+    /// <summary>
+    /// A family name is <c>Name_PublisherId</c> and package names cannot
+    /// contain underscores, so the name is everything before the last one.
+    /// Deriving it binds each script to the identity that generated it, so a
+    /// side-by-side development identity does not look up the base package.
+    /// </summary>
+    private static string GetPackageName(string packageFamilyName)
+    {
+        int separator = packageFamilyName.LastIndexOf('_');
+        if (separator <= 0)
+        {
+            throw new ArgumentException(
+                $"'{packageFamilyName}' is not a package family name.",
+                nameof(packageFamilyName));
+        }
+
+        return packageFamilyName[..separator];
+    }
 }

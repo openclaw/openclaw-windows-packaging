@@ -41,14 +41,31 @@ Re-register even when nothing changed.
 .PARAMETER SkipSetup
 Skip the final `clawctl setup` that extracts the bundled Node.js runtime. The
 package is registered but not runnable until setup is run once.
+.PARAMETER Patch
+Deploy a side-by-side development identity instead of the base package; this
+is the recommended way to iterate. Name it for the work. With -Patch pwsh-exec
+the package is OpenClawFoundation.OpenClawGateway-pwsh-exec, its commands are
+openclaw-pwsh-exec and clawctl-pwsh-exec, and its state lives under
+artifacts\local-package\patches\pwsh-exec. It gets its own isolated session and
+app data and never touches the base registration. Use 1 to 15 letters, digits,
+or hyphens; the value is lowercased. When finished, run
+`clawctl-pwsh-exec teardown --force`, then -Unregister with the same -Patch.
 .PARAMETER Unregister
 Remove the local development registration and exit. Cached payloads and
-runtimes are kept, and the package's app data is preserved. Run this before
-installing a released package: Windows will not replace a loose registration
-with a packaged install, regardless of version.
+runtimes are kept, and the package's app data is preserved. Run this for a base
+registration before installing a released package: Windows will not replace a
+loose registration with a packaged install, regardless of version.
+.EXAMPLE
+.\scripts\Deploy-LocalPackage.ps1 -Patch pwsh-exec
+Iterate beside the base package as openclaw-pwsh-exec and clawctl-pwsh-exec;
+later runs reuse the cache.
+.EXAMPLE
+clawctl-pwsh-exec teardown --force && .\scripts\Deploy-LocalPackage.ps1 -Unregister -Patch pwsh-exec
+Remove a finished patch: its isolated session first, then its registration.
 .EXAMPLE
 .\scripts\Deploy-LocalPackage.ps1
-Clean checkout to a registered, runnable package; later runs reuse the cache.
+Register the base identity, for work on its own aliases, completion, or
+loose/MSIX transitions.
 .EXAMPLE
 .\scripts\Deploy-LocalPackage.ps1 -RefreshPayload
 Pick up a newer OpenClaw payload from the latest successful main workflow run.
@@ -57,12 +74,14 @@ Pick up a newer OpenClaw payload from the latest successful main workflow run.
 Register from a prepared payload without contacting GitHub.
 .EXAMPLE
 .\scripts\Deploy-LocalPackage.ps1 -Unregister
-Remove the local registration.
+Remove the base local registration.
 #>
 [CmdletBinding(DefaultParameterSetName = 'Deploy')]
 param(
     [ValidateSet('x64', 'arm64')]
     [string]$Architecture = 'x64',
+
+    [string]$Patch,
 
     [Parameter(ParameterSetName = 'Deploy')]
     [string]$PayloadDirectory,
@@ -92,13 +111,14 @@ $repositoryRoot = Split-Path $PSScriptRoot -Parent
 Import-Module (Join-Path $PSScriptRoot 'LocalPackage.psm1') -Force
 
 if ($Unregister) {
-    Remove-LocalPackageRegistration -RepositoryRoot $repositoryRoot -Architecture $Architecture
+    Remove-LocalPackageRegistration -RepositoryRoot $repositoryRoot -Architecture $Architecture -Patch $Patch
     return
 }
 
 Invoke-LocalPackageDeployment `
     -RepositoryRoot $repositoryRoot `
     -Architecture $Architecture `
+    -Patch $Patch `
     -PayloadDirectory $PayloadDirectory `
     -PayloadRunId $PayloadRunId `
     -RefreshPayload:$RefreshPayload `

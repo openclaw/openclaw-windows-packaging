@@ -76,8 +76,36 @@ function New-Fixture {
     [IO.File]::WriteAllText((Join-Path $project 'node\native-redirect.mjs'), 'fixture redirect')
     [IO.File]::WriteAllText((Join-Path $project 'Package.appxmanifest'), @'
 <?xml version="1.0" encoding="utf-8"?>
-<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5">
   <Identity Name="OpenClawFoundation.OpenClawGateway" Publisher="CN=Fixture" Version="0.0.0.0" />
+  <Properties>
+    <DisplayName>OpenClaw Gateway</DisplayName>
+  </Properties>
+  <Applications>
+    <Application Id="App" Executable="openclaw.exe">
+      <uap:VisualElements DisplayName="OpenClaw Gateway" />
+      <Extensions>
+        <uap5:Extension Category="windows.appExecutionAlias" Executable="openclaw.exe">
+          <uap5:AppExecutionAlias>
+            <uap5:ExecutionAlias Alias="openclaw.exe" />
+          </uap5:AppExecutionAlias>
+        </uap5:Extension>
+      </Extensions>
+    </Application>
+    <Application Id="Control" Executable="openclaw.exe">
+      <uap:VisualElements DisplayName="OpenClaw Gateway" />
+      <Extensions>
+        <uap5:Extension Category="windows.appExecutionAlias" Executable="openclaw.exe">
+          <uap5:AppExecutionAlias>
+            <uap5:ExecutionAlias Alias="clawctl.exe" />
+          </uap5:AppExecutionAlias>
+        </uap5:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
 </Package>
 '@)
 
@@ -103,6 +131,7 @@ function New-Fixture {
         Publishes = 0
         Registrations = 0
         Setups = 0
+        SetupPackageNames = @()
         SetupPackageFamilyNames = @()
         SetupFailure = $false
         Removals = @()
@@ -192,38 +221,47 @@ function New-Fixture {
         GetPackage = {
             param($name)
             $state.PackageQueries += $name
-            if ($null -eq $state.Installed -or $state.Installed.Name -cne $name) {
-                return $null
-            }
-            return $state.Installed
+            # Installed holds every registered identity, so a patched
+            # deployment can be observed beside the base package.
+            return @($state.Installed) |
+                Where-Object { $null -ne $_ -and $_.Name -ceq $name } |
+                Select-Object -First 1
         }.GetNewClosure()
         RegisterPackage = {
             param($manifestPath)
             $state.Registrations++
             if ($state.RegisterFailure) { throw '0x80073CFB: registration blocked.' }
             [xml]$m = Get-Content -LiteralPath $manifestPath -Raw
-            $state.Installed = [pscustomobject]@{
-                Name = [string]$m.Package.Identity.Name
+            $name = [string]$m.Package.Identity.Name
+            $registered = [pscustomobject]@{
+                Name = $name
                 Version = if ($state.BadRegistration) { '9.9.9.9' } else { $m.Package.Identity.Version }
-                PackageFullName = "OpenClawFoundation.OpenClawGateway_$($m.Package.Identity.Version)_fixture"
-                PackageFamilyName = 'OpenClawFoundation.OpenClawGateway_fixture'
+                PackageFullName = "$($name)_$($m.Package.Identity.Version)_fixture"
+                PackageFamilyName = "$($name)_fixture"
                 InstallLocation = Split-Path $manifestPath -Parent
                 IsDevelopmentMode = $true
                 Status = 'Ok'
             }
+            $state.Installed = @(
+                @($state.Installed) | Where-Object { $null -ne $_ -and $_.Name -cne $name }
+            ) + $registered
             return $null
         }.GetNewClosure()
         RemovePackage = {
             param($packageFullName, $preserveData)
             $state.Removals += $packageFullName
             $state.PreserveFlags += [bool]$preserveData
-            $state.Installed = $null
+            $state.Installed = @(
+                @($state.Installed) |
+                    Where-Object { $null -ne $_ -and $_.PackageFullName -ne $packageFullName }
+            )
             return $null
         }.GetNewClosure()
         TestPath = { param($path) Test-Path -LiteralPath $path }
         RunSetup = {
-            param($packageFamilyName)
+            param($packageName, $packageFamilyName)
             $state.Setups++
+            $state.SetupPackageNames += $packageName
             $state.SetupPackageFamilyNames += $packageFamilyName
             if ($state.SetupFailure) { throw 'clawctl setup failed (exit 1).' }
             return $null
@@ -647,6 +685,96 @@ try {
     ) 'The aliases still resolve to the other checkout after take-over.'
 
     Test-ProductionMxcStageAdapterIgnoresStaleNativeExitState
+
+    # A patched identity registers beside the base package under its own name,
+    # aliases, display name, and state root. Base and legacy registrations that
+    # would block a base deployment are neither consulted nor disturbed.
+    $p = New-Fixture
+    $p.Installed = @(
+        [pscustomobject]@{
+            Name = 'OpenClawFoundation.OpenClawGateway'
+            Version = '1.2.3.4'; PackageFullName = 'OpenClawFoundation.OpenClawGateway_1.2.3.4_x64__pkg'
+            PackageFamilyName = 'OpenClawFoundation.OpenClawGateway_pkg'
+            InstallLocation = 'C:\Program Files\WindowsApps\fake'; IsDevelopmentMode = $false; Status = 'Ok'
+        }
+        [pscustomobject]@{
+            Name = 'OpenClaw.Gateway'
+            Version = '0.1.0.0'; PackageFullName = 'OpenClaw.Gateway_0.1.0.0_x64__legacy'
+            PackageFamilyName = 'OpenClaw.Gateway_kaa03rpbbqef6'
+            InstallLocation = (Join-Path $p.Root 'artifacts\local-package\x64\layout')
+            IsDevelopmentMode = $true; Status = 'Ok'
+        }
+    )
+    $patched = Invoke-Fixture $p @{ Patch = 'Foo' }
+    Assert-True ($patched.Changed -and @($p.Removals).Count -eq 0) `
+        'A patched deployment disturbed another registration.'
+    Assert-True (
+        $patched.LayoutDirectory -eq
+            (Join-Path $p.Root 'artifacts\local-package\patches\foo\x64\layout') -and
+        -not (Test-Path -LiteralPath (Join-Path $p.Root 'artifacts\local-package\x64'))
+    ) 'A patched deployment did not keep to its own state root.'
+    [xml]$pm = Get-Content -LiteralPath (Join-Path $patched.LayoutDirectory 'AppxManifest.xml') -Raw
+    $patchedAliases = @(
+        $pm.SelectNodes("//*[local-name()='ExecutionAlias']") |
+            ForEach-Object { $_.GetAttribute('Alias') } |
+            Sort-Object
+    )
+    $patchedTiles = @(
+        $pm.SelectNodes("//*[local-name()='VisualElements']") |
+            ForEach-Object { $_.GetAttribute('DisplayName') } |
+            Select-Object -Unique
+    )
+    Assert-True (
+        $pm.Package.Identity.Name -ceq 'OpenClawFoundation.OpenClawGateway-foo' -and
+        $pm.Package.Properties.DisplayName -ceq 'OpenClaw Gateway (foo)' -and
+        ($patchedTiles -join ',') -ceq 'OpenClaw Gateway (foo)' -and
+        ($patchedAliases -join ',') -ceq 'clawctl-foo.exe,openclaw-foo.exe'
+    ) 'The patched manifest does not carry its own identity, display name, and aliases.'
+    Assert-True (
+        @($p.SetupPackageNames)[0] -ceq 'OpenClawFoundation.OpenClawGateway-foo' -and
+        @($p.SetupPackageFamilyNames)[0] -ceq 'OpenClawFoundation.OpenClawGateway-foo_fixture'
+    ) 'Setup did not target the patched package.'
+    $p.Offline = $true
+    Assert-True (-not (Invoke-Fixture $p @{ Patch = 'foo' }).Changed) `
+        'A no-change patched re-run reported work.'
+
+    Remove-LocalPackageRegistration -RepositoryRoot $p.Root -Patch 'foo' -Operations $p.Operations
+    Assert-True (
+        @($p.Removals).Count -eq 1 -and
+        @($p.Removals)[0] -eq $patched.PackageFullName -and
+        @($p.Installed).Count -eq 2
+    ) 'Unregistering a patched identity touched another registration.'
+    Assert-True (
+        -not (Test-Path -LiteralPath (
+            Join-Path $p.Root 'artifacts\local-package\patches\foo\x64\state.json')) -and
+        (Test-Path -LiteralPath (
+            Join-Path $p.Root 'artifacts\local-package\patches\foo\x64\payloads'))
+    ) 'Unregistering a patched identity did not retire only its deployment state.'
+
+    # A suffix becomes a package name, alias, and path segment, so anything
+    # outside that shared alphabet fails before any state changes.
+    foreach ($invalid in @('-foo', 'foo-', 'foo_bar', 'foo.bar', '..\foo', ('a' * 16))) {
+        $bad = New-Fixture
+        Assert-Fails { Invoke-Fixture $bad @{ Patch = $invalid } } 'Invalid -Patch'
+        Assert-Fails {
+            Remove-LocalPackageRegistration -RepositoryRoot $bad.Root -Patch $invalid -Operations $bad.Operations
+        } 'Invalid -Patch'
+        Assert-True (
+            $bad.Downloads -eq 0 -and $bad.Registrations -eq 0 -and
+            @($bad.PackageQueries).Count -eq 0 -and
+            -not (Test-Path -LiteralPath (Join-Path $bad.Root 'artifacts'))
+        ) "An invalid -Patch '$invalid' changed state before it was rejected."
+    }
+
+    # An alias the patch cannot rename would collide with the base command.
+    $extraAlias = New-Fixture
+    $extraManifest = Join-Path $extraAlias.Root 'src\OpenClaw.Launcher\Package.appxmanifest'
+    [IO.File]::WriteAllText($extraManifest, (
+        (Get-Content -LiteralPath $extraManifest -Raw).Replace(
+            '<uap5:ExecutionAlias Alias="clawctl.exe" />',
+            '<uap5:ExecutionAlias Alias="clawctl.exe" /><uap5:ExecutionAlias Alias="claw.exe" />')))
+    Assert-Fails { Invoke-Fixture $extraAlias @{ Patch = 'foo' } } 'cannot rename: claw\.exe'
+    Assert-True ($extraAlias.Registrations -eq 0) 'A patched layout with an unrenamed alias was registered.'
 
     Write-Host 'Local package deployment scenarios passed.'
 }
