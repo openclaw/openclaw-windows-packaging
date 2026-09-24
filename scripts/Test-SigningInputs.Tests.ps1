@@ -40,9 +40,11 @@ $releaseIdentity = & (
 $approvedPackageVersion = $releaseIdentity.PackageVersion
 $approvedPayloadVersion = [string]$policy.payloadPackageVersion
 $packagingCommit = '1111111111111111111111111111111111111111'
-$testRoot = Join-Path $env:TEMP (
+$suiteRoot = Join-Path $env:TEMP (
     "openclaw-signing-policy-$([guid]::NewGuid().ToString('N'))"
 )
+$canonicalRoot = Join-Path $suiteRoot 'canonical'
+$testRoot = Join-Path $suiteRoot 'case'
 
 function New-TestArtifact {
     param(
@@ -303,7 +305,28 @@ function Invoke-PolicyValidation {
     )
 
     if (-not $PreserveBundle) {
-        New-TestBundle -Root $Root
+        $x64Hash = (Get-FileHash `
+            -LiteralPath (Join-Path $Root 'x64\OpenClawGateway-x64.msix') `
+            -Algorithm SHA256).Hash.ToLowerInvariant()
+        $arm64Hash = (Get-FileHash `
+            -LiteralPath (Join-Path $Root 'arm64\OpenClawGateway-arm64.msix') `
+            -Algorithm SHA256).Hash.ToLowerInvariant()
+        if (
+            $x64Hash -ceq $canonicalDefaultHashes.x64 -and
+            $arm64Hash -ceq $canonicalDefaultHashes.arm64
+        ) {
+            New-Item -Path (Join-Path $Root 'bundle') -ItemType Directory -Force |
+                Out-Null
+            Copy-Item `
+                -LiteralPath (Join-Path `
+                    $canonicalDefaultRoot `
+                    'bundle\OpenClawGateway.msixbundle') `
+                -Destination (Join-Path $Root 'bundle\OpenClawGateway.msixbundle') `
+                -Force
+        }
+        else {
+            New-TestBundle -Root $Root
+        }
     }
 
     & (Join-Path $PSScriptRoot 'Test-SigningInputs.ps1') `
@@ -446,6 +469,91 @@ function Update-TestMsix {
         Set-Content -LiteralPath $metadataPath -Encoding utf8
 }
 
+# Canonical artifacts are built once and copied into each case. Recording
+# their hashes lets the suite prove at the end that no case mutated them.
+$canonicalFileHashes = @{}
+
+function Register-CanonicalFiles {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    foreach ($file in Get-ChildItem -LiteralPath $Path -File -Recurse) {
+        $canonicalFileHashes[$file.FullName] = (
+            Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256
+        ).Hash
+    }
+}
+
+function Copy-TestArtifact {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Root,
+
+        [Parameter(Mandatory)]
+        [ValidateSet('x64', 'arm64')]
+        [string]$Architecture,
+
+        [string]$PayloadCommit = $approvedCommit,
+
+        [string]$PayloadPackageVersion = $approvedPayloadVersion,
+
+        [bool]$SourceTreeDirty = $false,
+
+        [string]$NodeRuntimeVersion = '24.16.0',
+
+        [bool]$IncludeBundledNode = $false,
+
+        [bool]$IncludeApplicationBundledNode = $false,
+
+        [bool]$IncludeApplicationNodeArchive = $false,
+
+        [bool]$IncludeEncodedScopedDependency = $false
+    )
+
+    $keyInputs = @(
+        $Architecture,
+        $PayloadCommit,
+        $PayloadPackageVersion,
+        $SourceTreeDirty,
+        $NodeRuntimeVersion,
+        $IncludeBundledNode,
+        $IncludeApplicationBundledNode,
+        $IncludeApplicationNodeArchive,
+        $IncludeEncodedScopedDependency
+    ) -join '|'
+    $keyBytes = [Text.Encoding]::UTF8.GetBytes($keyInputs)
+    $keyHash = [Convert]::ToHexString(
+        [Security.Cryptography.SHA256]::HashData($keyBytes)
+    ).ToLowerInvariant()
+    $canonicalVariantRoot = Join-Path $canonicalRoot "$Architecture-$keyHash"
+    $canonicalArtifact = Join-Path $canonicalVariantRoot $Architecture
+    if (-not (Test-Path -LiteralPath $canonicalArtifact -PathType Container)) {
+        New-TestArtifact `
+            -Root $canonicalVariantRoot `
+            -Architecture $Architecture `
+            -PayloadCommit $PayloadCommit `
+            -PayloadPackageVersion $PayloadPackageVersion `
+            -SourceTreeDirty $SourceTreeDirty `
+            -NodeRuntimeVersion $NodeRuntimeVersion `
+            -IncludeBundledNode $IncludeBundledNode `
+            -IncludeApplicationBundledNode $IncludeApplicationBundledNode `
+            -IncludeApplicationNodeArchive $IncludeApplicationNodeArchive `
+            -IncludeEncodedScopedDependency $IncludeEncodedScopedDependency
+        Register-CanonicalFiles -Path $canonicalArtifact
+    }
+
+    $caseArtifact = Join-Path $Root $Architecture
+    Remove-Item `
+        -LiteralPath $caseArtifact `
+        -Recurse `
+        -Force `
+        -ErrorAction SilentlyContinue
+    New-Item -Path $Root -ItemType Directory -Force | Out-Null
+    Copy-Item -LiteralPath $canonicalArtifact -Destination $caseArtifact -Recurse
+}
+
 function Reset-TestArtifacts {
     param([string]$PayloadCommit = $approvedCommit)
 
@@ -455,25 +563,52 @@ function Reset-TestArtifacts {
         -Force `
         -ErrorAction SilentlyContinue
     New-Item -Path $testRoot -ItemType Directory | Out-Null
-    New-TestArtifact -Root $testRoot -Architecture x64 -PayloadCommit $PayloadCommit
-    New-TestArtifact -Root $testRoot -Architecture arm64 -PayloadCommit $PayloadCommit
+    Copy-TestArtifact `
+        -Root $testRoot `
+        -Architecture x64 `
+        -PayloadCommit $PayloadCommit
+    Copy-TestArtifact `
+        -Root $testRoot `
+        -Architecture arm64 `
+        -PayloadCommit $PayloadCommit
 }
 
 try {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $canonicalDefaultRoot = Join-Path $canonicalRoot 'default'
+    Copy-TestArtifact -Root $canonicalDefaultRoot -Architecture x64
+    Copy-TestArtifact -Root $canonicalDefaultRoot -Architecture arm64
+    New-TestBundle -Root $canonicalDefaultRoot
+    Register-CanonicalFiles -Path $canonicalDefaultRoot
+    $canonicalDefaultHashes = @{
+        x64 = (Get-FileHash `
+            -LiteralPath (Join-Path `
+                $canonicalDefaultRoot 'x64\OpenClawGateway-x64.msix') `
+            -Algorithm SHA256).Hash.ToLowerInvariant()
+        arm64 = (Get-FileHash `
+            -LiteralPath (Join-Path `
+                $canonicalDefaultRoot 'arm64\OpenClawGateway-arm64.msix') `
+            -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
     Reset-TestArtifacts
     Invoke-PolicyValidation -Root $testRoot
 
-    Remove-Item -LiteralPath $testRoot -Recurse -Force
-    New-Item -Path $testRoot -ItemType Directory | Out-Null
-    New-TestArtifact -Root $testRoot -Architecture x64 -NodeRuntimeVersion '26.1.0'
-    New-TestArtifact -Root $testRoot -Architecture arm64 -NodeRuntimeVersion '26.1.0'
+    Reset-TestArtifacts
+    Copy-TestArtifact `
+        -Root $testRoot `
+        -Architecture x64 `
+        -NodeRuntimeVersion '26.1.0'
+    Copy-TestArtifact `
+        -Root $testRoot `
+        -Architecture arm64 `
+        -NodeRuntimeVersion '26.1.0'
     Invoke-PolicyValidation -Root $testRoot
 
-    Remove-Item -LiteralPath $testRoot -Recurse -Force
-    New-Item -Path $testRoot -ItemType Directory | Out-Null
-    New-TestArtifact -Root $testRoot -Architecture x64
-    New-TestArtifact -Root $testRoot -Architecture arm64 -NodeRuntimeVersion '26.1.0'
+    Reset-TestArtifacts
+    Copy-TestArtifact `
+        -Root $testRoot `
+        -Architecture arm64 `
+        -NodeRuntimeVersion '26.1.0'
     Assert-Fails `
         -MessagePattern 'Node.js runtime versions do not match' `
         -Action { Invoke-PolicyValidation -Root $testRoot }
@@ -569,6 +704,7 @@ try {
         -MessagePattern 'session host file is invalid' `
         -Action { Invoke-PolicyValidation -Root $testRoot }
 
+    Reset-TestArtifacts
     $x64MetadataPath = Join-Path $testRoot 'x64\msix-metadata.json'
     $x64Metadata = Get-Content -LiteralPath $x64MetadataPath -Raw |
         ConvertFrom-Json
@@ -582,23 +718,19 @@ try {
             Invoke-PolicyValidation -Root $testRoot
         }
 
-    Remove-Item -LiteralPath $testRoot -Recurse -Force
-    New-Item -Path $testRoot -ItemType Directory | Out-Null
-    New-TestArtifact `
+    Reset-TestArtifacts
+    Copy-TestArtifact `
         -Root $testRoot `
         -Architecture x64 `
         -PayloadPackageVersion '2026.9.3'
-    New-TestArtifact -Root $testRoot -Architecture arm64
     Assert-Fails `
         -MessagePattern 'metadata is not eligible' `
         -Action {
             Invoke-PolicyValidation -Root $testRoot
         }
 
-    Remove-Item -LiteralPath $testRoot -Recurse -Force
-    New-Item -Path $testRoot -ItemType Directory | Out-Null
-    New-TestArtifact -Root $testRoot -Architecture x64
-    New-TestArtifact `
+    Reset-TestArtifacts
+    Copy-TestArtifact `
         -Root $testRoot `
         -Architecture arm64 `
         -PayloadCommit ('3' * 40)
@@ -608,54 +740,51 @@ try {
             Invoke-PolicyValidation -Root $testRoot
         }
 
-    Remove-Item -LiteralPath $testRoot -Recurse -Force
-    New-Item -Path $testRoot -ItemType Directory | Out-Null
-    New-TestArtifact `
+    Reset-TestArtifacts
+    Copy-TestArtifact `
         -Root $testRoot `
         -Architecture x64 `
         -IncludeBundledNode $true
-    New-TestArtifact -Root $testRoot -Architecture arm64
     Assert-Fails `
         -MessagePattern 'x64 MSIX has unexpected Node.js content' `
         -Action {
             Invoke-PolicyValidation -Root $testRoot
         }
 
-    Remove-Item -LiteralPath $testRoot -Recurse -Force
-    New-Item -Path $testRoot -ItemType Directory | Out-Null
-    New-TestArtifact `
+    Reset-TestArtifacts
+    Copy-TestArtifact `
         -Root $testRoot `
         -Architecture x64 `
         -IncludeApplicationBundledNode $true
-    New-TestArtifact -Root $testRoot -Architecture arm64
     Assert-Fails `
         -MessagePattern 'x64 MSIX has unexpected Node.js content' `
         -Action {
             Invoke-PolicyValidation -Root $testRoot
         }
 
-    Remove-Item -LiteralPath $testRoot -Recurse -Force
-    New-Item -Path $testRoot -ItemType Directory | Out-Null
-    New-TestArtifact `
+    Reset-TestArtifacts
+    Copy-TestArtifact `
         -Root $testRoot `
         -Architecture x64 `
         -IncludeApplicationNodeArchive $true
-    New-TestArtifact -Root $testRoot -Architecture arm64
     Assert-Fails `
         -MessagePattern 'x64 MSIX has unexpected Node.js content' `
         -Action {
             Invoke-PolicyValidation -Root $testRoot
         }
 
-    Remove-Item -LiteralPath $testRoot -Recurse -Force
-    New-Item -Path $testRoot -ItemType Directory | Out-Null
-    New-TestArtifact `
+    Reset-TestArtifacts
+    Copy-TestArtifact `
         -Root $testRoot `
         -Architecture x64 `
         -IncludeEncodedScopedDependency $true
-    New-TestArtifact -Root $testRoot -Architecture arm64
     Invoke-PolicyValidation -Root $testRoot
 
+    Reset-TestArtifacts
+    Copy-TestArtifact `
+        -Root $testRoot `
+        -Architecture x64 `
+        -IncludeEncodedScopedDependency $true
     Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
         param($Expanded)
         $decodedDirectory = Join-Path `
@@ -787,8 +916,17 @@ try {
             Invoke-PolicyValidation -Root $testRoot -PreserveBundle
         }
 
+    foreach ($canonicalFile in $canonicalFileHashes.Keys) {
+        $currentHash = (
+            Get-FileHash -LiteralPath $canonicalFile -Algorithm SHA256
+        ).Hash
+        if ($currentHash -cne $canonicalFileHashes[$canonicalFile]) {
+            throw "A test case mutated the canonical artifact '$canonicalFile'."
+        }
+    }
+
     Write-Host 'Gateway MSIX signing policy tests passed.'
 }
 finally {
-    Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $suiteRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

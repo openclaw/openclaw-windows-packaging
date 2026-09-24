@@ -185,6 +185,11 @@ jobs:
         run: >
           .\scripts\Test-SigningInputs.Tests.ps1
 
+      - name: Test MSIX test signing
+        shell: pwsh
+        run: >
+          .\scripts\Test-Sign-TestMSIX.Tests.ps1
+
       - name: Test Node.js packaging inputs
         shell: pwsh
         run: .\scripts\Test-NodeRuntimeInputs.Tests.ps1

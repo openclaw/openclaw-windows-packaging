@@ -1,14 +1,42 @@
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'FileList')]
 param(
-    [Parameter(Mandatory)]
+    [Parameter(Mandatory, ParameterSetName = 'FileList')]
     [string]$FileListPath,
 
+    [Parameter(ParameterSetName = 'FileList')]
     [ValidateRange(1, 3000)]
-    [int]$MaximumFiles = 3000
+    [int]$MaximumFiles = 3000,
+
+    [Parameter(Mandatory, ParameterSetName = 'PathList')]
+    [string]$PathListPath
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# FileList preserves CI's GitHub JSON contract; PathList accepts local git -z output.
+$documentationPathPattern = '^(?:.*\.md|docs/.*|LICENSE)$'
+
+if ($PSCmdlet.ParameterSetName -eq 'PathList') {
+    if (-not (Test-Path -LiteralPath $PathListPath -PathType Leaf)) {
+        throw "Path list does not exist: $PathListPath"
+    }
+
+    $paths = @(
+        [IO.File]::ReadAllText(
+            $PathListPath,
+            [Text.UTF8Encoding]::new($false)
+        ).Split([char]0) |
+            Where-Object { $_.Length -gt 0 }
+    )
+    foreach ($path in $paths) {
+        if ($path -notmatch $documentationPathPattern) {
+            return 'true'
+        }
+    }
+
+    return 'false'
+}
 
 if (-not (Test-Path -LiteralPath $FileListPath -PathType Leaf)) {
     throw "Pull request file list does not exist: $FileListPath"
@@ -62,7 +90,7 @@ foreach ($file in $files) {
         if ([string]::IsNullOrWhiteSpace($path)) {
             continue
         }
-        if ($path -notmatch '^(?:.*\.md|docs/.*|LICENSE)$') {
+        if ($path -notmatch $documentationPathPattern) {
             return 'true'
         }
     }

@@ -5,9 +5,21 @@
 # -Remove. The marker comment on the second line is how the installer
 # recognises a hook it owns, so do not delete it.
 #
-# This hook runs the same command as continuous integration. It is a latency
-# shortcut, not a policy boundary: it is local to one clone, it is opt in, and
+# This hook runs the same command as continuous integration, except when the
+# push provably changes only documentation. It is a latency shortcut, not a
+# policy boundary: it is local to one clone, it is opt in, and
 # `git push --no-verify` skips it. Required CI checks remain authoritative.
+#
+# The pushed file set is every file changed, against its first parent, by a
+# commit that the push introduces: a commit reachable from a pushed object but
+# not from a branch or tag the destination reports through `git ls-remote`
+# during this push, or from the ref's current remote value. Local
+# remote-tracking refs are not trusted, because one left behind after its remote
+# branch was deleted would hide commits the destination does not have.
+# scripts/Get-PackagingRelevance.ps1 owns the documentation rule that CI uses.
+# Deletions check nothing. A root commit, input the hook does not understand,
+# and any failure to query the destination or to determine or classify the file
+# set run the quality script.
 
 set -e
 
@@ -18,6 +30,121 @@ if ! command -v pwsh >/dev/null 2>&1; then
 fi
 
 repository_root=$(git rev-parse --show-toplevel)
+remote_location=$2
+quality_script=scripts/Test-DotNetQuality.ps1
+classifier="$repository_root/scripts/Get-PackagingRelevance.ps1"
+work_directory=
 
-echo "pre-push: running scripts/Test-DotNetQuality.ps1"
-exec pwsh -NoProfile -File "$repository_root/scripts/Test-DotNetQuality.ps1"
+remove_work_directory() {
+    if [ -n "$work_directory" ]; then
+        rm -rf "$work_directory"
+    fi
+}
+trap remove_work_directory EXIT
+
+run_quality_script() {
+    # exec replaces this shell, so the EXIT trap would never run.
+    remove_work_directory
+    echo "pre-push: $1; running $quality_script"
+    exec pwsh -NoProfile -File "$repository_root/$quality_script"
+}
+
+skip_quality_script() {
+    echo "pre-push: $1; skipping $quality_script"
+    exit 0
+}
+
+is_object_id() {
+    case $1 in
+        '' | *[!0-9a-f]*) return 1 ;;
+    esac
+    [ ${#1} -eq 40 ] || [ ${#1} -eq 64 ]
+}
+
+is_zero_object_id() {
+    case $1 in
+        *[!0]*) return 1 ;;
+    esac
+    return 0
+}
+
+# Writes one ^<commit> line for every branch and tag commit the destination
+# reports now and this clone also has; commits the destination has but this
+# clone lacks cannot be ancestors of anything pushed from here.
+load_destination_commits() {
+    remote_refs=$(git ls-remote --heads --tags "$remote_location" </dev/null) ||
+        return 1
+    printf '%s\n' "$remote_refs" | cut -f1 >"$work_directory/remote-objects"
+    git cat-file --batch-check='%(objectname) %(objecttype)' \
+        <"$work_directory/remote-objects" >"$work_directory/remote-types" ||
+        return 1
+    sed -n 's/^\([0-9a-f][0-9a-f]*\) commit$/^\1/p' \
+        "$work_directory/remote-types" >"$work_directory/exclusions"
+}
+
+work_directory=$(mktemp -d) ||
+    run_quality_script 'could not create a temporary directory'
+path_list="$work_directory/paths"
+: >"$path_list"
+
+saw_ref=false
+saw_update=false
+# Git commands below read a file or /dev/null so they cannot consume the ref
+# lines.
+while read -r local_ref local_object remote_ref remote_object extra; do
+    saw_ref=true
+    if [ -z "$remote_ref" ] || [ -n "$extra" ] ||
+        ! is_object_id "$local_object" || ! is_object_id "$remote_object"; then
+        run_quality_script 'unexpected hook input'
+    fi
+
+    if is_zero_object_id "$local_object"; then
+        continue
+    fi
+    if [ "$saw_update" = false ]; then
+        load_destination_commits ||
+            run_quality_script 'could not list the destination refs'
+    fi
+    saw_update=true
+
+    if is_zero_object_id "$remote_object"; then
+        set -- "$local_object"
+    else
+        set -- "$local_object" "^$remote_object"
+    fi
+
+    root_commits=$(git rev-list --max-parents=0 --stdin "$@" \
+        <"$work_directory/exclusions") ||
+        run_quality_script 'could not determine the pushed commits'
+    if [ -n "$root_commits" ]; then
+        run_quality_script 'the push introduces a root commit'
+    fi
+
+    git log --format= --name-only -z --no-color --no-renames \
+        --diff-merges=first-parent --stdin "$@" \
+        <"$work_directory/exclusions" >>"$path_list" ||
+        run_quality_script 'could not determine the pushed files'
+done
+
+if [ "$saw_ref" = false ]; then
+    run_quality_script 'unexpected hook input'
+fi
+if [ "$saw_update" = false ]; then
+    skip_quality_script 'the push only deletes remote refs'
+fi
+if [ ! -s "$path_list" ]; then
+    skip_quality_script 'the push introduces no changed files'
+fi
+if [ ! -f "$classifier" ]; then
+    run_quality_script 'could not classify the pushed files'
+fi
+
+relevance=$(pwsh -NoProfile -File "$classifier" -PathListPath "$path_list") ||
+    run_quality_script 'could not classify the pushed files'
+relevance=$(printf '%s' "$relevance" | tr -d '\r')
+
+case $relevance in
+    false) skip_quality_script 'the push changes only documentation' ;;
+    true) run_quality_script 'the push changes more than documentation' ;;
+    *) run_quality_script 'could not classify the pushed files' ;;
+esac

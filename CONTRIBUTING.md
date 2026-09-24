@@ -168,12 +168,34 @@ CI. The hook is opt in and local to your clone:
 ```
 
 That writes the tracked `hooks\pre-push` into the hooks directory Git consults
-for your working tree. It runs `Test-DotNetQuality.ps1` and nothing else, so it
-reports exactly what CI reports. To remove it:
+for your working tree. When the hook does not skip a push as described below,
+it runs `Test-DotNetQuality.ps1` and nothing else, so it reports exactly what
+CI reports. Rerun the installer after pulling a hook change to refresh it. To
+remove it:
 
 ```powershell
 .\scripts\Install-GitHooks.ps1 -Remove
 ```
+
+The hook skips the quality script when every file the push changes is
+documentation, using the same rule CI uses to skip packaging
+(`scripts\Get-PackagingRelevance.ps1`: `*.md`, `docs/`, and `LICENSE`). The
+changed files are the files each new commit changes against its first parent.
+A new commit is one that no branch or tag on the destination contains; the
+hook asks the destination for its current branches and tags with
+`git ls-remote` during the push, which adds one round trip (about 0.5 s to
+GitHub here). A push that only deletes remote refs, or whose new commits
+change no files, checks nothing. A push that introduces a root commit, input
+the hook does not recognize, a failed query of the destination, and any
+failure to determine or classify the changed files run the quality script. The
+hook prints one line saying whether it skipped or ran the quality script and
+why.
+
+The hook does not trust your local remote-tracking refs, so a ref left behind
+after its remote branch was deleted cannot hide a commit the destination does
+not have. Commits that exist on the destination only outside its branches and
+tags count as new, which can cause an extra run. The hook is a latency
+shortcut; CI remains authoritative.
 
 A clone has one hooks directory, shared by every linked worktree
 (`git worktree add`). Installing or removing from any worktree therefore

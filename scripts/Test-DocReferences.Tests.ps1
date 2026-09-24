@@ -12,6 +12,9 @@ else {
     $env:TEMP
 }
 $testRoot = Join-Path $temporaryBase "openclaw-doc-references-$([guid]::NewGuid().ToString('N'))"
+$templateRoot = Join-Path $testRoot '.git-template'
+$templateGitDirectory = Join-Path $templateRoot '.git'
+$script:pendingTracked = @{}
 
 function Assert-True {
     param(
@@ -69,10 +72,7 @@ function Write-FixtureFile {
         [Text.UTF8Encoding]::new($false)
     )
     if ($Track) {
-        & git -C $Root add -- $Path
-        if ($LASTEXITCODE -ne 0) {
-            throw "Unable to track fixture file '$Path'."
-        }
+        $script:pendingTracked[$Root] = @($script:pendingTracked[$Root]) + $Path
     }
 }
 
@@ -84,10 +84,8 @@ function New-Fixture {
 
     $root = Join-Path $testRoot $Name
     New-Item -ItemType Directory -Path $root -Force | Out-Null
-    & git -C $root init --quiet
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to initialize fixture '$Name'."
-    }
+    Copy-Item -LiteralPath $templateGitDirectory -Destination $root -Recurse -Force
+    $script:pendingTracked[$root] = @()
     return $root
 }
 
@@ -99,6 +97,15 @@ function Invoke-Checker {
         [switch]$Advisory
     )
 
+    $pending = @($script:pendingTracked[$Root])
+    if ($pending.Count -gt 0) {
+        & git -C $Root add -- $pending
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to track pending fixture files for '$Root'."
+        }
+        $script:pendingTracked[$Root] = @()
+    }
+
     $output = @(& $scriptPath -RepositoryRoot $Root -Advisory:$Advisory)
     return [pscustomobject]@{
         ExitCode = $LASTEXITCODE
@@ -108,6 +115,12 @@ function Invoke-Checker {
 
 New-Item -Path $testRoot -ItemType Directory | Out-Null
 try {
+    New-Item -Path $templateRoot -ItemType Directory | Out-Null
+    & git -C $templateRoot init --quiet
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Unable to initialize the fixture template.'
+    }
+
     $clean = New-Fixture 'clean'
     Write-FixtureFile $clean 'README.md' '# Clean' -Track
     $result = Invoke-Checker $clean
