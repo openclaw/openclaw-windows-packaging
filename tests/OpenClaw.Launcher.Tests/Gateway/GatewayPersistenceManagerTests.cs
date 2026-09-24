@@ -157,9 +157,31 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
         string activation = await File.ReadAllTextAsync(ActivationScriptPath, CancellationToken.None);
 
         Assert.Contains("PackageFamilyName -eq $packageFamilyName", activation, StringComparison.Ordinal);
-        Assert.Contains("Get-AppxPackage -Name 'OpenClawFoundation.OpenClawGateway'", activation, StringComparison.Ordinal);
+        Assert.Contains("Get-AppxPackage -Name 'OpenClaw.Gateway' |", activation, StringComparison.Ordinal);
         Assert.Contains("does not declare application '$applicationId'", activation, StringComparison.Ordinal);
         Assert.Contains("does not target openclaw.exe", activation, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(
+        "OpenClawFoundation.OpenClawGateway_rfcbke2p71se2",
+        "OpenClawFoundation.OpenClawGateway")]
+    [InlineData(
+        "OpenClawFoundation.OpenClawGateway-foo_rfcbke2p71se2",
+        "OpenClawFoundation.OpenClawGateway-foo")]
+    public void TheControlActivationScriptLooksUpTheIdentityThatGeneratedIt(
+        string packageFamilyName,
+        string packageName)
+    {
+        // A side-by-side identity's logon recovery must find its own package;
+        // looking up the base name would report it as not registered.
+        string activation =
+            GatewayLauncherScript.CreateActivationScript(packageFamilyName);
+
+        Assert.Contains(
+            $"$package = Get-AppxPackage -Name '{packageName}' | ",
+            activation,
+            StringComparison.Ordinal);
     }
 
     [Fact]

@@ -6,13 +6,59 @@ $script:LegacyPackageName = 'OpenClaw.Gateway'
 $script:StateSchema = 1
 $script:ControlApplicationId = 'Control'
 
+function Get-LocalPackageIdentity {
+    param([string]$Patch)
+
+    # Only an omitted -Patch selects the base identity. An explicitly empty
+    # value, such as an unset variable, must fail: falling back would let a
+    # caller who asked for a patch remove the base registration or, with
+    # -ReplaceExistingInstall, an installed release and its app data.
+    if (-not $PSBoundParameters.ContainsKey('Patch')) {
+        return [pscustomobject]@{
+            Name = $script:PackageName
+            Patch = ''
+            DisplayName = ''
+            AgentCommand = 'openclaw'
+            ControlCommand = 'clawctl'
+            StateDirectory = 'artifacts\local-package'
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($Patch)) {
+        throw (
+            '-Patch requires a name. Omit -Patch to deploy the base ' +
+            "$script:PackageName identity."
+        )
+    }
+
+    # The suffix becomes part of the package name, both execution aliases, and
+    # a state directory. Package names are limited to 50 characters, which
+    # leaves 15 after the base name and separator.
+    $normalized = $Patch.ToLowerInvariant()
+    if ($normalized.Length -gt 15 -or
+        $normalized -cnotmatch '^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$') {
+        throw (
+            "Invalid -Patch '$Patch'. Use 1 to 15 letters, digits, or " +
+            'hyphens, starting and ending with a letter or digit.'
+        )
+    }
+    return [pscustomobject]@{
+        Name = "$script:PackageName-$normalized"
+        Patch = $normalized
+        DisplayName = "OpenClaw Gateway ($normalized)"
+        AgentCommand = "openclaw-$normalized"
+        ControlCommand = "clawctl-$normalized"
+        StateDirectory = "artifacts\local-package\patches\$normalized"
+    }
+}
+
 function Invoke-LocalPackageControlCommand {
     param(
+        [Parameter(Mandatory)][string]$PackageName,
         [Parameter(Mandatory)][string]$PackageFamilyName,
         [Parameter(Mandatory)][string]$Arguments
     )
 
-    $package = Get-AppxPackage -Name $script:PackageName -ErrorAction Stop |
+    $package = Get-AppxPackage -Name $PackageName -ErrorAction Stop |
         Where-Object { $_.PackageFamilyName -eq $PackageFamilyName } |
         Select-Object -First 1
     if ($null -eq $package) {
@@ -388,7 +434,8 @@ function New-LocalPackageLayout {
         [string]$PayloadDirectory,
         [string]$RuntimeArchive,
         [string]$Architecture,
-        [string]$Version
+        [string]$Version,
+        [Parameter(Mandatory)]$Identity
     )
 
     New-Item -Path $LayoutDirectory -ItemType Directory -Force | Out-Null
@@ -397,9 +444,31 @@ function New-LocalPackageLayout {
     [xml]$manifest = Get-Content -LiteralPath (
         Join-Path $RepositoryRoot 'src\OpenClaw.Launcher\Package.appxmanifest'
     ) -Raw
-    $identity = $manifest.SelectSingleNode("/*[local-name()='Package']/*[local-name()='Identity']")
-    $identity.SetAttribute('Version', $Version)
-    $identity.SetAttribute('ProcessorArchitecture', $Architecture)
+    $identityNode = $manifest.SelectSingleNode("/*[local-name()='Package']/*[local-name()='Identity']")
+    $identityNode.SetAttribute('Version', $Version)
+    $identityNode.SetAttribute('ProcessorArchitecture', $Architecture)
+    if ($Identity.Patch) {
+        $identityNode.SetAttribute('Name', $Identity.Name)
+        $manifest.SelectSingleNode(
+            "/*[local-name()='Package']/*[local-name()='Properties']/*[local-name()='DisplayName']"
+        ).InnerText = $Identity.DisplayName
+        foreach ($visual in $manifest.SelectNodes("//*[local-name()='VisualElements']")) {
+            $visual.SetAttribute('DisplayName', $Identity.DisplayName)
+        }
+        # Aliases are per-user and global, so an alias left unrenamed would
+        # collide with the base identity's command instead of sitting beside it.
+        $aliases = @{
+            'openclaw.exe' = "$($Identity.AgentCommand).exe"
+            'clawctl.exe' = "$($Identity.ControlCommand).exe"
+        }
+        foreach ($alias in $manifest.SelectNodes("//*[local-name()='ExecutionAlias']")) {
+            $current = $alias.GetAttribute('Alias')
+            if (-not $aliases.ContainsKey($current)) {
+                throw "The package manifest declares an alias a patched identity cannot rename: $current."
+            }
+            $alias.SetAttribute('Alias', $aliases[$current])
+        }
+    }
     $manifest.Save($manifestPath)
 
     Copy-Item -LiteralPath $HostExecutable -Destination (Join-Path $LayoutDirectory 'openclaw.exe') -Force
@@ -679,8 +748,11 @@ function Get-LocalPackageOperations {
         }
         TestPath = { param($path) Test-Path -LiteralPath $path }
         RunSetup = {
-            param($packageFamilyName)
-            Invoke-LocalPackageControlCommand -PackageFamilyName $packageFamilyName -Arguments 'setup'
+            param($packageName, $packageFamilyName)
+            Invoke-LocalPackageControlCommand `
+                -PackageName $packageName `
+                -PackageFamilyName $packageFamilyName `
+                -Arguments 'setup'
             return $null
         }
     }
@@ -716,17 +788,26 @@ function Remove-LocalPackageRegistration {
     param(
         [Parameter(Mandatory)][string]$RepositoryRoot,
         [ValidateSet('x64', 'arm64')][string]$Architecture = 'x64',
+        [string]$Patch,
         [hashtable]$Operations = @{}
     )
 
+    $identityArguments = @{}
+    if ($PSBoundParameters.ContainsKey('Patch')) { $identityArguments.Patch = $Patch }
+    $identity = Get-LocalPackageIdentity @identityArguments
     $services = Get-LocalPackageServices $Operations
-    $state = Join-Path ([IO.Path]::GetFullPath($RepositoryRoot)) "artifacts\local-package\$Architecture"
+    $state = Join-Path ([IO.Path]::GetFullPath($RepositoryRoot)) "$($identity.StateDirectory)\$Architecture"
     $layoutDirectory = Join-Path $state 'layout'
+    # The legacy identity only ever registered the base layout, so a patched
+    # identity has no legacy registration to account for.
+    $packageNames = if ($identity.Patch) {
+        @($identity.Name)
+    }
+    else {
+        @($identity.Name, $script:LegacyPackageName)
+    }
     $registrations = @(
-        foreach ($packageName in @(
-            $script:PackageName,
-            $script:LegacyPackageName
-        )) {
+        foreach ($packageName in $packageNames) {
             $installed = & $services.GetPackage $packageName
             if ($null -ne $installed) {
                 [pscustomobject]@{
@@ -737,7 +818,7 @@ function Remove-LocalPackageRegistration {
         }
     )
     if ($registrations.Count -eq 0) {
-        Write-Host 'No Gateway local package is registered for the current user.'
+        Write-Host "No $($identity.Name) local package is registered for the current user."
     }
     foreach ($registration in $registrations) {
         $installed = $registration.Package
@@ -781,6 +862,7 @@ function Invoke-LocalPackageDeployment {
         [switch]$ReplaceExistingInstall,
         [switch]$Force,
         [switch]$SkipSetup,
+        [string]$Patch,
         [hashtable]$Operations = @{}
     )
 
@@ -789,9 +871,15 @@ function Invoke-LocalPackageDeployment {
         throw '-PayloadDirectory cannot be combined with -PayloadRunId or -RefreshPayload.'
     }
 
+    $identityArguments = @{}
+    if ($PSBoundParameters.ContainsKey('Patch')) { $identityArguments.Patch = $Patch }
+    $identity = Get-LocalPackageIdentity @identityArguments
     $services = Get-LocalPackageServices $Operations
     $root = (Resolve-Path -LiteralPath $RepositoryRoot -ErrorAction Stop).Path
-    $stateRoot = Join-Path $root "artifacts\local-package\$Architecture"
+    # A patched identity owns its whole state root. Its layout links the payload
+    # it was registered with, so sharing a cache would let another identity's
+    # refresh retire a payload this registration still serves.
+    $stateRoot = Join-Path $root "$($identity.StateDirectory)\$Architecture"
     $layoutDirectory = Join-Path $stateRoot 'layout'
     $statePath = Join-Path $stateRoot 'state.json'
     $progress = @{ Stage = 'preparing' }
@@ -799,13 +887,18 @@ function Invoke-LocalPackageDeployment {
 
     try {
         & $services.Preflight $Architecture | Out-Null
-        Write-Host "Registering a local development build of $script:PackageName ($Architecture)."
+        Write-Host "Registering a local development build of $($identity.Name) ($Architecture)."
         Write-Host "Layout: $layoutDirectory"
 
         $installed = Invoke-LocalPackagePhase $progress 'Check current registration' {
-            & $services.GetPackage $script:PackageName
+            & $services.GetPackage $identity.Name
         }
-        $legacyInstalled = & $services.GetPackage $script:LegacyPackageName
+        $legacyInstalled = if ($identity.Patch) {
+            $null
+        }
+        else {
+            & $services.GetPackage $script:LegacyPackageName
+        }
         if ($null -ne $legacyInstalled) {
             $legacyOwned = Test-LocalPackageOwnership `
                 -Installed $legacyInstalled `
@@ -840,13 +933,13 @@ function Invoke-LocalPackageDeployment {
         if ($null -ne $installed -and -not $installed.IsDevelopmentMode) {
             if (-not $ReplaceExistingInstall) {
                 throw (
-                    "$script:PackageName is already installed from a package (version $($installed.Version)). " +
+                    "$($identity.Name) is already installed from a package (version $($installed.Version)). " +
                     'Windows cannot replace a packaged install with a local layout. ' +
                     'Re-run with -ReplaceExistingInstall to remove it first; its packaged app data ' +
                     'cannot be preserved across that switch.'
                 )
             }
-            Write-Warning "Removing the packaged $script:PackageName $($installed.Version); its app data cannot be preserved."
+            Write-Warning "Removing the packaged $($identity.Name) $($installed.Version); its app data cannot be preserved."
             & $services.RemovePackage $installed.PackageFullName $false | Out-Null
             $installed = $null
         }
@@ -856,7 +949,7 @@ function Invoke-LocalPackageDeployment {
             # registration of this identity can exist, but it is not ours to take.
             if (-not $ReplaceExistingInstall) {
                 throw (
-                    "$script:PackageName is already registered from another location: " +
+                    "$($identity.Name) is already registered from another location: " +
                     "$($installed.InstallLocation). Run -Unregister from that checkout, or " +
                     're-run with -ReplaceExistingInstall to take over the identity here.'
                 )
@@ -1018,7 +1111,8 @@ function Invoke-LocalPackageDeployment {
             New-LocalPackageLayout -LayoutDirectory $layoutDirectory -RepositoryRoot $root `
                 -HostExecutable $hostExecutable -SessionHostExecutable $sessionHostExecutable `
                 -MxcRuntimeDirectory $mxcRuntimeDirectory -PayloadDirectory $payload.Directory `
-                -RuntimeArchive $runtimeArchive -Architecture $Architecture -Version $version
+                -RuntimeArchive $runtimeArchive -Architecture $Architecture -Version $version `
+                -Identity $identity
         }
         Invoke-LocalPackagePhase $progress 'Register package' {
             # Re-registering over an existing development registration does not
@@ -1032,7 +1126,7 @@ function Invoke-LocalPackageDeployment {
             & $services.RegisterPackage $manifestPath
         } | Out-Null
 
-        $registered = & $services.GetPackage $script:PackageName
+        $registered = & $services.GetPackage $identity.Name
         if ($null -eq $registered -or $registered.Version -ne $version -or
             -not $registered.IsDevelopmentMode -or $registered.Status -inotin @('Ok', 'Ready')) {
             throw 'The package did not register as a healthy local development build.'
@@ -1049,7 +1143,7 @@ function Invoke-LocalPackageDeployment {
 
         if (-not $SkipSetup) {
             Invoke-LocalPackagePhase $progress 'Prepare bundled Node.js runtime' {
-                & $services.RunSetup $registered.PackageFamilyName
+                & $services.RunSetup $identity.Name $registered.PackageFamilyName
             } | Out-Null
         }
 
@@ -1074,9 +1168,9 @@ function Invoke-LocalPackageDeployment {
         $total.Stop()
         Write-Host "`nRegistered: $($registered.PackageFullName)"
         Write-Host $(if ($SkipSetup) {
-            'Run `clawctl setup` once, then `openclaw`.'
+            "Run ``$($identity.ControlCommand) setup`` once, then ``$($identity.AgentCommand)``."
         }
-        else { 'Ready to run: `openclaw`' })
+        else { "Ready to run: ``$($identity.AgentCommand)``" })
         Write-Host ('Total {0:0.00}s.' -f $total.Elapsed.TotalSeconds)
         return [pscustomobject]@{
             Version = $version

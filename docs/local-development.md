@@ -16,10 +16,11 @@ NativeAOT publishing and MSIX work.
 
 | Need | Authority and outcome |
 | --- | --- |
-| Iterate on the packaged application without producing an MSIX | `.\scripts\Deploy-LocalPackage.ps1` publishes and registers a Developer Mode layout. This is the normal inner loop. |
+| Iterate on the packaged application without producing an MSIX | `.\scripts\Deploy-LocalPackage.ps1 -Patch <name>` publishes and registers a Developer Mode layout under a side-by-side identity named for the work. This is the normal inner loop. |
+| Exercise the base `openclaw` and `clawctl` identity itself | `.\scripts\Deploy-LocalPackage.ps1` without `-Patch` registers `OpenClawFoundation.OpenClawGateway`, for alias, shell completion, or loose/MSIX transition work. |
 | Produce an unsigned artifact | `.\scripts\Build-LocalMSIX.ps1` composes an unsigned MSIX from a payload; it does not install it. |
 | Make a local artifact installable for testing | `.\scripts\Sign-TestMSIX.ps1` signs the output separately with a temporary test certificate. |
-| Install a signed local artifact | After removing a loose registration with the deployment script, install the signed package with `Add-AppxPackage -Path <signed-msix>`. |
+| Install a signed local artifact | After removing a base loose registration with the deployment script, install the signed package with `Add-AppxPackage -Path <signed-msix>`. |
 
 Loose registration and an installed MSIX are mutually exclusive for the
 `OpenClawFoundation.OpenClawGateway` identity. Windows cannot preserve packaged app data while
@@ -35,17 +36,31 @@ package family.
 
 ## Fast, loose-registration inner loop
 
-From a clean checkout, register an x64 layout and prepare the runtime:
+From a clean checkout, register an x64 layout under a patched identity named
+for the change you are iterating on, and prepare its runtime:
 
 ```powershell
-.\scripts\Deploy-LocalPackage.ps1 -Architecture x64
+.\scripts\Deploy-LocalPackage.ps1 -Patch pwsh-exec -Architecture x64
 ```
 
 The script resolves a payload, stages MXC and the bundled Node.js runtime,
 publishes both the NativeAOT `openclaw.exe` launcher and the NativeAOT session
 host, assembles the layout, registers it with `Add-AppxPackage -Register`, and
-runs `clawctl setup`. The layout lives under
-`artifacts\local-package\<architecture>\layout`.
+runs setup through that identity's control application. The patch registers
+beside the base package as `openclaw-pwsh-exec` and `clawctl-pwsh-exec`, so
+iteration never replaces the base `openclaw` and `clawctl` or their app data.
+Its layout lives under
+`artifacts\local-package\patches\pwsh-exec\<architecture>\layout`. A
+descriptive name keeps concurrent iterations apart and makes the registration
+recognizable in `Get-AppxPackage` output.
+
+Omit `-Patch` only when the work exercises the base identity itself: its
+`openclaw` and `clawctl` aliases, shell completion, or a loose/MSIX transition.
+That layout lives under `artifacts\local-package\<architecture>\layout`.
+
+**When you finish, tear down and unregister the patch.** Otherwise its
+isolated session, any gateway logon task, and its registration stay behind;
+see [remove a patch](#remove-a-patch).
 
 Use options for a concrete reason:
 
@@ -59,6 +74,7 @@ Use options for a concrete reason:
 | `-Force` | You intentionally need to re-register although the recorded inputs have not changed. |
 | `-SkipSetup` | You only need the registration and intentionally want to defer setup. If setup state is absent, the next `openclaw` invocation performs setup automatically unless `CLAWCTL_AUTO_SETUP` suppresses it; run `clawctl setup` when you want to provision or recover explicitly. |
 | `-ReplaceExistingInstall` | You explicitly accept removal of an installed MSIX or a registration owned by another checkout. This is destructive because app data cannot survive the loose/installed transition. |
+| `-Patch <name>` | You are iterating on a change; this is the recommended default. Name it for the work so its commands, app data, and isolated session stay separate from the base package. See [side-by-side patched identities](#side-by-side-patched-identities). |
 
 The command is idempotent, not timestamp-driven. `LocalPackage.psm1` records a
 fingerprint of the relevant inputs, including the SHA-256 content hash of the
@@ -75,15 +91,19 @@ copied, which is why repeat deploys avoid duplicating it.
 ### Verify the registered package
 
 ```powershell
-Get-AppxPackage -Name OpenClawFoundation.OpenClawGateway |
+Get-AppxPackage -Name OpenClawFoundation.OpenClawGateway-pwsh-exec |
   Select-Object PackageFullName, InstallLocation, IsDevelopmentMode, SignatureKind
 
-clawctl --version
-clawctl status
+clawctl-pwsh-exec --version
+clawctl-pwsh-exec status
 ```
 
+For the base identity, query `OpenClawFoundation.OpenClawGateway` and run
+`clawctl` instead.
+
 For a loose layout, `InstallLocation` should be the checkout's
-`artifacts\local-package\<architecture>\layout` and `IsDevelopmentMode` should
+`artifacts\local-package\patches\pwsh-exec\<architecture>\layout` (base:
+`artifacts\local-package\<architecture>\layout`) and `IsDevelopmentMode` should
 be `True`. `clawctl --version` prints the package version and packaging commit
 alongside the payload version and commit; compare these to the payload and
 checkout you intended to use. `clawctl status` is an active status probe: it
@@ -91,12 +111,78 @@ asks the backend to start the recorded provision, but does not create a
 replacement provision or start the gateway.
 
 After a successful loose deployment, expect the registration to report the
-current checkout's `artifacts\local-package\<architecture>\layout`,
-`IsDevelopmentMode` as `True`, and `SignatureKind` as `None`. The packaging
-commit from `clawctl --version` must match the checkout you deployed; the
-payload commit must match the payload selected by the deployment script. A
-mismatch means the command is reaching another registration or the wrong
-payload, even if the deployment command itself succeeded.
+current checkout's layout directory, `IsDevelopmentMode` as `True`, and
+`SignatureKind` as `None`. The packaging commit from `clawctl --version` must
+match the checkout you deployed; the payload commit must match the payload
+selected by the deployment script. A mismatch means the command is reaching
+another registration or the wrong payload, even if the deployment command
+itself succeeded.
+
+### Side-by-side patched identities
+
+`-Patch <name>` registers a separate development identity next to the base
+package. It is a local inner-loop affordance: it lets you keep several
+deployments registered at the same time for development and testing, such as
+parallel branches or agent sessions, or a change beside an installed release.
+It is not a product or release identity. Name it for the work, such as a
+branch topic, so each iteration is easy to identify and remove:
+
+```powershell
+.\scripts\Deploy-LocalPackage.ps1 -Patch pwsh-exec
+clawctl-pwsh-exec --version
+clawctl-pwsh-exec status
+```
+
+| Base identity | With `-Patch pwsh-exec` |
+| --- | --- |
+| `OpenClawFoundation.OpenClawGateway` | `OpenClawFoundation.OpenClawGateway-pwsh-exec` |
+| `openclaw`, `clawctl` | `openclaw-pwsh-exec`, `clawctl-pwsh-exec` |
+| Display name `OpenClaw Gateway` | `OpenClaw Gateway (pwsh-exec)` |
+| `artifacts\local-package\<architecture>` | `artifacts\local-package\patches\pwsh-exec\<architecture>` |
+
+The name is lowercased and must be 1 to 15 letters, digits, or hyphens,
+starting and ending with a letter or digit. A patched identity has its own
+package family, so it also has its own LocalState, setup state, isolated
+session, and gateway logon task. The script neither checks nor changes the
+base or legacy registrations for a patched deployment, so the patch can sit
+beside an installed MSIX or this checkout's base loose registration. Each
+patch keeps its own payload cache, so its first deployment downloads the
+payload again unless you pass `-PayloadDirectory`.
+
+Known limits. These are accepted because patched identities exist only for
+local concurrent development and testing:
+
+- Help, errors, and next-step guidance, including setup and teardown recovery
+  instructions, still print `clawctl` and `openclaw`. Always substitute the
+  patched command, such as `clawctl-pwsh-exec setup`. Running the printed base
+  command verbatim acts on the base package and its isolated session when one
+  is installed, and leaves the patch unrecovered.
+- Both gateways use OpenClaw's default port unless configured otherwise. Give
+  one instance a different `gateway.port` before running both gateways at
+  once.
+- Shell completion is bound to the base command names, and
+  `clawctl-pwsh-exec completion --install` or `--uninstall` edits the same
+  profile block as the base `clawctl`. Manage completion from the base package
+  only.
+
+#### Remove a patch
+
+Remove every patch when you finish with it. Tear down its isolated session
+while its commands still exist, then unregister it with the same
+`-Architecture` you deployed:
+
+```powershell
+clawctl-pwsh-exec teardown --force
+.\scripts\Deploy-LocalPackage.ps1 -Unregister -Patch pwsh-exec
+```
+
+Teardown removes the patch's isolated session, its data, any gateway logon
+task, and its setup state. `-Unregister -Patch pwsh-exec` then removes only
+that registration and preserves its app data. If you unregister first, the
+isolated session stays behind; redeploy the same patch to reach it again, then
+tear it down. `-Unregister` without `-Patch` never removes patched
+registrations. To find patches you have not removed, run
+`Get-AppxPackage -Name 'OpenClawFoundation.OpenClawGateway-*'`.
 
 ## Compose, sign, and install an artifact
 
@@ -139,8 +225,9 @@ certificate beside each signed package and records its thumbprint in
 `msix-metadata.json`; it does not add the certificate to a trust store. This is
 test signing, not an official release-signing path.
 
-Before installing the signed output, switch away from a loose registration
-through the repository-owned transition:
+Before installing the signed output, switch away from a base loose
+registration through the repository-owned transition. Patched registrations use
+another package name and do not block the install:
 
 ```powershell
 .\scripts\Deploy-LocalPackage.ps1 -Unregister
