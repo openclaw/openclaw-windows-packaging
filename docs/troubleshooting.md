@@ -98,9 +98,10 @@ clawctl gateway-service status
 
 `gateway-service` is the command name. Its status command does not start a
 gateway; when needed, it may start/probe the already-recorded session only to
-report file-only configuration readiness. Check the reported gateway state,
-the scheduled-task recovery state, and the log tail emitted for stopped or
-unhealthy gateways.
+report file-only configuration readiness. Check the reported gateway state and
+detail, which carries the supervisor's reason when the gateway exited, and the
+scheduled-task recovery state. The gateway's own output is not printed; run
+`clawctl collect-logs` and read the `gateway/` launch logs in the ZIP.
 
 **Likely cause.** `not started` means this installation has not started a
 gateway. `stopped` can be an ordinary consequence of stopping the isolated
@@ -115,8 +116,8 @@ then run:
 clawctl gateway-service start
 ```
 
-For an unhealthy gateway, inspect the emitted log tail, then run
-`clawctl gateway-service restart` to stop the verified gateway and start its
+For an unhealthy gateway, read its launch log from `clawctl collect-logs`, then
+run `clawctl gateway-service restart` to stop the verified gateway and start its
 replacement. If the stop cannot be verified, restart retains the gateway
 record and aborts rather than risk starting a second process. Use
 `clawctl gateway-service stop` instead when the gateway should remain stopped.
@@ -250,14 +251,14 @@ clawctl collect-logs [--output <path>]
 ```
 
 The command narrates each source on standard error as it gathers it: the
-isolated session, the OpenClaw logs and configuration collected inside it, and
-each host record. An interactive terminal shows one updating status line,
-redirected standard error keeps one line per source, and `--json` narrates
-nothing. Standard output carries only the result, which ends with the ZIP path
-on its own line. Without `--output`, it creates the ZIP in package state. It is
-best effort: if the agent session cannot be reached, the ZIP still contains
-host diagnostics and records that agent-side collection failed, with the
-underlying cause.
+isolated session, the OpenClaw logs and configuration collected inside it, each
+host record, and the gateway launch logs. An interactive terminal shows one
+updating status line, redirected standard error keeps one line per source, and
+`--json` narrates nothing. Standard output carries only the result, which ends
+with the ZIP path on its own line. Without `--output`, it creates the ZIP in
+package state. It is best effort: if the agent session cannot be reached, the
+ZIP still contains host diagnostics and records that agent-side collection
+failed, with the underlying cause.
 
 The ZIP's `manifest.txt` names the collecting build's environment: the Windows
 build and update revision, how the package was installed (a Developer Mode
@@ -266,19 +267,32 @@ with its install path), and the package, OpenClaw payload, MXC runtime, and
 Node.js versions. `host/openclaw.log` records the same `Environment:` line at
 every host start, and records each failure with its type, message, MXC error
 code and failing operation, Windows error code, and inner causes. A failure
-that no handler anticipated also records its stack trace.
+that no handler anticipated also records its stack trace. Every gateway start
+records its outcome: the state and the message the command reported, including
+the supervisor's reason when the gateway exited during startup.
+
+`gateway/` holds each gateway launch's own output log and supervisor status
+from the shared workspace. These are the files that a failed or stopped
+gateway's message points to when it says to run `clawctl collect-logs`. Earlier
+launches are kept too, because a later start replaces the gateway record but
+not the earlier launch's files. The newest 10 launches are collected, each
+file cut to its last 1 MiB, and the manifest notes anything that was left out.
+The workspace does not need a running session to be read.
 
 **Likely cause.** Partial setup, session reachability problems, and gateway
 failures can prevent collection of some agent files without preventing
 collection of the host evidence needed to diagnose them.
 
 **Fix.** Review the ZIP before sharing it. The collector includes selected
-OpenClaw logs and `.openclaw\openclaw.json*` candidates, applies
-credential-shaped-value redaction to JSON, and intentionally excludes SQLite
-databases and authentication-profile files. Redaction is not a substitute for
-review, and the collector does not enumerate arbitrary agent-profile files.
-The host log and manifest also name local paths, such as the install
-location of a loose-layout registration, and the agent account.
+OpenClaw logs, `.openclaw\openclaw.json*` candidates, and the gateway launch
+files. It redacts credential-shaped JSON members, URL query or fragment
+parameters (such as a Control UI link's `#token=`), environment-style
+assignments such as `OPENAI_API_KEY=`, and HTTP authorization header
+credentials, and it intentionally excludes SQLite databases and
+authentication-profile files. Redaction is not a substitute for review, and the
+collector does not enumerate arbitrary agent-profile files. The host log and
+manifest also name local paths, such as the install location of a loose-layout
+registration, and the agent account.
 
 ## Bug report collection checklist
 

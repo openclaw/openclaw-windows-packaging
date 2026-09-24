@@ -183,10 +183,18 @@ discard available host diagnostics.
 Agent paths are relative to the agent profile: OpenClaw logs come from
 `AppData\Local\Temp\openclaw`, and configuration candidates are
 `.openclaw\openclaw.json*`. The collector excludes SQLite databases and
-authentication-profile files by name. JSON entries are passed through
-credential-shaped-value redaction before being added. Collection is
-best-effort, and the ZIP manifest warns that redaction is not a substitute for
-review before sharing.
+authentication-profile files by name. Text entries are passed through
+credential-shaped-value redaction before being added: JSON members, URL query
+or fragment parameters, environment-style assignments, and HTTP authorization
+header credentials. Every redaction pattern runs non-backtracking, so crafted
+guest text cannot stall collection. Collection is best-effort, and the ZIP
+manifest warns that redaction is not a substitute for review before sharing.
+
+The host also reads each gateway launch's output log and supervisor status
+straight from the shared workspace. The files must be named for the recorded
+session's generation, and reparse points are refused. Only the newest 10
+launches are kept, each file cut to its last 1 MiB, because the workspace is
+guest-writable. Reading these files does not start the session.
 
 The helper accepts only host-named sources and writes collected files to the
 shared workspace. Missing sources are reported as entries rather than treated

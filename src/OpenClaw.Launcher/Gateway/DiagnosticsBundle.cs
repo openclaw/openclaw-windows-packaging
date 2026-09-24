@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.IO.Compression;
+using System.Text;
 using OpenClaw.Launcher.Mxc;
 using OpenClaw.Launcher.Session;
 using OpenClaw.SessionProtocol;
@@ -32,6 +34,15 @@ internal sealed partial class GatewayRuntime
 
     /// <summary>Directory in the shared workspace used to stage guest files.</summary>
     internal const string StagingDirectoryName = "openclaw-diagnostics";
+
+    /// <summary>Gateway launches whose files a bundle keeps, newest first.</summary>
+    internal const int MaximumGatewayLaunches = 10;
+
+    /// <summary>Bytes kept from the end of each gateway launch file.</summary>
+    internal const int MaximumGatewayFileBytes = 1024 * 1024;
+
+    private const string GatewayLogSuffix = ".log";
+    private const string GatewayStatusSuffix = ".status.json";
 
     /// <summary>A host file the bundle includes, and how narration names it.</summary>
     private sealed record HostSource(string Name, string Description, string Path);
@@ -121,14 +132,16 @@ internal sealed partial class GatewayRuntime
         List<HostSource> hostFiles = CollectHostFiles();
         string? staged = null;
         SessionWorkspaceOperation? stagingOperation = null;
+        SessionWorkspaceOperation? gatewayOperation = null;
 
         try
         {
             (staged, stagingOperation, bool sessionReached) =
                 await TryStageAgentFilesAsync(notes, progress, cancellationToken)
                     .ConfigureAwait(false);
+            (gatewayOperation, List<string> gatewayFiles) = FindGatewayLaunchFiles(notes);
 
-            if (hostFiles.Count == 0 && staged is null)
+            if (hostFiles.Count == 0 && staged is null && gatewayFiles.Count == 0)
             {
                 return new DiagnosticsBundleResult(null, sessionReached, notes);
             }
@@ -138,6 +151,8 @@ internal sealed partial class GatewayRuntime
                 WriteBundle(
                     bundlePath,
                     hostFiles,
+                    gatewayFiles,
+                    gatewayOperation,
                     staged,
                     stagingOperation,
                     environment,
@@ -157,8 +172,93 @@ internal sealed partial class GatewayRuntime
         {
             TryDeleteStaging(stagingOperation, staged);
             stagingOperation?.Dispose();
+            gatewayOperation?.Dispose();
         }
     }
+
+    /// <summary>
+    /// Finds each gateway launch's log and supervisor status in the shared
+    /// workspace, newest launch first.
+    /// </summary>
+    /// <remarks>
+    /// Every launch writes its own <c>gateway-&lt;generation&gt;-&lt;launch&gt;</c>
+    /// log and status beside the requests, and a relaunch replaces only the
+    /// gateway record, so an earlier failed launch is found here rather than
+    /// through that record. Only files named for this session's generation are
+    /// taken, and only the newest launches, because the workspace is
+    /// guest-writable and otherwise unbounded. Reading it needs no running
+    /// session, so this evidence survives a session that can no longer start.
+    /// </remarks>
+    private (SessionWorkspaceOperation? Operation, List<string> Files) FindGatewayLaunchFiles(
+        List<string> notes)
+    {
+        SessionRecord? record = Session.Coordinator.GetRecordedStatus().Record;
+        if (record?.WorkspacePath is not { Length: > 0 } ||
+            string.IsNullOrWhiteSpace(record.Generation))
+        {
+            return (null, []);
+        }
+
+        SessionWorkspaceOperation? operation = null;
+        try
+        {
+            operation = Session.Executor.CreateWorkspaceOperation(record);
+            List<IGrouping<string, FileInfo>> launches = [.. new DirectoryInfo(operation.WorkspacePath)
+                .EnumerateFiles($"gateway-{record.Generation}-*")
+                .Where(file => GatewayLaunchStem(file.Name) is not null)
+                .Where(file =>
+                {
+                    if ((file.Attributes & FileAttributes.ReparsePoint) == 0)
+                    {
+                        return true;
+                    }
+
+                    notes.Add($"gateway/{file.Name}: excluded because it is a reparse point");
+                    return false;
+                })
+                .GroupBy(file => GatewayLaunchStem(file.Name)!, StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(launch => launch.Max(file => file.LastWriteTimeUtc))];
+
+            if (launches.Count > MaximumGatewayLaunches)
+            {
+                notes.Add(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"gateway: {launches.Count - MaximumGatewayLaunches} older launches were not " +
+                    $"collected; the newest {MaximumGatewayLaunches} were kept."));
+            }
+
+            return (
+                operation,
+                [.. launches
+                    .Take(MaximumGatewayLaunches)
+                    .SelectMany(launch => launch
+                        .OrderBy(file => file.Name, StringComparer.OrdinalIgnoreCase)
+                        .Select(file => file.FullName))]);
+        }
+        catch (Exception exception) when (
+            exception is SessionException or IOException or UnauthorizedAccessException)
+        {
+            operation?.Dispose();
+
+            // Without a gateway record there is nothing the user was told to
+            // look for, so a workspace that was never created stays silent.
+            if (Session.GatewayState.Read().Record is not null)
+            {
+                notes.Add(
+                    "Gateway launch logs could not be collected " +
+                    $"({DiagnosticFailure.Describe(exception)}).");
+            }
+
+            return (null, []);
+        }
+    }
+
+    private static string? GatewayLaunchStem(string fileName) =>
+        fileName.EndsWith(GatewayStatusSuffix, StringComparison.OrdinalIgnoreCase)
+            ? fileName[..^GatewayStatusSuffix.Length]
+            : fileName.EndsWith(GatewayLogSuffix, StringComparison.OrdinalIgnoreCase)
+                ? fileName[..^GatewayLogSuffix.Length]
+                : null;
 
     internal static string ResolveBundlePath(
         string? requestedPath,
@@ -291,6 +391,8 @@ internal sealed partial class GatewayRuntime
     private static void WriteBundle(
         string bundlePath,
         List<HostSource> hostFiles,
+        List<string> gatewayFiles,
+        SessionWorkspaceOperation? gatewayOperation,
         string? staged,
         SessionWorkspaceOperation? stagingOperation,
         string? environment,
@@ -307,6 +409,21 @@ internal sealed partial class GatewayRuntime
         {
             progress.Report(new ClawCtlProgress($"Collecting {source.Description}."));
             AddEntry(archive, source.Name, source.Path, notes);
+        }
+
+        if (gatewayFiles.Count > 0 && gatewayOperation is not null)
+        {
+            progress.Report(new ClawCtlProgress("Collecting the gateway launch logs."));
+            foreach (string file in gatewayFiles)
+            {
+                AddEntry(
+                    archive,
+                    $"gateway/{Path.GetFileName(file)}",
+                    file,
+                    notes,
+                    gatewayOperation,
+                    MaximumGatewayFileBytes);
+            }
         }
 
         if (staged is not null &&
@@ -399,7 +516,8 @@ internal sealed partial class GatewayRuntime
         string name,
         string path,
         List<string> notes,
-        SessionWorkspaceOperation? operation = null)
+        SessionWorkspaceOperation? operation = null,
+        int? maximumBytes = null)
     {
         string fileName = Path.GetFileName(path);
 
@@ -421,8 +539,13 @@ internal sealed partial class GatewayRuntime
                     FileAccess.Read,
                     FileShare.ReadWrite | FileShare.Delete)
                 : operation.OpenRead(path);
-            using (StreamReader reader = new(input))
+            if (maximumBytes is int limit)
             {
+                text = ReadTail(input, limit, name, notes);
+            }
+            else
+            {
+                using StreamReader reader = new(input);
                 text = reader.ReadToEnd();
             }
 
@@ -435,6 +558,38 @@ internal sealed partial class GatewayRuntime
         {
             notes.Add($"{name}: unreadable ({DiagnosticFailure.Describe(exception)})");
         }
+    }
+
+    /// <summary>
+    /// Reads at most <paramref name="maximumBytes"/> from the end of a file.
+    /// </summary>
+    /// <remarks>
+    /// A running gateway keeps appending to its log, so the bound is fixed by
+    /// the length at open. A cut starts at the next whole line, which also
+    /// drops any character split by the cut.
+    /// </remarks>
+    private static string ReadTail(
+        FileStream input,
+        int maximumBytes,
+        string name,
+        List<string> notes)
+    {
+        long length = input.Length;
+        long start = Math.Max(0, length - maximumBytes);
+        input.Seek(start, SeekOrigin.Begin);
+        byte[] buffer = new byte[length - start];
+        int read = input.ReadAtLeast(buffer, buffer.Length, throwOnEndOfStream: false);
+        string text = Encoding.UTF8.GetString(buffer, 0, read);
+        if (start == 0)
+        {
+            return text.TrimStart('\uFEFF');
+        }
+
+        int newline = text.IndexOf('\n', StringComparison.Ordinal);
+        notes.Add(string.Create(
+            CultureInfo.InvariantCulture,
+            $"{name}: only the last {maximumBytes / 1024} KiB of {length} bytes were kept."));
+        return newline < 0 ? string.Empty : text[(newline + 1)..];
     }
 
     private static void TryDeleteStaging(

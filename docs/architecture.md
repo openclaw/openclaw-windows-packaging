@@ -245,10 +245,14 @@ credential.
 [`DiagnosticsBundle`](../src/OpenClaw.Launcher/Gateway/DiagnosticsBundle.cs)
 collects troubleshooting material through the shared workspace while excluding
 credential stores, and writes the collecting host's environment into its
-manifest. [`DiagnosticsRedactor`](../src/OpenClaw.Launcher/Gateway/DiagnosticsRedactor.cs)
-redacts credential-shaped JSON members in remaining text, but that redaction
-is deliberately best-effort and does not make a bundle safe to share without
-review.
+manifest. It also reads every recent gateway launch's output log and supervisor
+status from that workspace. It keeps a bounded tail of each and refuses reparse
+points, because the guest can write there.
+[`DiagnosticsRedactor`](../src/OpenClaw.Launcher/Gateway/DiagnosticsRedactor.cs)
+redacts credential-shaped JSON members, URL parameters, environment-style
+assignments, and authorization header credentials in the remaining text. That
+redaction is deliberately best-effort and does not make a bundle safe to share
+without review.
 
 Diagnostics describe runtime evidence; they are not release verification.
 The build path independently creates an inventory of package inputs and hashes

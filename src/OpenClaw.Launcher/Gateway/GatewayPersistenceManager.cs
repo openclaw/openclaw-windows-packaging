@@ -77,7 +77,7 @@ internal sealed class GatewayPersistenceManager
 
         if (probe.Presence == GatewayTaskPresence.Unreadable)
         {
-            _log($"The logon task '{_identity.Name}' could not be read: {probe.Detail}");
+            _log($"The logon task '{_identity.Name}' could not be read: {DiagnosticFailure.SingleLine(probe.Detail ?? "no detail was reported.")}");
             return new GatewayPersistenceStatus(
                 GatewayPersistenceState.Unknown,
                 GatewayPersistenceLane.None,
@@ -168,7 +168,7 @@ internal sealed class GatewayPersistenceManager
         {
             _log(
                 $"The logon task '{_identity.Name}' could not be read, so it was " +
-                $"left unchanged: {probe.Detail}");
+                $"left unchanged: {DiagnosticFailure.SingleLine(probe.Detail ?? "no detail was reported.")}");
             return new GatewayPersistenceInstallResult(
                 GatewayPersistenceState.Unknown,
                 GatewayPersistenceLane.None,
@@ -210,7 +210,7 @@ internal sealed class GatewayPersistenceManager
 
         _log(
             $"The logon task '{_identity.Name}' could not be registered; trying the " +
-            $"Startup-folder fallback: {registration.Detail}");
+            $"Startup-folder fallback: {DiagnosticFailure.SingleLine(registration.Detail ?? "no detail was reported.")}");
         return InstallFallback(registration.Detail);
     }
 
@@ -230,7 +230,7 @@ internal sealed class GatewayPersistenceManager
 
         if (!deletion.Succeeded || detail is not null)
         {
-            _log($"Logon recovery could not be fully removed: {detail}");
+            _log($"Logon recovery could not be fully removed: {DiagnosticFailure.SingleLine(detail ?? "no detail was reported.")}");
             return new GatewayPersistenceRemovalResult(
                 Succeeded: false,
                 fallback.Changed || launcher.Changed || activationScript.Changed,

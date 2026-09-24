@@ -1,8 +1,11 @@
+using System.Globalization;
 using System.IO.Compression;
+using System.Text;
 using OpenClaw.Launcher.Gateway;
 using OpenClaw.Launcher.Mxc;
 using OpenClaw.Launcher.Session;
 using OpenClaw.Launcher.Tests.Session;
+using OpenClaw.SessionProtocol;
 
 namespace OpenClaw.Launcher.Tests.Gateway;
 
@@ -156,6 +159,209 @@ public sealed class DiagnosticsBundleTests : IDisposable
             manifestText,
             StringComparison.Ordinal);
         Assert.Contains(note, manifestText, StringComparison.Ordinal);
+
+        // No gateway was ever recorded, so nothing is said about its logs.
+        Assert.DoesNotContain(
+            result.Notes,
+            candidate => candidate.StartsWith("Gateway launch logs", StringComparison.Ordinal));
+    }
+
+    // A field report's gateway failed twice, and the first failure came from
+    // a launch the record no longer named. Every launch's own log and
+    // supervisor status must reach the bundle, redacted, while other files in
+    // the guest-writable workspace do not.
+    [Fact]
+    public async Task EveryGatewayLaunchLogAndSupervisorStatusIsCollected()
+    {
+        string workspace = Path.Combine(_root, "shared");
+        Directory.CreateDirectory(workspace);
+        (GatewayRuntime runtime, _, SessionRuntime session) = CreateRuntime(workspace);
+        await session.Coordinator.EnsureStartedAsync(CancellationToken.None);
+        string generation = session.Coordinator.GetRecordedStatus().Record!.Generation!;
+        string earlier = WriteGatewayLaunch(
+            workspace,
+            generation,
+            "earlier",
+            "Gateway failed to start: another OpenClaw process owns gateway-lifecycle\n",
+            "the application exited with code 1",
+            new DateTime(2026, 9, 24, 16, 28, 23, DateTimeKind.Utc));
+        string later = WriteGatewayLaunch(
+            workspace,
+            generation,
+            "later",
+            "Control UI: http://127.0.0.1:18789/#token=ghu_verysecretvalue\n",
+            "supervising process 4242",
+            new DateTime(2026, 9, 24, 16, 29, 45, DateTimeKind.Utc));
+        await File.WriteAllTextAsync(
+            Path.Combine(workspace, $"gateway-{generation}-later.json"),
+            "{}");
+        await File.WriteAllTextAsync(
+            Path.Combine(workspace, "gateway-another-generation-launch.log"),
+            "not this session");
+        string bundlePath = Path.Combine(_root, "gateway.zip");
+        var progress = new RecordingProgress();
+
+        DiagnosticsBundleResult result = await runtime.CollectLogsAsync(
+            bundlePath,
+            environment: null,
+            progress,
+            CancellationToken.None);
+
+        Assert.Equal(bundlePath, result.BundlePath);
+        Assert.Contains("Collecting the gateway launch logs.", progress.Messages);
+        using ZipArchive archive = ZipFile.OpenRead(bundlePath);
+        Assert.Equal(
+            [
+                $"gateway/{later}.log",
+                $"gateway/{later}.status.json",
+                $"gateway/{earlier}.log",
+                $"gateway/{earlier}.status.json"
+            ],
+            archive.Entries
+                .Select(entry => entry.FullName)
+                .Where(name => name.StartsWith("gateway/", StringComparison.Ordinal)));
+        Assert.Contains(
+            "another OpenClaw process owns gateway-lifecycle",
+            await ReadEntryAsync(archive, $"gateway/{earlier}.log"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "the application exited with code 1",
+            await ReadEntryAsync(archive, $"gateway/{earlier}.status.json"),
+            StringComparison.Ordinal);
+        string laterLog = await ReadEntryAsync(archive, $"gateway/{later}.log");
+        Assert.DoesNotContain("ghu_verysecretvalue", laterLog, StringComparison.Ordinal);
+        Assert.Contains(DiagnosticsRedactor.Placeholder, laterLog, StringComparison.Ordinal);
+    }
+
+    // The workspace is guest-writable, so neither the number of launches nor
+    // a long-running gateway's log may grow a bundle without bound.
+    [Fact]
+    public async Task OnlyTheNewestLaunchesAndTheEndOfALongLogAreKept()
+    {
+        string workspace = Path.Combine(_root, "shared");
+        Directory.CreateDirectory(workspace);
+        (GatewayRuntime runtime, _, SessionRuntime session) = CreateRuntime(workspace);
+        await session.Coordinator.EnsureStartedAsync(CancellationToken.None);
+        string generation = session.Coordinator.GetRecordedStatus().Record!.Generation!;
+        var firstLaunch = new DateTime(2026, 9, 24, 12, 0, 0, DateTimeKind.Utc);
+        int launches = GatewayRuntime.MaximumGatewayLaunches + 2;
+        for (int index = 0; index < launches - 1; index++)
+        {
+            WriteGatewayLaunch(
+                workspace,
+                generation,
+                $"launch{index:D2}",
+                $"launch {index}\n",
+                "the application exited with code 1",
+                firstLaunch.AddMinutes(index));
+        }
+
+        var longLog = new StringBuilder();
+        for (int line = 0; longLog.Length <= GatewayRuntime.MaximumGatewayFileBytes * 2; line++)
+        {
+            longLog.Append(CultureInfo.InvariantCulture, $"line {line:D8} of the running gateway\n");
+        }
+
+        longLog.Append("the last line\n");
+        string newest = WriteGatewayLaunch(
+            workspace,
+            generation,
+            "newest",
+            longLog.ToString(),
+            "supervising process 4242",
+            firstLaunch.AddHours(1));
+        string bundlePath = Path.Combine(_root, "bounded.zip");
+
+        DiagnosticsBundleResult result = await runtime.CollectLogsAsync(
+            bundlePath,
+            environment: null,
+            new RecordingProgress(),
+            CancellationToken.None);
+
+        using ZipArchive archive = ZipFile.OpenRead(bundlePath);
+        string[] logs =
+        [
+            .. archive.Entries
+                .Select(entry => entry.FullName)
+                .Where(name => name.StartsWith("gateway/", StringComparison.Ordinal) &&
+                    name.EndsWith(".log", StringComparison.Ordinal))
+        ];
+        Assert.Equal(GatewayRuntime.MaximumGatewayLaunches, logs.Length);
+        Assert.DoesNotContain($"gateway/gateway-{generation}-launch00.log", logs);
+        Assert.DoesNotContain($"gateway/gateway-{generation}-launch01.log", logs);
+        Assert.Contains("gateway: 2 older launches were not collected; the newest 10 were kept.", result.Notes);
+        string kept = await ReadEntryAsync(archive, $"gateway/{newest}.log");
+        Assert.True(kept.Length <= GatewayRuntime.MaximumGatewayFileBytes, $"kept {kept.Length} characters");
+        Assert.StartsWith("line ", kept, StringComparison.Ordinal);
+        Assert.EndsWith("the last line\n", kept, StringComparison.Ordinal);
+        Assert.Contains(
+            result.Notes,
+            note => note.StartsWith(
+                $"gateway/{newest}.log: only the last 1024 KiB of ",
+                StringComparison.Ordinal));
+    }
+
+    // A recorded gateway means the user was told to collect its log, so a
+    // workspace that cannot be read must be named rather than skipped.
+    [Fact]
+    public async Task AnUnreadableWorkspaceForARecordedGatewayIsNamed()
+    {
+        (GatewayRuntime runtime, _, SessionRuntime session) =
+            CreateRuntime(workspacePath: Path.Combine(_root, "never-created"));
+        SessionRecord record = await session.Coordinator.EnsureStartedAsync(CancellationToken.None);
+        session.GatewayState.Write(new GatewayRecord
+        {
+            SandboxId = record.SandboxId,
+            ProcessId = 4242,
+            ProcessStartTimeUtc = DateTimeOffset.UnixEpoch
+        });
+        string bundlePath = Path.Combine(_root, "recorded.zip");
+
+        DiagnosticsBundleResult result = await runtime.CollectLogsAsync(
+            bundlePath,
+            environment: null,
+            new RecordingProgress(),
+            CancellationToken.None);
+
+        Assert.Contains(
+            result.Notes,
+            note => note.StartsWith(
+                "Gateway launch logs could not be collected (SessionException: " +
+                "The recorded shared workspace could not be opened safely",
+                StringComparison.Ordinal));
+    }
+
+    private static string WriteGatewayLaunch(
+        string workspace,
+        string generation,
+        string launch,
+        string log,
+        string supervisorDetail,
+        DateTime writtenUtc)
+    {
+        string stem = $"gateway-{generation}-{launch}";
+        string logPath = Path.Combine(workspace, stem + ".log");
+        string statusPath = Path.Combine(workspace, stem + ".status.json");
+        File.WriteAllText(logPath, log);
+        File.WriteAllText(
+            statusPath,
+            SessionInspectProtocol.SerializeStatus(new SessionSupervisorStatus
+            {
+                State = SessionSupervisorStatus.ExitedState,
+                ProcessId = 4242,
+                UpdatedAtUtc = writtenUtc,
+                Detail = supervisorDetail
+            }));
+        File.SetLastWriteTimeUtc(logPath, writtenUtc);
+        File.SetLastWriteTimeUtc(statusPath, writtenUtc);
+        return stem;
+    }
+
+    private static async Task<string> ReadEntryAsync(ZipArchive archive, string name)
+    {
+        using var reader = new StreamReader(
+            Assert.Single(archive.Entries, entry => entry.FullName == name).Open());
+        return await reader.ReadToEndAsync().ConfigureAwait(false);
     }
 
     [Fact]

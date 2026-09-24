@@ -280,7 +280,7 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
                         (result.Error is { Length: > 0 } guestError
                             ? $" The guest reported: {guestError}"
                             : string.Empty);
-                    _log($"Gateway {DescribeOperation(option)} failed: {mismatch}");
+                    _log($"Gateway {DescribeOperation(option)} failed: {DiagnosticFailure.SingleLine(mismatch)}");
                     return new SessionInspectResult
                     {
                         RequestId = requestId,
@@ -290,7 +290,9 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
 
                 if (result.Error is { Length: > 0 } reported)
                 {
-                    _log($"Gateway {DescribeOperation(option)} failed in the session: {reported}");
+                    _log(
+                        $"Gateway {DescribeOperation(option)} failed in the session: " +
+                        DiagnosticFailure.SingleLine(reported));
                 }
 
                 return result;

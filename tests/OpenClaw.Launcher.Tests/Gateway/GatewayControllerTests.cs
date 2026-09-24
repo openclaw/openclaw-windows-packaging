@@ -385,6 +385,56 @@ public sealed class GatewayControllerTests : IDisposable
         Assert.Contains("clawctl collect-logs", result.Message, StringComparison.Ordinal);
     }
 
+    // A field bundle showed a start that logged only "Starting the gateway" and
+    // then "Host exiting", so it could not say whether the gateway came up or
+    // exited, or why. Every start path ends here, so the outcome is logged once.
+    [Fact]
+    public async Task AStartupExitIsLoggedWithWhatTheUserWasTold()
+    {
+        _client.Inspection = new SessionInspectResult
+        {
+            SupervisorDetail = "the application exited with code 1"
+        };
+
+        GatewayStartResult result = await CreateController()
+            .StartAsync("helper.exe", CancellationToken.None);
+
+        Assert.Contains($"Gateway start finished: Stopped. {result.Message}", _log);
+    }
+
+    [Fact]
+    public async Task AListeningStartIsLoggedWithItsObservedPort()
+    {
+        _client.Inspection = Healthy();
+
+        await CreateController().StartAsync("helper.exe", CancellationToken.None);
+
+        Assert.Contains("Gateway start finished: Running. The gateway is running on port 18789.", _log);
+    }
+
+    // The supervisor detail is written by the guest. A line break in it must
+    // not let the guest append a forged entry to the host log.
+    [Fact]
+    public async Task GuestTextInAStartOutcomeStaysOnItsOwnLogEntry()
+    {
+        _client.Inspection = new SessionInspectResult
+        {
+            SupervisorDetail =
+                "the application exited with code 1\r\n2026-09-24T16:30:00Z pid=1 Host exiting.\u001b[2J"
+        };
+
+        await CreateController().StartAsync("helper.exe", CancellationToken.None);
+
+        string entry = Assert.Single(
+            _log,
+            line => line.StartsWith("Gateway start finished:", StringComparison.Ordinal));
+        Assert.Contains(
+            "exited with code 1 2026-09-24T16:30:00Z pid=1 Host exiting. [2J",
+            entry,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(entry, character => char.IsControl(character));
+    }
+
     [Fact]
     public async Task ALiveProcessThatIsNotServingIsReportedAsUnhealthy()
     {

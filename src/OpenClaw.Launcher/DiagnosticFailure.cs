@@ -86,7 +86,7 @@ internal static class DiagnosticFailure
     private static void Append(StringBuilder builder, Exception exception, int depth)
     {
         builder.Append(exception.GetType().Name);
-        string message = ToSingleLine(exception.Message);
+        string message = SingleLine(exception.Message);
         if (message.Length > 0)
         {
             builder.Append(": ").Append(message);
@@ -156,12 +156,39 @@ internal static class DiagnosticFailure
             _ => null
         };
 
-    // A description stays on its log entry's line; only an unhandled failure's
-    // stack trace continues onto the lines after it.
-    private static string ToSingleLine(string message) =>
-        string.Join(
-            ' ',
-            message.Split(
-                ['\r', '\n'],
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+    /// <summary>
+    /// Keeps text on its log entry's line.
+    /// </summary>
+    /// <remarks>
+    /// Messages and details can carry text the guest wrote. Collapsing line
+    /// breaks and other control characters to single spaces stops that text
+    /// from forging an entry of its own or carrying terminal escape sequences
+    /// into the log. Only an unhandled failure's stack trace continues onto
+    /// the lines after its entry.
+    /// </remarks>
+    internal static string SingleLine(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        var builder = new StringBuilder(text.Length);
+        bool pendingSpace = false;
+        foreach (char character in text)
+        {
+            if (char.IsControl(character) || char.IsWhiteSpace(character))
+            {
+                pendingSpace = builder.Length > 0;
+                continue;
+            }
+
+            if (pendingSpace)
+            {
+                builder.Append(' ');
+                pendingSpace = false;
+            }
+
+            builder.Append(character);
+        }
+
+        return builder.ToString();
+    }
 }

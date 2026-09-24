@@ -111,6 +111,16 @@ public sealed class DiagnosticFailureTests
         Assert.Equal("InvalidOperationException: first line second line", description);
     }
 
+    // Messages carry guest-written text, so a terminal escape or a stray
+    // control character must not reach the log either.
+    [Fact]
+    public void ControlCharactersInAMessageAreCollapsed()
+    {
+        Assert.Equal(
+            "exited [2J with a tab",
+            DiagnosticFailure.SingleLine("exited\u001b[2J with\u0000\ta tab"));
+    }
+
     [Fact]
     public void AnOverlyDeepChainIsBounded()
     {
