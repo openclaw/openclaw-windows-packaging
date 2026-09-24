@@ -123,9 +123,10 @@ if ($null -ne $existingDestination) {
     try {
         [IO.Directory]::Delete($destinationPath, $true)
     }
-    catch [UnauthorizedAccessException] {
-        # Directory.Delete refuses read-only files and reports a nested
-        # junction as denied after unlinking it; Remove-Item -Force finishes.
+    catch [UnauthorizedAccessException], [IO.IOException] {
+        # Directory.Delete refuses read-only files and, depending on the
+        # Windows version, fails after unlinking a nested junction;
+        # Remove-Item -Force finishes either removal.
         Remove-Item -LiteralPath $destinationPath -Recurse -Force
     }
 }
