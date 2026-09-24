@@ -57,6 +57,7 @@ or package version logic:
 .\scripts\Test-MSIXReleaseIdentity.Tests.ps1
 .\scripts\Test-OpenClawSource.Tests.ps1
 .\scripts\Test-WorkflowPackageVersion.Tests.ps1
+.\scripts\Test-Submit-MicrosoftStore.Tests.ps1
 .\scripts\Test-GitHooks.Tests.ps1
 ```
 

@@ -9,6 +9,9 @@ $workflowPath = Join-Path `
     $repositoryRoot `
     '.github\workflows\gateway-msix.yml'
 $workflow = Get-Content -LiteralPath $workflowPath -Raw
+$storePolicyPath = Join-Path $repositoryRoot 'store-submission.json'
+$storePolicy = Get-Content -LiteralPath $storePolicyPath -Raw |
+    ConvertFrom-Json
 
 $requiredFragments = @(
     'group: gateway-msix-${{ github.event.pull_request.number || github.run_id }}'
@@ -18,6 +21,8 @@ $requiredFragments = @(
     'name: Test packaging relevance'
     "if: `${{ github.event_name != 'pull_request' || needs.changes.outputs.packaging == 'true' }}"
     'name: Gateway MSIX CI'
+    'name: Test Microsoft Store submission'
+    '.\scripts\Test-Submit-MicrosoftStore.Tests.ps1'
     "if: `${{ always() }}"
     "contains(needs.*.result, 'failure')"
     "contains(needs.*.result, 'cancelled')"
@@ -78,10 +83,21 @@ $requiredFragments = @(
     'signing-account-name: openclaw'
     'certificate-profile-name: openclaw'
     'name: Publish signed Gateway MSIX release'
-    'name: Publish unsigned Microsoft Store MSIX release'
-    "inputs.signing_mode == 'store' && needs.authorize-signing.result == 'success'"
-    'These packages are **unsigned Microsoft Store submission assets**.'
-    'They are not intended for direct sideloading.'
+    'name: Submit Gateway bundle to Microsoft Store'
+    "github.event_name == 'workflow_dispatch'"
+    "github.ref == 'refs/heads/main'"
+    "inputs.signing_mode == 'store'"
+    "needs.authorize-signing.result == 'success'"
+    'environment: microsoft-store'
+    'group: microsoft-store-submission'
+    'cancel-in-progress: false'
+    'name: Request short-lived Microsoft Store assertion'
+    '.\scripts\New-GitHubOidcRequestUri.ps1'
+    '.\scripts\Submit-MicrosoftStore.ps1'
+    '& chmod 600 $assertionPath'
+    '-BundlePath .\store\OpenClawGateway.msixbundle'
+    'name: openclaw-gateway-store-submission-evidence'
+    'continue-on-error: true'
     '.\scripts\Get-MSIXReleaseIdentity.ps1'
     'contents: write'
     'uses: softprops/action-gh-release@v3'
@@ -146,26 +162,52 @@ if ($signJob.Contains('release-policy.json', [StringComparison]::Ordinal)) {
     )
 }
 
-$storePublishJobMatch = [regex]::Match(
+$storeSubmissionJobMatch = [regex]::Match(
     $workflow,
-    '(?ms)^  publish-store-release:\s*(?<job>.*?)(?=^  [a-z][a-z0-9-]+:)'
+    '(?ms)^  submit-microsoft-store:\s*(?<job>.*?)(?=^  [a-z][a-z0-9-]+:)'
 )
-if (-not $storePublishJobMatch.Success) {
-    throw 'Unable to locate the publish-store-release workflow job.'
+if (-not $storeSubmissionJobMatch.Success) {
+    throw 'Unable to locate the submit-microsoft-store workflow job.'
 }
-$storePublishJob = $storePublishJobMatch.Groups['job'].Value
-foreach ($forbidden in @('azure/login', 'artifact-signing-action', 'id-token: write')) {
-    if ($storePublishJob.Contains($forbidden, [StringComparison]::Ordinal)) {
-        throw "Store publication must not request signing capability: $forbidden"
-    }
-}
-foreach ($artifact in @(
+$storeSubmissionJob = $storeSubmissionJobMatch.Groups['job'].Value
+foreach ($forbidden in @(
+    'azure/login'
+    'artifact-signing-action'
+    'softprops/action-gh-release'
     'openclaw-gateway-msix-unsigned-x64'
     'openclaw-gateway-msix-unsigned-arm64'
-    'openclaw-gateway-msix-unsigned-bundle'
+    'clientSecret'
+    'CLIENT_SECRET'
 )) {
-    if (-not $storePublishJob.Contains($artifact, [StringComparison]::Ordinal)) {
-        throw "Store publication must consume the authorized unsigned artifact: $artifact"
+    if ($storeSubmissionJob.Contains($forbidden, [StringComparison]::Ordinal)) {
+        throw "Store submission contains forbidden configuration: $forbidden"
+    }
+}
+foreach ($required in @(
+    'openclaw-gateway-msix-unsigned-bundle'
+    'actions: read'
+    'contents: read'
+    'id-token: write'
+    'MSSTORE_TENANT_ID: ${{ vars.MSSTORE_TENANT_ID }}'
+    'MSSTORE_CLIENT_ID: ${{ vars.MSSTORE_CLIENT_ID }}'
+    'MSSTORE_APPLICATION_ID: ${{ vars.MSSTORE_APPLICATION_ID }}'
+    'MSSTORE_ASSERTION_FILE: ${{ steps.oidc.outputs.assertion_path }}'
+    '-ClientAssertionFile $env:MSSTORE_ASSERTION_FILE'
+    'retention-days: 90'
+)) {
+    if (-not $storeSubmissionJob.Contains($required, [StringComparison]::Ordinal)) {
+        throw "Store submission is missing required configuration: $required"
+    }
+}
+
+if ($workflow.Contains(
+        'publish-store-release:',
+        [StringComparison]::Ordinal)) {
+    throw 'Store mode must not publish unsigned packages as a GitHub Release.'
+}
+foreach ($forbidden in @('microsoft-store-apppublisher', 'MSSTORE_SELLER_ID')) {
+    if ($storeSubmissionJob.Contains($forbidden, [StringComparison]::Ordinal)) {
+        throw "Store submission must use submission-ID-bound API operations: $forbidden"
     }
 }
 

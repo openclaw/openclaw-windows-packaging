@@ -595,8 +595,8 @@ validation. Manual runs support four modes:
   temporary self-signed certificate plus the public `.cer` needed for local
   installation;
 - `store` requires the reviewed immutable commit from `release-policy.json`,
-  may run only from `main`, and publishes permanent unsigned Partner Center
-  submission assets; Microsoft signs them during Store ingestion;
+  may run only from `main`, and submits the unsigned multi-architecture bundle
+  directly to Partner Center; Microsoft signs it during Store ingestion;
 - `official` requires the approved immutable commit from
   `release-policy.json`, may run only from `main`, and publishes the signed
   packages as permanent assets on a GitHub Release named by the policy.
@@ -643,17 +643,15 @@ reviewed pull request:
 
 After that pull request merges, manually run **Build OpenClaw Gateway MSIX** on
 `main` with `openclaw_ref` set to the approved commit. Use `signing_mode=store`
-for the Partner Center identity, or `signing_mode=official` only when the Azure
-certificate subject exactly matches the reviewed publisher. The workflow derives
-the package version and release tag, creates
-the tag in this repository, and publishes a GitHub Release with generated
-release notes. Each release contains a multi-architecture
-`OpenClawGateway-<version>.msixbundle` as the recommended Store submission, plus
-`OpenClawGateway-<version>-x64.msix` and
-`OpenClawGateway-<version>-arm64.msix` packages for architecture-specific
-deployment. Store-mode assets are intentionally unsigned and are not direct
-sideload downloads; Partner Center signs them during ingestion. The duplicate
-GitHub Actions artifacts remain short-lived transport and diagnostic copies.
+to submit the Partner Center bundle, or `signing_mode=official` only when the
+Azure certificate subject exactly matches the reviewed publisher. The workflow
+derives the package version and release tag. Official mode creates that tag and
+publishes a signed GitHub Release. Store mode uploads only
+`OpenClawGateway.msixbundle` to the existing Partner Center product and commits
+the update; it does not publish unsigned packages on a GitHub Release. The
+bundle already contains both architecture packages, so also uploading the x64
+and ARM64 MSIX files would create duplicate-package validation errors. GitHub
+Actions artifacts remain short-lived transport and diagnostic copies.
 
 The same identity can be used for direct distribution and Microsoft Store
 submission; the fourth component is always `0`.
@@ -714,6 +712,51 @@ uses account `openclaw`, certificate profile `openclaw`, and endpoint
 is recorded in `release-policy.json`. Before an official dispatch, the
 certificate profile must issue that exact Partner Center publisher subject;
 signature verification fails closed when it does not.
+
+### Microsoft Store submission setup
+
+Store submission behavior is reviewable in `store-submission.json`: it pins the
+packaged-app API origin and scope, OIDC audience, commit behavior, draft
+ownership, package rollout percentage, upload timeout, and minimum access-token
+lifetime. The repository-owned `scripts\Submit-MicrosoftStore.ps1` boundary
+submits exactly one bundle and retains bundle-hash evidence for 90 days. It
+rejects an existing draft, creates a new submission without deleting anything,
+and binds update, verification, cleanup, and commit to that exact submission
+ID. Existing listing, availability, pricing, and screenshot state must survive
+a canonical comparison before commit. A replaced or changed draft fails closed.
+
+Create a protected `microsoft-store` GitHub environment and define these
+environment variables (identifiers, not credentials):
+
+- `MSSTORE_TENANT_ID`: Microsoft Entra tenant ID;
+- `MSSTORE_CLIENT_ID`: dedicated Entra application client ID;
+- `MSSTORE_APPLICATION_ID`: the existing Partner Center product ID.
+
+The product's first submission must already be published. In Partner Center,
+add the Entra application with the **Manager (Windows)** role. Do not create a
+client secret. Add this federated identity credential to the Entra application:
+
+- issuer: `https://token.actions.githubusercontent.com`;
+- subject:
+  `repo:openclaw@252820863/openclaw-windows-packaging@1347889239:environment:microsoft-store`;
+- audience: `api://AzureADTokenExchange`.
+
+This must be the Entra application's only credential: do not add client
+secrets, certificates, or additional federated subjects, and do not share the
+application with another publisher. The Store identity is an exclusive writer;
+only this serialized GitHub environment may use it. Do not edit an API-created
+draft in Partner Center. Microsoft documents that such an edit invalidates
+further API update or commit operations; let the workflow clean up its own
+failed draft before retrying.
+
+The protected environment binds that assertion to the Store deployment job and
+can require maintainer approval independently of repository branch protection.
+GitHub issues a short-lived assertion for each run; the workflow passes it by a
+temporary file, never places it on the command line, and removes it in an
+`always()` cleanup step. A successful run commits a Partner Center submission
+for certification. Certification and rollout remain visible in Partner Center;
+the workflow proves API acceptance and preserves its evidence rather than
+holding a runner open for the full certification queue.
 
 ## Installed data
 
