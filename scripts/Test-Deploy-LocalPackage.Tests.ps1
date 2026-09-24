@@ -74,6 +74,11 @@ function New-Fixture {
     [IO.File]::WriteAllText((Join-Path $project 'Images\StoreLogo.png'), 'fixture image')
     New-Item -Path (Join-Path $project 'node') -ItemType Directory -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $project 'node\native-redirect.mjs'), 'fixture redirect')
+    [IO.File]::WriteAllText((Join-Path $project 'Program.cs'), 'launcher source')
+    New-Item -Path (Join-Path $root 'src\OpenClaw.SessionHost') -ItemType Directory -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $root 'src\OpenClaw.SessionHost\Program.cs'), 'session host source')
+    New-Item -Path (Join-Path $root 'src\OpenClaw.SessionProtocol') -ItemType Directory -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $root 'src\OpenClaw.SessionProtocol\Protocol.cs'), 'protocol source')
     [IO.File]::WriteAllText((Join-Path $project 'Package.appxmanifest'), @'
 <?xml version="1.0" encoding="utf-8"?>
 <Package
@@ -137,6 +142,8 @@ function New-Fixture {
         Removals = @()
         PreserveFlags = @()
         PublishMetadata = $null
+        LauncherPublishes = @()
+        Commit = '1111111111111111111111111111111111111111'
     }
     $state.WritePayload = {
         param($directory, $architecture, $text, $nodeVersion)
@@ -189,24 +196,41 @@ function New-Fixture {
             [IO.File]::WriteAllText((Join-Path $output 'mxc-runtime.json'), '{}')
             return $null
         }.GetNewClosure()
+        CheckoutCommit = { $state.Commit }.GetNewClosure()
         Publish = {
             param($project, $architecture, $output, $metadata)
             $state.Publishes++
             if ($project -like '*OpenClaw.Launcher.csproj') {
                 $state.PublishMetadata = $metadata
+                $state.LauncherPublishes += $metadata.PackageVersion
             }
             if ($state.PublishFailure) { throw 'NativeAOT publish failed.' }
+            # Like MSBuild, every publish rewrites the project's intermediate
+            # and output directories, whether or not anything changed.
+            $projectDirectory = Split-Path $project -Parent
+            foreach ($buildOutput in @('bin', 'obj')) {
+                New-Item -Path (Join-Path $projectDirectory $buildOutput) -ItemType Directory -Force | Out-Null
+                [IO.File]::WriteAllText(
+                    (Join-Path $projectDirectory "$buildOutput\build.cache"),
+                    [guid]::NewGuid().ToString())
+            }
             New-Item -Path $output -ItemType Directory -Force | Out-Null
+            # The binaries are a pure function of their inputs, as a real
+            # deterministic publish is: the project and protocol sources, the
+            # compile-time identity in metadata, and HostVersion, which models
+            # an input the deployment cannot see, such as an SDK update.
+            $sources = @(
+                Get-Content -LiteralPath (Join-Path $projectDirectory 'Program.cs') -Raw
+                Get-Content -LiteralPath (
+                    Join-Path $state.Root 'src\OpenClaw.SessionProtocol\Protocol.cs') -Raw
+            ) -join '|'
             $isSessionHost = $project -like '*OpenClaw.SessionHost*'
             if ($isSessionHost) {
                 [IO.File]::WriteAllText(
                     (Join-Path $output 'openclaw-session-host.exe'),
-                    "session host $($state.HostVersion)")
+                    "session host $($state.HostVersion) [$sources]")
             }
             elseif (-not $state.SkipHost) {
-                # Unchanged source must produce identical bytes, as a real
-                # incremental publish does; HostVersion models a source edit
-                # and metadata models generated compile-time constants.
                 $identity = if ($null -eq $metadata) {
                     ''
                 }
@@ -215,7 +239,7 @@ function New-Fixture {
                 }
                 [IO.File]::WriteAllText(
                     (Join-Path $output 'openclaw.exe'),
-                    "host $($state.HostVersion) $identity")
+                    "host $($state.HostVersion) [$sources] $identity")
             }
             return $null
         }.GetNewClosure()
@@ -334,9 +358,12 @@ try {
     # the previous one must be removed first, preserving app data.
     Assert-True (@($f.Removals).Count -eq 1 -and @($f.PreserveFlags)[0] -eq $true) 'Re-registration did not first remove the existing development registration.'
 
-    # A source change must reach the registered package.
+    # A changed launcher must reach the registered package even when it changed
+    # through an input the deployment does not hash, such as an SDK update. The
+    # build inputs only predict the version; the published binaries decide.
     $f.Now = $f.Now.AddMinutes(5)
     $f.HostVersion = 2
+    $publishedBefore = @($f.LauncherPublishes).Count
     $changed = Invoke-Fixture $f
     Assert-True ($changed.Changed) 'A launcher change was not detected.'
     $changedLauncher = Get-Content (Join-Path $layout 'openclaw.exe') -Raw
@@ -346,6 +373,203 @@ try {
             "`"PackageVersion`":`"$($changed.Version)`"",
             [StringComparison]::Ordinal)
     ) 'The layout kept a stale launcher or package identity.'
+    Assert-True (
+        (@($f.LauncherPublishes | Select-Object -Skip $publishedBefore) -join ',') -eq
+            "$($forced.Version),$($changed.Version)"
+    ) 'Binaries that changed with unchanged inputs were not verified, then rebuilt with the new version.'
+
+    # A changed deployment must publish the launcher once, with the version it
+    # registers: the package version is compiled in, so every extra publish
+    # is a full NativeAOT compile. Every change must still be deployed, and
+    # the next run must settle although each publish rewrites bin and obj.
+    $sp = New-Fixture
+    $spFirst = Invoke-Fixture $sp
+    Assert-True ((@($sp.LauncherPublishes) -join ',') -eq $spFirst.Version) `
+        'A first deployment did not publish the launcher once with its version.'
+    $spLauncher = Join-Path $spFirst.LayoutDirectory 'openclaw.exe'
+    $spSessionHost = Join-Path $spFirst.LayoutDirectory 'session-host\x64\openclaw-session-host.exe'
+    $sourceEdits = @(
+        @{
+            Name = 'launcher source'; Binary = $spLauncher; Marker = 'edited launcher source'
+            Apply = {
+                [IO.File]::WriteAllText(
+                    (Join-Path $sp.Root 'src\OpenClaw.Launcher\Program.cs'), 'edited launcher source')
+            }
+        }
+        @{
+            Name = 'session host source'; Binary = $spSessionHost; Marker = 'edited session host source'
+            Apply = {
+                [IO.File]::WriteAllText(
+                    (Join-Path $sp.Root 'src\OpenClaw.SessionHost\Program.cs'), 'edited session host source')
+            }
+        }
+        @{
+            Name = 'protocol source'; Binary = $spLauncher; Marker = 'edited protocol source'
+            Apply = {
+                [IO.File]::WriteAllText(
+                    (Join-Path $sp.Root 'src\OpenClaw.SessionProtocol\Protocol.cs'), 'edited protocol source')
+            }
+        }
+        @{
+            Name = 'checkout commit'; Binary = $spLauncher
+            Marker = '"PackageCommit":"2222222222222222222222222222222222222222"'
+            Apply = { $sp.Commit = '2222222222222222222222222222222222222222' }
+        }
+        @{
+            Name = 'central package version'; Binary = $null; Marker = $null
+            Apply = {
+                [IO.File]::WriteAllText((Join-Path $sp.Root 'Directory.Packages.props'), '<Project />')
+            }
+        }
+    )
+    foreach ($edit in $sourceEdits) {
+        $sp.Now = $sp.Now.AddMinutes(1)
+        & $edit.Apply
+        $publishedBefore = @($sp.LauncherPublishes).Count
+        $edited = Invoke-Fixture $sp
+        $published = @($sp.LauncherPublishes | Select-Object -Skip $publishedBefore)
+        [xml]$editedManifest = Get-Content (Join-Path $edited.LayoutDirectory 'AppxManifest.xml') -Raw
+        Assert-True $edited.Changed "A $($edit.Name) change was reported as up to date."
+        Assert-True (($published -join ',') -eq $edited.Version) (
+            "A $($edit.Name) change published the launcher with [$($published -join ', ')] " +
+            "instead of once with $($edited.Version).")
+        Assert-True (
+            $editedManifest.Package.Identity.Version -eq $edited.Version -and
+            (Get-Content $spLauncher -Raw).Contains("`"PackageVersion`":`"$($edited.Version)`"")
+        ) "A $($edit.Name) change registered a launcher compiled with another package version."
+        if ($edit.Binary) {
+            Assert-True ((Get-Content $edit.Binary -Raw).Contains($edit.Marker)) `
+                "A $($edit.Name) change did not reach the registered layout."
+        }
+
+        $registrationsBefore = $sp.Registrations
+        $publishedBefore = @($sp.LauncherPublishes).Count
+        $settled = Invoke-Fixture $sp
+        Assert-True (
+            -not $settled.Changed -and $settled.Version -eq $edited.Version -and
+            $sp.Registrations -eq $registrationsBefore
+        ) "The deployment after a $($edit.Name) change did not settle."
+        Assert-True (
+            (@($sp.LauncherPublishes | Select-Object -Skip $publishedBefore) -join ',') -eq $edited.Version
+        ) "An unchanged deployment after a $($edit.Name) change published the launcher with a new version."
+    }
+
+    # Rebuilding a supplied payload in place changes the identity compiled into
+    # the launcher, so it is a changed input too.
+    $pd = New-Fixture
+    $pdPayload = Join-Path $testRoot "rebuilt supplied payload $([guid]::NewGuid().ToString('N'))"
+    & $pd.WritePayload $pdPayload 'x64' 'supplied' '24.20.0'
+    Invoke-Fixture $pd @{ PayloadDirectory = $pdPayload } | Out-Null
+    $pdMetadataPath = Join-Path $pdPayload 'payload-metadata.json'
+    $pdMetadata = Get-Content -LiteralPath $pdMetadataPath -Raw | ConvertFrom-Json
+    $pdMetadata.packageVersion = '2026.9.5'
+    [IO.File]::WriteAllText($pdMetadataPath, ($pdMetadata | ConvertTo-Json))
+    $pd.Now = $pd.Now.AddMinutes(1)
+    $publishedBefore = @($pd.LauncherPublishes).Count
+    $pdChanged = Invoke-Fixture $pd @{ PayloadDirectory = $pdPayload }
+    Assert-True (
+        $pdChanged.Changed -and
+        (@($pd.LauncherPublishes | Select-Object -Skip $publishedBefore) -join ',') -eq $pdChanged.Version -and
+        $pd.PublishMetadata.PayloadVersion -eq '2026.9.5'
+    ) 'A rebuilt supplied payload was not published once with its new identity.'
+
+    # A patched identity publishes once too, under its own identity and
+    # version, and leaves the base registration from the same checkout alone.
+    $pp = New-Fixture
+    $ppBase = Invoke-Fixture $pp
+    $ppPatch = Invoke-Fixture $pp @{ Patch = 'foo' }
+    [IO.File]::WriteAllText((Join-Path $pp.Root 'src\OpenClaw.Launcher\Program.cs'), 'patched launcher source')
+    $pp.Now = $pp.Now.AddMinutes(1)
+    $publishedBefore = @($pp.LauncherPublishes).Count
+    $ppChanged = Invoke-Fixture $pp @{ Patch = 'foo' }
+    [xml]$ppManifest = Get-Content (Join-Path $ppChanged.LayoutDirectory 'AppxManifest.xml') -Raw
+    Assert-True (
+        $ppChanged.Changed -and
+        (@($pp.LauncherPublishes | Select-Object -Skip $publishedBefore) -join ',') -eq $ppChanged.Version
+    ) 'A changed patched deployment did not publish the launcher once with its version.'
+    Assert-True (
+        $ppManifest.Package.Identity.Name -ceq 'OpenClawFoundation.OpenClawGateway-foo' -and
+        $ppManifest.Package.Identity.Version -eq $ppChanged.Version -and
+        [version]$ppChanged.Version -gt [version]$ppPatch.Version -and
+        (Get-Content (Join-Path $ppChanged.LayoutDirectory 'openclaw.exe') -Raw).Contains(
+            "`"PackageVersion`":`"$($ppChanged.Version)`"")
+    ) 'A changed patch did not keep its identity or register the version it compiled.'
+    Assert-True (
+        (@($pp.Installed) | Where-Object Name -ceq 'OpenClawFoundation.OpenClawGateway').PackageFullName -eq
+            $ppBase.PackageFullName
+    ) 'A patched deployment changed the base registration.'
+    Assert-True (-not (Invoke-Fixture $pp @{ Patch = 'foo' }).Changed) 'A changed patch did not settle.'
+    $ppBaseChanged = Invoke-Fixture $pp
+    Assert-True (
+        $ppBaseChanged.Changed -and [version]$ppBaseChanged.Version -gt [version]$ppBase.Version
+    ) 'The base identity was reported current after the source it was built from changed.'
+
+    # A checkout that deployed before build-input fingerprints existed has a
+    # state record without one. Its first deployment must take the ordinary
+    # changed-deployment path, removing the registration with its app data
+    # preserved exactly as a source change does, and then settle.
+    $delta = {
+        param($state, $before)
+        [pscustomobject]@{
+            Removals = @($state.Removals | Select-Object -Skip $before.Removals)
+            PreserveFlags = @($state.PreserveFlags | Select-Object -Skip $before.Removals)
+            Registrations = $state.Registrations - $before.Registrations
+            Setups = $state.Setups - $before.Setups
+            LauncherPublishes = @($state.LauncherPublishes | Select-Object -Skip $before.LauncherPublishes)
+        }
+    }
+    $snapshot = {
+        param($state)
+        @{
+            Removals = @($state.Removals).Count; Registrations = $state.Registrations
+            Setups = $state.Setups; LauncherPublishes = @($state.LauncherPublishes).Count
+        }
+    }
+    $control = New-Fixture
+    $controlPrior = Invoke-Fixture $control
+    [IO.File]::WriteAllText((Join-Path $control.Root 'src\OpenClaw.Launcher\Program.cs'), 'control source edit')
+    $control.Now = $control.Now.AddMinutes(1)
+    $controlBefore = & $snapshot $control
+    $controlChanged = Invoke-Fixture $control
+    $controlDelta = & $delta $control $controlBefore
+
+    $pr = New-Fixture
+    $priorDeployment = Invoke-Fixture $pr
+    $priorStatePath = Join-Path $pr.Root 'artifacts\local-package\x64\state.json'
+    $priorRecord = Get-Content -LiteralPath $priorStatePath -Raw | ConvertFrom-Json -AsHashtable
+    $priorRecord.Remove('inputFingerprint')
+    Assert-True (
+        (@($priorRecord.Keys | Sort-Object) -join ',') -ceq
+            'fingerprint,layoutDirectory,packageFullName,payloadDirectory,schemaVersion,setupComplete,version'
+    ) 'The fixture does not reproduce the state record written before this change.'
+    [IO.File]::WriteAllText($priorStatePath, ($priorRecord | ConvertTo-Json -Depth 8) + "`n")
+    $pr.Now = $pr.Now.AddMinutes(1)
+    $priorBefore = & $snapshot $pr
+    $upgraded = Invoke-Fixture $pr
+    $upgradeDelta = & $delta $pr $priorBefore
+    Assert-True (
+        $upgraded.Changed -and [version]$upgraded.Version -gt [version]$priorDeployment.Version -and
+        ($upgradeDelta.LauncherPublishes -join ',') -eq $upgraded.Version
+    ) 'A prior state record did not redeploy once with a new version.'
+    Assert-True (
+        ($upgradeDelta.Removals -join ',') -eq $priorDeployment.PackageFullName -and
+        ($controlDelta.Removals -join ',') -eq $controlPrior.PackageFullName -and
+        ($upgradeDelta.PreserveFlags -join ',') -eq ($controlDelta.PreserveFlags -join ',') -and
+        ($upgradeDelta.PreserveFlags -join ',') -eq 'True' -and
+        $upgradeDelta.Registrations -eq $controlDelta.Registrations -and $upgradeDelta.Registrations -eq 1 -and
+        $upgradeDelta.Setups -eq $controlDelta.Setups -and $upgradeDelta.Setups -eq 1 -and
+        $controlChanged.Changed
+    ) 'Upgrading a prior state record did not use the same registration, removal, and app-data path as a changed deployment.'
+    Assert-True (
+        (Get-Content -LiteralPath $priorStatePath -Raw | ConvertFrom-Json -AsHashtable).ContainsKey('inputFingerprint')
+    ) 'The upgraded deployment did not record its build inputs.'
+    $settledBefore = & $snapshot $pr
+    $upgradeSettled = Invoke-Fixture $pr
+    $settledDelta = & $delta $pr $settledBefore
+    Assert-True (
+        -not $upgradeSettled.Changed -and $upgradeSettled.Version -eq $upgraded.Version -and
+        $settledDelta.Registrations -eq 0 -and @($settledDelta.Removals).Count -eq 0
+    ) 'The deployment after upgrading a prior state record did not settle.'
 
     # Payload refresh replaces content and retires the old generation only on success.
     $f.Offline = $false
@@ -501,6 +725,217 @@ try {
         $upgradeSelectionAfter -ne $upgradeSelectionBefore -and
         -not (Test-Path -LiteralPath $upgradePayload)
     ) 'Successful recovery did not select the replacement and retire the old payload.'
+
+    # An MSIX composition owns a checkout-wide lock, composes the latest
+    # successful payload by default, and downloads only a run its cache lacks.
+    # A payload becomes the cached selection only after the composer accepts
+    # it, so a rejected or interrupted download never becomes the default.
+    $mc = New-Fixture
+    $mc.Composed = @()
+    $mc.ComposeFailure = $false
+    $msixCache = Join-Path $mc.Root 'artifacts\local-msix\payloads\x64'
+    $msixSelection = Join-Path $msixCache 'current.json'
+    $compose = {
+        param($directory)
+        $mc.Composed += $directory
+        if ($mc.ComposeFailure) { throw 'Payload metadata is not valid for this MSIX package.' }
+    }.GetNewClosure()
+    $composeMsix = {
+        param([hashtable]$Arguments = @{})
+        $msixArguments = @{ Architecture = 'x64' }
+        foreach ($key in $Arguments.Keys) { $msixArguments[$key] = $Arguments[$key] }
+        Invoke-LocalPackageMsixBuild -RepositoryRoot $mc.Root -Compose $compose `
+            -Operations $mc.Operations @msixArguments
+    }
+    $selectedRun = { (Get-Content -LiteralPath $msixSelection -Raw | ConvertFrom-Json).runId }
+    $readComposed = { Get-Content -LiteralPath (Join-Path @($mc.Composed)[-1] 'app\openclaw.mjs') -Raw }
+
+    & $composeMsix
+    $mcFirst = @($mc.Composed)[-1]
+    Assert-True (
+        $mc.Queries -eq 1 -and $mc.Downloads -eq 1 -and (& $readComposed) -eq 'first payload' -and
+        (& $selectedRun) -eq 500
+    ) 'The first composition did not download and select the latest run.'
+    & $composeMsix
+    Assert-True (
+        $mc.Queries -eq 2 -and $mc.Downloads -eq 1 -and @($mc.Composed)[-1] -eq $mcFirst
+    ) 'A composition of the unchanged latest run did not check it and reuse the cache.'
+
+    $mc.RunId = [long]501
+    $mc.PayloadText = 'newer main payload'
+    & $composeMsix
+    $mcNewer = @($mc.Composed)[-1]
+    Assert-True (
+        $mc.Downloads -eq 2 -and (& $readComposed) -eq 'newer main payload' -and
+        (& $selectedRun) -eq 501
+    ) 'A composition after a newer main run composed the stale cached payload.'
+    Assert-True (
+        -not (Test-Path -LiteralPath $mcFirst) -and
+        @(Get-ChildItem -LiteralPath $msixCache -Directory).Count -eq 1
+    ) 'An accepted newer payload did not retire the superseded generation.'
+
+    # A pinned run the cache holds needs no GitHub. Without a pin, an
+    # unreachable GitHub fails and names that path instead of silently
+    # composing a cached payload that may be stale.
+    $mc.Offline = $true
+    & $composeMsix @{ PayloadRunId = [long]501 }
+    Assert-True (
+        $mc.Queries -eq 3 -and $mc.Downloads -eq 2 -and @($mc.Composed)[-1] -eq $mcNewer
+    ) 'A composition pinned to the cached run contacted GitHub or downloaded again.'
+    $composedBefore = @($mc.Composed).Count
+    Assert-Fails { & $composeMsix } 'latest successful payload run.*-PayloadRunId 501.*-PayloadDirectory'
+    Assert-True (
+        @($mc.Composed).Count -eq $composedBefore -and (& $selectedRun) -eq 501
+    ) 'An unreachable GitHub fell back to composing the cached payload.'
+    $mc.Offline = $false
+
+    # A payload the composer rejects must not become the cached selection, or
+    # every later composition would repeat the failure.
+    $mc.RunId = [long]502
+    $mc.PayloadText = 'rejected payload'
+    $mc.ComposeFailure = $true
+    $selectionBefore = Get-Content -LiteralPath $msixSelection -Raw
+    Assert-Fails { & $composeMsix } 'not valid for this MSIX package'
+    $mcRejected = @($mc.Composed)[-1]
+    Assert-True (
+        (Get-Content -LiteralPath $msixSelection -Raw) -eq $selectionBefore -and
+        -not (Test-Path -LiteralPath $mcRejected) -and (Test-Path -LiteralPath $mcNewer)
+    ) 'A payload the composer rejected was selected or left in the cache.'
+    $mc.ComposeFailure = $false
+    $mc.PayloadText = 'accepted payload'
+    & $composeMsix
+    Assert-True (
+        $mc.Downloads -eq 4 -and (& $readComposed) -eq 'accepted payload' -and (& $selectedRun) -eq 502 -and
+        -not (Test-Path -LiteralPath $mcNewer)
+    ) 'A retry after a rejected composition did not download, select, and retire as usual.'
+    $mcAccepted = @($mc.Composed)[-1]
+
+    $mc.PayloadText = 'refreshed payload'
+    & $composeMsix @{ RefreshPayload = $true }
+    Assert-True (
+        $mc.Downloads -eq 5 -and (& $readComposed) -eq 'refreshed payload' -and
+        -not (Test-Path -LiteralPath $mcAccepted) -and
+        @(Get-ChildItem -LiteralPath $msixCache -Directory).Count -eq 1
+    ) '-RefreshPayload did not replace the cached payload.'
+    $mcRefreshed = @($mc.Composed)[-1]
+
+    $mc.DownloadFailure = $true
+    $composedBefore = @($mc.Composed).Count
+    Assert-Fails { & $composeMsix @{ RefreshPayload = $true } } 'Interrupted payload download'
+    $mc.DownloadFailure = $false
+    Assert-True (
+        @($mc.Composed).Count -eq $composedBefore -and (& $selectedRun) -eq 502 -and
+        (@(Get-ChildItem -LiteralPath $msixCache -Directory).FullName -join '|') -eq $mcRefreshed
+    ) 'An interrupted download was composed, selected, or left beside the cached payload.'
+
+    # A run killed mid-download leaves its generation behind without selecting
+    # it. The next run, holding the checkout, reclaims it instead of letting
+    # abandoned payloads accumulate, and leaves anything it did not create.
+    $abandoned = Join-Path $msixCache "503-$([guid]::NewGuid().ToString('N'))"
+    & $mc.WritePayload $abandoned 'x64' 'abandoned download' '24.20.0'
+    $unrelated = Join-Path $msixCache 'not-a-generation'
+    New-Item -Path $unrelated -ItemType Directory | Out-Null
+    $mc.Offline = $true
+    & $composeMsix @{ PayloadRunId = [long]502 }
+    $mc.Offline = $false
+    Assert-True (
+        -not (Test-Path -LiteralPath $abandoned) -and (Test-Path -LiteralPath $unrelated) -and
+        @($mc.Composed)[-1] -eq $mcRefreshed -and (& $selectedRun) -eq 502
+    ) 'An abandoned generation was not reclaimed, or the sweep touched what it did not create.'
+    Remove-Item -LiteralPath $unrelated
+    # Runs in one checkout share content\openclaw and this cache, so a second
+    # run fails before touching either while the first holds the checkout.
+    $mc.RunId = [long]503
+    $downloadsBefore = $mc.Downloads
+    $lockPath = Join-Path $mc.Root 'artifacts\local-msix\.lock'
+    $held = [IO.FileStream]::new($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    try {
+        $selectionBefore = Get-Content -LiteralPath $msixSelection -Raw
+        $queriesBefore = $mc.Queries
+        $composedBefore = @($mc.Composed).Count
+        Assert-Fails { & $composeMsix } 'Another Build-LocalMSIX\.ps1 run in this checkout holds .*\.lock'
+        $suppliedPayload = Join-Path $testRoot 'locked supplied msix payload'
+        & $mc.WritePayload $suppliedPayload 'x64' 'supplied msix payload' '24.20.0'
+        Assert-Fails { & $composeMsix @{ PayloadDirectory = $suppliedPayload } } 'holds .*\.lock'
+        Assert-True (
+            $mc.Queries -eq $queriesBefore -and $mc.Downloads -eq $downloadsBefore -and
+            @($mc.Composed).Count -eq $composedBefore -and
+            (Get-Content -LiteralPath $msixSelection -Raw) -eq $selectionBefore -and
+            (@(Get-ChildItem -LiteralPath $msixCache -Directory).FullName -join '|') -eq $mcRefreshed
+        ) 'A run blocked by the checkout lock queried, downloaded, composed, or changed the cache.'
+    }
+    finally { $held.Dispose() }
+
+    # A supplied payload is composed in place without GitHub or the cache.
+    $mc.Offline = $true
+    & $composeMsix @{ PayloadDirectory = $suppliedPayload }
+    Assert-True (
+        @($mc.Composed)[-1] -eq (Resolve-Path -LiteralPath $suppliedPayload).Path -and
+        $mc.Downloads -eq $downloadsBefore -and (& $selectedRun) -eq 502
+    ) 'A supplied payload was not composed directly or touched the cache.'
+    $mc.Offline = $false
+    Assert-Fails { & $composeMsix @{ PayloadDirectory = $suppliedPayload; RefreshPayload = $true } } 'cannot be combined'
+    Assert-Fails { & $composeMsix @{ PayloadDirectory = $suppliedPayload; PayloadRunId = [long]7 } } 'cannot be combined'
+    Assert-Fails { & $composeMsix @{ PayloadRunId = [long]-1 } } 'positive workflow run'
+
+    # Payloads are architecture-specific, so arm64 composes from its own cache
+    # and never from, or over, the x64 selection.
+    $mc.PayloadText = 'arm64 payload'
+    & $composeMsix @{ Architecture = 'arm64' }
+    $arm64Metadata = Get-Content -LiteralPath (Join-Path @($mc.Composed)[-1] 'payload-metadata.json') -Raw |
+        ConvertFrom-Json
+    Assert-True (
+        @($mc.Composed)[-1].StartsWith(
+            (Join-Path $mc.Root 'artifacts\local-msix\payloads\arm64'), [StringComparison]::OrdinalIgnoreCase) -and
+        $arm64Metadata.architecture -eq 'arm64' -and (& $selectedRun) -eq 502 -and
+        (@(Get-ChildItem -LiteralPath $msixCache -Directory).FullName -join '|') -eq $mcRefreshed
+    ) 'An arm64 composition used or changed the x64 payload cache.'
+
+    # A first download killed before anything was selected leaves a generation
+    # and no current.json. The next successful run must still reclaim it, as
+    # must a refresh that replaces a selection too damaged to name its payload.
+    $cold = New-Fixture
+    $coldCache = Join-Path $cold.Root 'artifacts\local-msix\payloads\x64'
+    $coldOrphan = Join-Path $coldCache "500-$([guid]::NewGuid().ToString('N'))"
+    New-Item -Path (Join-Path $coldOrphan 'app') -ItemType Directory -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $coldOrphan 'app\partial.bin'), 'interrupted first download')
+    $coldUnownedDirectory = Join-Path $coldCache 'not-a-generation'
+    New-Item -Path $coldUnownedDirectory -ItemType Directory | Out-Null
+    $coldUnownedFile = Join-Path $coldCache '600-notes.txt'
+    [IO.File]::WriteAllText($coldUnownedFile, 'unowned file')
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $coldCache 'current.json'))) `
+        'The interrupted-first-download fixture must start without a selection.'
+    $coldComposed = @()
+    $coldCompose = { param($directory) $script:coldComposed += $directory }
+    Invoke-LocalPackageMsixBuild -RepositoryRoot $cold.Root -Architecture x64 `
+        -Compose $coldCompose -Operations $cold.Operations
+    $coldSelected = @($coldComposed)[-1]
+    Assert-True (
+        -not (Test-Path -LiteralPath $coldOrphan) -and (Test-Path -LiteralPath $coldSelected) -and
+        (Get-Content -LiteralPath (Join-Path $coldSelected 'app\openclaw.mjs') -Raw) -eq 'first payload' -and
+        (Get-Content -LiteralPath (Join-Path $coldCache 'current.json') -Raw | ConvertFrom-Json).generation -eq
+            [IO.Path]::GetFileName($coldSelected)
+    ) 'A generation left by an interrupted first download was not reclaimed, or the new selection is unusable.'
+    Assert-True (
+        (Test-Path -LiteralPath $coldUnownedDirectory -PathType Container) -and
+        (Test-Path -LiteralPath $coldUnownedFile -PathType Leaf)
+    ) 'Reclaiming abandoned generations removed cache entries this owner did not create.'
+    Remove-Item -LiteralPath $coldUnownedDirectory, $coldUnownedFile
+    [IO.File]::WriteAllText((Join-Path $coldCache 'current.json'), 'not json')
+    Assert-Fails {
+        Invoke-LocalPackageMsixBuild -RepositoryRoot $cold.Root -Architecture x64 `
+            -Compose $coldCompose -Operations $cold.Operations
+    } 'Run with -RefreshPayload'
+    Assert-True (Test-Path -LiteralPath $coldSelected) `
+        'A run refused by an unreadable selection deleted the payload before -RefreshPayload was requested.'
+    Invoke-LocalPackageMsixBuild -RepositoryRoot $cold.Root -Architecture x64 -RefreshPayload `
+        -Compose $coldCompose -Operations $cold.Operations 3>$null
+    Assert-True (
+        -not (Test-Path -LiteralPath $coldSelected) -and
+        (@(Get-ChildItem -LiteralPath $coldCache -Directory).FullName -join '|') -eq @($coldComposed)[-1] -and
+        (Get-Content -LiteralPath (Join-Path $coldCache 'current.json') -Raw | ConvertFrom-Json).generation -eq
+            [IO.Path]::GetFileName(@($coldComposed)[-1])
+    ) 'Refreshing an unreadable selection left the payload it could no longer name.'
 
     # Argument guards.
     $j = New-Fixture

@@ -372,9 +372,10 @@ function Resolve-LocalPackagePayload {
     if (-not $complete) { Remove-Item -LiteralPath $directory -Recurse -Force }
     }
 
-    # The selection is committed and the replaced generation retired by the
-    # caller, once the whole deployment succeeds. Committing here would leave a
-    # failed run selecting a payload that was never successfully deployed.
+    # The caller commits the selection and retires the replaced generation
+    # through Complete-LocalPackagePayload once its consumer accepts the
+    # payload: committing here would leave a failed run selecting a payload
+    # that was never successfully deployed or composed.
     $superseded = $null
     if ($null -ne $current) {
     $old = Join-Path $CacheDirectory $current['generation']
@@ -394,6 +395,133 @@ function Resolve-LocalPackagePayload {
     }
     SelectionPath = $selectionPath
     }
+}
+
+function Complete-LocalPackagePayload {
+    param($Payload)
+
+    if ($null -ne $Payload.PendingSelection) {
+        Write-LocalPackageRecord $Payload.SelectionPath $Payload.PendingSelection
+    }
+    if ($Payload.Superseded) {
+        Remove-Item -LiteralPath $Payload.Superseded -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Enter-LocalPackageBuildLock {
+    param([string]$Path)
+
+    New-Item -Path (Split-Path $Path -Parent) -ItemType Directory -Force | Out-Null
+    try {
+        # The open handle is the lock, so the operating system releases it
+        # even when the holder is killed; the file left behind is inert.
+        return [IO.FileStream]::new(
+            $Path,
+            [IO.FileMode]::OpenOrCreate,
+            [IO.FileAccess]::ReadWrite,
+            [IO.FileShare]::None)
+    }
+    catch [IO.IOException] {
+        $failure = @($_.Exception, $_.Exception.InnerException) |
+            Where-Object { $_ -is [IO.IOException] } |
+            Select-Object -First 1
+        # Only a sharing or lock violation means another run holds the file.
+        if (($failure.HResult -band 0xFFFF) -notin @(32, 33)) { throw }
+        throw (
+            "Another Build-LocalMSIX.ps1 run in this checkout holds $Path. " +
+            'Wait for it to finish, or compose from another checkout: runs in one ' +
+            'checkout share content\openclaw and the payload cache.'
+        )
+    }
+}
+
+function Invoke-LocalPackageMsixBuild {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$RepositoryRoot,
+        [Parameter(Mandatory)][ValidateSet('x64', 'arm64')][string]$Architecture,
+        [string]$PayloadDirectory,
+        [long]$PayloadRunId,
+        [switch]$RefreshPayload,
+        [Parameter(Mandatory)][scriptblock]$Compose,
+        [hashtable]$Operations = @{}
+    )
+
+    if ($PayloadRunId -lt 0) { throw '-PayloadRunId must be a positive workflow run ID.' }
+    if ($PayloadDirectory -and ($PayloadRunId -ne 0 -or $RefreshPayload)) {
+        throw '-PayloadDirectory cannot be combined with -PayloadRunId or -RefreshPayload.'
+    }
+    $services = Get-LocalPackageServices $Operations
+    $msixRoot = Join-Path ([IO.Path]::GetFullPath($RepositoryRoot)) 'artifacts\local-msix'
+    # Every composition in a checkout rewrites the same content\ staging tree
+    # and reads this cache, so one run holds the checkout at a time. That also
+    # keeps a refresh from retiring a generation another run is still reading.
+    $lock = Enter-LocalPackageBuildLock (Join-Path $msixRoot '.lock')
+    try {
+        if ($PayloadDirectory) {
+            & $Compose (Resolve-Path -LiteralPath $PayloadDirectory -ErrorAction Stop).Path
+            return
+        }
+
+        $cacheDirectory = Join-Path $msixRoot "payloads\$Architecture"
+        $runId = $PayloadRunId
+        if ($runId -eq 0) {
+            # An ordinary build composes the latest successful payload, so the
+            # cache only avoids downloading a run it already holds. Falling back
+            # to it here could silently compose a superseded payload.
+            try { $runId = & $services.LatestRun }
+            catch {
+                $selection = $null
+                try { $selection = Read-LocalPackageRecord (Join-Path $cacheDirectory 'current.json') }
+                catch { $selection = $null }
+                $pin = if ($null -ne $selection -and $selection['runId'] -is [long] -and $selection['runId'] -gt 0) {
+                    "-PayloadRunId $($selection['runId']) to reuse the cached payload"
+                }
+                else { '-PayloadRunId <id>' }
+                throw (
+                    "Cannot find the latest successful payload run: $($_.Exception.Message) " +
+                    "To compose without querying GitHub, pass $pin, or -PayloadDirectory <path>."
+                )
+            }
+            if ($runId -isnot [long] -or $runId -le 0) {
+                throw 'Payload selection did not return a valid workflow run ID.'
+            }
+        }
+        $payload = Resolve-LocalPackagePayload -CacheDirectory $cacheDirectory `
+            -Architecture $Architecture -PayloadRunId $runId `
+            -RefreshPayload:$RefreshPayload -Operations $services
+        # The composer applies checks this owner does not, so a payload becomes
+        # the cached selection only once composition accepts it, as a deployment
+        # commits only after registering. Nothing links a rejected download, so
+        # it is discarded rather than left for a retry to trip over.
+        $accepted = $false
+        try {
+            & $Compose $payload.Directory
+            $accepted = $true
+        }
+        finally {
+            if ($accepted) {
+                Complete-LocalPackagePayload $payload
+                # After a success the cache holds only the selected generation.
+                # This run holds the checkout and nothing links a composition's
+                # payload, so any other generation was left by an interrupted
+                # run, including a first download that never selected one or a
+                # generation an unreadable selection could no longer name.
+                $selected = [IO.Path]::GetFileName($payload.Directory)
+                foreach ($generation in Get-ChildItem -LiteralPath $cacheDirectory -Directory -Force) {
+                    if ($generation.Name -cne $selected -and
+                        $generation.Name -match '^[1-9]\d*-[0-9a-f]{32}$' -and
+                        ($generation.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) {
+                        Remove-Item -LiteralPath $generation.FullName -Recurse -Force -ErrorAction SilentlyContinue
+                    }
+                }
+            }
+            elseif (-not $payload.CacheHit) {
+                Remove-Item -LiteralPath $payload.Directory -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    finally { $lock.Dispose() }
 }
 
 function Resolve-LocalPackageRuntime {
@@ -585,6 +713,37 @@ function Get-LocalPackageFileInventory {
     )
 }
 
+function Get-LocalPackageSourceInventory {
+    param([string]$RepositoryRoot)
+
+    # The checkout files the launcher and session-host publishes read. Each
+    # project's bin and obj hold build output that every publish rewrites, so
+    # hashing them would make every deployment look changed.
+    $projectFiles = foreach ($project in @(
+        'OpenClaw.Launcher', 'OpenClaw.SessionHost', 'OpenClaw.SessionProtocol'
+    )) {
+        foreach ($entry in Get-ChildItem -LiteralPath (Join-Path $RepositoryRoot "src\$project") -Force) {
+            if ($entry.PSIsContainer -and $entry.Name -in @('bin', 'obj')) { continue }
+            $files = if ($entry.PSIsContainer) {
+                Get-ChildItem -LiteralPath $entry.FullName -File -Recurse -Force
+            }
+            else { $entry }
+            foreach ($file in $files) {
+                $relativePath = [IO.Path]::GetRelativePath($RepositoryRoot, $file.FullName)
+                "$relativePath`:$((Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash)"
+            }
+        }
+    }
+    $buildFiles = foreach ($name in @('Directory.Build.props', 'Directory.Packages.props', 'global.json')) {
+        $path = Join-Path $RepositoryRoot $name
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            "$name`:$((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash)"
+        }
+        else { "$name`:absent" }
+    }
+    return @($projectFiles | Sort-Object) + @($buildFiles)
+}
+
 function Test-LocalPackageLayout {
     param(
         [string]$LayoutDirectory,
@@ -731,17 +890,17 @@ function Get-LocalPackageOperations {
                 -OutputDirectory $output
             return $null
         }
+        CheckoutCommit = { Get-LocalPackageCheckoutCommit }
         Publish = {
             param($project, $architecture, $output, $metadata)
-            # Bake the checkout's commit into the local build so `clawctl
-            # --version` identifies what was deployed. A detached or missing
-            # git falls back to the project's own default.
+            # Bake the deployment's identity into the launcher so `clawctl
+            # --version` identifies what was deployed. An empty commit, from a
+            # missing git, falls back to the project's own default.
             $metadataArgs = @()
-            $commit = Get-LocalPackageCheckoutCommit
-            if ($commit) {
-                $metadataArgs += "-p:ClawCtlPackageCommit=$commit"
-            }
             if ($null -ne $metadata) {
+                if ($metadata.PackageCommit) {
+                    $metadataArgs += "-p:ClawCtlPackageCommit=$($metadata.PackageCommit)"
+                }
                 $metadataArgs += "-p:ClawCtlPackageVersion=$($metadata.PackageVersion)"
                 $metadataArgs += "-p:ClawCtlPayloadVersion=$($metadata.PayloadVersion)"
                 $metadataArgs += "-p:ClawCtlPayloadCommit=$($metadata.PayloadCommit)"
@@ -1029,20 +1188,15 @@ function Invoke-LocalPackageDeployment {
         )
         $previous = Read-LocalPackageRecord $statePath
         $now = & $services.Now
-        $publishVersion = if ($null -ne $installed -and
-            $installed.IsDevelopmentMode -and
-            $null -ne $previous -and
-            $previous['version'] -eq $installed.Version) {
-            $installed.Version
-        }
-        else {
+        $newVersion = {
             Get-LocalPackageNextVersion `
                 -InstalledVersion $(if ($null -ne $installed) { $installed.Version } else { '' }) `
                 -PreviousVersion $(if ($null -ne $previous) { [string]$previous['version'] } else { '' }) `
                 -Now $now
         }
         $publishMetadata = @{
-            PackageVersion = $publishVersion
+            PackageVersion = ''
+            PackageCommit = [string](& $services.CheckoutCommit)
             PayloadVersion = if ([string]::IsNullOrWhiteSpace(
                 [string]$payloadMetadata['packageVersion'])) {
                 'unknown'
@@ -1066,6 +1220,54 @@ function Invoke-LocalPackageDeployment {
         Invoke-LocalPackagePhase $progress 'Stage MXC runtime' {
             & $services.StageMxcRuntime $root $Architecture $mxcRuntimeDirectory
         } | Out-Null
+        $manifestSource = Join-Path $root 'src\OpenClaw.Launcher\Package.appxmanifest'
+        $manifestHash = (Get-FileHash -LiteralPath $manifestSource -Algorithm SHA256).Hash
+        $mxcHashes = @(
+            Get-ChildItem -LiteralPath $mxcRuntimeDirectory -File -Recurse |
+                Sort-Object FullName |
+                ForEach-Object {
+                    "$($_.Name):$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
+                }
+        )
+        $imageHashes = @(
+            Get-ChildItem -LiteralPath (Join-Path $root 'src\OpenClaw.Launcher\Images') -File -Recurse |
+                Sort-Object FullName |
+                ForEach-Object { "$($_.Name):$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)" }
+        )
+        $nodeScriptsDirectory = Join-Path $root 'src\OpenClaw.Launcher\node'
+        $nodeScriptHashes = Get-LocalPackageFileInventory -Directory $nodeScriptsDirectory
+        # The package version is compiled into the launcher, so a version change
+        # costs a full NativeAOT compile. The build inputs predict whether this
+        # deployment can stay current, letting a changed deployment publish once
+        # with the version it registers. They only choose that version: the
+        # published binaries below still decide "up to date", so an input missed
+        # here costs a second publish, never a stale package.
+        $inputFingerprint = Get-LocalPackageFingerprint (@(
+            $Architecture
+            $payload.Directory
+            [IO.Path]::GetFileName($runtimeArchive)
+            $publishMetadata.PackageCommit
+            $publishMetadata.PayloadVersion
+            $publishMetadata.PayloadCommit
+            $manifestHash
+        ) + $imageHashes + $nodeScriptHashes + $mxcHashes +
+            (Get-LocalPackageSourceInventory -RepositoryRoot $root))
+        $setupSatisfied = $SkipSetup -or ($null -ne $previous -and $previous['setupComplete'] -eq $true)
+        $registrationCurrent = -not $Force -and $null -ne $previous -and $null -ne $installed -and
+            $installed.IsDevelopmentMode -and
+            (Test-LocalPackageOwnership -Installed $installed -LayoutDirectory $layoutDirectory) -and
+            $previous['inputFingerprint'] -eq $inputFingerprint -and
+            $previous['version'] -eq $installed.Version -and
+            $installed.Status -ieq 'Ok' -and
+            $setupSatisfied -and
+            (Test-LocalPackageLayout -LayoutDirectory $layoutDirectory `
+                -PayloadDirectory $payload.Directory `
+                -NodeScriptsDirectory $nodeScriptsDirectory `
+                -RuntimeArchiveName ([IO.Path]::GetFileName($runtimeArchive)) `
+                -Architecture $Architecture)
+        $version = if ($registrationCurrent) { $installed.Version } else { & $newVersion }
+        $publishMetadata.PackageVersion = $version
+
         $hostDirectory = Join-Path $stateRoot 'host'
         Invoke-LocalPackagePhase $progress 'Build launcher (NativeAOT)' {
             & $services.Publish (Join-Path $root 'src\OpenClaw.Launcher\OpenClaw.Launcher.csproj') `
@@ -1085,53 +1287,27 @@ function Invoke-LocalPackageDeployment {
             throw "The publish did not produce $sessionHostExecutable."
         }
 
-        $hostInfo = Get-Item -LiteralPath $hostExecutable
         $sessionHostInfo = Get-Item -LiteralPath $sessionHostExecutable
-        $manifestSource = Join-Path $root 'src\OpenClaw.Launcher\Package.appxmanifest'
-        # Hash the launcher rather than trusting its timestamp: publish copies
-        # into the output directory and can refresh timestamps with no source
-        # change, which would defeat the up-to-date check on every run.
-        $hostHash = (Get-FileHash -LiteralPath $hostExecutable -Algorithm SHA256).Hash
         $sessionHostHash = (
             Get-FileHash -LiteralPath $sessionHostExecutable -Algorithm SHA256
         ).Hash
-        $mxcHashes = @(
-            Get-ChildItem -LiteralPath $mxcRuntimeDirectory -File -Recurse |
-                Sort-Object FullName |
-                ForEach-Object {
-                    "$($_.Name):$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
-                }
-        )
-        $imageHashes = @(
-            Get-ChildItem -LiteralPath (Join-Path $root 'src\OpenClaw.Launcher\Images') -File -Recurse |
-                Sort-Object FullName |
-                ForEach-Object { "$($_.Name):$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)" }
-        )
-        $nodeScriptsDirectory = Join-Path $root 'src\OpenClaw.Launcher\node'
-        $nodeScriptHashes = Get-LocalPackageFileInventory -Directory $nodeScriptsDirectory
-        $fingerprint = Get-LocalPackageFingerprint (@(
-            $Architecture
-            $payload.Directory
-            [IO.Path]::GetFileName($runtimeArchive)
-            $hostInfo.Length.ToString()
-            $hostHash
-            $sessionHostInfo.Length.ToString()
-            $sessionHostHash
-            (Get-FileHash -LiteralPath $manifestSource -Algorithm SHA256).Hash
-        ) + $imageHashes + $nodeScriptHashes + $mxcHashes)
-        $setupSatisfied = $SkipSetup -or ($null -ne $previous -and $previous['setupComplete'] -eq $true)
-        if (-not $Force -and $null -ne $previous -and $null -ne $installed -and
-            $installed.IsDevelopmentMode -and
-            (Test-LocalPackageOwnership -Installed $installed -LayoutDirectory $layoutDirectory) -and
-            $previous['fingerprint'] -eq $fingerprint -and
-            $previous['version'] -eq $installed.Version -and
-            $installed.Status -ieq 'Ok' -and
-            $setupSatisfied -and
-            (Test-LocalPackageLayout -LayoutDirectory $layoutDirectory `
-                -PayloadDirectory $payload.Directory `
-                -NodeScriptsDirectory $nodeScriptsDirectory `
-                -RuntimeArchiveName ([IO.Path]::GetFileName($runtimeArchive)) `
-                -Architecture $Architecture)) {
+        # Hash the launcher rather than trusting its timestamp: publish copies
+        # into the output directory and can refresh timestamps with no source
+        # change, which would defeat the up-to-date check on every run.
+        $outputFingerprint = {
+            Get-LocalPackageFingerprint (@(
+                $Architecture
+                $payload.Directory
+                [IO.Path]::GetFileName($runtimeArchive)
+                (Get-Item -LiteralPath $hostExecutable).Length.ToString()
+                (Get-FileHash -LiteralPath $hostExecutable -Algorithm SHA256).Hash
+                $sessionHostInfo.Length.ToString()
+                $sessionHostHash
+                $manifestHash
+            ) + $imageHashes + $nodeScriptHashes + $mxcHashes)
+        }
+        $fingerprint = & $outputFingerprint
+        if ($registrationCurrent -and $previous['fingerprint'] -eq $fingerprint) {
             $total.Stop()
             Write-Host "`nAlready up to date: $($installed.PackageFullName)"
             Write-Host ('Total {0:0.00}s. Use -Force to re-register anyway.' -f $total.Elapsed.TotalSeconds)
@@ -1143,29 +1319,19 @@ function Invoke-LocalPackageDeployment {
             }
         }
 
-        $version = Get-LocalPackageNextVersion `
-            -InstalledVersion $(if ($null -ne $installed) { $installed.Version } else { '' }) `
-            -PreviousVersion $(if ($null -ne $previous) { [string]$previous['version'] } else { '' }) `
-            -Now $now
-        if ($version -ne $publishVersion) {
+        if ($registrationCurrent) {
+            Write-Host (
+                "`nThe published binaries changed although the recorded build inputs did not, " +
+                'for example after an SDK or toolchain update.'
+            )
+            $version = & $newVersion
             $publishMetadata.PackageVersion = $version
             Invoke-LocalPackagePhase $progress 'Rebuild launcher with package identity' {
                 & $services.Publish (
                     Join-Path $root 'src\OpenClaw.Launcher\OpenClaw.Launcher.csproj'
                 ) $Architecture $hostDirectory $publishMetadata
             } | Out-Null
-            $hostInfo = Get-Item -LiteralPath $hostExecutable
-            $hostHash = (Get-FileHash -LiteralPath $hostExecutable -Algorithm SHA256).Hash
-            $fingerprint = Get-LocalPackageFingerprint (@(
-                $Architecture
-                $payload.Directory
-                [IO.Path]::GetFileName($runtimeArchive)
-                $hostInfo.Length.ToString()
-                $hostHash
-                $sessionHostInfo.Length.ToString()
-                $sessionHostHash
-                (Get-FileHash -LiteralPath $manifestSource -Algorithm SHA256).Hash
-            ) + $imageHashes + $nodeScriptHashes + $mxcHashes)
+            $fingerprint = & $outputFingerprint
         }
 
         $manifestPath = Invoke-LocalPackagePhase $progress 'Assemble layout' {
@@ -1196,6 +1362,7 @@ function Invoke-LocalPackageDeployment {
             schemaVersion = $script:StateSchema
             version = $version
             fingerprint = $fingerprint
+            inputFingerprint = $inputFingerprint
             setupComplete = $false
             packageFullName = $registered.PackageFullName
             layoutDirectory = $layoutDirectory
@@ -1214,17 +1381,13 @@ function Invoke-LocalPackageDeployment {
             schemaVersion = $script:StateSchema
             version = $version
             fingerprint = $fingerprint
+            inputFingerprint = $inputFingerprint
             setupComplete = (-not $SkipSetup)
             packageFullName = $registered.PackageFullName
             layoutDirectory = $layoutDirectory
             payloadDirectory = $payload.Directory
         })
-        if ($null -ne $payload.PendingSelection) {
-            Write-LocalPackageRecord $payload.SelectionPath $payload.PendingSelection
-        }
-        if ($payload.Superseded) {
-            Remove-Item -LiteralPath $payload.Superseded -Recurse -Force -ErrorAction SilentlyContinue
-        }
+        Complete-LocalPackagePayload $payload
 
         $total.Stop()
         Write-Host "`nRegistered: $($registered.PackageFullName)"
@@ -1289,4 +1452,4 @@ function Get-LocalPackageNextVersion {
 }
 
 Export-ModuleMember -Function Invoke-LocalPackageDeployment, Remove-LocalPackageRegistration,
-    Get-LocalPackageNextVersion
+    Get-LocalPackageNextVersion, Invoke-LocalPackageMsixBuild

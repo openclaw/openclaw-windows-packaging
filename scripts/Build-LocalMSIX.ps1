@@ -7,6 +7,8 @@ param(
 
     [long]$PayloadRunId,
 
+    [switch]$RefreshPayload,
+
     [string]$NodeArchivePath,
 
     [string]$PackageVersion,
@@ -16,7 +18,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path $PSScriptRoot -Parent
-$repository = 'openclaw/openclaw-windows-packaging'
+Import-Module (Join-Path $PSScriptRoot 'LocalPackage.psm1') -Force
 
 function Invoke-CheckedCommand {
     param(
@@ -47,7 +49,6 @@ if (-not $OutputDirectory) {
         "artifacts\local-msix\$Architecture\$PackageVersion"
 }
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
-$workDirectory = Join-Path $OutputDirectory 'work'
 
 if (Test-Path -LiteralPath $OutputDirectory) {
     throw (
@@ -55,116 +56,87 @@ if (Test-Path -LiteralPath $OutputDirectory) {
         'Choose another -PackageVersion or -OutputDirectory.'
     )
 }
-New-Item -Path $workDirectory -ItemType Directory -Force | Out-Null
 
 if ($NodeArchivePath) {
     $NodeArchivePath = (Resolve-Path -LiteralPath $NodeArchivePath).Path
 }
 
-if ($PayloadDirectory) {
-    $resolvedPayloadDirectory = (Resolve-Path -LiteralPath $PayloadDirectory).Path
-}
-else {
-    $gh = Get-Command gh -ErrorAction SilentlyContinue
-    if ($null -eq $gh) {
-        throw 'GitHub CLI (gh) is required when -PayloadDirectory is omitted.'
+$msixPath = Join-Path $OutputDirectory "OpenClawGateway-$Architecture.msix"
+# LocalPackage.psm1 owns payload selection, its cache, and the checkout lock;
+# it records a downloaded payload as the cached selection only after this
+# composition succeeds.
+$compose = {
+    param([string]$resolvedPayloadDirectory)
+
+    $payloadApplication = Join-Path $resolvedPayloadDirectory 'app'
+    $payloadMetadata = Join-Path $resolvedPayloadDirectory 'payload-metadata.json'
+    if (-not (Test-Path -LiteralPath $payloadApplication -PathType Container)) {
+        throw "Required payload input was not found: $payloadApplication"
+    }
+    if (-not (Test-Path -LiteralPath $payloadMetadata -PathType Leaf)) {
+        throw "Required payload input was not found: $payloadMetadata"
     }
 
-    if ($PayloadRunId -eq 0) {
-        $runJson = & gh run list `
-            --repo $repository `
-            --workflow gateway-msix.yml `
-            --branch main `
-            --status success `
-            --limit 1 `
-            --json databaseId
+    Push-Location $repositoryRoot
+    try {
+        Write-Host 'Restoring locked .NET dependencies.'
+        Invoke-CheckedCommand `
+            -FailureMessage 'Locked dependency restore failed.' `
+            -Command {
+                & dotnet restore `
+                    .\src\OpenClaw.Launcher\OpenClaw.Launcher.csproj `
+                    --runtime "win-$Architecture" `
+                    -p:PublishAot=true `
+                    -p:IncludePackagingContent=true `
+                    "-p:Platform=$Architecture"
+            }
+        Invoke-CheckedCommand `
+            -FailureMessage 'Session host dependency restore failed.' `
+            -Command {
+                & dotnet restore `
+                    .\src\OpenClaw.SessionHost\OpenClaw.SessionHost.csproj `
+                    --runtime "win-$Architecture" `
+                    -p:PublishAot=true `
+                    "-p:Platform=$Architecture"
+            }
+
+        $sourceCommit = (& git rev-parse HEAD) -join ''
+        if ($LASTEXITCODE -ne 0 -or
+            $sourceCommit -notmatch '^[0-9a-fA-F]{40}$') {
+            throw 'Unable to resolve the current source commit.'
+        }
+        $sourceTreeDirty = [bool](& git status --porcelain)
         if ($LASTEXITCODE -ne 0) {
-            throw 'Unable to query the latest successful payload workflow.'
+            throw 'Unable to inspect the current source tree.'
         }
 
-        $runs = @($runJson | ConvertFrom-Json)
-        if ($runs.Count -ne 1) {
-            throw 'No successful payload workflow was found.'
+        Write-Host "Building unsigned MSIX version $PackageVersion."
+        & .\scripts\Build-MSIX.ps1 `
+            -PayloadDirectory $resolvedPayloadDirectory `
+            -NodeArchivePath $NodeArchivePath `
+            -Architecture $Architecture `
+            -PackageVersion $PackageVersion `
+            -SourceCommit $sourceCommit `
+            -SourceTreeDirty:$sourceTreeDirty `
+            -OutputDirectory $OutputDirectory
+        if (-not (Test-Path -LiteralPath $msixPath -PathType Leaf)) {
+            throw "The MSIX build did not produce $msixPath."
         }
-        $PayloadRunId = $runs[0].databaseId
     }
-
-    $resolvedPayloadDirectory = Join-Path $workDirectory 'payload'
-    New-Item -Path $resolvedPayloadDirectory -ItemType Directory -Force |
-        Out-Null
-    Write-Host (
-        "Downloading openclaw-gateway-payload-$Architecture from workflow $PayloadRunId."
-    )
-    Invoke-CheckedCommand `
-        -FailureMessage 'Unable to download the payload artifact.' `
-        -Command {
-            & gh run download $PayloadRunId `
-                --repo $repository `
-                --name "openclaw-gateway-payload-$Architecture" `
-                --dir $resolvedPayloadDirectory
-        }
-}
-
-$payloadApplication = Join-Path $resolvedPayloadDirectory 'app'
-$payloadMetadata = Join-Path $resolvedPayloadDirectory 'payload-metadata.json'
-if (-not (Test-Path -LiteralPath $payloadApplication -PathType Container)) {
-    throw "Required payload input was not found: $payloadApplication"
-}
-if (-not (Test-Path -LiteralPath $payloadMetadata -PathType Leaf)) {
-    throw "Required payload input was not found: $payloadMetadata"
-}
-
-Push-Location $repositoryRoot
-try {
-    Write-Host 'Restoring locked .NET dependencies.'
-    Invoke-CheckedCommand `
-        -FailureMessage 'Locked dependency restore failed.' `
-        -Command {
-            & dotnet restore `
-                .\src\OpenClaw.Launcher\OpenClaw.Launcher.csproj `
-                --runtime "win-$Architecture" `
-                -p:PublishAot=true `
-                -p:IncludePackagingContent=true `
-                "-p:Platform=$Architecture"
-        }
-    Invoke-CheckedCommand `
-        -FailureMessage 'Session host dependency restore failed.' `
-        -Command {
-            & dotnet restore `
-                .\src\OpenClaw.SessionHost\OpenClaw.SessionHost.csproj `
-                --runtime "win-$Architecture" `
-                -p:PublishAot=true `
-                "-p:Platform=$Architecture"
-        }
-
-    $sourceCommit = (& git rev-parse HEAD) -join ''
-    if ($LASTEXITCODE -ne 0 -or
-        $sourceCommit -notmatch '^[0-9a-fA-F]{40}$') {
-        throw 'Unable to resolve the current source commit.'
+    finally {
+        Pop-Location
     }
-    $sourceTreeDirty = [bool](& git status --porcelain)
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Unable to inspect the current source tree.'
-    }
-
-    Write-Host "Building unsigned MSIX version $PackageVersion."
-    & .\scripts\Build-MSIX.ps1 `
-        -PayloadDirectory $resolvedPayloadDirectory `
-        -NodeArchivePath $NodeArchivePath `
-        -Architecture $Architecture `
-        -PackageVersion $PackageVersion `
-        -SourceCommit $sourceCommit `
-        -SourceTreeDirty:$sourceTreeDirty `
-        -OutputDirectory $OutputDirectory
-
-    $msixPath = Join-Path $OutputDirectory "OpenClawGateway-$Architecture.msix"
-    Remove-Item -LiteralPath $workDirectory -Recurse -Force
-    Write-Host ''
-    Write-Host "Local MSIX is ready: $msixPath"
-    Write-Host (
-        'Sign the package before installing it with Add-AppxPackage.'
-    )
 }
-finally {
-    Pop-Location
-}
+Invoke-LocalPackageMsixBuild `
+    -RepositoryRoot $repositoryRoot `
+    -Architecture $Architecture `
+    -PayloadDirectory $PayloadDirectory `
+    -PayloadRunId $PayloadRunId `
+    -RefreshPayload:$RefreshPayload `
+    -Compose $compose
+
+Write-Host ''
+Write-Host "Local MSIX is ready: $msixPath"
+Write-Host (
+    'Sign the package before installing it with Add-AppxPackage.'
+)
