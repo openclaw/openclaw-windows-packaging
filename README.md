@@ -329,9 +329,10 @@ update does not remove a running process's runtime.
 
 ## Selecting the OpenClaw revision
 
-`.github\workflows\gateway-msix.yml` selects **stable** through public npm
-`openclaw@latest` whenever a new packaging run starts. The resolver checks the
-exact published version, its signed upstream tag and commit, and the source
+`.github\workflows\gateway-msix.yml` selects **stable** whenever a new packaging
+run starts: public npm `openclaw@latest`, or the exact `stableVersion` when
+`release-policy.json` pins one (see below). The resolver checks the exact
+published version, its signed upstream tag and commit, and the source
 package version before building. There is no automatic fallback to another
 version or channel; extended-stable and named prereleases are rejected.
 Source selection also checks the MSIX release-version rules before building:
