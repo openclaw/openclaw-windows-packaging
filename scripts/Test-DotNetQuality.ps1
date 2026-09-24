@@ -84,15 +84,16 @@ Invoke-CheckedCommand `
 # Verification only. This never rewrites source, including in CI. Run
 # `dotnet format whitespace` and `dotnet format style` without
 # `--verify-no-changes` to apply fixes locally, then review the diff.
+# Restore already ran above, or -SkipRestore asserts the caller ran it.
 Write-Host 'Verifying whitespace formatting...'
 Invoke-CheckedCommand `
-    -Command { dotnet format whitespace $solution --verify-no-changes } `
+    -Command { dotnet format whitespace $solution --no-restore --verify-no-changes } `
     -FailureMessage ('Whitespace formatting check failed. Run ' +
         '"dotnet format whitespace .\OpenClaw.Gateway.MSIX.slnx" to fix.')
 
 Write-Host 'Verifying code style...'
 Invoke-CheckedCommand `
-    -Command { dotnet format style $solution --verify-no-changes } `
+    -Command { dotnet format style $solution --no-restore --verify-no-changes } `
     -FailureMessage ('Code style check failed. Run ' +
         '"dotnet format style .\OpenClaw.Gateway.MSIX.slnx" to fix.')
 
