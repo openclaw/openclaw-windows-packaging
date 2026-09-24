@@ -288,7 +288,9 @@ OpenClaw logs, `.openclaw\openclaw.json*` candidates, and the gateway launch
 files. It redacts credential-shaped JSON members, URL query or fragment
 parameters (such as a Control UI link's `#token=`), environment-style
 assignments such as `OPENAI_API_KEY=`, and HTTP authorization header
-credentials, and it intentionally excludes SQLite databases and
+credentials. The redaction applies to every collected file, to `manifest.txt`,
+and to the notes the command prints, because a note can quote a failure's raw
+detail. The collector intentionally excludes SQLite databases and
 authentication-profile files. Redaction is not a substitute for review, and the
 collector does not enumerate arbitrary agent-profile files. The host log and
 manifest also name local paths, such as the install location of a loose-layout

@@ -186,9 +186,11 @@ Agent paths are relative to the agent profile: OpenClaw logs come from
 authentication-profile files by name. Text entries are passed through
 credential-shaped-value redaction before being added: JSON members, URL query
 or fragment parameters, environment-style assignments, and HTTP authorization
-header credentials. Every redaction pattern runs non-backtracking, so crafted
-guest text cannot stall collection. Collection is best-effort, and the ZIP
-manifest warns that redaction is not a substitute for review before sharing.
+header credentials. The manifest and the notes the command returns are
+redacted the same way, because a failure note can quote raw executor or guest
+output. Every redaction pattern runs non-backtracking, so crafted guest text
+cannot stall collection. Collection is best-effort, and the ZIP manifest warns
+that redaction is not a substitute for review before sharing.
 
 The host also reads each gateway launch's output log and supervisor status
 straight from the shared workspace. The files must be named for the recorded

@@ -250,9 +250,9 @@ status from that workspace. It keeps a bounded tail of each and refuses reparse
 points, because the guest can write there.
 [`DiagnosticsRedactor`](../src/OpenClaw.Launcher/Gateway/DiagnosticsRedactor.cs)
 redacts credential-shaped JSON members, URL parameters, environment-style
-assignments, and authorization header credentials in the remaining text. That
-redaction is deliberately best-effort and does not make a bundle safe to share
-without review.
+assignments, and authorization header credentials in the remaining text, the
+manifest, and the notes the command returns. That redaction is deliberately
+best-effort and does not make a bundle safe to share without review.
 
 Diagnostics describe runtime evidence; they are not release verification.
 The build path independently creates an inventory of package inputs and hashes

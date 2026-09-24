@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.IO.Compression;
 using System.Text;
+using System.Text.Json;
 using OpenClaw.Launcher.Gateway;
 using OpenClaw.Launcher.Mxc;
 using OpenClaw.Launcher.Session;
@@ -331,6 +332,62 @@ public sealed class DiagnosticsBundleTests : IDisposable
                 StringComparison.Ordinal));
     }
 
+    // A failure note quotes the failure's full detail. For a malformed MXC
+    // response, that detail includes the executor's raw output and
+    // diagnostics. Notes reach the manifest and the command's console and
+    // JSON result, so they must be redacted like collected file text.
+    [Fact]
+    public async Task CredentialsInAFailureNoteAreRedactedEverywhereTheNoteGoes()
+    {
+        string workspace = Path.Combine(_root, "shared");
+        Directory.CreateDirectory(workspace);
+        var executor = new MalformedStartExecutor(
+            workspace,
+            malformedOutput: "thread 'main' panicked: Authorization: Bearer ghu_verysecretvalue",
+            executorDiagnostics: "fatal: OPENAI_API_KEY=ghu_othersecretvalue");
+        (GatewayRuntime runtime, _, SessionRuntime session) = CreateRuntime(
+            workspace,
+            new MxcCliSessionClient(
+                new MxcRuntimeLocation(
+                    Path.Combine(_root, "mxc"),
+                    Path.Combine(_root, "mxc", "wxc-exec.exe"),
+                    Path.Combine(_root, "mxc", "plm.exe"),
+                    null),
+                executor));
+        SessionRecord record = await session.Coordinator.EnsureStartedAsync(CancellationToken.None);
+        session.StageHelper(record);
+        string bundlePath = Path.Combine(_root, "malformed.zip");
+
+        DiagnosticsBundleResult result = await runtime.CollectLogsAsync(
+            bundlePath,
+            environment: null,
+            new RecordingProgress(),
+            CancellationToken.None);
+
+        string note = Assert.Single(
+            result.Notes,
+            candidate => candidate.StartsWith(
+                "Agent-side logs could not be collected (MxcException:",
+                StringComparison.Ordinal));
+        Assert.Contains("[code ProtocolViolation]", note, StringComparison.Ordinal);
+        Assert.Contains(
+            $"Executor diagnostics: fatal: OPENAI_API_KEY={DiagnosticsRedactor.Placeholder}",
+            note,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"Executor output: thread 'main' panicked: Authorization: Bearer {DiagnosticsRedactor.Placeholder}",
+            note,
+            StringComparison.Ordinal);
+        using ZipArchive archive = ZipFile.OpenRead(bundlePath);
+        string manifest = await ReadEntryAsync(archive, "manifest.txt");
+        Assert.Contains(note, manifest, StringComparison.Ordinal);
+        foreach (string shared in (string[])[manifest, .. result.Notes])
+        {
+            Assert.DoesNotContain("ghu_verysecretvalue", shared, StringComparison.Ordinal);
+            Assert.DoesNotContain("ghu_othersecretvalue", shared, StringComparison.Ordinal);
+        }
+    }
+
     private static string WriteGatewayLaunch(
         string workspace,
         string generation,
@@ -417,7 +474,8 @@ public sealed class DiagnosticsBundleTests : IDisposable
     }
 
     private (GatewayRuntime Runtime, HostPaths Paths, SessionRuntime Session) CreateRuntime(
-        string? workspacePath = null)
+        string? workspacePath = null,
+        IMxcSessionClient? backend = null)
     {
         HostPaths paths = HostPaths.ForRoot(
             Path.Combine(_root, Guid.NewGuid().ToString("N"), "state"),
@@ -429,13 +487,18 @@ public sealed class DiagnosticsBundleTests : IDisposable
         string helperPath = SessionRuntime.ResolveHelperPath(baseDirectory);
         Directory.CreateDirectory(Path.GetDirectoryName(helperPath)!);
         File.WriteAllText(helperPath, "fixture");
-        var backend = new FakeMxcSessionClient();
-        if (workspacePath is not null)
+        if (backend is null)
         {
-            backend.Metadata = new MxcProvisionMetadata(
-                "agent_1",
-                "S-1-5-21-0-0-0-1001",
-                workspacePath);
+            var fake = new FakeMxcSessionClient();
+            if (workspacePath is not null)
+            {
+                fake.Metadata = new MxcProvisionMetadata(
+                    "agent_1",
+                    "S-1-5-21-0-0-0-1001",
+                    workspacePath);
+            }
+
+            backend = fake;
         }
 
         SessionRuntime session = SessionRuntime.Create(
@@ -450,5 +513,40 @@ public sealed class DiagnosticsBundleTests : IDisposable
             session,
             _ => { });
         return (runtime, paths, session);
+    }
+
+    /// <summary>
+    /// Answers MXC lifecycle phases with fixed envelopes, standing in for the
+    /// executor process so the real client and its wire parsing run. The
+    /// first start succeeds and every later one prints malformed output.
+    /// </summary>
+    private sealed class MalformedStartExecutor(
+        string workspace,
+        string malformedOutput,
+        string executorDiagnostics) : IMxcExecutorInvoker
+    {
+        private int _starts;
+
+        public Task<MxcExecutorOutcome> InvokeAsync(
+            MxcExecutorInvocation invocation,
+            CancellationToken cancellationToken)
+        {
+            string phase = MxcWireProtocol.DecodeConfig(invocation.Arguments[1]).Phase!;
+            MxcExecutorOutcome outcome = phase switch
+            {
+                MxcWireProtocol.ProvisionPhase => new MxcExecutorOutcome(
+                    0,
+                    "{\"result\":{\"sandboxId\":\"iso:fixture\",\"metadata\":{" +
+                    "\"agentUserName\":\"agent_1\",\"agentUserSid\":\"S-1-5-21-0-0-0-1001\"," +
+                    "\"ephemeralWorkspacePath\":" + JsonSerializer.Serialize(workspace) + "}}}",
+                    string.Empty),
+                MxcWireProtocol.StartPhase when Interlocked.Increment(ref _starts) == 1 =>
+                    new MxcExecutorOutcome(0, """{"result":{}}""", string.Empty),
+                MxcWireProtocol.StartPhase =>
+                    new MxcExecutorOutcome(1, malformedOutput, executorDiagnostics),
+                _ => throw new InvalidOperationException($"Unexpected MXC phase '{phase}'.")
+            };
+            return Task.FromResult(outcome);
+        }
     }
 }

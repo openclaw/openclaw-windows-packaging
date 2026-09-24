@@ -143,7 +143,7 @@ internal sealed partial class GatewayRuntime
 
             if (hostFiles.Count == 0 && staged is null && gatewayFiles.Count == 0)
             {
-                return new DiagnosticsBundleResult(null, sessionReached, notes);
+                return new DiagnosticsBundleResult(null, sessionReached, Shareable(notes));
             }
 
             try
@@ -166,7 +166,7 @@ internal sealed partial class GatewayRuntime
                     "Choose another path with --output.",
                     exception);
             }
-            return new DiagnosticsBundleResult(bundlePath, sessionReached, notes);
+            return new DiagnosticsBundleResult(bundlePath, sessionReached, Shareable(notes));
         }
         finally
         {
@@ -453,17 +453,28 @@ internal sealed partial class GatewayRuntime
         writer.WriteLine($"Collected: {DateTimeOffset.UtcNow:u}");
         if (environment is not null)
         {
-            writer.WriteLine($"Environment: {environment}");
+            writer.WriteLine(DiagnosticsRedactor.Redact($"Environment: {environment}"));
         }
 
         writer.WriteLine(
             "Redaction is best-effort and targets credential-shaped values. " +
             "Review before sharing.");
-        foreach (string note in notes)
+        foreach (string note in Shareable(notes))
         {
             writer.WriteLine(note);
         }
     }
+
+    /// <summary>
+    /// The notes as they may leave this machine.
+    /// </summary>
+    /// <remarks>
+    /// A note can quote a failure's full detail, including raw executor or
+    /// guest output. Every note reaches the manifest and the command's console
+    /// and JSON result, so each is redacted like collected file text.
+    /// </remarks>
+    private static string[] Shareable(IEnumerable<string> notes) =>
+        [.. notes.Select(DiagnosticsRedactor.Redact)];
 
     private static List<string> EnumerateStagedFiles(
         string workspace,
