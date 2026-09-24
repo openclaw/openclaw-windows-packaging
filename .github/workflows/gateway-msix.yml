@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       openclaw_ref:
-        description: Optional stable-source ref; empty follows npm latest (release publication still requires policy approval)
+        description: Optional stable-source ref; empty uses release-policy stable (the stableVersion pin, else npm latest); release publication still requires policy approval
         required: false
         default: ''
         type: string

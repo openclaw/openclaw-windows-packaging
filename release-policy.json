@@ -1,5 +1,6 @@
 {
   "repository": "https://github.com/openclaw/openclaw",
+  "stableVersion": "2026.9.5",
   "gatewayTag": "v2026.9.4",
   "msixRevision": 4,
   "payloadPackageVersion": "2026.9.4",
