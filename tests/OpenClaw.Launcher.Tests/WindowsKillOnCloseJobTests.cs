@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Pipes;
 
 namespace OpenClaw.Launcher.Tests;
 
@@ -8,22 +9,27 @@ public sealed class WindowsKillOnCloseJobTests
     public async Task DisposingJobTerminatesAssignedProcess()
     {
         using WindowsKillOnCloseJob job = WindowsKillOnCloseJob.Create();
-        using Process process = job.StartProcess(new ProcessStartInfo
-        {
-            FileName = Path.Combine(
-                Environment.SystemDirectory,
-                "WindowsPowerShell",
-                "v1.0",
-                "powershell.exe"),
-            UseShellExecute = false,
-            ArgumentList =
+        using var stdin = new AnonymousPipeServerStream(
+            PipeDirection.Out,
+            HandleInheritability.None);
+        using Process process = job.StartProcess(
+            new ProcessStartInfo
             {
-                "-NoLogo",
-                "-NoProfile",
-                "-Command",
-                "Start-Sleep -Seconds 60"
-            }
-        });
+                FileName = Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+                UseShellExecute = false,
+                ArgumentList =
+                {
+                    "/d",
+                    "/c",
+                    "set",
+                    "/p",
+                    "line="
+                }
+            },
+            stdin.ClientSafePipeHandle,
+            output: null,
+            standardError: null);
+        stdin.DisposeLocalCopyOfClientHandle();
 
         Assert.False(process.HasExited);
 
@@ -38,25 +44,43 @@ public sealed class WindowsKillOnCloseJobTests
     public async Task FastExitRetainsExitCodeAfterDelayedObservation()
     {
         using WindowsKillOnCloseJob job = WindowsKillOnCloseJob.Create();
-        using Process process = job.StartProcess(new ProcessStartInfo
-        {
-            FileName = Path.Combine(
-                Environment.SystemDirectory,
-                "WindowsPowerShell",
-                "v1.0",
-                "powershell.exe"),
-            UseShellExecute = false,
-            ArgumentList =
+        using var stdin = new AnonymousPipeServerStream(
+            PipeDirection.Out,
+            HandleInheritability.None);
+        using Process process = job.StartProcess(
+            new ProcessStartInfo
             {
-                "-NoLogo",
-                "-NoProfile",
-                "-Command",
-                "exit 37"
-            }
-        });
+                FileName = Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+                UseShellExecute = false,
+                ArgumentList =
+                {
+                    "/d",
+                    "/c",
+                    "(set",
+                    "/p",
+                    "line=)",
+                    "&",
+                    "exit",
+                    "37"
+                }
+            },
+            stdin.ClientSafePipeHandle,
+            output: null,
+            standardError: null);
+        stdin.DisposeLocalCopyOfClientHandle();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
-        await Task.Delay(TimeSpan.FromMilliseconds(500));
-        await process.WaitForExitAsync();
+        // The child waits on stdin while the test opens its watcher handle.
+        // Closing this test-owned write end releases the child; then the watcher
+        // closes, leaving only StartProcess's retained handle to report its exit code.
+        using (Process watcher = Process.GetProcessById(process.Id))
+        {
+            _ = watcher.SafeHandle;
+            stdin.Dispose();
+            await watcher.WaitForExitAsync(timeout.Token);
+        }
+
+        await process.WaitForExitAsync(timeout.Token);
 
         Assert.Equal(37, process.ExitCode);
     }

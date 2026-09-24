@@ -378,16 +378,18 @@ public sealed class ClawCtlCommandLineTests
     }
 
     [Theory]
-    [InlineData("pwsh --command one --file two.ps1")]
-    [InlineData("pwsh --command one unexpected")]
-    [InlineData("pwsh unexpected")]
-    public async Task InvalidPowerShellModeDoesNotStartWork(string commandLine)
+    [InlineData("pwsh --command one --file two.ps1", "'--command' and '--file' cannot be used together.")]
+    [InlineData("pwsh --command one unexpected", "PowerShell script arguments require '--file'.")]
+    [InlineData("pwsh unexpected", "PowerShell script arguments require '--file'.")]
+    public async Task InvalidPowerShellModeDoesNotStartWork(
+        string commandLine,
+        string expectedError)
     {
         (int exitCode, _, string error) =
             await RunAsync(commandLine.Split(' ')).ConfigureAwait(true);
 
         Assert.Equal(1, exitCode);
-        Assert.NotEmpty(error);
+        Assert.Contains(expectedError, error, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -890,6 +892,23 @@ public sealed class ClawCtlCommandLineTests
 
         Assert.Equal(1, exitCode);
         Assert.NotEmpty(error);
+        Assert.DoesNotContain(
+            "package is ready",
+            output,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SetupForceWithoutFreshNamesTheOptionItRequires()
+    {
+        (int exitCode, string output, string error) =
+            await RunAsync("setup", "--force").ConfigureAwait(true);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains(
+            "Option '--force' requires option '--fresh'.",
+            error,
+            StringComparison.Ordinal);
         Assert.DoesNotContain(
             "package is ready",
             output,
