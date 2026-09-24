@@ -354,6 +354,8 @@ Run PowerShell policy suites by owning surface rather than indiscriminately:
 `Test-NodeRuntimeInputs.Tests.ps1` for Node runtime inputs,
 `Test-PackagingRelevance.Tests.ps1`, `Test-OpenClawCacheKey.Tests.ps1`, and
 `Test-OpenClawPackage.Tests.ps1` for payload/package workflow behavior,
+`Test-Copy-PayloadTree.Tests.ps1` for the payload tree copy used by
+`Build-Payload.ps1` and `Build-MSIX.ps1`,
 `Test-MSIXReleaseIdentity.Tests.ps1` and
 `Test-WorkflowPackageVersion.Tests.ps1` for release/version identity,
 `Test-Deploy-LocalPackage.Tests.ps1` for the loose-registration flow, and

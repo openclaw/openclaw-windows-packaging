@@ -418,7 +418,9 @@ E2E on a supported host. `Build-MSIX.ps1` and
 `Build-LocalMSIX.ps1 -PayloadDirectory` can still cross-compose an already-qualified
 payload.
 It validates the Gateway and Control UI
-build identities on the installed tree, including reused staged installs, then
+build identities on the installed tree, including reused staged installs, and
+copies that tree into the payload without changing it. The copy refuses links
+or reparse points inside the tree rather than skipping them. The script then
 provisions the packaging-owned Windows Launcher plugin into the payload copy's
 bundled plugin directory. Its internal package, path, and plugin ID remain
 `gateway-isolation`. The bundled plugin is enabled by default and adds the
@@ -737,9 +739,11 @@ removing the MSIX.
 ## Integrity and isolation boundary
 
 The payload build emits an expanded npm-installed application tree.
-`Build-MSIX.ps1` rejects Node.js from that tree, copies it into package content,
-and records every application file's path, length, and SHA-256 in
-`payload-files.json`. It separately validates and hashes the pinned Node.js
+`Build-MSIX.ps1` rejects Node.js and links from that tree, copies it into
+package content without modifying the payload directory, and records every
+application file's path, length, and SHA-256 in `payload-files.json`. It
+refuses a payload directory that overlaps the package content directory. It
+separately validates and hashes the pinned Node.js
 archive. Package construction verifies both inputs against the generated MSIX.
 Official signing authorization repeats the application inventory and Node.js
 archive validation before requesting signing credentials.
