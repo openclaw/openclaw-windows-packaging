@@ -13,6 +13,8 @@ Read the repository-root `AGENTS.md` before this file. This scope owns JIT xUnit
 - Fake only the isolation boundary. Prefer real collaborators inside it and assert outcomes rather than mock call counts.
 - Extend existing fixtures and scenario helpers before creating a parallel test harness. Keep x64 and ARM64 expectations synchronized where architecture is part of the contract.
 
+- Coverage is a diagnostic for finding meaningful test gaps; it never by itself justifies adding tests.
+
 ## NativeAOT driver
 
 - `OpenClaw.Launcher.AotSmoke` calls the same `Program.RunAsync` route as production; it must never call `Main`, which resolves diagnostics under the real user profile.

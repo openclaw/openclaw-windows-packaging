@@ -54,11 +54,30 @@ or package version logic:
 .\scripts\Test-PackagingRelevance.Tests.ps1
 .\scripts\Test-OpenClawCacheKey.Tests.ps1
 .\scripts\Test-OpenClawPackage.Tests.ps1
+.\scripts\Test-Measure-Coverage.Tests.ps1
 .\scripts\Test-MSIXReleaseIdentity.Tests.ps1
 .\scripts\Test-OpenClawSource.Tests.ps1
 .\scripts\Test-WorkflowPackageVersion.Tests.ps1
 .\scripts\Test-GitHooks.Tests.ps1
 ```
+
+### Measure coverage
+
+Use coverage as a diagnostic to find gaps in meaningful behavior tests, not as
+a threshold or a reason by itself to add tests. From the repository root:
+
+```powershell
+.\scripts\Measure-Coverage.ps1
+```
+
+The command writes each local report to its own
+`artifacts\coverage\<timestamp>-<unique-id>` directory, so runs started in
+the same second do not overwrite each other's test results.
+Use `-Path 'src\OpenClaw.Launcher\*'` to narrow reported files, `-Uncovered`
+to show uncovered lines, `-BaselinePath <coverage-file-or-directory>` to
+compare a prior result, and `-Filter '<dotnet-test-filter>'` to select tests.
+To report an existing result without running tests, use
+`-CoberturaPath <coverage.cobertura.xml>`.
 
 The source-selection tests use offline npm and GitHub fixtures.
 
