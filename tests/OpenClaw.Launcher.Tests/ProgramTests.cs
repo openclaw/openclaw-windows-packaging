@@ -2541,6 +2541,7 @@ public sealed class ProgramTests : IDisposable
         Assert.Contains("Logon recovery could not be fully removed.", result.Message, StringComparison.Ordinal);
         Assert.Contains("Access is denied.", result.Detail, StringComparison.Ordinal);
         Assert.NotNull(runtime.SetupState.Read(runtime.ApplicationId).Record);
+        Assert.NotNull(runtime.Coordinator.GetRecordedStatus().Record);
         Assert.Contains(scheduler.Calls, call => call.StartsWith("delete:", StringComparison.Ordinal));
         FakeMxcSessionClient backend = (FakeMxcSessionClient)runtime.Backend;
         Assert.DoesNotContain(backend.Calls, call => call.StartsWith("stop:", StringComparison.Ordinal));
@@ -2562,6 +2563,7 @@ public sealed class ProgramTests : IDisposable
         Assert.True(result.Succeeded);
         Assert.True(result.SessionRemoved);
         Assert.Equal(SetupStateFault.Missing, runtime.SetupState.Read(runtime.ApplicationId).Fault);
+        Assert.Null(runtime.Coordinator.GetRecordedStatus().Record);
         FakeMxcSessionClient backend = (FakeMxcSessionClient)runtime.Backend;
         Assert.Equal(1, backend.Calls.Count(call => call.StartsWith("stop:", StringComparison.Ordinal)));
         Assert.Equal(1, backend.Calls.Count(call => call.StartsWith("deprovision:", StringComparison.Ordinal)));
