@@ -228,6 +228,11 @@ jobs:
         run: >
           .\scripts\Test-OpenClawPackage.Tests.ps1
 
+      - name: Test coverage reporting
+        shell: pwsh
+        run: >
+          .\scripts\Test-Measure-Coverage.Tests.ps1
+
       - name: Test stable source selection
         shell: pwsh
         run: .\scripts\Test-OpenClawSource.Tests.ps1
