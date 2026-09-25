@@ -32,9 +32,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
-    $OutputDirectory = Join-Path $repositoryRoot "artifacts\coverage\$timestamp"
+$defaultOutputDirectory = [string]::IsNullOrWhiteSpace($OutputDirectory)
+if ($defaultOutputDirectory) {
+    $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $OutputDirectory = Join-Path $repositoryRoot "artifacts\coverage\$timestamp-$([guid]::NewGuid().ToString('N'))"
 }
 elseif (-not [IO.Path]::IsPathRooted($OutputDirectory)) {
     $OutputDirectory = Join-Path $repositoryRoot $OutputDirectory
@@ -308,7 +309,7 @@ function Get-BaselineCoveragePath {
     return Get-UniqueCoveragePath -CoverageFiles $matches -DirectoryPath $InputPath
 }
 
-New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
+New-Item -ItemType Directory -Path $OutputDirectory -Force:(!$defaultOutputDirectory) | Out-Null
 if ([string]::IsNullOrWhiteSpace($CoberturaPath)) {
     $testProject = Join-Path $repositoryRoot 'tests\OpenClaw.Launcher.Tests\OpenClaw.Launcher.Tests.csproj'
     $runSettings = Join-Path $repositoryRoot 'tests\coverage.runsettings'

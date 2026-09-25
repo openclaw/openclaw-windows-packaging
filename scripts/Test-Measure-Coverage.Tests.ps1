@@ -149,6 +149,10 @@ try {
     $filtered = & $scriptPath -CoberturaPath $currentCoverage -Path "$testDirectoryName\*" `
         -OutputDirectory (Join-Path $testRoot 'filtered-output') -PassThru
     Assert-Equal -Actual $filtered.Files.Count -Expected 2 -Reason 'Repository-relative path filters must match absolute and relative Cobertura filenames'
+    $explicitReuse = & $scriptPath -CoberturaPath $currentCoverage `
+        -OutputDirectory $outputDirectory -PassThru
+    Assert-Equal -Actual $explicitReuse.SummaryPath -Expected $result.SummaryPath `
+        -Reason 'An explicitly selected output directory must still be reusable'
 
     Assert-Fails -Action {
         & $scriptPath -CoberturaPath $currentCoverage -Path 'does-not-match/*' `
@@ -175,6 +179,79 @@ try {
         & $scriptPath -Filter 'FullyQualifiedName=CoverageFilterMustNotMatchAnyTest' `
             -OutputDirectory (Join-Path $testRoot 'no-matching-tests-output')
     } -MessagePattern 'No tests matched filter'
+
+    $isolatedRoot = Join-Path $testRoot 'isolated-repository'
+    $isolatedScripts = Join-Path $isolatedRoot 'scripts'
+    $isolatedTests = Join-Path $isolatedRoot 'tests'
+    New-Item -ItemType Directory -Path $isolatedScripts, $isolatedTests | Out-Null
+    $isolatedScript = Join-Path $isolatedScripts 'Measure-Coverage.ps1'
+    Copy-Item -LiteralPath $scriptPath -Destination $isolatedScript
+    [IO.File]::WriteAllText((Join-Path $isolatedTests 'coverage.runsettings'), '<RunSettings />')
+    $isolatedSource = Join-Path $isolatedRoot 'sample.cs'
+    [IO.File]::WriteAllText($isolatedSource, 'class Sample {}')
+    $isolatedCoverage = Join-Path $isolatedRoot 'sample.cobertura.xml'
+    Write-Cobertura -Path $isolatedCoverage -Content @"
+<coverage><packages><package name="Assembly.One"><classes>
+  <class name="Sample" filename="$([Security.SecurityElement]::Escape($isolatedSource))"><lines>
+    <line number="1" hits="1" />
+  </lines></class>
+</classes></package></packages></coverage>
+"@
+
+    $previousExitCode = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+    try {
+        & {
+            function Get-Date {
+                param([string]$Format)
+                Assert-Equal -Actual $Format -Expected 'yyyyMMdd-HHmmss' -Reason 'The report directory should retain its timestamp'
+                '20300101-000000'
+            }
+
+            function dotnet {
+                param([Parameter(ValueFromRemainingArguments = $true)][object[]]$Arguments)
+
+                $directoryIndex = [Array]::IndexOf($Arguments, '--results-directory')
+                if ($directoryIndex -lt 0) {
+                    throw 'dotnet test did not receive a results directory.'
+                }
+                $directory = [string]$Arguments[$directoryIndex + 1]
+                [IO.File]::WriteAllText((Join-Path $directory 'coverage.trx'),
+                    '<TestRun><ResultSummary><Counters total="1" /></ResultSummary></TestRun>')
+                Copy-Item -LiteralPath $isolatedCoverage -Destination (Join-Path $directory 'run.cobertura.xml')
+                $global:LASTEXITCODE = 0
+            }
+
+            $first = & $isolatedScript -PassThru
+            $firstDirectory = Split-Path -Parent $first.SummaryPath
+            $firstTrx = Join-Path $firstDirectory 'coverage.trx'
+            $firstSummary = [IO.File]::ReadAllText($first.SummaryPath)
+
+            $second = & $isolatedScript -PassThru
+            $secondDirectory = Split-Path -Parent $second.SummaryPath
+            if ($firstDirectory -eq $secondDirectory) {
+                throw 'Default coverage runs started at the same instant reused a results directory.'
+            }
+            if ($firstDirectory -notlike (Join-Path $isolatedRoot 'artifacts\coverage\20300101-000000-*') -or
+                $secondDirectory -notlike (Join-Path $isolatedRoot 'artifacts\coverage\20300101-000000-*')) {
+                throw 'Default coverage runs must keep their timestamp and stay under the repository artifacts directory.'
+            }
+            if (-not (Test-Path -LiteralPath $firstTrx -PathType Leaf) -or
+                -not (Test-Path -LiteralPath (Join-Path $secondDirectory 'coverage.trx') -PathType Leaf) -or
+                [IO.File]::ReadAllText($first.SummaryPath) -ne $firstSummary) {
+                throw 'A second default run must leave the first run TRX and summary intact.'
+            }
+            Assert-Equal -Actual $first.Overall.CoveredLines -Expected 1 -Reason 'The first run must report the collected coverage'
+            Assert-Equal -Actual $second.Overall.CoveredLines -Expected 1 -Reason 'The second run must report its own collected coverage'
+        }
+    }
+    finally {
+        if ($null -ne $previousExitCode) {
+            $global:LASTEXITCODE = $previousExitCode.Value
+        }
+        else {
+            Remove-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+        }
+    }
 }
 finally {
     if (Test-Path -LiteralPath $testRoot) {

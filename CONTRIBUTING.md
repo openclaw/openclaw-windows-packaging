@@ -70,7 +70,9 @@ a threshold or a reason by itself to add tests. From the repository root:
 .\scripts\Measure-Coverage.ps1
 ```
 
-The command writes its local report to `artifacts\coverage\<timestamp>`.
+The command writes each local report to its own
+`artifacts\coverage\<timestamp>-<unique-id>` directory, so runs started in
+the same second do not overwrite each other's test results.
 Use `-Path 'src\OpenClaw.Launcher\*'` to narrow reported files, `-Uncovered`
 to show uncovered lines, `-BaselinePath <coverage-file-or-directory>` to
 compare a prior result, and `-Filter '<dotnet-test-filter>'` to select tests.
