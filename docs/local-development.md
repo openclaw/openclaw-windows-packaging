@@ -403,7 +403,10 @@ coverage data, TRX, and a readable summary in the `gateway-msix-test-results`
 workflow artifact. Debug coverage runs only after Release tests pass; if
 collection or summary generation fails, the workflow reports a warning and
 keeps available test results without blocking the host-test gate. Inspect the
-failed coverage step for the cause.
+failed coverage step for the cause. The workflow attempts the results upload
+even when tests fail; an artifact-service failure also reports a warning
+without changing the Release test gate, but may leave no artifact. Inspect
+the failed upload step logs in that case.
 
 When changing command-line parsing, help, version output, startup, trimming, or
 NativeAOT-sensitive code, also run:

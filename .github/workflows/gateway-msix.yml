@@ -177,7 +177,9 @@ jobs:
         run: Write-Host '::warning title=Coverage reporting failed::Coverage is advisory. Inspect the failed coverage step and available test results artifact.'
 
       - name: Upload test and coverage results
+        id: results_upload
         if: ${{ always() }}
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: gateway-msix-test-results
@@ -186,6 +188,11 @@ jobs:
             CoverageResults
           if-no-files-found: warn
           retention-days: 7
+
+      - name: Warn if results upload fails
+        if: ${{ always() && steps.results_upload.outcome == 'failure' }}
+        shell: pwsh
+        run: Write-Host '::warning title=Test results upload failed::Artifact service error. Inspect the failed Upload test and coverage results step logs; test results may be unavailable.'
 
       # The xUnit suite runs under a JIT test host, so it cannot prove the
       # native entrypoint alias and root command name, or that
