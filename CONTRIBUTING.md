@@ -80,11 +80,13 @@ To report an existing result without running tests, use
 `-CoberturaPath <coverage.cobertura.xml-or-directory>`.
 
 When the CI `test-host` job runs, it publishes its Release TRX test results and
-Debug coverage outputs (raw Cobertura data, TRX, and readable `summary.md`) as
-the `gateway-msix-test-results` workflow artifact. The coverage summary is
-also added to the GitHub Actions run summary. The artifact uploads even when
-tests fail; coverage collection and its summary run only after the Release test
-step succeeds.
+available Debug coverage outputs (raw Cobertura data, TRX, and readable
+`summary.md`) as the `gateway-msix-test-results` workflow artifact. Successful
+coverage collection also adds the summary to the GitHub Actions run summary.
+The artifact uploads even when tests fail; coverage runs only after the Release
+tests pass. Coverage or summary failure remains visible in the coverage step
+logs and emits a warning, but does not fail the required host-test job. Check
+the coverage step logs when the summary is missing.
 
 The source-selection tests use offline npm and GitHub fixtures.
 

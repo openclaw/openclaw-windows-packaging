@@ -398,9 +398,12 @@ Run PowerShell policy suites by owning surface rather than indiscriminately:
 `Test-Sign-TestMSIX.Tests.ps1` for test signing. The Node input suite requires
 Node.js and npm; it uses a dependency-free local fixture.
 
-The CI host-test job also retains Release TRX results and Debug Cobertura
-coverage data, TRX, and a readable coverage summary in the
-`gateway-msix-test-results` workflow artifact.
+The CI host-test job retains Release TRX results and available Debug Cobertura
+coverage data, TRX, and a readable summary in the `gateway-msix-test-results`
+workflow artifact. Debug coverage runs only after Release tests pass; if
+collection or summary generation fails, the workflow reports a warning and
+keeps available test results without blocking the host-test gate. Inspect the
+failed coverage step for the cause.
 
 When changing command-line parsing, help, version output, startup, trimming, or
 NativeAOT-sensitive code, also run:

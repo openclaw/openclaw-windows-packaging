@@ -159,7 +159,9 @@ jobs:
           --logger "trx;LogFileName=coverage.trx"
 
       - name: Collect and summarize test coverage
+        id: coverage
         if: ${{ success() }}
+        continue-on-error: true
         shell: pwsh
         run: |
           .\scripts\Measure-Coverage.ps1 `
@@ -168,6 +170,11 @@ jobs:
           [IO.File]::AppendAllText(
             $env:GITHUB_STEP_SUMMARY,
             [IO.File]::ReadAllText('.\CoverageResults\summary.md') + [Environment]::NewLine)
+
+      - name: Warn if coverage reporting fails
+        if: ${{ steps.coverage.outcome == 'failure' }}
+        shell: pwsh
+        run: Write-Host '::warning title=Coverage reporting failed::Coverage is advisory. Inspect the failed coverage step and available test results artifact.'
 
       - name: Upload test and coverage results
         if: ${{ always() }}
