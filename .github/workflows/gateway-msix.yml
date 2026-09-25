@@ -156,14 +156,29 @@ jobs:
           --blame-hang-timeout 3min
           --blame-hang-dump-type mini
           --results-directory TestResults
+          --logger "trx;LogFileName=coverage.trx"
 
-      - name: Upload hang diagnostics
-        if: ${{ failure() }}
+      - name: Collect and summarize test coverage
+        if: ${{ success() }}
+        shell: pwsh
+        run: |
+          .\scripts\Measure-Coverage.ps1 `
+            -OutputDirectory .\CoverageResults `
+            -Uncovered
+          [IO.File]::AppendAllText(
+            $env:GITHUB_STEP_SUMMARY,
+            [IO.File]::ReadAllText('.\CoverageResults\summary.md') + [Environment]::NewLine)
+
+      - name: Upload test and coverage results
+        if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          name: gateway-msix-test-hang-diagnostics
-          path: TestResults
-          retention-days: 5
+          name: gateway-msix-test-results
+          path: |
+            TestResults
+            CoverageResults
+          if-no-files-found: warn
+          retention-days: 7
 
       # The xUnit suite runs under a JIT test host, so it cannot prove the
       # native entrypoint alias and root command name, or that

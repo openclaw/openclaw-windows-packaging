@@ -77,7 +77,14 @@ Use `-Path 'src\OpenClaw.Launcher\*'` to narrow reported files, `-Uncovered`
 to show uncovered lines, `-BaselinePath <coverage-file-or-directory>` to
 compare a prior result, and `-Filter '<dotnet-test-filter>'` to select tests.
 To report an existing result without running tests, use
-`-CoberturaPath <coverage.cobertura.xml>`.
+`-CoberturaPath <coverage.cobertura.xml-or-directory>`.
+
+When the CI `test-host` job runs, it publishes its Release TRX test results and
+Debug coverage outputs (raw Cobertura data, TRX, and readable `summary.md`) as
+the `gateway-msix-test-results` workflow artifact. The coverage summary is
+also added to the GitHub Actions run summary. The artifact uploads even when
+tests fail; coverage collection and its summary run only after the Release test
+step succeeds.
 
 The source-selection tests use offline npm and GitHub fixtures.
 

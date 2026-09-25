@@ -154,6 +154,14 @@ try {
     Assert-Equal -Actual $explicitReuse.SummaryPath -Expected $result.SummaryPath `
         -Reason 'An explicitly selected output directory must still be reusable'
 
+    $coverageDirectory = Join-Path $testRoot 'coverage-directory'
+    New-Item -ItemType Directory -Path $coverageDirectory | Out-Null
+    Copy-Item -LiteralPath $currentCoverage -Destination (Join-Path $coverageDirectory 'first.cobertura.xml')
+    Copy-Item -LiteralPath $currentCoverage -Destination (Join-Path $coverageDirectory 'second.cobertura.xml')
+    $directoryResult = & $scriptPath -CoberturaPath $coverageDirectory `
+        -OutputDirectory (Join-Path $testRoot 'directory-output') -PassThru
+    Assert-Equal -Actual $directoryResult.Overall.TotalLines -Expected 7 -Reason 'Report-only mode must resolve a directory containing identical collector attachments'
+
     Assert-Fails -Action {
         & $scriptPath -CoberturaPath $currentCoverage -Path 'does-not-match/*' `
             -OutputDirectory (Join-Path $testRoot 'empty-output') -PassThru

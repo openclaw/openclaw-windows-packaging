@@ -398,6 +398,10 @@ Run PowerShell policy suites by owning surface rather than indiscriminately:
 `Test-Sign-TestMSIX.Tests.ps1` for test signing. The Node input suite requires
 Node.js and npm; it uses a dependency-free local fixture.
 
+The CI host-test job also retains Release TRX results and Debug Cobertura
+coverage data, TRX, and a readable coverage summary in the
+`gateway-msix-test-results` workflow artifact.
+
 When changing command-line parsing, help, version output, startup, trimming, or
 NativeAOT-sensitive code, also run:
 

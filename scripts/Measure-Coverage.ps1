@@ -13,6 +13,9 @@
 
 .EXAMPLE
     .\scripts\Measure-Coverage.ps1 -CoberturaPath artifacts\coverage\previous\coverage.cobertura.xml
+
+.EXAMPLE
+    .\scripts\Measure-Coverage.ps1 -CoberturaPath TestResults -OutputDirectory TestResults\coverage-report
 #>
 [CmdletBinding()]
 param(
@@ -340,11 +343,18 @@ if ([string]::IsNullOrWhiteSpace($CoberturaPath)) {
     $coverageFiles = @(Get-ChildItem -LiteralPath $OutputDirectory -Recurse -File -Filter '*.cobertura.xml')
     $CoberturaPath = Get-UniqueCoveragePath -CoverageFiles $coverageFiles -DirectoryPath $OutputDirectory
 }
-elseif (-not [IO.Path]::IsPathRooted($CoberturaPath)) {
-    $CoberturaPath = Join-Path $repositoryRoot $CoberturaPath
+else {
+    if (-not [IO.Path]::IsPathRooted($CoberturaPath)) {
+        $CoberturaPath = Join-Path $repositoryRoot $CoberturaPath
+    }
+    $CoberturaPath = [IO.Path]::GetFullPath($CoberturaPath)
+    if (Test-Path -LiteralPath $CoberturaPath -PathType Container) {
+        $coverageFiles = @(Get-ChildItem -LiteralPath $CoberturaPath -Recurse -File -Filter '*.cobertura.xml')
+        $CoberturaPath = Get-UniqueCoveragePath -CoverageFiles $coverageFiles -DirectoryPath $CoberturaPath
+    }
 }
 
-$files = @(Get-CoverageData -CoveragePath ([IO.Path]::GetFullPath($CoberturaPath)) |
+$files = @(Get-CoverageData -CoveragePath $CoberturaPath |
     Where-Object { $_.Path -like $pathFilter })
 if ($files.Count -eq 0 -or (@($files | ForEach-Object TotalLines | Measure-Object -Sum).Sum -eq 0)) {
     throw "No coverage recorded; check -Filter '$Path'."
