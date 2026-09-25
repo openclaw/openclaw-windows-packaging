@@ -270,6 +270,30 @@ function Format-LineRanges {
     return $ranges -join ', '
 }
 
+function Get-UniqueCoveragePath {
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [IO.FileInfo[]]$CoverageFiles,
+
+        [Parameter(Mandatory)]
+        [string]$DirectoryPath
+    )
+
+    $uniqueCoverageFiles = @{}
+    foreach ($coverageFile in $CoverageFiles) {
+        $hash = (Get-FileHash -LiteralPath $coverageFile.FullName -Algorithm SHA256).Hash
+        if (-not $uniqueCoverageFiles.ContainsKey($hash)) {
+            $uniqueCoverageFiles[$hash] = $coverageFile.FullName
+        }
+    }
+    if ($uniqueCoverageFiles.Count -ne 1) {
+        throw "Expected one unique Cobertura file under '$DirectoryPath'; found $($uniqueCoverageFiles.Count) distinct reports across $($CoverageFiles.Count) files."
+    }
+
+    return @($uniqueCoverageFiles.Values)[0]
+}
+
 function Get-BaselineCoveragePath {
     param([string]$InputPath)
 
@@ -281,10 +305,7 @@ function Get-BaselineCoveragePath {
     }
 
     $matches = @(Get-ChildItem -LiteralPath $InputPath -Recurse -File -Filter '*.cobertura.xml')
-    if ($matches.Count -ne 1) {
-        throw "Baseline directory '$InputPath' must contain exactly one Cobertura file; found $($matches.Count)."
-    }
-    return $matches[0].FullName
+    return Get-UniqueCoveragePath -CoverageFiles $matches -DirectoryPath $InputPath
 }
 
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
@@ -316,10 +337,7 @@ if ([string]::IsNullOrWhiteSpace($CoberturaPath)) {
     }
 
     $coverageFiles = @(Get-ChildItem -LiteralPath $OutputDirectory -Recurse -File -Filter '*.cobertura.xml')
-    if ($coverageFiles.Count -ne 1) {
-        throw "Expected exactly one Cobertura file under '$OutputDirectory'; found $($coverageFiles.Count)."
-    }
-    $CoberturaPath = $coverageFiles[0].FullName
+    $CoberturaPath = Get-UniqueCoveragePath -CoverageFiles $coverageFiles -DirectoryPath $OutputDirectory
 }
 elseif (-not [IO.Path]::IsPathRooted($CoberturaPath)) {
     $CoberturaPath = Join-Path $repositoryRoot $CoberturaPath

@@ -108,8 +108,17 @@ try {
 </classes></package></packages></coverage>
 "@
 
+    $duplicateBaselineDirectory = Join-Path $testRoot 'baseline-duplicates'
+    New-Item -ItemType Directory -Path $duplicateBaselineDirectory | Out-Null
+    Copy-Item -LiteralPath $baselineCoverage -Destination (Join-Path $duplicateBaselineDirectory 'first.cobertura.xml')
+    Copy-Item -LiteralPath $baselineCoverage -Destination (Join-Path $duplicateBaselineDirectory 'second.cobertura.xml')
+    $mixedBaselineDirectory = Join-Path $testRoot 'baseline-mixed'
+    New-Item -ItemType Directory -Path $mixedBaselineDirectory | Out-Null
+    Copy-Item -LiteralPath $baselineCoverage -Destination (Join-Path $mixedBaselineDirectory 'baseline.cobertura.xml')
+    Copy-Item -LiteralPath $currentCoverage -Destination (Join-Path $mixedBaselineDirectory 'current.cobertura.xml')
+
     $outputDirectory = Join-Path $testRoot 'output'
-    $result = & $scriptPath -CoberturaPath $currentCoverage -BaselinePath $baselineCoverage `
+    $result = & $scriptPath -CoberturaPath $currentCoverage -BaselinePath $duplicateBaselineDirectory `
         -OutputDirectory $outputDirectory -Uncovered -PassThru
 
     Assert-Equal -Actual $result.Overall.TotalLines -Expected 7 -Reason 'Duplicate classes must not inflate line totals'
@@ -157,6 +166,10 @@ try {
         & $scriptPath -CoberturaPath $malformedCoverage `
             -OutputDirectory (Join-Path $testRoot 'malformed-output') -PassThru
     } -MessagePattern 'Could not parse Cobertura file'
+    Assert-Fails -Action {
+        & $scriptPath -CoberturaPath $currentCoverage -BaselinePath $mixedBaselineDirectory `
+            -OutputDirectory (Join-Path $testRoot 'mixed-baseline-output') -PassThru
+    } -MessagePattern 'Expected one unique Cobertura file'
 
     Assert-Fails -Action {
         & $scriptPath -Filter 'FullyQualifiedName=CoverageFilterMustNotMatchAnyTest' `
