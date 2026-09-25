@@ -2522,6 +2522,64 @@ public sealed class ProgramTests : IDisposable
         Assert.Equal("setup failed", failure.Message);
     }
 
+    [Fact]
+    public async Task TeardownKeepsTheOwnedSessionWhenRecoveryDeletionFails()
+    {
+        SessionRuntime runtime = await SetUpSessionAsync().ConfigureAwait(true);
+        var scheduler = new Gateway.FakeGatewayTaskScheduler
+        {
+            DeleteResult = GatewayTaskOperation.Failure("Access is denied."),
+        };
+        TeardownOrchestrator orchestrator = CreateTeardownOrchestrator(runtime, _ => { }, scheduler);
+
+        TeardownResult result = await orchestrator.RunAsync(
+            runtime.HelperPath,
+            force: false,
+            CancellationToken.None).ConfigureAwait(true);
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("Logon recovery could not be fully removed.", result.Message, StringComparison.Ordinal);
+        Assert.Contains("Access is denied.", result.Detail, StringComparison.Ordinal);
+        Assert.NotNull(runtime.SetupState.Read(runtime.ApplicationId).Record);
+        Assert.NotNull(runtime.Coordinator.GetRecordedStatus().Record);
+        Assert.Contains(scheduler.Calls, call => call.StartsWith("delete:", StringComparison.Ordinal));
+        FakeMxcSessionClient backend = (FakeMxcSessionClient)runtime.Backend;
+        Assert.DoesNotContain(backend.Calls, call => call.StartsWith("stop:", StringComparison.Ordinal));
+        Assert.DoesNotContain(backend.Calls, call => call.StartsWith("deprovision:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task TeardownRemovesOwnedSessionAfterIdempotentRecoveryCleanup()
+    {
+        SessionRuntime runtime = await SetUpSessionAsync().ConfigureAwait(true);
+        var scheduler = new Gateway.FakeGatewayTaskScheduler();
+        TeardownOrchestrator orchestrator = CreateTeardownOrchestrator(runtime, _ => { }, scheduler);
+
+        TeardownResult result = await orchestrator.RunAsync(
+            runtime.HelperPath,
+            force: false,
+            CancellationToken.None).ConfigureAwait(true);
+
+        Assert.True(result.Succeeded);
+        Assert.True(result.SessionRemoved);
+        Assert.Equal(SetupStateFault.Missing, runtime.SetupState.Read(runtime.ApplicationId).Fault);
+        Assert.Null(runtime.Coordinator.GetRecordedStatus().Record);
+        FakeMxcSessionClient backend = (FakeMxcSessionClient)runtime.Backend;
+        Assert.Equal(1, backend.Calls.Count(call => call.StartsWith("stop:", StringComparison.Ordinal)));
+        Assert.Equal(1, backend.Calls.Count(call => call.StartsWith("deprovision:", StringComparison.Ordinal)));
+
+        TeardownResult repeated = await orchestrator.RunAsync(
+            runtime.HelperPath,
+            force: false,
+            CancellationToken.None).ConfigureAwait(true);
+
+        Assert.True(repeated.Succeeded);
+        Assert.False(repeated.SessionRemoved);
+        Assert.Equal(2, scheduler.Calls.Count(call => call.StartsWith("delete:", StringComparison.Ordinal)));
+        Assert.Equal(1, backend.Calls.Count(call => call.StartsWith("stop:", StringComparison.Ordinal)));
+        Assert.Equal(1, backend.Calls.Count(call => call.StartsWith("deprovision:", StringComparison.Ordinal)));
+    }
+
     public void Dispose()
     {
         Directory.Delete(_testDirectory, recursive: true);
@@ -2552,12 +2610,13 @@ public sealed class ProgramTests : IDisposable
     // to supply a scheduler fixture rather than let it reach Task Scheduler.
     private TeardownOrchestrator CreateTeardownOrchestrator(
         SessionRuntime runtime,
-        Action<string> log)
+        Action<string> log,
+        Gateway.FakeGatewayTaskScheduler? scheduler = null)
     {
         string stateRoot = Path.Combine(_testDirectory, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(stateRoot);
         var recovery = new GatewayPersistenceManager(
-            new Gateway.FakeGatewayTaskScheduler(),
+            scheduler ?? new Gateway.FakeGatewayTaskScheduler(),
             new GatewayPersistenceOptions(
                 UserSid: "S-1-5-21-1",
                 PackageFamilyName: "OpenClaw.Gateway_test",
