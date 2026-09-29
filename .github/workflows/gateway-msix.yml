@@ -237,6 +237,11 @@ jobs:
         run: >
           .\scripts\Test-WorkflowSigningConfiguration.ps1
 
+      - name: Test MSBuild property escaping
+        shell: pwsh
+        run: >
+          .\scripts\Test-MSBuildPropertyValue.Tests.ps1
+
       - name: Test OpenClaw build identity validation
         shell: pwsh
         run: >

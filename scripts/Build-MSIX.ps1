@@ -66,14 +66,9 @@ if (
 ) {
     throw "The $IdentityChannel package identity is incomplete in release policy."
 }
-# MSBuild treats commas and semicolons in a command-line property as
-# separators between multiple properties. Percent-escape them before passing
-# the distinguished-name publisher; MSBuild restores the literal characters
-# before XmlPoke writes the generated manifest.
-$msbuildPublisher = $publisher.
-    Replace('%', '%25').
-    Replace(',', '%2C').
-    Replace(';', '%3B')
+$msbuildPublisher = & (
+    Join-Path $PSScriptRoot 'ConvertTo-MSBuildPropertyValue.ps1'
+) -Value $publisher
 
 function Invoke-CheckedCommand {
     param(
