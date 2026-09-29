@@ -37,9 +37,9 @@ $policy = Get-Content `
     ConvertFrom-Json
 $candidatePackageName = [string]$policy.packageIdentityName
 $candidatePackageFamilyName = [string]$policy.packageFamilyName
-$previousPackageName = [string]$policy.previousPackageIdentity.name
-$previousPackageFamilyName = [string]$policy.previousPackageIdentity.familyName
-$previousPublisher = [string]$policy.previousPackageIdentity.publisher
+$previousPackageName = [string]$policy.sideloadPackageIdentity.name
+$previousPackageFamilyName = [string]$policy.sideloadPackageIdentity.familyName
+$previousPublisher = [string]$policy.sideloadPackageIdentity.publisher
 if (
     [string]::IsNullOrWhiteSpace($candidatePackageName) -or
     [string]::IsNullOrWhiteSpace($candidatePackageFamilyName) -or

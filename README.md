@@ -670,20 +670,21 @@ reviewed pull request:
 
 After that pull request merges, manually run **Build OpenClaw Gateway MSIX** on
 `main` with `openclaw_ref` set to the approved commit. Use `signing_mode=store`
-for the Partner Center identity, or `signing_mode=official` only when the Azure
-certificate subject exactly matches the reviewed publisher. The workflow derives
-the package version and release tag, creates
-the tag in this repository, and publishes a GitHub Release with generated
-release notes. Each release contains a multi-architecture
-`OpenClawGateway-<version>.msixbundle` as the recommended Store submission, plus
+to retain only the unsigned Partner Center bundle, or `signing_mode=official`
+to additionally sign and publish the sideload identity. The workflow derives
+the package version and release tag. Official mode creates the tag and
+publishes a GitHub Release with generated release notes. Each GitHub Release
+contains a signed sideload
+`OpenClawGateway-<version>.msixbundle`, plus
 `OpenClawGateway-<version>-x64.msix` and
 `OpenClawGateway-<version>-arm64.msix` packages for architecture-specific
-deployment. Store-mode assets are intentionally unsigned and are not direct
-sideload downloads; Partner Center signs them during ingestion. The duplicate
-GitHub Actions artifacts remain short-lived transport and diagnostic copies.
+deployment. The unsigned Store-identity bundle is retained separately as the
+`openclaw-gateway-msix-store-submission` Actions artifact for 90 days; Partner
+Center signs it during ingestion.
 
-The same identity can be used for direct distribution and Microsoft Store
-submission; the fourth component is always `0`.
+Direct GitHub distribution and Store submission intentionally use distinct
+identities because the current Azure certificate matches the legacy sideload
+publisher rather than Partner Center's reserved publisher.
 
 The signed `v0.0.0.0` and `v0.0.0.1` proof releases and the latest production
 release retain the former `OpenClaw.Gateway` identity and remain immutable

@@ -55,8 +55,9 @@ $requiredFragments = @(
     'tenant-id: ${{ vars.AZURE_TENANT_ID }}'
     'subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}'
     'uses: azure/artifact-signing-action@v2'
-    'name: Compose unsigned multi-architecture MSIX bundle'
-    'name: Upload unsigned multi-architecture MSIX bundle'
+    'name: Compose unsigned Store and sideload MSIX bundles'
+    'name: Upload unsigned Store MSIX bundle'
+    'name: Upload unsigned sideload MSIX bundle'
     'name: Test proof-release MSIX identity transition'
     "needs.changes.outputs.versioning == 'true'"
     'scripts/Test-MSIXReleaseIdentity.Tests.ps1'
@@ -66,11 +67,12 @@ $requiredFragments = @(
     '-CandidateBundlePath test-signed\bundle\OpenClawGateway.msixbundle'
     'openclaw-gateway-msix-upgrade-evidence'
     'retention-days: 90'
-    '-BundlePath artifacts\bundle\OpenClawGateway.msixbundle'
+    '-IdentityChannel $channel'
+    '-BundlePath "artifacts\$channelDirectory\bundle\OpenClawGateway.msixbundle"'
     'files-folder-recurse: true'
     'files: ${{ github.workspace }}\artifacts\bundle\OpenClawGateway.msixbundle'
     'publisher: ${{ steps.release.outputs.publisher }}'
-    '"publisher=$($policy.publisher)" >> $env:GITHUB_OUTPUT'
+    '"publisher=$($policy.sideloadPackageIdentity.publisher)" >> $env:GITHUB_OUTPUT'
     'EXPECTED_PUBLISHER: ${{ needs.authorize-signing.outputs.publisher }}'
     '$expectedSubject = $env:EXPECTED_PUBLISHER'
     'name: Upload signed multi-architecture MSIX bundle'
@@ -78,10 +80,9 @@ $requiredFragments = @(
     'signing-account-name: openclaw'
     'certificate-profile-name: openclaw'
     'name: Publish signed Gateway MSIX release'
-    'name: Publish unsigned Microsoft Store MSIX release'
-    "inputs.signing_mode == 'store' && needs.authorize-signing.result == 'success'"
-    'These packages are **unsigned Microsoft Store submission assets**.'
-    'They are not intended for direct sideloading.'
+    "inputs.publish_release && needs.sign-msix.result == 'success'"
+    'name: Retain authorized Microsoft Store submission bundle'
+    'name: openclaw-gateway-msix-store-submission'
     '.\scripts\Get-MSIXReleaseIdentity.ps1'
     'contents: write'
     'uses: softprops/action-gh-release@v3'
@@ -145,13 +146,27 @@ if ($signJob.Contains('release-policy.json', [StringComparison]::Ordinal)) {
         'authorize-signing job; it does not check out release policy.'
     )
 }
+foreach ($artifact in @(
+    'openclaw-gateway-msix-sideload-unsigned-x64'
+    'openclaw-gateway-msix-sideload-unsigned-arm64'
+    'openclaw-gateway-msix-sideload-unsigned-bundle'
+)) {
+    if (-not $signJob.Contains($artifact, [StringComparison]::Ordinal)) {
+        throw "Official signing must consume the sideload artifact: $artifact"
+    }
+}
+if ($signJob.Contains(
+        'openclaw-gateway-msix-store-unsigned',
+        [StringComparison]::Ordinal)) {
+    throw 'Official signing must not consume Store-identity packages.'
+}
 
 $storePublishJobMatch = [regex]::Match(
     $workflow,
-    '(?ms)^  publish-store-release:\s*(?<job>.*?)(?=^  [a-z][a-z0-9-]+:)'
+    '(?ms)^  retain-store-submission:\s*(?<job>.*?)(?=^  [a-z][a-z0-9-]+:)'
 )
 if (-not $storePublishJobMatch.Success) {
-    throw 'Unable to locate the publish-store-release workflow job.'
+    throw 'Unable to locate the retain-store-submission workflow job.'
 }
 $storePublishJob = $storePublishJobMatch.Groups['job'].Value
 foreach ($forbidden in @('azure/login', 'artifact-signing-action', 'id-token: write')) {
@@ -160,13 +175,17 @@ foreach ($forbidden in @('azure/login', 'artifact-signing-action', 'id-token: wr
     }
 }
 foreach ($artifact in @(
-    'openclaw-gateway-msix-unsigned-x64'
-    'openclaw-gateway-msix-unsigned-arm64'
-    'openclaw-gateway-msix-unsigned-bundle'
+    'openclaw-gateway-msix-store-unsigned-bundle'
+    'openclaw-gateway-msix-store-submission'
+    'retention-days: 90'
 )) {
     if (-not $storePublishJob.Contains($artifact, [StringComparison]::Ordinal)) {
         throw "Store publication must consume the authorized unsigned artifact: $artifact"
     }
+}
+
+if ($workflow.Contains('publish-store-release:', [StringComparison]::Ordinal)) {
+    throw 'Unsigned Store packages must not be published as GitHub Releases.'
 }
 
 Write-Host 'Gateway MSIX signing workflow configuration passed.'

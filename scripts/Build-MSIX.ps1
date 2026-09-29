@@ -16,6 +16,9 @@ param(
     [ValidatePattern('^[0-9a-fA-F]{40}$')]
     [string]$SourceCommit,
 
+    [ValidateSet('Store', 'Sideload')]
+    [string]$IdentityChannel = 'Store',
+
     [switch]$SourceTreeDirty,
 
     [Parameter(Mandatory)]
@@ -43,9 +46,26 @@ if (
 ) {
     throw 'The package manifest identity does not match release policy.'
 }
-$packageIdentityName = [string]$policy.packageIdentityName
-$packageFamilyName = [string]$policy.packageFamilyName
-$publisher = [string]$policy.publisher
+$selectedIdentity = if ($IdentityChannel -eq 'Sideload') {
+    $policy.sideloadPackageIdentity
+}
+else {
+    [pscustomobject]@{
+        name = $policy.packageIdentityName
+        familyName = $policy.packageFamilyName
+        publisher = $policy.publisher
+    }
+}
+$packageIdentityName = [string]$selectedIdentity.name
+$packageFamilyName = [string]$selectedIdentity.familyName
+$publisher = [string]$selectedIdentity.publisher
+if (
+    [string]::IsNullOrWhiteSpace($packageIdentityName) -or
+    [string]::IsNullOrWhiteSpace($packageFamilyName) -or
+    [string]::IsNullOrWhiteSpace($publisher)
+) {
+    throw "The $IdentityChannel package identity is incomplete in release policy."
+}
 
 function Invoke-CheckedCommand {
     param(
@@ -438,6 +458,8 @@ try {
                 "-p:AssemblyVersion=$PackageVersion" `
                 "-p:FileVersion=$PackageVersion" `
                 "-p:PackageIdentityVersion=$PackageVersion" `
+                "-p:PackageIdentityName=$packageIdentityName" `
+                "-p:PackageIdentityPublisher=$publisher" `
                 "-p:ClawCtlPackageVersion=$PackageVersion" `
                 "-p:ClawCtlPackageCommit=$($SourceCommit.ToLowerInvariant())" `
                 "-p:ClawCtlPayloadVersion=$([string]$payloadInfo.packageVersion)" `
@@ -569,6 +591,17 @@ try {
             $manifestStream.Dispose()
         }
 
+        $builtIdentity = $manifest.Package.Identity
+        if (
+            $null -eq $builtIdentity -or
+            [string]$builtIdentity.Name -cne $packageIdentityName -or
+            [string]$builtIdentity.Publisher -cne $publisher -or
+            [string]$builtIdentity.ProcessorArchitecture -cne $Architecture -or
+            [string]$builtIdentity.Version -cne $PackageVersion
+        ) {
+            throw "The built $IdentityChannel MSIX manifest identity is unexpected."
+        }
+
         $aliasExtension = @(
             $manifest.SelectNodes(
                 "//*[local-name()='Extension' and @Category='windows.appExecutionAlias']"
@@ -661,6 +694,7 @@ try {
         archive = $msixName
         sha256 = $msixHash
         signed = $false
+        identityChannel = $IdentityChannel.ToLowerInvariant()
         packageVersion = $PackageVersion
         packageIdentityName = $packageIdentityName
         packageFamilyName = $packageFamilyName

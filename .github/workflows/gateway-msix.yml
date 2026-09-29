@@ -22,6 +22,11 @@ on:
           - test
           - store
           - official
+      publish_release:
+        description: Publish the signed sideload packages as a GitHub Release
+        required: true
+        default: true
+        type: boolean
 
 concurrency:
   group: gateway-msix-${{ github.event.pull_request.number || github.run_id }}
@@ -583,7 +588,7 @@ jobs:
             -p:PublishAot=true `
             -p:Platform='${{ matrix.architecture }}'
 
-      - name: Compose unsigned MSIX
+      - name: Compose unsigned Store and sideload MSIX packages
         shell: pwsh
         env:
           SIGNING_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode || 'unsigned' }}
@@ -608,20 +613,33 @@ jobs:
           $packageVersion = .\scripts\Get-WorkflowPackageVersion.ps1 `
             @versionParameters
 
-          .\scripts\Build-MSIX.ps1 `
-            -PayloadDirectory '${{ runner.temp }}\openclaw-payload' `
-            -Architecture '${{ matrix.architecture }}' `
-            -PackageVersion $packageVersion `
-            -SourceCommit '${{ github.sha }}' `
-            -OutputDirectory '${{ runner.temp }}\openclaw-msix'
+          foreach ($channel in @('Store', 'Sideload')) {
+            .\scripts\Build-MSIX.ps1 `
+              -PayloadDirectory '${{ runner.temp }}\openclaw-payload' `
+              -Architecture '${{ matrix.architecture }}' `
+              -PackageVersion $packageVersion `
+              -SourceCommit '${{ github.sha }}' `
+              -IdentityChannel $channel `
+              -OutputDirectory "${{ runner.temp }}\openclaw-msix-$($channel.ToLowerInvariant())"
+          }
 
-      - name: Upload unsigned MSIX
+      - name: Upload unsigned Store MSIX
         uses: actions/upload-artifact@v7
         with:
-          name: openclaw-gateway-msix-unsigned-${{ matrix.architecture }}
+          name: openclaw-gateway-msix-store-unsigned-${{ matrix.architecture }}
           path: |
-            ${{ runner.temp }}\openclaw-msix\OpenClawGateway-${{ matrix.architecture }}.msix
-            ${{ runner.temp }}\openclaw-msix\msix-metadata.json
+            ${{ runner.temp }}\openclaw-msix-store\OpenClawGateway-${{ matrix.architecture }}.msix
+            ${{ runner.temp }}\openclaw-msix-store\msix-metadata.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload unsigned sideload MSIX
+        uses: actions/upload-artifact@v7
+        with:
+          name: openclaw-gateway-msix-sideload-unsigned-${{ matrix.architecture }}
+          path: |
+            ${{ runner.temp }}\openclaw-msix-sideload\OpenClawGateway-${{ matrix.architecture }}.msix
+            ${{ runner.temp }}\openclaw-msix-sideload\msix-metadata.json
           if-no-files-found: error
           retention-days: 7
 
@@ -644,13 +662,13 @@ jobs:
       - name: Download unsigned x64 package
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-unsigned-x64
+          name: openclaw-gateway-msix-store-unsigned-x64
           path: artifacts\x64
 
       - name: Download unsigned ARM64 package
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-unsigned-arm64
+          name: openclaw-gateway-msix-store-unsigned-arm64
           path: artifacts\arm64
 
       - name: Apply temporary test signature
@@ -677,7 +695,7 @@ jobs:
           retention-days: 7
 
   build-msix-bundle:
-    name: Build unsigned multi-architecture Gateway MSIX bundle
+    name: Build unsigned Store and sideload Gateway MSIX bundles
     needs:
       - changes
       - build-package
@@ -689,19 +707,31 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Download unsigned x64 package
+      - name: Download unsigned Store x64 package
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-unsigned-x64
-          path: artifacts\x64
+          name: openclaw-gateway-msix-store-unsigned-x64
+          path: artifacts\store\x64
 
-      - name: Download unsigned ARM64 package
+      - name: Download unsigned Store ARM64 package
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-unsigned-arm64
-          path: artifacts\arm64
+          name: openclaw-gateway-msix-store-unsigned-arm64
+          path: artifacts\store\arm64
 
-      - name: Compose unsigned multi-architecture MSIX bundle
+      - name: Download unsigned sideload x64 package
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-sideload-unsigned-x64
+          path: artifacts\sideload\x64
+
+      - name: Download unsigned sideload ARM64 package
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-sideload-unsigned-arm64
+          path: artifacts\sideload\arm64
+
+      - name: Compose unsigned Store and sideload MSIX bundles
         shell: pwsh
         env:
           SIGNING_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode || 'unsigned' }}
@@ -726,17 +756,27 @@ jobs:
           $packageVersion = .\scripts\Get-WorkflowPackageVersion.ps1 `
             @versionParameters
 
-          .\scripts\Build-MSIXBundle.ps1 `
-            -X64Package artifacts\x64\OpenClawGateway-x64.msix `
-            -Arm64Package artifacts\arm64\OpenClawGateway-arm64.msix `
-            -PackageVersion $packageVersion `
-            -OutputPath artifacts\bundle\OpenClawGateway.msixbundle
+          foreach ($channel in @('store', 'sideload')) {
+            .\scripts\Build-MSIXBundle.ps1 `
+              -X64Package "artifacts\$channel\x64\OpenClawGateway-x64.msix" `
+              -Arm64Package "artifacts\$channel\arm64\OpenClawGateway-arm64.msix" `
+              -PackageVersion $packageVersion `
+              -OutputPath "artifacts\$channel\bundle\OpenClawGateway.msixbundle"
+          }
 
-      - name: Upload unsigned multi-architecture MSIX bundle
+      - name: Upload unsigned Store MSIX bundle
         uses: actions/upload-artifact@v7
         with:
-          name: openclaw-gateway-msix-unsigned-bundle
-          path: artifacts\bundle\OpenClawGateway.msixbundle
+          name: openclaw-gateway-msix-store-unsigned-bundle
+          path: artifacts\store\bundle\OpenClawGateway.msixbundle
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload unsigned sideload MSIX bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: openclaw-gateway-msix-sideload-unsigned-bundle
+          path: artifacts\sideload\bundle\OpenClawGateway.msixbundle
           if-no-files-found: error
           retention-days: 7
 
@@ -761,13 +801,13 @@ jobs:
       - name: Download unsigned x64 candidate
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-unsigned-x64
+          name: openclaw-gateway-msix-store-unsigned-x64
           path: artifacts\x64
 
       - name: Download unsigned bundle candidate
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-unsigned-bundle
+          name: openclaw-gateway-msix-store-unsigned-bundle
           path: artifacts\bundle
 
       - name: Apply temporary test signature
@@ -860,23 +900,41 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Download unsigned x64 package
+      - name: Download unsigned Store x64 package
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-unsigned-x64
-          path: artifacts\x64
+          name: openclaw-gateway-msix-store-unsigned-x64
+          path: artifacts\store\x64
 
-      - name: Download unsigned ARM64 package
+      - name: Download unsigned Store ARM64 package
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-unsigned-arm64
-          path: artifacts\arm64
+          name: openclaw-gateway-msix-store-unsigned-arm64
+          path: artifacts\store\arm64
 
-      - name: Download unsigned multi-architecture bundle
+      - name: Download unsigned Store bundle
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-unsigned-bundle
-          path: artifacts\bundle
+          name: openclaw-gateway-msix-store-unsigned-bundle
+          path: artifacts\store\bundle
+
+      - name: Download unsigned sideload x64 package
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-sideload-unsigned-x64
+          path: artifacts\sideload\x64
+
+      - name: Download unsigned sideload ARM64 package
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-sideload-unsigned-arm64
+          path: artifacts\sideload\arm64
+
+      - name: Download unsigned sideload bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-sideload-unsigned-bundle
+          path: artifacts\sideload\bundle
 
       - name: Resolve official release metadata
         id: release
@@ -895,7 +953,7 @@ jobs:
           "package_version=$packageVersion" >> $env:GITHUB_OUTPUT
           "release_tag=$($identity.ReleaseTag)" >> $env:GITHUB_OUTPUT
           "release_version=$($identity.ReleaseVersion)" >> $env:GITHUB_OUTPUT
-          "publisher=$($policy.publisher)" >> $env:GITHUB_OUTPUT
+          "publisher=$($policy.sideloadPackageIdentity.publisher)" >> $env:GITHUB_OUTPUT
 
       - name: Enforce reviewed release policy
         shell: pwsh
@@ -903,12 +961,16 @@ jobs:
           OPENCLAW_REF: ${{ inputs.openclaw_ref || needs.build-package.outputs.source_sha }}
           PACKAGING_COMMIT: ${{ github.sha }}
         run: |
-          .\scripts\Test-SigningInputs.ps1 `
-            -ArtifactsDirectory artifacts `
-            -PolicyPath .\release-policy.json `
-            -BundlePath artifacts\bundle\OpenClawGateway.msixbundle `
-            -RequestedRef $env:OPENCLAW_REF `
-            -PackagingCommit $env:PACKAGING_COMMIT
+          foreach ($channel in @('Store', 'Sideload')) {
+            $channelDirectory = $channel.ToLowerInvariant()
+            .\scripts\Test-SigningInputs.ps1 `
+              -ArtifactsDirectory "artifacts\$channelDirectory" `
+              -PolicyPath .\release-policy.json `
+              -BundlePath "artifacts\$channelDirectory\bundle\OpenClawGateway.msixbundle" `
+              -RequestedRef $env:OPENCLAW_REF `
+              -PackagingCommit $env:PACKAGING_COMMIT `
+              -IdentityChannel $channel
+          }
 
   sign-msix:
     name: Officially sign Gateway MSIX packages
@@ -927,19 +989,19 @@ jobs:
       - name: Download unsigned x64 package
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-unsigned-x64
+          name: openclaw-gateway-msix-sideload-unsigned-x64
           path: artifacts\x64
 
       - name: Download unsigned ARM64 package
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-unsigned-arm64
+          name: openclaw-gateway-msix-sideload-unsigned-arm64
           path: artifacts\arm64
 
       - name: Download unsigned multi-architecture bundle
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-unsigned-bundle
+          name: openclaw-gateway-msix-sideload-unsigned-bundle
           path: artifacts\bundle
 
       - name: Azure login
@@ -1056,7 +1118,7 @@ jobs:
 
   publish-release:
     name: Publish signed Gateway MSIX release
-    if: ${{ needs.sign-msix.result == 'success' }}
+    if: ${{ inputs.publish_release && needs.sign-msix.result == 'success' }}
     needs:
       - build-package
       - authorize-signing
@@ -1122,78 +1184,38 @@ jobs:
 
             The packages are signed by OpenClaw Foundation through Azure Artifact Signing.
 
-  publish-store-release:
-    name: Publish unsigned Microsoft Store MSIX release
-    if: ${{ inputs.signing_mode == 'store' && needs.authorize-signing.result == 'success' }}
+  retain-store-submission:
+    name: Retain authorized Microsoft Store submission bundle
+    if: ${{ needs.authorize-signing.result == 'success' }}
     needs:
-      - build-package
-      - build-msix
       - build-msix-bundle
       - authorize-signing
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     permissions:
       actions: read
-      contents: write
     steps:
-      - name: Download authorized unsigned x64 package
+      - name: Download authorized unsigned Store bundle
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-unsigned-x64
-          path: store/x64
+          name: openclaw-gateway-msix-store-unsigned-bundle
+          path: store
 
-      - name: Download authorized unsigned ARM64 package
-        uses: actions/download-artifact@v8
-        with:
-          name: openclaw-gateway-msix-unsigned-arm64
-          path: store/arm64
-
-      - name: Download authorized unsigned multi-architecture bundle
-        uses: actions/download-artifact@v8
-        with:
-          name: openclaw-gateway-msix-unsigned-bundle
-          path: store/bundle
-
-      - name: Stage versioned Store submission assets
-        shell: bash
+      - name: Stage versioned Store submission bundle
+        shell: pwsh
         env:
           RELEASE_VERSION: ${{ needs.authorize-signing.outputs.release_version }}
         run: |
-          set -euo pipefail
-          mkdir release-assets
-          cp store/x64/OpenClawGateway-x64.msix \
-            "release-assets/OpenClawGateway-${RELEASE_VERSION}-x64.msix"
-          cp store/arm64/OpenClawGateway-arm64.msix \
-            "release-assets/OpenClawGateway-${RELEASE_VERSION}-arm64.msix"
-          cp store/bundle/OpenClawGateway.msixbundle \
-            "release-assets/OpenClawGateway-${RELEASE_VERSION}.msixbundle"
+          Rename-Item `
+            -LiteralPath store\OpenClawGateway.msixbundle `
+            -NewName "OpenClawGateway-$env:RELEASE_VERSION-store.msixbundle"
 
-      - name: Create permanent GitHub release
-        uses: softprops/action-gh-release@v3
+      - name: Upload Store submission bundle
+        uses: actions/upload-artifact@v7
         with:
-          tag_name: ${{ needs.authorize-signing.outputs.release_tag }}
-          target_commitish: ${{ github.sha }}
-          name: OpenClaw Gateway MSIX ${{ needs.authorize-signing.outputs.release_tag }}
-          generate_release_notes: true
-          prerelease: false
-          make_latest: true
-          overwrite_files: false
-          fail_on_unmatched_files: true
-          files: |
-            release-assets/*.msix
-            release-assets/*.msixbundle
-          body: |
-            > [!IMPORTANT]
-            > These packages are **unsigned Microsoft Store submission assets**.
-            > Submit them through Partner Center, which signs packages during Store ingestion.
-            > They are not intended for direct sideloading.
-
-            Packages OpenClaw `${{ needs.build-package.outputs.package_version }}`
-            from [`openclaw/openclaw@${{ needs.build-package.outputs.source_sha }}`](https://github.com/openclaw/openclaw/commit/${{ needs.build-package.outputs.source_sha }}).
-
-            ### Store submission assets
-            - **Recommended:** `OpenClawGateway-${{ needs.authorize-signing.outputs.release_version }}.msixbundle`
-            - **x64:** `OpenClawGateway-${{ needs.authorize-signing.outputs.release_version }}-x64.msix`
-            - **ARM64:** `OpenClawGateway-${{ needs.authorize-signing.outputs.release_version }}-arm64.msix`
+          name: openclaw-gateway-msix-store-submission
+          path: store\OpenClawGateway-${{ needs.authorize-signing.outputs.release_version }}-store.msixbundle
+          if-no-files-found: error
+          retention-days: 90
 
   ci-gate:
     name: Gateway MSIX CI
@@ -1210,7 +1232,7 @@ jobs:
       - authorize-signing
       - sign-msix
       - publish-release
-      - publish-store-release
+      - retain-store-submission
     runs-on: ubuntu-latest
     steps:
       - name: Check workflow results

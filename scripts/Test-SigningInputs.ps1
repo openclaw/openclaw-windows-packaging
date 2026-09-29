@@ -14,7 +14,10 @@ param(
 
     [Parameter(Mandatory)]
     [ValidatePattern('^[0-9a-fA-F]{40}$')]
-    [string]$PackagingCommit
+    [string]$PackagingCommit,
+
+    [ValidateSet('Store', 'Sideload')]
+    [string]$IdentityChannel = 'Store'
 )
 
 Set-StrictMode -Version Latest
@@ -160,10 +163,25 @@ if (
     $policy.approvedCommit -notmatch '^[0-9a-fA-F]{40}$' -or
     [string]::IsNullOrWhiteSpace([string]$policy.packageIdentityName) -or
     [string]::IsNullOrWhiteSpace([string]$policy.packageFamilyName) -or
-    [string]::IsNullOrWhiteSpace([string]$policy.publisher)
+    [string]::IsNullOrWhiteSpace([string]$policy.publisher) -or
+    [string]::IsNullOrWhiteSpace([string]$policy.sideloadPackageIdentity.name) -or
+    [string]::IsNullOrWhiteSpace([string]$policy.sideloadPackageIdentity.familyName) -or
+    [string]::IsNullOrWhiteSpace([string]$policy.sideloadPackageIdentity.publisher)
 ) {
     throw 'The Gateway MSIX release policy is invalid.'
 }
+
+$expectedIdentity = if ($IdentityChannel -eq 'Sideload') {
+    $policy.sideloadPackageIdentity
+}
+else {
+    [pscustomobject]@{
+        name = $policy.packageIdentityName
+        familyName = $policy.packageFamilyName
+        publisher = $policy.publisher
+    }
+}
+$expectedIdentityChannel = $IdentityChannel.ToLowerInvariant()
 
 $releaseIdentity = & (
     Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1'
@@ -231,9 +249,10 @@ foreach ($architecture in @('x64', 'arm64')) {
         $metadata.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
         $metadata.signed -ne $false -or
         $metadata.packageVersion -ne $approvedPackageVersion -or
-        $metadata.packageIdentityName -ne $policy.packageIdentityName -or
-        $metadata.packageFamilyName -ne $policy.packageFamilyName -or
-        $metadata.publisher -ne $policy.publisher
+        $metadata.identityChannel -ne $expectedIdentityChannel -or
+        $metadata.packageIdentityName -ne $expectedIdentity.name -or
+        $metadata.packageFamilyName -ne $expectedIdentity.familyName -or
+        $metadata.publisher -ne $expectedIdentity.publisher
     ) {
         throw "The $architecture MSIX metadata is not eligible for signing."
     }
@@ -463,8 +482,8 @@ foreach ($architecture in @('x64', 'arm64')) {
         )
         if (
             $null -eq $identity -or
-            $identity.Name -ne $policy.packageIdentityName -or
-            $identity.Publisher -ne $policy.publisher -or
+            $identity.Name -ne $expectedIdentity.name -or
+            $identity.Publisher -ne $expectedIdentity.publisher -or
             $identity.ProcessorArchitecture -ne $architecture -or
             $identity.Version -ne $metadata.packageVersion
         ) {
@@ -608,8 +627,8 @@ try {
     }
     if (
         $null -eq $bundleIdentity -or
-        $bundleIdentity.Name -ne $policy.packageIdentityName -or
-        $bundleIdentity.Publisher -ne $policy.publisher -or
+        $bundleIdentity.Name -ne $expectedIdentity.name -or
+        $bundleIdentity.Publisher -ne $expectedIdentity.publisher -or
         -not $bundleVersionIsValid -or
         $bundleVersion -ne $approvedPackageVersion
     ) {

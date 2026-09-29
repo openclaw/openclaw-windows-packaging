@@ -133,7 +133,7 @@
 
   <Target Name="GenerateVersionedAppxManifest"
           BeforeTargets="_ValidatePresenceOfAppxManifestItems"
-          Condition="'$(PackageIdentityVersion)' != ''">
+          Condition="'$(PackageIdentityVersion)' != '' or '$(PackageIdentityName)' != '' or '$(PackageIdentityPublisher)' != ''">
     <PropertyGroup>
       <_GeneratedAppxManifest>$(IntermediateOutputPath)Package.g.appxmanifest</_GeneratedAppxManifest>
     </PropertyGroup>
@@ -142,7 +142,16 @@
           DestinationFiles="$(_GeneratedAppxManifest)" />
     <XmlPoke XmlInputPath="$(_GeneratedAppxManifest)"
              Query="/*[local-name()='Package']/*[local-name()='Identity']/@Version"
-             Value="$(PackageIdentityVersion)" />
+             Value="$(PackageIdentityVersion)"
+             Condition="'$(PackageIdentityVersion)' != ''" />
+    <XmlPoke XmlInputPath="$(_GeneratedAppxManifest)"
+             Query="/*[local-name()='Package']/*[local-name()='Identity']/@Name"
+             Value="$(PackageIdentityName)"
+             Condition="'$(PackageIdentityName)' != ''" />
+    <XmlPoke XmlInputPath="$(_GeneratedAppxManifest)"
+             Query="/*[local-name()='Package']/*[local-name()='Identity']/@Publisher"
+             Value="$(PackageIdentityPublisher)"
+             Condition="'$(PackageIdentityPublisher)' != ''" />
     <ItemGroup>
       <AppxManifest Remove="@(AppxManifest)" />
       <AppxManifest Include="$(_GeneratedAppxManifest)">

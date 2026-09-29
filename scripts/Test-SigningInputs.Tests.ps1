@@ -13,7 +13,13 @@ if (
     [string]$policy.packageFamilyName -cne
         'OpenClawFoundation.OpenClawGateway_rfcbke2p71se2' -or
     [string]$policy.publisher -cne
-        'CN=4BA40A7A-B719-4C40-BF91-84AF4F1136FC'
+        'CN=4BA40A7A-B719-4C40-BF91-84AF4F1136FC' -or
+    [string]$policy.sideloadPackageIdentity.name -cne
+        'OpenClaw.Gateway' -or
+    [string]$policy.sideloadPackageIdentity.familyName -cne
+        'OpenClaw.Gateway_kaa03rpbbqef6' -or
+    [string]$policy.sideloadPackageIdentity.publisher -cne
+        'CN=OpenClaw Foundation, O=OpenClaw Foundation, L=Mill Valley, S=California, C=US'
 ) {
     throw 'Release policy does not contain the Partner Center-reserved identity.'
 }
@@ -62,6 +68,9 @@ function New-TestArtifact {
         [bool]$SourceTreeDirty = $false,
 
         [string]$NodeRuntimeVersion = '24.16.0',
+
+        [ValidateSet('Store', 'Sideload')]
+        [string]$IdentityChannel = 'Store',
 
         [bool]$IncludeBundledNode = $false,
 
@@ -142,11 +151,22 @@ function New-TestArtifact {
             -LiteralPath (Join-Path $payloadDirectory 'payload-files.json') `
             -Encoding utf8
 
+    $selectedIdentity = if ($IdentityChannel -eq 'Sideload') {
+        $policy.sideloadPackageIdentity
+    }
+    else {
+        [pscustomobject]@{
+            name = $policy.packageIdentityName
+            familyName = $policy.packageFamilyName
+            publisher = $policy.publisher
+        }
+    }
+
     @"
 <?xml version="1.0" encoding="utf-8"?>
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
-  <Identity Name="$($policy.packageIdentityName)"
-            Publisher="$($policy.publisher)"
+  <Identity Name="$($selectedIdentity.name)"
+            Publisher="$($selectedIdentity.publisher)"
             Version="$approvedPackageVersion"
             ProcessorArchitecture="$Architecture" />
 </Package>
@@ -283,10 +303,11 @@ function New-TestArtifact {
         archive = $msixName
         sha256 = $msixHash
         signed = $false
+        identityChannel = $IdentityChannel.ToLowerInvariant()
         packageVersion = $approvedPackageVersion
-        packageIdentityName = $policy.packageIdentityName
-        packageFamilyName = $policy.packageFamilyName
-        publisher = $policy.publisher
+        packageIdentityName = $selectedIdentity.name
+        packageFamilyName = $selectedIdentity.familyName
+        publisher = $selectedIdentity.publisher
     } |
         ConvertTo-Json |
         Set-Content `
@@ -300,6 +321,9 @@ function Invoke-PolicyValidation {
         [string]$Root,
 
         [string]$RequestedRef = $approvedCommit,
+
+        [ValidateSet('Store', 'Sideload')]
+        [string]$IdentityChannel = 'Store',
 
         [switch]$PreserveBundle
     )
@@ -325,7 +349,7 @@ function Invoke-PolicyValidation {
                 -Force
         }
         else {
-            New-TestBundle -Root $Root
+            New-TestBundle -Root $Root -IdentityChannel $IdentityChannel
         }
     }
 
@@ -334,7 +358,8 @@ function Invoke-PolicyValidation {
         -PolicyPath $policyPath `
         -BundlePath (Join-Path $Root 'bundle\OpenClawGateway.msixbundle') `
         -RequestedRef $RequestedRef `
-        -PackagingCommit $packagingCommit
+        -PackagingCommit $packagingCommit `
+        -IdentityChannel $IdentityChannel
 }
 
 function New-TestBundle {
@@ -346,8 +371,21 @@ function New-TestBundle {
             $Root `
             'x64\OpenClawGateway-x64.msix'),
 
-        [string]$BundleVersion = $approvedPackageVersion
+        [string]$BundleVersion = $approvedPackageVersion,
+
+        [ValidateSet('Store', 'Sideload')]
+        [string]$IdentityChannel = 'Store'
     )
+
+    $selectedIdentity = if ($IdentityChannel -eq 'Sideload') {
+        $policy.sideloadPackageIdentity
+    }
+    else {
+        [pscustomobject]@{
+            name = $policy.packageIdentityName
+            publisher = $policy.publisher
+        }
+    }
 
     $bundleDirectory = Join-Path $Root 'bundle'
     $bundleStaging = Join-Path $Root '.bundle-package'
@@ -375,8 +413,8 @@ function New-TestBundle {
     @"
 <?xml version="1.0" encoding="utf-8"?>
 <Bundle xmlns="http://schemas.microsoft.com/appx/2013/bundle">
-  <Identity Name="$($policy.packageIdentityName)"
-            Publisher="$($policy.publisher)"
+  <Identity Name="$($selectedIdentity.name)"
+            Publisher="$($selectedIdentity.publisher)"
             Version="$BundleVersion" />
   <Packages>
     <Package Type="application"
@@ -503,6 +541,9 @@ function Copy-TestArtifact {
 
         [string]$NodeRuntimeVersion = '24.16.0',
 
+        [ValidateSet('Store', 'Sideload')]
+        [string]$IdentityChannel = 'Store',
+
         [bool]$IncludeBundledNode = $false,
 
         [bool]$IncludeApplicationBundledNode = $false,
@@ -518,6 +559,7 @@ function Copy-TestArtifact {
         $PayloadPackageVersion,
         $SourceTreeDirty,
         $NodeRuntimeVersion,
+        $IdentityChannel,
         $IncludeBundledNode,
         $IncludeApplicationBundledNode,
         $IncludeApplicationNodeArchive,
@@ -537,6 +579,7 @@ function Copy-TestArtifact {
             -PayloadPackageVersion $PayloadPackageVersion `
             -SourceTreeDirty $SourceTreeDirty `
             -NodeRuntimeVersion $NodeRuntimeVersion `
+            -IdentityChannel $IdentityChannel `
             -IncludeBundledNode $IncludeBundledNode `
             -IncludeApplicationBundledNode $IncludeApplicationBundledNode `
             -IncludeApplicationNodeArchive $IncludeApplicationNodeArchive `
@@ -592,6 +635,19 @@ try {
     }
     Reset-TestArtifacts
     Invoke-PolicyValidation -Root $testRoot
+
+    $sideloadRoot = Join-Path $suiteRoot 'sideload'
+    Copy-TestArtifact `
+        -Root $sideloadRoot `
+        -Architecture x64 `
+        -IdentityChannel Sideload
+    Copy-TestArtifact `
+        -Root $sideloadRoot `
+        -Architecture arm64 `
+        -IdentityChannel Sideload
+    Invoke-PolicyValidation `
+        -Root $sideloadRoot `
+        -IdentityChannel Sideload
 
     Reset-TestArtifacts
     Copy-TestArtifact `
