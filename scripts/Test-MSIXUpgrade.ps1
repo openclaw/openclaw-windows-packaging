@@ -18,6 +18,9 @@ param(
     [Parameter(Mandatory)]
     [string]$ExpectedCandidateVersion,
 
+    [ValidateSet('identity-reset', 'in-place')]
+    [string]$TransitionMode = 'identity-reset',
+
     [Parameter(Mandatory)]
     [string]$EvidencePath
 )
@@ -35,19 +38,39 @@ $policy = Get-Content `
     -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'release-policy.json') `
     -Raw |
     ConvertFrom-Json
-$candidatePackageName = [string]$policy.packageIdentityName
-$candidatePackageFamilyName = [string]$policy.packageFamilyName
-$previousPackageName = [string]$policy.sideloadPackageIdentity.name
-$previousPackageFamilyName = [string]$policy.sideloadPackageIdentity.familyName
-$previousPublisher = [string]$policy.sideloadPackageIdentity.publisher
+$sideloadPackageName = [string]$policy.sideloadPackageIdentity.name
+$sideloadPackageFamilyName = [string]$policy.sideloadPackageIdentity.familyName
+$sideloadPublisher = [string]$policy.sideloadPackageIdentity.publisher
+$candidatePackageName = if ($TransitionMode -ceq 'in-place') {
+    $sideloadPackageName
+}
+else {
+    [string]$policy.packageIdentityName
+}
+$candidatePackageFamilyName = if ($TransitionMode -ceq 'in-place') {
+    $sideloadPackageFamilyName
+}
+else {
+    [string]$policy.packageFamilyName
+}
+$candidatePublisher = if ($TransitionMode -ceq 'in-place') {
+    $sideloadPublisher
+}
+else {
+    [string]$policy.publisher
+}
+$previousPackageName = $sideloadPackageName
+$previousPackageFamilyName = $sideloadPackageFamilyName
+$previousPublisher = $sideloadPublisher
 if (
     [string]::IsNullOrWhiteSpace($candidatePackageName) -or
     [string]::IsNullOrWhiteSpace($candidatePackageFamilyName) -or
+    [string]::IsNullOrWhiteSpace($candidatePublisher) -or
     [string]::IsNullOrWhiteSpace($previousPackageName) -or
     [string]::IsNullOrWhiteSpace($previousPackageFamilyName) -or
     [string]::IsNullOrWhiteSpace($previousPublisher)
 ) {
-    throw 'The release policy does not define the package identity reset.'
+    throw 'The release policy does not define the required package identities.'
 }
 
 function Read-MSIXIdentity {
@@ -108,9 +131,14 @@ function Read-MSIXIdentity {
     }
 }
 
+$gatewayPackageNames = @(
+    $candidatePackageName,
+    $previousPackageName
+) | Select-Object -Unique
+
 function Get-GatewayPackages {
     @(
-        foreach ($name in @($candidatePackageName, $previousPackageName)) {
+        foreach ($name in $gatewayPackageNames) {
             Get-AppxPackage -Name $name -ErrorAction SilentlyContinue
         }
     )
@@ -182,6 +210,33 @@ function Install-TestPackage {
     $packages[0]
 }
 
+function Update-TestPackage {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$ExpectedName,
+        [Parameter(Mandatory)][string]$ExpectedFamilyName
+    )
+
+    if (
+        -not $script:testOwnsPackage -or
+        $script:testPackageName -cne $ExpectedName -or
+        $script:testPackageFamilyName -cne $ExpectedFamilyName
+    ) {
+        throw 'Refusing to update an OpenClaw package not owned by this test.'
+    }
+    Add-AppxPackage -Path $Path -ErrorAction Stop
+    $packages = @(
+        Get-AppxPackage -Name $ExpectedName -ErrorAction SilentlyContinue
+    )
+    if ($packages.Count -ne 1) {
+        throw 'Windows did not retain exactly one Gateway registration after update.'
+    }
+    if ([string]$packages[0].PackageFamilyName -cne $ExpectedFamilyName) {
+        throw 'Windows changed the package family during an in-place update.'
+    }
+    $packages[0]
+}
+
 $resolvedBaselinesPath = (Resolve-Path -LiteralPath $BaselinesPath).Path
 $resolvedBaselinesDirectory = (
     Resolve-Path -LiteralPath $BaselinesDirectory
@@ -214,7 +269,7 @@ if (
     throw 'The candidate MSIX bundle identity is unexpected.'
 }
 
-if ($candidateIdentity.Publisher -cne [string]$policy.publisher) {
+if ($candidateIdentity.Publisher -cne $candidatePublisher) {
     throw 'The candidate MSIX publisher does not match release policy.'
 }
 
@@ -299,17 +354,25 @@ try {
         else {
             $resolvedCandidatePath
         }
-        Remove-TestPackage
-        $installedCandidate = Install-TestPackage `
-            -Path $candidatePath `
-            -ExpectedName $candidatePackageName `
-            -ExpectedFamilyName $candidatePackageFamilyName
+        $installedCandidate = if ($TransitionMode -ceq 'in-place') {
+            Update-TestPackage `
+                -Path $candidatePath `
+                -ExpectedName $candidatePackageName `
+                -ExpectedFamilyName $candidatePackageFamilyName
+        }
+        else {
+            Remove-TestPackage
+            Install-TestPackage `
+                -Path $candidatePath `
+                -ExpectedName $candidatePackageName `
+                -ExpectedFamilyName $candidatePackageFamilyName
+        }
         if (
             $null -eq $installedCandidate -or
             [string]$installedCandidate.Version -cne $candidateIdentity.Version -or
             [string]$installedCandidate.Status -cne 'Ok'
         ) {
-            throw "Windows did not install after '$($baseline.assetName)' was removed."
+            throw "Windows did not install the candidate after '$($baseline.assetName)'."
         }
         $candidateLocalState = Join-Path `
             $env:LOCALAPPDATA `
@@ -317,10 +380,27 @@ try {
         $retainedMarkerPath = Join-Path `
             $candidateLocalState `
             'msix-upgrade-proof.txt'
-        if (
+        $markerWasRetained = Test-Path `
+            -LiteralPath $retainedMarkerPath `
+            -PathType Leaf
+        if ($markerWasRetained) {
+            $markerWasRetained = (
+                Get-Content -LiteralPath $retainedMarkerPath -Raw
+            ).Trim() -ceq $marker
+        }
+        if ($TransitionMode -ceq 'in-place') {
+            if (
+                $installedCandidate.PackageFamilyName -cne
+                    $installedBaseline.PackageFamilyName -or
+                -not $markerWasRetained
+            ) {
+                throw 'The in-place update did not retain package identity and LocalState.'
+            }
+        }
+        elseif (
             $installedCandidate.PackageFamilyName -ceq
                 $installedBaseline.PackageFamilyName -or
-            (Test-Path -LiteralPath $retainedMarkerPath -PathType Leaf)
+            $markerWasRetained
         ) {
             throw 'The Partner Center identity reset did not create isolated LocalState.'
         }
@@ -333,8 +413,8 @@ try {
             packageFamilyName = [string]$installedCandidate.PackageFamilyName
             status = [string]$installedCandidate.Status
             previousPackageFamilyName = [string]$installedBaseline.PackageFamilyName
-            identityTransition = 'remove-and-reinstall'
-            localStateRetained = $false
+            identityTransition = $TransitionMode
+            localStateRetained = $markerWasRetained
         })
     }
 
@@ -395,6 +475,6 @@ if (-not [string]::IsNullOrWhiteSpace($evidenceDirectory)) {
     Set-Content -LiteralPath $EvidencePath -Encoding utf8
 
 Write-Host (
-    'MSIX identity-reset validation passed for ' +
+    "MSIX $TransitionMode validation passed for " +
     "$($results.Count) proof-release paths."
 )

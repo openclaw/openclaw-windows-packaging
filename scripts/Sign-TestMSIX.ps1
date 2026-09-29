@@ -10,6 +10,9 @@ param(
         Join-Path (Split-Path $PSScriptRoot -Parent) 'release-policy.json'
     ),
 
+    [ValidateSet('store', 'sideload')]
+    [string]$IdentityChannel = 'store',
+
     # Test seam that replaces certificate-store operations so tests never
     # touch Cert:\. Production callers omit it.
     [hashtable]$Operations = @{}
@@ -62,7 +65,12 @@ $resolvedArtifactsDirectory = (
 $resolvedPolicyPath = (Resolve-Path -LiteralPath $PolicyPath).Path
 $policy = Get-Content -LiteralPath $resolvedPolicyPath -Raw |
     ConvertFrom-Json
-$publisher = [string]$policy.publisher
+$publisher = if ($IdentityChannel -ceq 'sideload') {
+    [string]$policy.sideloadPackageIdentity.publisher
+}
+else {
+    [string]$policy.publisher
+}
 if ([string]::IsNullOrWhiteSpace($publisher)) {
     throw 'The Gateway MSIX release policy publisher is missing.'
 }

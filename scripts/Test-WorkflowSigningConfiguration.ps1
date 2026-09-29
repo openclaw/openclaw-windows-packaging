@@ -60,13 +60,17 @@ $requiredFragments = @(
     'name: Compose unsigned Store and sideload MSIX bundles'
     'name: Upload unsigned Store MSIX bundle'
     'name: Upload unsigned sideload MSIX bundle'
-    'name: Test proof-release MSIX identity transition'
+    'name: Test MSIX identity transition and in-place upgrades'
     "needs.changes.outputs.versioning == 'true'"
     'scripts/Test-MSIXReleaseIdentity.Tests.ps1'
     '.\scripts\msix-upgrade-baselines.json'
     '.\scripts\Test-MSIXUpgrade.ps1'
-    'name: Download unsigned bundle candidate'
-    '-CandidateBundlePath test-signed\bundle\OpenClawGateway.msixbundle'
+    'name: Download unsigned Store bundle candidate'
+    'name: Download unsigned sideload bundle candidate'
+    '-IdentityChannel sideload'
+    '-TransitionMode identity-reset'
+    '-TransitionMode in-place'
+    '-CandidateBundlePath test-signed\sideload\bundle\OpenClawGateway.msixbundle'
     'openclaw-gateway-msix-upgrade-evidence'
     'retention-days: 90'
     '-IdentityChannel $channel'
@@ -126,8 +130,8 @@ if (-not $dispatchDefaultMatch.Success -or
 }
 
 $identityCalls = [regex]::Matches($workflow, '-GatewayTag \$env:GATEWAY_TAG')
-if ($identityCalls.Count -ne 3) {
-    throw 'MSIX, bundle and upgrade verification must use the same resolved Gateway tag.'
+if ($identityCalls.Count -ne 4) {
+    throw 'MSIX, bundle and both upgrade verifications must use the same resolved Gateway tag.'
 }
 
 if ($workflow.Contains('AZURE_CLIENT_SECRET', [StringComparison]::Ordinal)) {

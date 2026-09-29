@@ -786,7 +786,7 @@ jobs:
           retention-days: 7
 
   test-msix-upgrades:
-    name: Test proof-release MSIX identity transition
+    name: Test MSIX identity transition and in-place upgrades
     if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.versioning == 'true' }}
     needs:
       - changes
@@ -803,24 +803,45 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Download unsigned x64 candidate
+      - name: Download unsigned Store x64 candidate
         uses: actions/download-artifact@v8
         with:
           name: openclaw-gateway-msix-store-unsigned-x64
-          path: artifacts\x64
+          path: artifacts\store\x64
 
-      - name: Download unsigned bundle candidate
+      - name: Download unsigned Store bundle candidate
         uses: actions/download-artifact@v8
         with:
           name: openclaw-gateway-msix-store-unsigned-bundle
-          path: artifacts\bundle
+          path: artifacts\store\bundle
 
-      - name: Apply temporary test signature
+      - name: Download unsigned sideload x64 candidate
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-sideload-unsigned-x64
+          path: artifacts\sideload\x64
+
+      - name: Download unsigned sideload bundle candidate
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-sideload-unsigned-bundle
+          path: artifacts\sideload\bundle
+
+      - name: Apply temporary Store test signature
         shell: pwsh
         run: |
           .\scripts\Sign-TestMSIX.ps1 `
-            -ArtifactsDirectory artifacts `
-            -OutputDirectory test-signed
+            -ArtifactsDirectory artifacts\store `
+            -OutputDirectory test-signed\store `
+            -IdentityChannel store
+
+      - name: Apply temporary sideload test signature
+        shell: pwsh
+        run: |
+          .\scripts\Sign-TestMSIX.ps1 `
+            -ArtifactsDirectory artifacts\sideload `
+            -OutputDirectory test-signed\sideload `
+            -IdentityChannel sideload
 
       - name: Download hash-pinned proof releases
         shell: pwsh
@@ -842,7 +863,7 @@ jobs:
             }
           }
 
-      - name: Test installed-package identity reset and isolated LocalState
+      - name: Test Store identity reset and isolated LocalState
         shell: pwsh
         env:
           GATEWAY_TAG: ${{ needs.build-package.outputs.source_tag }}
@@ -855,17 +876,38 @@ jobs:
           .\scripts\Test-MSIXUpgrade.ps1 `
             -BaselinesPath .\scripts\msix-upgrade-baselines.json `
             -BaselinesDirectory baselines `
-            -CandidatePackagePath test-signed\x64\OpenClawGateway-x64.msix `
-            -CandidateBundlePath test-signed\bundle\OpenClawGateway.msixbundle `
-            -CandidateCertificatePath test-signed\x64\OpenClawGateway-test-signing.cer `
+            -CandidatePackagePath test-signed\store\x64\OpenClawGateway-x64.msix `
+            -CandidateBundlePath test-signed\store\bundle\OpenClawGateway.msixbundle `
+            -CandidateCertificatePath test-signed\store\x64\OpenClawGateway-test-signing.cer `
             -ExpectedCandidateVersion $identity.PackageVersion `
-            -EvidencePath evidence\msix-upgrade-evidence.json
+            -TransitionMode identity-reset `
+            -EvidencePath evidence\msix-identity-reset-evidence.json
+
+      - name: Test sideload in-place update and retained LocalState
+        shell: pwsh
+        env:
+          GATEWAY_TAG: ${{ needs.build-package.outputs.source_tag }}
+        run: |
+          $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
+            ConvertFrom-Json
+          $identity = .\scripts\Get-MSIXReleaseIdentity.ps1 `
+            -GatewayTag $env:GATEWAY_TAG `
+            -MSIXRevision ([int]$policy.msixRevision)
+          .\scripts\Test-MSIXUpgrade.ps1 `
+            -BaselinesPath .\scripts\msix-upgrade-baselines.json `
+            -BaselinesDirectory baselines `
+            -CandidatePackagePath test-signed\sideload\x64\OpenClawGateway-x64.msix `
+            -CandidateBundlePath test-signed\sideload\bundle\OpenClawGateway.msixbundle `
+            -CandidateCertificatePath test-signed\sideload\x64\OpenClawGateway-test-signing.cer `
+            -ExpectedCandidateVersion $identity.PackageVersion `
+            -TransitionMode in-place `
+            -EvidencePath evidence\msix-in-place-upgrade-evidence.json
 
       - name: Upload identity-transition evidence
         uses: actions/upload-artifact@v7
         with:
           name: openclaw-gateway-msix-upgrade-evidence
-          path: evidence\msix-upgrade-evidence.json
+          path: evidence\*.json
           if-no-files-found: error
           retention-days: 90
 

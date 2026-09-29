@@ -686,18 +686,20 @@ Direct GitHub distribution and Store submission intentionally use distinct
 identities because the current Azure certificate matches the legacy sideload
 publisher rather than Partner Center's reserved publisher.
 
-The signed `v0.0.0.0` and `v0.0.0.1` proof releases and the latest production
-release retain the former `OpenClaw.Gateway` identity and remain immutable
-transition baselines. Partner Center requires the reserved
+The signed `v0.0.0.0` and `v0.0.0.1` proof releases and the latest signed
+sideload release retain the `OpenClaw.Gateway` identity and remain immutable
+upgrade baselines. Partner Center requires the reserved
 `OpenClawFoundation.OpenClawGateway` identity, so Windows cannot update those
 packages in place or retain their packaged LocalState. Pull requests that
 change release policy download the hash-pinned standalone x64 and recommended
 `.msixbundle` assets, install each one on a clean GitHub-hosted Windows runner,
-verify the legacy identity, remove it, install the candidate through the same
-delivery format, and prove that Windows registered the reserved package family
-with isolated LocalState. Changes to source-selection scripts also trigger this
-check against the selected release. The gate additionally proves fresh
-installation of both candidate formats. It refuses to run when a Gateway package is
+verify the legacy identity, remove it, install the Store candidate through the
+same delivery format, and prove that Windows registered the reserved package
+family with isolated LocalState. The same gate updates each baseline in place
+to the new sideload candidate and proves that standalone and bundle delivery
+retain the exact LocalState marker. Changes to source-selection scripts also
+trigger this check against the selected release. The gate additionally proves
+fresh installation of both Store candidate formats. It refuses to run when a Gateway package is
 already registered and removes only packages installed by that test
 invocation. It temporarily trusts the ephemeral test-signing certificate in
 the local-machine Trusted People store, as required by Windows deployment, and
