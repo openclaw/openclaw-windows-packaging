@@ -377,10 +377,10 @@ states the host constraints at instruction priority; real-model testing showed
 that user context alone could reach the model yet still be ignored. The user
 interaction rule covers both launching and offering an unusable local dialog;
 validate proposed next steps as well as tool calls in real-model scenarios. The user
-copy remains a compatibility fallback because the approved v2026.9.4 runtime
-can replace system-context additions on runtime-only events. Remove that
-fallback only after the selected runtime preserves system context through
-those events and the request-boundary proof covers them. Until then,
+copy remains a compatibility fallback because the previously approved
+v2026.9.4 runtime can replace system-context additions on runtime-only events.
+Remove that fallback only after the selected runtime preserves system context
+through those events and the request-boundary proof covers them. Until then,
 this lane does not synthesize those events or qualify external CLI/realtime
 backends. Raw-model and settled-finalization operations omit prompt hooks.
 Do not treat successful registration as universal context coverage. Repeat

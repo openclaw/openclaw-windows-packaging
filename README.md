@@ -518,12 +518,11 @@ OpenClaw `v2026.9.5` at `ec9c1a13db8938e5a3eaa51fca2e981cde2395a9`
 includes that forwarding and has been qualified with this default-on plugin.
 Unsigned and test builds follow the stable-source selection above; that
 qualification is not an official runtime approval.
-The official-signing policy remains on the release-approved OpenClaw `v2026.9.4`
-baseline (`3a9d69db306cd7f081e06254cb89c4bcc14a7107`); that approval does not
-establish support for this default-on/theme contract. A compatible runtime
-requires separate reviewed approval before an official release. Without theme
-forwarding, the page uses the browser or operating system light/dark preference
-with a safe built-in palette.
+The official-signing source policy pins that same tag and commit; source
+approval alone does not establish support for this default-on/theme contract.
+Runtime compatibility requires separate reviewed approval before an official
+release. Without theme forwarding, the page uses the browser or operating
+system light/dark preference with a safe built-in palette.
 
 `scripts\Build-MSIX.ps1` downloads the official Node.js archive matching the
 payload's recorded build version and architecture, copies both inputs into

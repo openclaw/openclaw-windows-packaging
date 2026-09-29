@@ -16,7 +16,7 @@ if (@(. $sourcePath).Count -ne 0) { throw 'Dot-sourcing the helper must not prod
 $basePolicy = Read-OpenClawReleasePolicy $policyPath
 $commit = $basePolicy.approvedCommit
 $version = $basePolicy.payloadPackageVersion
-$tagObject = '8bec206f3c1f787e1e9c45cfd34d3de2a78c7b8e'
+$tagObject = 'ce2a56d4f41a756662328f4098e303014fdbb38c'
 $integrity = 'sha512-' + [Convert]::ToBase64String([byte[]]::new(64))
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) "openclaw-source-tests-$([guid]::NewGuid().ToString('N'))"
 $testCount = 0
@@ -135,15 +135,15 @@ try {
     }
     Invoke-Test 'a new resolution follows an advancing stable channel' {
         $first = Resolve-OpenClawSource $policy
-        Add-Release '2026.9.5' ('a' * 40) ('b' * 40)
-        $http.Responses['Registry:latest'].version = '2026.9.5'
+        Add-Release '2026.9.7' ('a' * 40) ('b' * 40)
+        $http.Responses['Registry:latest'].version = '2026.9.7'
         $selected = Resolve-OpenClawSource $policy
         Assert-Equal $selected.resolvedCommit ('a' * 40)
         Assert-Equal $first.resolvedCommit $commit
         $identity = & (Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1') `
             -GatewayTag $selected.releaseTag -MSIXRevision 0
-        Assert-Equal $identity.PackageVersion '2026.9.500.0'
-        Assert-Equal $identity.ReleaseTag 'v2026.9.5-msix.0'
+        Assert-Equal $identity.PackageVersion '2026.9.700.0'
+        Assert-Equal $identity.ReleaseTag 'v2026.9.7-msix.0'
     }
     foreach ($missing in @('Registry:latest', "Registry:$version", "GitHub:git/ref/tags/v$version")) {
         Invoke-Test "missing $missing is terminal, with no fallback" {
@@ -156,7 +156,7 @@ try {
     }
     foreach ($case in @(
             @{ Name = 'registry name'; Edit = { $http.Responses["Registry:$version"].name = 'other' }; Error = 'exact registry' },
-            @{ Name = 'registry version'; Edit = { $http.Responses["Registry:$version"].version = '2026.9.5' }; Error = 'exact registry' },
+            @{ Name = 'registry version'; Edit = { $http.Responses["Registry:$version"].version = '2026.9.7' }; Error = 'exact registry' },
             @{ Name = 'registry repository'; Edit = { $http.Responses["Registry:$version"].repository.url += '/other' }; Error = 'repository' },
             @{ Name = 'registry integrity'; Edit = { $http.Responses["Registry:$version"].dist.integrity = 'sha512-invalid' }; Error = 'registryIntegrity' },
             @{ Name = 'registry gitHead'; Edit = { $http.Responses["Registry:$version"].gitHead = 'a' * 40 }; Error = 'gitHead' },
@@ -165,7 +165,7 @@ try {
             @{ Name = 'unsigned tag'; Edit = { $http.Responses["GitHub:git/tags/$tagObject"].verification.verified = $false }; Error = 'signature' },
             @{ Name = 'nonboolean verification'; Edit = { $http.Responses["GitHub:git/tags/$tagObject"].verification.verified = 'true' }; Error = 'signature' },
             @{ Name = 'wrong tag SHA'; Edit = { $http.Responses["GitHub:git/tags/$tagObject"].sha = 'a' * 40 }; Error = 'signature' },
-            @{ Name = 'wrong tag label'; Edit = { $http.Responses["GitHub:git/tags/$tagObject"].tag = 'v2026.9.5' }; Error = 'signature' },
+            @{ Name = 'wrong tag label'; Edit = { $http.Responses["GitHub:git/tags/$tagObject"].tag = 'v2026.9.7' }; Error = 'signature' },
             @{ Name = 'nested tag target'; Edit = { $http.Responses["GitHub:git/tags/$tagObject"].object.type = 'tag' }; Error = 'directly to a commit' },
             @{ Name = 'source name'; Edit = { Set-Package -Name 'other' }; Error = 'source package name' },
             @{ Name = 'source correction mismatch'; Edit = {
@@ -239,8 +239,8 @@ try {
         }
     }
     Invoke-Test 'a reviewed older stable pin queries only its exact release and remains officially approved' {
-        Add-Release '2026.9.5' ('a' * 40) ('b' * 40)
-        $http.Responses['Registry:latest'].version = '2026.9.5'
+        Add-Release '2026.9.7' ('a' * 40) ('b' * 40)
+        $http.Responses['Registry:latest'].version = '2026.9.7'
         $policy | Add-Member stableVersion $version
         Save-Policy
         $source = & $workflowPath @workflow -SigningMode official
@@ -311,7 +311,7 @@ try {
         Save-Policy
         $null = & $workflowPath @workflow
         $http.Calls.Clear()
-        $policy.stableVersion = '2026.9.5'
+        $policy.stableVersion = '2026.9.7'
         Save-Policy
         Assert-Throws { & $workflowPath @workflow -ReuseSnapshot } 'requestedRef'
         $policy.PSObject.Properties.Remove('stableVersion')
@@ -344,8 +344,8 @@ try {
     }
     foreach ($mode in @('official', 'store')) {
         Invoke-Test "a valid newer stable channel is not $mode release authority" {
-            Add-Release '2026.9.5' ('a' * 40) ('b' * 40)
-            $http.Responses['Registry:latest'].version = '2026.9.5'
+            Add-Release '2026.9.7' ('a' * 40) ('b' * 40)
+            $http.Responses['Registry:latest'].version = '2026.9.7'
             Assert-Throws { & $workflowPath @workflow -SigningMode $mode } 'reviewed approvedCommit'
             Assert-Equal (Test-Path -LiteralPath $workflow.OutputPath) $false
         }
