@@ -380,11 +380,12 @@ try {
         $retainedMarkerPath = Join-Path `
             $candidateLocalState `
             'msix-upgrade-proof.txt'
-        $markerWasRetained = Test-Path `
+        $markerExists = Test-Path `
             -LiteralPath $retainedMarkerPath `
             -PathType Leaf
-        if ($markerWasRetained) {
-            $markerWasRetained = (
+        $markerContentsMatch = $false
+        if ($markerExists) {
+            $markerContentsMatch = (
                 Get-Content -LiteralPath $retainedMarkerPath -Raw
             ).Trim() -ceq $marker
         }
@@ -392,7 +393,7 @@ try {
             if (
                 $installedCandidate.PackageFamilyName -cne
                     $installedBaseline.PackageFamilyName -or
-                -not $markerWasRetained
+                -not $markerContentsMatch
             ) {
                 throw 'The in-place update did not retain package identity and LocalState.'
             }
@@ -400,7 +401,7 @@ try {
         elseif (
             $installedCandidate.PackageFamilyName -ceq
                 $installedBaseline.PackageFamilyName -or
-            $markerWasRetained
+            $markerExists
         ) {
             throw 'The Partner Center identity reset did not create isolated LocalState.'
         }
@@ -414,7 +415,7 @@ try {
             status = [string]$installedCandidate.Status
             previousPackageFamilyName = [string]$installedBaseline.PackageFamilyName
             identityTransition = $TransitionMode
-            localStateRetained = $markerWasRetained
+            localStateRetained = ($TransitionMode -ceq 'in-place' -and $markerContentsMatch)
         })
     }
 

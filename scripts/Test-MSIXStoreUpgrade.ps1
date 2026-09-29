@@ -132,6 +132,9 @@ function Install-StoreBaseline {
     if (@(Get-StorePackage).Count -ne 0) {
         throw 'Refusing to install over a Store Gateway package not owned by this test.'
     }
+    # WinGet may leave a registration even when it reports failure or the
+    # registration poll times out. Arm cleanup before starting the install.
+    $script:testOwnsPackage = $true
     $winget = Get-Command winget.exe -ErrorAction Stop
     $output = @(
         & $winget.Source install `
@@ -162,7 +165,6 @@ function Install-StoreBaseline {
     if ($packages.Count -ne 1) {
         throw 'The Microsoft Store did not create exactly one Gateway registration.'
     }
-    $script:testOwnsPackage = $true
     $installed = $packages[0]
     if (
         [string]$installed.PackageFamilyName -cne $packageFamilyName -or
@@ -273,12 +275,16 @@ try {
     }
 }
 finally {
-    Remove-TestPackage
-    if ($null -ne $certificate) {
-        Remove-Item `
-            -LiteralPath "Cert:\LocalMachine\TrustedPeople\$($certificate.Thumbprint)" `
-            -Force `
-            -ErrorAction SilentlyContinue
+    try {
+        Remove-TestPackage
+    }
+    finally {
+        if ($null -ne $certificate) {
+            Remove-Item `
+                -LiteralPath "Cert:\LocalMachine\TrustedPeople\$($certificate.Thumbprint)" `
+                -Force `
+                -ErrorAction SilentlyContinue
+        }
     }
 }
 

@@ -18,6 +18,8 @@ $requiredFragments = @(
     'name: Test packaging relevance'
     'name: Test MSBuild property escaping'
     '.\scripts\Test-MSBuildPropertyValue.Tests.ps1'
+    'name: Test MSIX upgrade safety'
+    '.\scripts\Test-MSIXUpgradeSafety.Tests.ps1'
     "if: `${{ github.event_name != 'pull_request' || needs.changes.outputs.packaging == 'true' }}"
     'name: Gateway MSIX CI'
     "if: `${{ always() }}"

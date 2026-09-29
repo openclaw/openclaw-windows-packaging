@@ -224,6 +224,11 @@ jobs:
         run: >
           .\scripts\Test-Sign-TestMSIX.Tests.ps1
 
+      - name: Test MSIX upgrade safety
+        shell: pwsh
+        run: >
+          .\scripts\Test-MSIXUpgradeSafety.Tests.ps1
+
       - name: Test Node.js packaging inputs
         shell: pwsh
         run: .\scripts\Test-NodeRuntimeInputs.Tests.ps1
