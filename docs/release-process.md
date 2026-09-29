@@ -64,11 +64,13 @@ Complete this checklist after the policy pull request has merged to `main`.
    are generated from merged pull request titles; `CONTRIBUTING.md` owns the
    required title format.
 5. Confirm the policy pull request's `test-msix-upgrades` job succeeded and
-   retained its identity-transition evidence artifact. That job runs only on pull requests
+   retained both identity-transition and in-place-upgrade evidence. That job runs only on pull requests
    that change versioning inputs or source-selection scripts; it does not run
    during the later official dispatch.
-6. Do not reuse or alter an accepted GitHub release tag, and do not edit an
-   existing proof-release entry in `scripts\msix-upgrade-baselines.json`.
+6. Do not reuse or alter an accepted GitHub release tag. Update the latest
+   production entries in `scripts\msix-upgrade-baselines.json` only in a
+   reviewed policy pull request, using the verified digest of an immutable
+   signed sideload release.
 
 Dispatch **Build OpenClaw Gateway MSIX** from `main` in GitHub Actions with
 those inputs. A `store` or `official` run deliberately bypasses both the upstream package
@@ -99,16 +101,27 @@ Observe these workflow outcomes:
 - `sign-msix` verifies signatures and refreshes package metadata.
 
 The policy pull request's upgrade job uses `scripts\Test-MSIXUpgrade.ps1` with
-the immutable, hash-pinned proof-release fixtures in
+the immutable, hash-pinned release fixtures in
 `scripts\msix-upgrade-baselines.json`. It requires an isolated clean Windows
 account and refuses to run when an OpenClaw Gateway package is already
-registered. The Partner Center identity differs from the legacy GitHub-release
-identity, so Windows cannot perform an in-place update or retain packaged
-LocalState. The job installs every standalone and bundle baseline, verifies the
-reviewed legacy identity, removes it, installs the candidate under the reserved
-identity, proves the package family and LocalState are isolated, and proves
-both candidate delivery formats install cleanly. Do not substitute a developer
-profile or weaken those fixtures to make the check pass.
+registered. It exercises two explicit modes for both standalone and bundle
+delivery:
+
+- **Store identity reset:** install a signed sideload baseline, write a
+  LocalState marker, remove that identity, install the test-signed Store
+  candidate, and prove the reserved package family has isolated LocalState.
+  This remains the Store gate until Partner Center has distributed an authentic
+  Store-signed baseline.
+- **Sideload in-place update:** install the same baseline, write the marker,
+  update directly to the newer test-signed sideload candidate without removing
+  the package, and prove the package family and exact marker are retained.
+
+Before approving a policy bump, the release owner must confirm whether the
+previous Store revision reached users. If it did, replace the reset-only Store
+gate with an authentic, hash-pinned Store baseline and prove the Store update
+in place. If it did not, record that no installed Store baseline exists and
+retain the reset/fresh-install evidence. Do not substitute a developer profile
+or weaken the fixtures to make either check pass.
 
 ## Publication and completion
 
@@ -123,7 +136,7 @@ bundle plus signed x64 and ARM64 standalone MSIX assets.
 After publication, verify the release has the derived permanent tag, generated
 notes, three signed sideload assets, and valid signatures. Separately verify
 the run retained its unsigned Store submission bundle. Reconcile the release with the successful
-identity-transition evidence from the policy pull request. Verify the bundle and both
+identity-transition and in-place-upgrade evidence from the policy pull request. Verify the bundle and both
 standalone packages are present; the bundle is the multi-architecture delivery,
 while the standalone packages support explicit architecture deployment. Keep
 both the release workflow run and the policy pull request's evidence available

@@ -705,8 +705,10 @@ invocation. It temporarily trusts the ephemeral test-signing certificate in
 the local-machine Trusted People store, as required by Windows deployment, and
 removes that certificate in `finally`. The resulting JSON evidence is retained
 as a workflow artifact for 90 days. This identity change is the explicitly
-approved breaking reset; future releases under the reserved identity must
-return to in-place upgrade and LocalState-retention proof.
+approved breaking reset. Until Partner Center distributes a Store-signed
+package, later policy revisions repeat the reset and fresh-install proof. After
+the reserved identity reaches users, subsequent releases must use an authentic
+Store baseline and prove in-place upgrade with LocalState retention.
 
 An `.msixbundle` is a single installable container for the x64 and ARM64 MSIX
 packages; Windows selects the package appropriate for the device. An
