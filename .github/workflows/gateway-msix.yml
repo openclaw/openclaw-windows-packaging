@@ -903,6 +903,25 @@ jobs:
             -TransitionMode in-place `
             -EvidencePath evidence\msix-in-place-upgrade-evidence.json
 
+      - name: Test authentic Store in-place update and retained LocalState
+        shell: pwsh
+        env:
+          GATEWAY_TAG: ${{ needs.build-package.outputs.source_tag }}
+        run: |
+          $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
+            ConvertFrom-Json
+          $identity = .\scripts\Get-MSIXReleaseIdentity.ps1 `
+            -GatewayTag $env:GATEWAY_TAG `
+            -MSIXRevision ([int]$policy.msixRevision)
+          .\scripts\Test-MSIXStoreUpgrade.ps1 `
+            -CandidatePackagePath test-signed\store\x64\OpenClawGateway-x64.msix `
+            -CandidateBundlePath test-signed\store\bundle\OpenClawGateway.msixbundle `
+            -CandidateCertificatePath test-signed\store\x64\OpenClawGateway-test-signing.cer `
+            -ExpectedBaselineVersion '2026.9.404.0' `
+            -ExpectedCandidateVersion $identity.PackageVersion `
+            -StoreProductId '9NV70LV3D6XC' `
+            -EvidencePath evidence\msix-store-in-place-upgrade-evidence.json
+
       - name: Upload identity-transition evidence
         uses: actions/upload-artifact@v7
         with:

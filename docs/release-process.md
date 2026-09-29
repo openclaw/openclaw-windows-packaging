@@ -115,13 +115,18 @@ delivery:
 - **Sideload in-place update:** install the same baseline, write the marker,
   update directly to the newer test-signed sideload candidate without removing
   the package, and prove the package family and exact marker are retained.
+- **Store in-place update:** install the published Store product by its Store
+  ID, require the installed package to match the reviewed previous version and
+  reserved identity, write the marker, and update directly to each test-signed
+  Store candidate format. The package family and exact marker must survive.
 
 Before approving a policy bump, the release owner must confirm whether the
-previous Store revision reached users. If it did, replace the reset-only Store
-gate with an authentic, hash-pinned Store baseline and prove the Store update
-in place. If it did not, record that no installed Store baseline exists and
-retain the reset/fresh-install evidence. Do not substitute a developer profile
-or weaken the fixtures to make either check pass.
+previous Store revision reached users. When it did, the Store install must
+resolve to that exact version before the in-place test continues; a newer,
+older, missing, or differently identified Store package is a hard failure. If
+no installed Store baseline exists, record that owner decision and retain the
+reset/fresh-install evidence. Do not substitute a developer profile or weaken
+the fixtures to make either check pass.
 
 ## Publication and completion
 

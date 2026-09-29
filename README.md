@@ -697,9 +697,12 @@ verify the legacy identity, remove it, install the Store candidate through the
 same delivery format, and prove that Windows registered the reserved package
 family with isolated LocalState. The same gate updates each baseline in place
 to the new sideload candidate and proves that standalone and bundle delivery
-retain the exact LocalState marker. Changes to source-selection scripts also
-trigger this check against the selected release. The gate additionally proves
-fresh installation of both Store candidate formats. It refuses to run when a Gateway package is
+retain the exact LocalState marker. When the previous Store revision reached
+users, the gate also installs that exact published Store version by Store ID
+and proves that both Store candidate formats update it in place while retaining
+the marker. Changes to source-selection scripts also trigger this check against
+the selected release. The gate additionally proves fresh installation of both
+Store candidate formats. It refuses to run when a Gateway package is
 already registered and removes only packages installed by that test
 invocation. It temporarily trusts the ephemeral test-signing certificate in
 the local-machine Trusted People store, as required by Windows deployment, and
@@ -707,7 +710,7 @@ removes that certificate in `finally`. The resulting JSON evidence is retained
 as a workflow artifact for 90 days. This identity change is the explicitly
 approved breaking reset. Until Partner Center distributes a Store-signed
 package, later policy revisions repeat the reset and fresh-install proof. After
-the reserved identity reaches users, subsequent releases must use an authentic
+the reserved identity reaches users, subsequent releases install the authentic
 Store baseline and prove in-place upgrade with LocalState retention.
 
 An `.msixbundle` is a single installable container for the x64 and ARM64 MSIX
