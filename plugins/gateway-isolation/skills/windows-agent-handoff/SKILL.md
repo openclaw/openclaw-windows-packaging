@@ -32,12 +32,22 @@ metadata: {"openclaw":{"os":["win32"],"requires":{"env":["CLAWCTL_GATEWAY_ISOLAT
      established, or the uncertainty is explicit.
 
 2. Select the smallest supported route.
-   - For windows, browser interaction, sign-in, or other human participation,
+   - Set `{baseDir}` to the directory containing the advertised `SKILL.md`
+     you read. Resolve reference paths against that directory, never the
+     application root, workspace, or current working directory.
+   - Read the applicable branch before answering, including refusals and
+     recovery guidance. Unsafe requested actions remain prohibited during
+     this read-only preparation.
+   - For GUI work, including agent-only automation, browser interaction,
+     sign-in, or other human participation,
      read [GUI and sign-in](references/gui-and-sign-in.md).
    - For sending, downloading, opening, or copying a generated deliverable,
      read [file handoff](references/file-handoff.md).
    - When both are needed, follow both branches. Keep unrelated headless work
      in the agent session; do not repeat the isolation explanation every turn.
+   - The branch files are `{baseDir}\references\gui-and-sign-in.md` and
+     `{baseDir}\references\file-handoff.md`; do not guess another `skills`
+     directory if a read fails.
    - **Check:** the route matches the user's requested outcome, not merely a
      convenient local operation.
 

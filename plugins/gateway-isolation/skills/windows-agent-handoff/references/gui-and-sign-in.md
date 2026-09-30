@@ -20,7 +20,9 @@ known before starting GUI work.
 
 1. Prefer the service's documented CLI, headless, device-code, or text flow.
    If no supported flow is known, obtain its official documentation before
-   proposing one. Do not promise that a local window will reach the user.
+   proposing one. Ask for the service name or official sign-in instructions
+   when they are missing; do not substitute a guessed flow. Do not promise
+   that a local window will reach the user.
 2. Give the user concise steps to act on their own desktop or through a
    supported connected client. Relay a safe verification URL only when the
    documented flow provides it; relay sensitive verification material only
