@@ -59,7 +59,7 @@ test("supplies brief local-session guidance with the pinned runtime fallback wit
   assert.deepEqual(text.split("\n\n"), [
     "## Windows agent session",
     "The Gateway and local tools run in an isolated Windows agent session, not the user's desktop: local windows are invisible to the user, and local file access does not imply user access.",
-    "For user-facing GUI, sign-in, or file delivery, consult the windows-agent-handoff skill before acting; use supported participation and delivery routes, share only intended nonsensitive files, and state what remains unverified.",
+    "Do not solicit or expose credentials/tokens, bypass MFA/consent, alter ACLs/isolation, open local GUI for human participation, or export private workspaces; consult windows-agent-handoff for supported GUI, sign-in, and verified nonsensitive file delivery.",
   ]);
   assert.deepEqual(hooks[0].handler(), result);
   result.prependContext = "caller mutation";

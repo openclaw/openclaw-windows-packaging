@@ -11,9 +11,9 @@ import { resolvePreparedApplicationFile } from "./prepared-application-file.mjs"
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 assert.equal(process.platform, "win32", "The real-runtime lane requires Windows.");
-assert.ok(process.argv[2], "Pass the prepared OpenClaw payload directory.");
-const payloadRoot = path.resolve(process.argv[2]);
-const application = path.resolve(payloadRoot, "app");
+assert.equal(process.argv.length, 2, "Select the prepared application through Test-GatewayIsolationContext.ps1.");
+const application = process.cwd();
+const payloadRoot = path.dirname(application);
 if (!application.startsWith(payloadRoot + path.sep)) {
   throw new Error("Application must remain inside the prepared payload directory.");
 }

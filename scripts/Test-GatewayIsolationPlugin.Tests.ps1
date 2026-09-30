@@ -63,6 +63,23 @@ try {
         throw "Gateway isolation plugin tests failed with exit code $LASTEXITCODE."
     }
 
+    $emptyApplication = Join-Path $testRoot 'empty-payload\app'
+    New-Item -Path $emptyApplication -ItemType Directory -Force | Out-Null
+    $callerDirectory = (Get-Location).Path
+    $contextFailed = $false
+    try {
+        & (Join-Path $PSScriptRoot 'Test-GatewayIsolationContext.ps1') `
+            -OpenClawDirectory $emptyApplication
+    }
+    catch {
+        if ($LASTEXITCODE -eq 0) { throw }
+        $contextFailed = $true
+        $global:LASTEXITCODE = 0
+    }
+    if (-not $contextFailed -or (Get-Location).Path -cne $callerDirectory) {
+        throw 'Failed prepared-runtime validation must restore the calling directory.'
+    }
+
     New-Item `
         -Path (
             Join-Path $packageSource 'dist\control-ui\assets'
