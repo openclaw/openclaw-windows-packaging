@@ -29,18 +29,18 @@
       "sha256": "48a65dd7bdc515acac96f73129aed9a343604bbfb3ceed8be4e5bd5367fd85c4"
     },
     {
-      "releaseTag": "v2026.9.4-msix.4",
+      "releaseTag": "v2026.9.4-msix.5",
       "deliveryType": "standalone",
-      "assetName": "OpenClawGateway-2026.9.4-msix.4-x64.msix",
-      "packageVersion": "2026.9.404.0",
-      "sha256": "c3e7d819de67bdf522d39f18aa5fbe0084c9d9e28c23b4a6eb65693ba42ddd10"
+      "assetName": "OpenClawGateway-2026.9.4-msix.5-x64.msix",
+      "packageVersion": "2026.9.405.0",
+      "sha256": "af4f3063ce1c69f686fa1e28a327b5051cda5cb825e5dd6c068c26469d1ac2c9"
     },
     {
-      "releaseTag": "v2026.9.4-msix.4",
+      "releaseTag": "v2026.9.4-msix.5",
       "deliveryType": "bundle",
-      "assetName": "OpenClawGateway-2026.9.4-msix.4.msixbundle",
-      "packageVersion": "2026.9.404.0",
-      "sha256": "46407dadefc69f943a3615cbf2c8b9d0b5b090db16aac89d76b6487e503ee5c4"
+      "assetName": "OpenClawGateway-2026.9.4-msix.5.msixbundle",
+      "packageVersion": "2026.9.405.0",
+      "sha256": "ad7e3cd99b77326ac31888388ef2e9e7ee9e03e6734f4f05894b28f27a4b46ed"
     }
   ]
 }
