@@ -503,23 +503,35 @@ does not rewrite them. Direct-Node UI fixtures verify rendering and interactions
 not packaged-launcher isolation or installed upgrade behavior.
 
 The same plugin supplies agent instructions on Windows when the launcher report
-is exactly `enabled`. Before supported agent runs, it prepends context explaining
-that local GUI is not the user's desktop, user participation needs a supported
-text/headless route, and private work should stay private while only intended
-deliverables are handed off. Authorized agent-only GUI work that needs no human
-viewing or input is allowed; this is not a blanket GUI prohibition.
-Remote or user-session nodes require their own
-capability and authorization checks. This is guidance, not isolation enforcement
-or a file-export feature; it does not install a skill or overwrite workspace
-instructions or configuration.
+is exactly `enabled`. Its `before_prompt_build` hook supplies two sentences
+explaining that local windows are invisible to the user, local file access does
+not imply user access, and participation or deliverable handoff needs a supported
+route. Static guidance belongs in `appendSystemContext`; the plugin also returns
+`prependContext` as a fallback because the pinned OpenClaw v2026.9.4 runtime can
+replace system additions on runtime-only turns. This duplicates the short block
+on ordinary turns. Remove the fallback only after a runtime fix is verified.
+This is guidance, not isolation enforcement or a file-export feature; it does
+not overwrite workspace instructions or configuration.
+It is not a blanket prohibition on agent-only GUI work.
+
+The plugin also bundles the
+[`windows-agent-handoff` skill](plugins/gateway-isolation/skills/windows-agent-handoff/SKILL.md).
+The short context names it for user-facing GUI, sign-in, and file delivery.
+OpenClaw advertises eligible skills and loads their instructions on demand;
+the detailed procedures are not inserted into every prompt. The skill separates
+GUI/authentication and file-delivery branches, checks the exact isolation report
+before acting, and requires observable completion evidence. Its Windows and
+environment metadata are discovery filters, not authorization. Disabling the
+plugin removes its skill; `skills.entries.windows-agent-handoff.enabled=false`
+disables the skill independently. Hook opt-outs do not disable manifest skills.
 
 The plugin supplies static guidance, not a shared-path environment variable.
 For filesystem handoff, prefer a host-reported or user-selected destination.
 The host reports `session.sharedFolder` through `clawctl status --json` in the
 user's normal terminal; that command can start the recorded session.
-When neither destination is supplied, the guidance assumes the isolated agent
-account has an existing `Shared` folder. Resolve it with a local tool inside
-that agent session, for example:
+The skill names the isolated agent's existing `Shared` folder as a handoff
+option. When neither destination is supplied, resolve it with a local tool
+inside that agent session, for example:
 
 ```powershell
 (Resolve-Path -LiteralPath (Join-Path $env:USERPROFILE 'Shared') -ErrorAction Stop).Path

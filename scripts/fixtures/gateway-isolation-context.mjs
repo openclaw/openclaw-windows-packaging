@@ -32,9 +32,16 @@ const identity = JSON.parse(await fs.readFile(path.join(application, "dist", "bu
 assert.equal(identity.commit, payload.resolvedCommit);
 assert.equal(identity.version, payload.packageVersion);
 console.log(`Runtime: ${identity.version} ${identity.commit}; Node ${process.version}`);
-for (const name of ["index.js", "package.json", "openclaw.plugin.json"]) {
+const skillName = "windows-agent-handoff";
+const skillFiles = [
+  path.join("skills", skillName, "SKILL.md"),
+  path.join("skills", skillName, "references", "gui-and-sign-in.md"),
+  path.join("skills", skillName, "references", "file-handoff.md"),
+];
+const pluginDirectory = path.join(application, "dist", "extensions", "gateway-isolation");
+for (const name of ["index.js", "package.json", "openclaw.plugin.json", ...skillFiles]) {
   assert.deepEqual(
-    await fs.readFile(path.join(application, "dist", "extensions", "gateway-isolation", name)),
+    await fs.readFile(path.join(pluginDirectory, name)),
     await fs.readFile(path.join(repository, "plugins", "gateway-isolation", name)),
     `The prepared runtime must contain the current plugin: ${name}`,
   );
@@ -49,6 +56,10 @@ createGatewayIsolationPlugin({ CLAWCTL_GATEWAY_ISOLATION: "enabled" }, "win32").
   registerHttpRoute() {},
 });
 assert.ok(instructions);
+const skillReads = await Promise.all(skillFiles.map(async name => ({
+  path: path.join(pluginDirectory, name),
+  text: await fs.readFile(path.join(pluginDirectory, name), "utf8"),
+})));
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-context-"));
 const workspace = path.join(root, "workspace");
@@ -78,6 +89,22 @@ const server = http.createServer(async (request, response) => {
     const summary = !body.tools?.length;
     console.log(`${scenario.name}: ${summary ? "summary" : "agent"} request ${requestCount}`);
     if (!summary) {
+      const systemText = body.messages
+        .filter(message => ["system", "developer"].includes(message.role))
+        .map(message => typeof message.content === "string" ? message.content : JSON.stringify(message.content))
+        .join("\n");
+      const advertisedSkill = systemText.match(
+        /<skill>\s*<name>windows-agent-handoff<\/name>[\s\S]*?<location>(.*?)<\/location>[\s\S]*?<\/skill>/,
+      );
+      assert.equal(Boolean(advertisedSkill), scenario.skillAvailable,
+        "Skill discovery must respect plugin, environment, and skill eligibility.");
+      assert.ok(!systemText.includes(skillReads[0].text),
+        "Detailed skill instructions must not be injected into the system prompt.");
+      if (advertisedSkill) {
+        scenario.skillPath = advertisedSkill[1].replace(/^~(?=[\\/]|$)/, root);
+        assert.equal(await fs.realpath(scenario.skillPath), await fs.realpath(skillReads[0].path),
+          "Discovery must point to the packaged skill, not an ambient same-named copy.");
+      }
       for (const roles of [["system", "developer"], ["user"]]) {
         const rendered = JSON.stringify(body.messages.filter(message => roles.includes(message.role)));
         assert.equal(rendered.split("## Windows agent session").length - 1, scenario.guidance ? 1 : 0,
@@ -102,19 +129,26 @@ const server = http.createServer(async (request, response) => {
       scenario.summaries++;
     }
     const lastUser = body.messages.findLastIndex(message => message.role === "user");
-    const toolResult = body.messages.slice(lastUser + 1).find(message => message.role === "tool");
-    if (toolResult) {
-      assert.ok(JSON.stringify(toolResult).includes(sentinel));
-      scenario.toolResults++;
+    const toolResults = body.messages.slice(lastUser + 1).filter(message => message.role === "tool");
+    for (const [index, toolResult] of toolResults.entries()) {
+      assert.ok(JSON.stringify(toolResult).includes(JSON.stringify(scenario.reads[index].text).slice(1, -1)),
+        `Read ${index + 1} must return the complete expected file through the real tool: ${JSON.stringify(toolResult)}`);
     }
+    scenario.toolResults = toolResults.length;
+    const nextRead = scenario.reads[toolResults.length];
     const delta = summary
       ? { content: "## Goal\nRead the fixture deliverable.\n## Progress\nThe previous fixture read completed.\n## Next Steps\nContinue the current fixture request. No other work or credentials are needed." }
-      : toolResult
+      : !nextRead
       ? { content: "Fixture completed." }
       : {
           tool_calls: [{
-            index: 0, id: "fixture-read", type: "function",
-            function: { name: "read", arguments: JSON.stringify({ path: sentinelPath }) },
+            index: 0, id: `fixture-read-${toolResults.length}`, type: "function",
+            function: {
+              name: "read",
+              arguments: JSON.stringify({
+                path: scenario.readSkill && toolResults.length === 0 ? scenario.skillPath : nextRead.path,
+              }),
+            },
           }],
         };
     response.writeHead(200, { "Content-Type": "text/event-stream" });
@@ -124,7 +158,7 @@ const server = http.createServer(async (request, response) => {
     })}\n\n`;
     response.write(event({ role: "assistant" }));
     response.write(event(delta));
-    response.write(event({}, summary || toolResult ? "stop" : "tool_calls"));
+    response.write(event({}, summary || !nextRead ? "stop" : "tool_calls"));
     response.end("data: [DONE]\n\n");
   } catch (error) {
     requestFailure ??= error;
@@ -190,17 +224,20 @@ async function run(args) {
 
 async function agent(name, {
   overflow = false, summaryExpected = false, guidance = true,
+  skillAvailable = true, readSkill = false,
   sessionKey = "agent:main:isolation-context-fixture",
 } = {}) {
-  scenario = { name, overflow, guidance, agentRequests: 0, summaries: 0, toolResults: 0 };
+  const reads = [...(readSkill ? skillReads : []), { path: sentinelPath, text: sentinel }];
+  scenario = { name, overflow, guidance, skillAvailable, readSkill, reads,
+    agentRequests: 0, summaries: 0, toolResults: 0 };
   const result = await run([
     "agent", "--local", "--agent", "main", "--session-key", sessionKey,
-    "--message", `Read the fixture deliverable. Scenario: ${name}.`,
+    "--message", `${readSkill ? "Consult windows-agent-handoff and its references before reading" : "Read"} the fixture deliverable. Scenario: ${name}.`,
     "--thinking", "off", "--timeout", "60", "--json",
   ]);
   assert.ok(scenario.agentRequests >= 2, JSON.stringify(result));
-  assert.equal(scenario.toolResults, 1, "The fixture read must execute after the captured request.");
-  assert.deepEqual(result.meta.toolSummary, { calls: 1, tools: ["read"], failures: 0 });
+  assert.equal(scenario.toolResults, reads.length, "The planned reads must execute through the real tool.");
+  assert.deepEqual(result.meta.toolSummary, { calls: reads.length, tools: ["read"], failures: 0 });
   if (overflow) {
     assert.equal(scenario.overflowSent, true);
     // Retained-turn compaction can finish without a separate summary-model request.
@@ -237,6 +274,8 @@ async function inspect(name, value, { active = true, hook = true, mode = "enable
 try {
   const configBytes = JSON.stringify(config);
   await fs.writeFile(configPath, configBytes);
+  await agent("on-demand skill and reference reads", { readSkill: true,
+    sessionKey: "agent:main:skill-read-fixture" });
   await agent("first turn");
   await agent("same-run compaction", { overflow: true });
   await agent("post-compaction turn");
@@ -255,6 +294,20 @@ try {
   denied.plugins.entries = { "gateway-isolation": { hooks: { allowPromptInjection: false } } };
   await fs.writeFile(configPath, JSON.stringify(denied));
   await agent("prompt-injection opt-out", { guidance: false, sessionKey: "agent:main:opt-out-fixture" });
+  const skillDisabled = structuredClone(config);
+  skillDisabled.skills = { entries: { [skillName]: { enabled: false } } };
+  await fs.writeFile(configPath, JSON.stringify(skillDisabled));
+  await agent("skill opt-out", { skillAvailable: false, sessionKey: "agent:main:skill-opt-out-fixture" });
+  const pluginDisabled = structuredClone(config);
+  pluginDisabled.plugins.entries = { "gateway-isolation": { enabled: false } };
+  await fs.writeFile(configPath, JSON.stringify(pluginDisabled));
+  await agent("plugin opt-out", { guidance: false, skillAvailable: false,
+    sessionKey: "agent:main:plugin-opt-out-fixture" });
+  await fs.writeFile(configPath, configBytes);
+  env.CLAWCTL_GATEWAY_ISOLATION = "";
+  await agent("missing isolation report", { guidance: false, skillAvailable: false,
+    sessionKey: "agent:main:missing-report-fixture" });
+  env.CLAWCTL_GATEWAY_ISOLATION = "enabled";
   await inspect("fresh profile", undefined);
   await inspect("existing undecided profile", {});
   await inspect("explicit disable", { plugins: { entries: { "gateway-isolation": { enabled: false } } } },

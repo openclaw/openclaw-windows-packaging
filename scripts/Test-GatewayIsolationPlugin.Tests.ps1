@@ -181,8 +181,20 @@ try {
     $packagedPlugin = Join-Path `
         $payloadDirectory `
         'app\dist\extensions\gateway-isolation'
-    foreach ($pluginFile in @('package.json', 'openclaw.plugin.json', 'index.js')) {
-        Assert-Path -Path (Join-Path $packagedPlugin $pluginFile)
+    foreach ($pluginFile in @(
+        'package.json'
+        'openclaw.plugin.json'
+        'index.js'
+        'skills\windows-agent-handoff\SKILL.md'
+        'skills\windows-agent-handoff\references\gui-and-sign-in.md'
+        'skills\windows-agent-handoff\references\file-handoff.md'
+    )) {
+        $packagedPath = Join-Path $packagedPlugin $pluginFile
+        Assert-Path -Path $packagedPath
+        $sourceHash = (Get-FileHash -LiteralPath (Join-Path $pluginDirectory $pluginFile)).Hash
+        if ((Get-FileHash -LiteralPath $packagedPath).Hash -cne $sourceHash) {
+            throw "Packaged plugin content differs from its source: $pluginFile"
+        }
     }
     if (Test-Path -LiteralPath (Join-Path $packagedPlugin 'index.test.js')) {
         throw 'Plugin test sources must not be shipped in the MSIX payload.'
