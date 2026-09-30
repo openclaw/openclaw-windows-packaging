@@ -11,8 +11,8 @@ import { resolvePreparedApplicationFile } from "./prepared-application-file.mjs"
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 assert.equal(process.platform, "win32", "The real-runtime lane requires Windows.");
-assert.ok(process.argv[2], "Pass the prepared OpenClaw application directory.");
-const application = path.resolve(process.argv[2]);
+assert.equal(process.argv.length, 2, "Select the prepared application through Test-GatewayIsolationContext.ps1.");
+const application = process.cwd();
 const policy = JSON.parse(await fs.readFile(path.join(repository, "release-policy.json"), "utf8"));
 const identity = JSON.parse(await fs.readFile(
   await resolvePreparedApplicationFile(application, path.join("dist", "build-info.json")), "utf8"));

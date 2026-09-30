@@ -323,6 +323,8 @@ unchanged, without shipping plugin tests. It also checks prepared-application
 file confinement, including traversal, sibling-directory, and directory-link
 escapes. The runtime lane resolves each application input to a regular file
 inside the physical selected application directory before reading or launching it.
+The PowerShell entry point owns application selection and runs the fixture in
+that directory, restoring the caller's directory even when validation fails.
 
 The plugin-owned `windows-agent-handoff` skill uses OpenClaw's manifest `skills`
 facility, not Copilot's repository skill directories. Author it using upstream's
@@ -333,6 +335,8 @@ workflow and safety boundaries in `SKILL.md`; link branch-only detail from
 `references`; verify discovery and actual tool reads. The short environment
 context names the skill only for its relevant scenarios, rather than relying
 solely on description matching or loading its body every turn.
+It keeps the essential first-action prohibitions always present; skill loading
+selects detailed procedures, not whether those prohibitions apply.
 
 For actual prompt coverage, use a prepared, dependency-complete OpenClaw
 application directory containing this checkout's plugin under
