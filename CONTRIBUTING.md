@@ -23,6 +23,20 @@ summary below:
 - Visual Studio Build Tools with the **Desktop development with C++** workload
   and the Windows SDK, for NativeAOT publish and MSIX composition
 
+### JavaScript language server
+
+The Copilot CLI configuration in `.github\lsp.json` enables JavaScript code
+intelligence for `plugins\gateway-isolation` alongside the existing C# server.
+Install its optional editor tooling once:
+
+```powershell
+npm install --global typescript typescript-language-server
+```
+
+The server uses `npx --no-install`, so it does not download dependencies when
+Copilot starts it. In an existing Copilot session, run `/lsp reload`, then
+`/lsp test typescript-language-server` to check startup.
+
 ## Build, analyze, and test
 
 ```powershell

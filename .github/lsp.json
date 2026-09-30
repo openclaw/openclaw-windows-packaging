@@ -1,5 +1,16 @@
 {
   "lspServers": {
+    "typescript-language-server": {
+      "command": "npx",
+      "args": [
+        "--no-install",
+        "typescript-language-server",
+        "--stdio"
+      ],
+      "fileExtensions": {
+        ".js": "javascript"
+      }
+    },
     "roslyn-language-server": {
       "command": "dotnet",
       "args": [
