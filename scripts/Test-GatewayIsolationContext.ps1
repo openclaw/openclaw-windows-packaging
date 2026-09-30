@@ -16,7 +16,7 @@ $applicationDirectory = $resolvedApplication.ProviderPath
 if ((Split-Path -Leaf $applicationDirectory) -ne 'app') {
     throw 'OpenClawDirectory must name the app directory inside a prepared payload.'
 }
-Push-Location $applicationDirectory
+Push-Location -LiteralPath $applicationDirectory
 try {
     & node (Join-Path $PSScriptRoot 'fixtures\gateway-isolation-context.mjs')
 }
