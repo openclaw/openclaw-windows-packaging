@@ -56,7 +56,9 @@ try {
         throw 'Gateway isolation plugin package has an invalid runtime entry.'
     }
 
-    & node --test (Join-Path $pluginDirectory 'index.test.js')
+    & node --test `
+        (Join-Path $pluginDirectory 'index.test.js') `
+        (Join-Path $PSScriptRoot 'fixtures\prepared-application-file.test.mjs')
     if ($LASTEXITCODE -ne 0) {
         throw "Gateway isolation plugin tests failed with exit code $LASTEXITCODE."
     }

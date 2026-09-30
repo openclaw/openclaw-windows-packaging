@@ -319,7 +319,10 @@ finally {
 Run `.\scripts\Test-GatewayIsolationPlugin.Tests.ps1` for the Windows Launcher
 plugin's output, platform/report gates, staging, and payload inspection.
 The suite verifies that the skill and both branch references reach the payload
-unchanged, without shipping plugin tests.
+unchanged, without shipping plugin tests. It also checks prepared-application
+file confinement, including traversal, sibling-directory, and directory-link
+escapes. The runtime lane resolves each application input to a regular file
+inside the physical selected application directory before reading or launching it.
 
 The plugin-owned `windows-agent-handoff` skill uses OpenClaw's manifest `skills`
 facility, not Copilot's repository skill directories. Author it using upstream's

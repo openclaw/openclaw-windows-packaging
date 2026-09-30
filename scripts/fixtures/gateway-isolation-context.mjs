@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createGatewayIsolationPlugin } from "../../plugins/gateway-isolation/index.js";
+import { resolvePreparedApplicationFile } from "./prepared-application-file.mjs";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 assert.equal(process.platform, "win32", "The real-runtime lane requires Windows.");
@@ -28,7 +29,8 @@ const payload = JSON.parse(await fs.readFile(metadataPath, "utf8"));
 assert.equal(payload.repository, "https://github.com/openclaw/openclaw");
 assert.match(payload.resolvedCommit, /^[0-9a-f]{40}$/);
 assert.match(payload.packageVersion, /^\d{4}\.\d+\.\d+(?:-\d+)?$/);
-const identity = JSON.parse(await fs.readFile(path.join(application, "dist", "build-info.json"), "utf8"));
+const identity = JSON.parse(await fs.readFile(
+  await resolvePreparedApplicationFile(application, path.join("dist", "build-info.json")), "utf8"));
 assert.equal(identity.commit, payload.resolvedCommit);
 assert.equal(identity.version, payload.packageVersion);
 console.log(`Runtime: ${identity.version} ${identity.commit}; Node ${process.version}`);
@@ -38,10 +40,10 @@ const skillFiles = [
   path.join("skills", skillName, "references", "gui-and-sign-in.md"),
   path.join("skills", skillName, "references", "file-handoff.md"),
 ];
-const pluginDirectory = path.join(application, "dist", "extensions", "gateway-isolation");
+const pluginRelativeDirectory = path.join("dist", "extensions", "gateway-isolation");
 for (const name of ["index.js", "package.json", "openclaw.plugin.json", ...skillFiles]) {
   assert.deepEqual(
-    await fs.readFile(path.join(pluginDirectory, name)),
+    await fs.readFile(await resolvePreparedApplicationFile(application, path.join(pluginRelativeDirectory, name))),
     await fs.readFile(path.join(repository, "plugins", "gateway-isolation", name)),
     `The prepared runtime must contain the current plugin: ${name}`,
   );
@@ -56,10 +58,11 @@ createGatewayIsolationPlugin({ CLAWCTL_GATEWAY_ISOLATION: "enabled" }, "win32").
   registerHttpRoute() {},
 });
 assert.ok(instructions);
-const skillReads = await Promise.all(skillFiles.map(async name => ({
-  path: path.join(pluginDirectory, name),
-  text: await fs.readFile(path.join(pluginDirectory, name), "utf8"),
-})));
+const skillReads = await Promise.all(skillFiles.map(async name => {
+  const file = await resolvePreparedApplicationFile(application, path.join(pluginRelativeDirectory, name));
+  return { path: file, text: await fs.readFile(file, "utf8") };
+}));
+const applicationEntrypoint = await resolvePreparedApplicationFile(application, "openclaw.mjs");
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-context-"));
 const workspace = path.join(root, "workspace");
@@ -210,7 +213,7 @@ Object.assign(env, {
 });
 
 async function run(args) {
-  const child = spawn(process.execPath, [path.join(application, "openclaw.mjs"), ...args],
+  const child = spawn(process.execPath, [applicationEntrypoint, ...args],
     { cwd: workspace, env, stdio: ["ignore", "pipe", "pipe"], timeout: 90_000 });
   let stdout = "";
   let stderr = "";
