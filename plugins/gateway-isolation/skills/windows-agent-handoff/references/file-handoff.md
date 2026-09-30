@@ -68,7 +68,12 @@ is preserved, and the report distinguishes copying from recipient access.
 
 If profile/path resolution, directory availability, access, copying, or client
 delivery fails, report the failure and ask for a supported destination or
-capability. Do not create a replacement shared root, fall back to Public
+capability. Name the actual missing or failed destination even when an unsafe
+export request also needs refusal; do not propose the missing `Shared` folder
+as an available alternative. For a filesystem handoff, ask for a supported
+destination and clarify the intended nonsensitive deliverables only if needed.
+
+Do not create a replacement shared root, fall back to Public
 Documents or `PUBLIC`/`TEMP`, modify broad ACLs, use administrator Explorer, or
 weaken isolation.
 
