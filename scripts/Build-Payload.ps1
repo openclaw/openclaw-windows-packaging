@@ -156,7 +156,14 @@ $applicationDirectory = Join-Path $OutputDirectory 'app'
 $installedPackage = $applicationDirectory
 
 $pluginSource = Join-Path $repositoryRoot 'plugins\gateway-isolation'
-$pluginFiles = @('package.json', 'openclaw.plugin.json', 'index.js')
+$pluginFiles = @(
+    'package.json'
+    'openclaw.plugin.json'
+    'index.js'
+    'skills\windows-agent-handoff\SKILL.md'
+    'skills\windows-agent-handoff\references\gui-and-sign-in.md'
+    'skills\windows-agent-handoff\references\file-handoff.md'
+)
 foreach ($pluginFile in $pluginFiles) {
     $sourcePath = Join-Path $pluginSource $pluginFile
     if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
@@ -197,9 +204,11 @@ if (Test-Path -LiteralPath $pluginTarget) {
 }
 New-Item -Path $pluginTarget -ItemType Directory | Out-Null
 foreach ($pluginFile in $pluginFiles) {
+    $targetPath = Join-Path $pluginTarget $pluginFile
+    New-Item -Path (Split-Path $targetPath -Parent) -ItemType Directory -Force | Out-Null
     Copy-Item `
         -LiteralPath (Join-Path $pluginSource $pluginFile) `
-        -Destination (Join-Path $pluginTarget $pluginFile)
+        -Destination $targetPath
 }
 
 $previousStateDirectory = $env:OPENCLAW_STATE_DIR
