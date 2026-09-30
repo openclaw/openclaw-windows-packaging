@@ -63,6 +63,23 @@ try {
         throw "Gateway isolation plugin tests failed with exit code $LASTEXITCODE."
     }
 
+    $bracketApplication = Join-Path $testRoot 'app[1]'
+    [IO.Directory]::CreateDirectory($bracketApplication) | Out-Null
+    [IO.Directory]::CreateDirectory((Join-Path $testRoot 'app1')) | Out-Null
+    $callerDirectory = (Get-Location).Path
+    $selectedDirectory = & {
+        param($selectorScript, $selectedApplication)
+        function node {
+            (Get-Location).ProviderPath
+            $global:LASTEXITCODE = 0
+        }
+        & $selectorScript -OpenClawDirectory $selectedApplication
+    } (Join-Path $PSScriptRoot 'Test-GatewayIsolationContext.ps1') $bracketApplication
+    if ($selectedDirectory -cne $bracketApplication -or
+        (Get-Location).Path -cne $callerDirectory) {
+        throw 'Prepared-runtime selection must preserve literal bracketed paths and restore the caller.'
+    }
+
     $emptyApplication = Join-Path $testRoot 'empty-application'
     New-Item -Path $emptyApplication -ItemType Directory -Force | Out-Null
     $callerDirectory = (Get-Location).Path

@@ -13,7 +13,7 @@ if ($resolvedApplication.Provider.Name -ne 'FileSystem' -or
     throw 'Prepared OpenClaw application must be a filesystem directory.'
 }
 $applicationDirectory = $resolvedApplication.ProviderPath
-Push-Location $applicationDirectory
+Push-Location -LiteralPath $applicationDirectory
 try {
     & node (Join-Path $PSScriptRoot 'fixtures\gateway-isolation-context.mjs')
 }
