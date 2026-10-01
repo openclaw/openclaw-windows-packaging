@@ -10,9 +10,9 @@ import { createGatewayIsolationPlugin } from "../../plugins/gateway-isolation/in
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 assert.equal(process.platform, "win32", "The real-runtime lane requires Windows.");
-assert.ok(process.argv[2], "Pass the prepared OpenClaw application directory.");
-const application = path.resolve(process.argv[2]);
-const payloadRoot = await fs.realpath(path.dirname(application));
+assert.ok(process.argv[2], "Pass the prepared OpenClaw payload directory.");
+const payloadRoot = await fs.realpath(process.argv[2]);
+const application = path.join(payloadRoot, "app");
 const metadataPath = await fs.realpath(path.join(payloadRoot, "payload-metadata.json"));
 if (!metadataPath.startsWith(payloadRoot + path.sep)) {
   throw new Error("Payload metadata must remain inside the prepared payload directory.");
