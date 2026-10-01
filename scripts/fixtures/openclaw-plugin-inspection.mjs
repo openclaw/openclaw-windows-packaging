@@ -47,7 +47,8 @@ if (args[0] === "--version") {
       on(name, handler) {
         hooks.push({ name });
         assert.deepEqual(Object.keys(handler()), ["prependContext", "appendSystemContext"]);
-        assert.match(handler().prependContext, /separate Windows agent session/);
+        assert.match(handler().prependContext, /isolated Windows agent session/);
+        assert.ok(handler().prependContext.length <= 600, "Packaged guidance must remain brief.");
         assert.equal(handler().appendSystemContext, handler().prependContext);
       },
       session: {

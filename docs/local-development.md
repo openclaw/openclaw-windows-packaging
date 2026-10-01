@@ -318,6 +318,25 @@ finally {
 
 Run `.\scripts\Test-GatewayIsolationPlugin.Tests.ps1` for the Windows Launcher
 plugin's output, platform/report gates, staging, and payload inspection.
+The suite verifies that the skill and both branch references reach the payload
+unchanged, without shipping plugin tests. It also checks prepared-application
+file confinement, including traversal, sibling-directory, and directory-link
+escapes. The runtime lane resolves each application input to a regular file
+inside the physical selected application directory before reading or launching it.
+The PowerShell entry point owns application selection and runs the fixture in
+that directory, restoring the caller's directory even when validation fails.
+
+The plugin-owned `windows-agent-handoff` skill uses OpenClaw's manifest `skills`
+facility, not Copilot's repository skill directories. Author it using upstream's
+[skill-creator workflow](https://github.com/openclaw/openclaw/blob/3a9d69db306cd7f081e06254cb89c4bcc14a7107/skills/skill-creator/SKILL.md)
+and [creating-skills guidance](https://github.com/openclaw/openclaw/blob/3a9d69db306cd7f081e06254cb89c4bcc14a7107/docs/tools/creating-skills.md):
+keep the description selective, one line, and under 160 characters; keep shared
+workflow and safety boundaries in `SKILL.md`; link branch-only detail from
+`references`; verify discovery and actual tool reads. The short environment
+context names the skill only for its relevant scenarios, rather than relying
+solely on description matching or loading its body every turn.
+It keeps the essential first-action prohibitions always present; skill loading
+selects detailed procedures, not whether those prohibitions apply.
 
 For actual prompt coverage, use a prepared, dependency-complete OpenClaw
 application directory containing this checkout's plugin under
@@ -336,11 +355,28 @@ real account, package registration, or scheduled task is involved.
 
 The fixture captures actual embedded-runner requests before the first tool,
 through a forced context-overflow/compaction retry, on the next turn, and in
-new, subagent-key, and cron-key sessions. It checks the complete instruction
-block in both system and user context rather than just hook registration, plus plugin/hook opt-outs and
+new, subagent-key, and cron-key sessions. It checks the complete two-sentence
+instruction block in both system and user context rather than just hook
+registration; user context is the fallback for the pinned runtime's replacement
+of system additions on runtime-only turns. It also checks plugin/hook opt-outs and
 unchanged user configuration and instruction files. It does not schedule cron
 jobs, spawn remote agents, evaluate model obedience, or prove attachment
 delivery/user-side filesystem access.
+
+The same lane verifies the skill's advertised packaged location, absence of
+eager body injection, and complete on-demand reads of `SKILL.md` and both branch
+references. It checks skill/plugin opt-outs and missing isolation-report
+eligibility using fresh session keys. The fake provider deliberately requests
+the reads; this proves runtime discovery and loading, not autonomous model
+selection or compliance with the procedures.
+
+Observational live-model cases are recorded in
+[`windows-agent-handoff.test-cases.json`](../scripts/fixtures/windows-agent-handoff.test-cases.json).
+They cover explicit invocation, natural selection, a headless-work negative
+route, truthful completion, unsafe export requests, and authorized agent-only
+GUI work. These cases must not execute side effects. Evaluate actual responses
+and skill/reference reads before claiming model-routing or safety compliance;
+the deterministic runtime lane is not a substitute.
 
 In authorized installed-environment tests, pair a human-participation case with
 an agent-only GUI case that needs no human viewing or input. A GUI process is

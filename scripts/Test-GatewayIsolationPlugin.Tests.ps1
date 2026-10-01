@@ -56,9 +56,52 @@ try {
         throw 'Gateway isolation plugin package has an invalid runtime entry.'
     }
 
-    & node --test (Join-Path $pluginDirectory 'index.test.js')
+    & node --test `
+        (Join-Path $pluginDirectory 'index.test.js') `
+        (Join-Path $PSScriptRoot 'fixtures\prepared-application-file.test.mjs')
     if ($LASTEXITCODE -ne 0) {
         throw "Gateway isolation plugin tests failed with exit code $LASTEXITCODE."
+    }
+
+    $bracketApplication = Join-Path $testRoot 'app[1]'
+    [IO.Directory]::CreateDirectory($bracketApplication) | Out-Null
+    $siblingApplication = Join-Path $testRoot 'app1'
+    [IO.Directory]::CreateDirectory($siblingApplication) | Out-Null
+    [IO.File]::WriteAllText((Join-Path $bracketApplication 'selection.txt'), 'bracketed-application')
+    [IO.File]::WriteAllText((Join-Path $siblingApplication 'selection.txt'), 'sibling-application')
+    $callerDirectory = (Get-Location).Path
+    $selectedApplicationMarker = & {
+        param($selectorScript, $selectedApplication)
+        function node {
+            [IO.File]::ReadAllText((Join-Path (Get-Location).ProviderPath 'selection.txt'))
+            $global:LASTEXITCODE = 0
+        }
+        & $selectorScript -OpenClawDirectory $selectedApplication
+    } (Join-Path $PSScriptRoot 'Test-GatewayIsolationContext.ps1') $bracketApplication
+    if ($selectedApplicationMarker -cne 'bracketed-application' -or
+        (Get-Location).Path -cne $callerDirectory) {
+        throw (
+            'Prepared-runtime selection must read the bracketed application and restore the caller. ' +
+            "Observed marker: '$selectedApplicationMarker'. " +
+            "Caller before: '$callerDirectory'; after: '$((Get-Location).Path)'."
+        )
+    }
+
+    $emptyApplication = Join-Path $testRoot 'empty-application'
+    New-Item -Path $emptyApplication -ItemType Directory -Force | Out-Null
+    $callerDirectory = (Get-Location).Path
+    $contextFailed = $false
+    try {
+        & (Join-Path $PSScriptRoot 'Test-GatewayIsolationContext.ps1') `
+            -OpenClawDirectory $emptyApplication
+    }
+    catch {
+        if ($LASTEXITCODE -eq 0) { throw }
+        $contextFailed = $true
+        $global:LASTEXITCODE = 0
+    }
+    if (-not $contextFailed -or (Get-Location).Path -cne $callerDirectory) {
+        throw 'Failed prepared-runtime validation must restore the calling directory.'
     }
 
     New-Item `
@@ -181,8 +224,20 @@ try {
     $packagedPlugin = Join-Path `
         $payloadDirectory `
         'app\dist\extensions\gateway-isolation'
-    foreach ($pluginFile in @('package.json', 'openclaw.plugin.json', 'index.js')) {
-        Assert-Path -Path (Join-Path $packagedPlugin $pluginFile)
+    foreach ($pluginFile in @(
+        'package.json'
+        'openclaw.plugin.json'
+        'index.js'
+        'skills\windows-agent-handoff\SKILL.md'
+        'skills\windows-agent-handoff\references\gui-and-sign-in.md'
+        'skills\windows-agent-handoff\references\file-handoff.md'
+    )) {
+        $packagedPath = Join-Path $packagedPlugin $pluginFile
+        Assert-Path -Path $packagedPath
+        $sourceHash = (Get-FileHash -LiteralPath (Join-Path $pluginDirectory $pluginFile)).Hash
+        if ((Get-FileHash -LiteralPath $packagedPath).Hash -cne $sourceHash) {
+            throw "Packaged plugin content differs from its source: $pluginFile"
+        }
     }
     if (Test-Path -LiteralPath (Join-Path $packagedPlugin 'index.test.js')) {
         throw 'Plugin test sources must not be shipped in the MSIX payload.'
