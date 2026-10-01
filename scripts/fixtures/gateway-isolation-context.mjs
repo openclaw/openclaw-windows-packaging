@@ -12,7 +12,12 @@ const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".
 assert.equal(process.platform, "win32", "The real-runtime lane requires Windows.");
 assert.ok(process.argv[2], "Pass the prepared OpenClaw application directory.");
 const application = path.resolve(process.argv[2]);
-const payload = JSON.parse(await fs.readFile(path.join(application, "..", "payload-metadata.json"), "utf8"));
+const payloadRoot = await fs.realpath(path.dirname(application));
+const metadataPath = await fs.realpath(path.join(payloadRoot, "payload-metadata.json"));
+if (!metadataPath.startsWith(payloadRoot + path.sep)) {
+  throw new Error("Payload metadata must remain inside the prepared payload directory.");
+}
+const payload = JSON.parse(await fs.readFile(metadataPath, "utf8"));
 assert.equal(payload.repository, "https://github.com/openclaw/openclaw");
 assert.match(payload.resolvedCommit, /^[0-9a-f]{40}$/);
 assert.match(payload.packageVersion, /^\d{4}\.\d+\.\d+(?:-\d+)?$/);
