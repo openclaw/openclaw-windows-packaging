@@ -1,3 +1,30 @@
+function Get-OpenClawBuildRoute {
+    param(
+        [string]$WorkflowRef,
+        [string]$GitHubRef,
+        [string]$EventName,
+        [ValidateSet('unsigned', 'test', 'store', 'official')][string]$SigningMode,
+        [AllowEmptyString()][string]$Channel
+    )
+
+    Assert-OpenClawSourceText $GitHubRef 'githubRef' -Pattern '\Arefs/(?:(?:heads|tags)/\S+|pull/[1-9][0-9]*/merge)\z'
+    $expected = "openclaw/openclaw-windows-packaging/.github/workflows/gateway-msix.yml@$GitHubRef"
+    if ($WorkflowRef -cne $expected) { throw 'The workflow ref does not match the packaging workflow and ref.' }
+    if ($EventName -cnotin @('push', 'pull_request', 'workflow_dispatch') -or
+        (($EventName -ceq 'pull_request') -ne ($GitHubRef -cmatch '\Arefs/pull/'))) {
+        throw 'The workflow event and ref context are unsupported.'
+    }
+    if ($SigningMode -cne 'unsigned' -and $EventName -cne 'workflow_dispatch') {
+        throw 'Signing modes require a workflow dispatch.'
+    }
+    if ($SigningMode -in @('official', 'store') -and $GitHubRef -cne 'refs/heads/main') {
+        throw 'Release publication requires the main workflow ref.'
+    }
+    if ($Channel -cnotin @('', 'stable')) { throw 'The source channel is unsupported.' }
+    if ($GitHubRef -ceq 'refs/heads/main' -and $Channel -ceq 'stable') { return 'trusted' }
+    return 'read-only'
+}
+
 function Get-OpenClawSourceField {
     param([AllowNull()][object]$InputObject, [string]$Name, [switch]$Optional)
 

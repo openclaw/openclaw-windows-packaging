@@ -380,7 +380,9 @@ the selected payload's full commit SHA as an assertion. A supplied SHA must
 match the captured payload release; it does not override channel selection. Tags and branches are
 rejected for publication. Before authorization, the workflow
 restores the same run's source snapshot and checks its workflow run ID,
-packaging commit, and signing mode. It does not resolve the moving channel again.
+packaging commit, signing mode, workflow ref, event, and Git ref. It does not
+resolve the moving channel again. Missing or incompatible snapshot context
+requires a new run.
 
 Payload composition validates that the selected OpenClaw runtime discovers and
 activates the packaging-owned Windows Launcher plugin by default, both without
@@ -399,13 +401,28 @@ the launcher derives its runtime version and LocalState path from the bundled
 archive name. There is no separate packaging-side Node.js version pin or
 runtime-support policy.
 
-Non-official workflows cache the packed OpenClaw tarball by its resolved
+Unsigned/test builds restore the packed OpenClaw tarball cache by its resolved
 upstream commit. They also cache each architecture's Windows dependency tree by
 the resolved commit, tarball SHA-256, Node.js version, and payload-build script.
 A tarball cache hit still verifies the recorded version, commit and SHA-256; a
 dependency-tree hit still runs every payload validation and smoke test.
-Official-signing workflows bypass
+Store and official workflows bypass
 both caches and always rebuild upstream source and Windows dependencies.
+
+Source preflight selects one of two callers of
+`.github\workflows\gateway-msix-build.yml`. Only validated stable selection
+from the packaging workflow on `main` grants `cache-mode: write`.
+Unsigned/test overrides (including overrides dispatched from `main`),
+non-main dispatches, and pull requests use `cache-mode: read`. They can
+restore eligible caches but cannot save them. This caller-scoped token cap
+also covers setup-dotnet's NuGet cache and caches nested in upstream actions
+or build scripts; changing an environment variable cannot increase it.
+Signing and publication jobs use `cache-mode: none`.
+
+The cache-boundary cutover still requires coordinated legacy main-cache
+invalidation and cold/warm CI proof before trusting existing cache contents.
+Local policy tests do not prove GitHub's token enforcement or fresh CodeQL
+results; see [release process](docs/release-process.md#cache-boundary-cutover).
 
 The payload artifact records the requested ref and resolved upstream commit in
 `payload-metadata.json`. That build-only file is not embedded in the MSIX.

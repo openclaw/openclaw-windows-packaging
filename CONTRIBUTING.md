@@ -74,6 +74,8 @@ or package version logic:
 .\scripts\Test-Measure-Coverage.Tests.ps1
 .\scripts\Test-MSIXReleaseIdentity.Tests.ps1
 .\scripts\Test-OpenClawSource.Tests.ps1
+.\scripts\Test-WorkflowSigningConfiguration.ps1
+.\scripts\Test-MSIXUpgradeMatrix.Tests.ps1
 .\scripts\Test-WorkflowPackageVersion.Tests.ps1
 .\scripts\Test-GitHooks.Tests.ps1
 ```
@@ -106,7 +108,19 @@ remains visible in its step logs and emits a warning, but does not fail the
 required host-test job. An upload failure may leave no artifact; inspect the
 upload step logs before relying on the results.
 
-The source-selection tests use offline npm and GitHub fixtures.
+The source-selection tests use offline npm and GitHub fixtures to exercise
+snapshot capture/replay, bound workflow context, and trusted versus read-only
+routes. `Test-WorkflowSigningConfiguration.ps1` executes the selected-build
+owner: exactly one route must succeed and its outputs must match preflight.
+It no longer inspects YAML fragments. The signing-input suite validates
+the actual synthetic packages and bundles against the captured source.
+
+The shared build workflow inherits the caller's explicit cache token cap;
+never request write access inside it or pass signing secrets to upstream
+execution. Local checks cannot establish GitHub platform enforcement or
+CodeQL alert closure. Those checks and legacy cache reset require separately
+authorized CI/cutover work described in the
+[release process](docs/release-process.md#cache-boundary-cutover).
 
 The Node.js input suite requires Node.js and npm. It builds a dependency-free
 local fixture, including its install script, for the running Node.js

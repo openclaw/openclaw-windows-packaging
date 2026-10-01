@@ -7,6 +7,9 @@ param(
     [ValidateSet('unsigned', 'test', 'store', 'official')][string]$SigningMode = 'unsigned',
     [Parameter(Mandatory)][ValidatePattern('\A[1-9][0-9]*\z')][string]$WorkflowRunId,
     [Parameter(Mandatory)][ValidatePattern('\A[0-9a-fA-F]{40}\z')][string]$PackagingCommit,
+    [Parameter(Mandatory)][string]$WorkflowRef,
+    [Parameter(Mandatory)][string]$GitHubRef,
+    [Parameter(Mandatory)][string]$EventName,
     [switch]$ReuseSnapshot
 )
 
@@ -24,6 +27,8 @@ if ($GatewayVersion -ne '') {
     $selectionPolicy |
         Add-Member -NotePropertyName stableVersion -NotePropertyValue $GatewayVersion -Force
 }
+$null = Get-OpenClawBuildRoute -WorkflowRef $WorkflowRef -GitHubRef $GitHubRef `
+    -EventName $EventName -SigningMode $SigningMode -Channel ''
 $releaseMode = $SigningMode -in @('official', 'store')
 if ($releaseMode -and $Ref -ne '' -and $Ref -cnotmatch '\A[0-9a-fA-F]{40}\z') {
     throw 'Release publication requires an empty Ref or a full SHA matching stable.'
@@ -76,12 +81,17 @@ $context = [ordered]@{
     workflowRunId = $WorkflowRunId
     packagingCommit = $PackagingCommit.ToLowerInvariant()
     signingMode = $SigningMode
+    workflowRef = $WorkflowRef
+    githubRef = $GitHubRef
+    eventName = $EventName
 }
+$route = Get-OpenClawBuildRoute -WorkflowRef $WorkflowRef -GitHubRef $GitHubRef `
+    -EventName $EventName -SigningMode $SigningMode -Channel $source.channel
 foreach ($field in $context.Keys) {
     if ($ReuseSnapshot) {
         $value = Get-OpenClawSourceField $source $field
         if ($value -isnot [string] -or $value -cne $context[$field]) {
-            throw "The source snapshot has an unexpected workflow identity: $field"
+            throw "The source snapshot has an unexpected workflow identity: $field. Start a new workflow run."
         }
     }
     else { $source | Add-Member -NotePropertyName $field -NotePropertyValue $context[$field] }
@@ -95,4 +105,5 @@ if (-not $ReuseSnapshot) {
     try { $stream.Write($bytes, 0, $bytes.Length) }
     finally { $stream.Dispose() }
 }
+$source | Add-Member -NotePropertyName buildRoute -NotePropertyValue $route -Force
 return $source

@@ -23,6 +23,7 @@ $documentationPathPattern = '^(?:.*\.md|docs/.*|LICENSE)$'
 # every other local deployment can use the equivalent successful main payload.
 $payloadArtifactPaths = @(
     '.github/workflows/gateway-msix.yml'
+    '.github/workflows/gateway-msix-build.yml'
     'release-policy.json'
     'scripts/Build-Payload.ps1'
     'scripts/Copy-PayloadTree.ps1'

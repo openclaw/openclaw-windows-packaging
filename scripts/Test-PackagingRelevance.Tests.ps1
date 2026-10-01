@@ -126,6 +126,9 @@ try {
         @{ filename = 'README.md' }
         @{ filename = 'scripts/Build-MSIX.ps1' }
     )
+    foreach ($surface in @('.github/workflows/gateway-msix-build.yml', 'scripts/Select-WorkflowBuild.ps1')) {
+        Assert-Relevance -Expected true -Files @(@{ filename = $surface })
+    }
     Assert-Relevance -Expected true -Files @(
         @{
             filename = 'docs/removed-script.md'
@@ -139,6 +142,7 @@ try {
     )
     foreach ($payloadPath in @(
         '.github/workflows/gateway-msix.yml'
+        '.github/workflows/gateway-msix-build.yml'
         'release-policy.json'
         'scripts/Build-Payload.ps1'
         'scripts/Copy-PayloadTree.ps1'

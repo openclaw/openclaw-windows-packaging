@@ -24,6 +24,10 @@ param(
     [ValidatePattern('^[0-9a-fA-F]{40}$')]
     [string]$PackagingCommit,
 
+    [Parameter(Mandatory)][string]$WorkflowRef,
+    [Parameter(Mandatory)][string]$GitHubRef,
+    [Parameter(Mandatory)][string]$EventName,
+
     [string]$RequestedRef = '',
 
     [string]$GatewayVersion = '',
@@ -197,6 +201,7 @@ $source = & (Join-Path $PSScriptRoot 'Get-WorkflowSource.ps1') `
     -OutputPath $SourcePath `
     -WorkflowRunId $WorkflowRunId `
     -PackagingCommit $PackagingCommit `
+    -WorkflowRef $WorkflowRef -GitHubRef $GitHubRef -EventName $EventName `
     -SigningMode $SigningMode `
     -Ref $RequestedRef `
     -GatewayVersion $GatewayVersion `

@@ -1,0 +1,484 @@
+name: Build captured OpenClaw Gateway MSIX
+
+on:
+  workflow_call:
+    inputs:
+      source_ref:
+        type: string
+        required: true
+      gateway_version:
+        type: string
+        required: true
+      signing_mode:
+        type: string
+        required: true
+      versioning:
+        type: string
+        required: true
+      payload_artifact:
+        type: string
+        required: true
+      cache_write:
+        description: Avoid explicit saves on the read-only route; the caller token cap is authoritative
+        type: boolean
+        required: true
+    outputs:
+      source_sha:
+        value: ${{ jobs.complete.outputs.source_sha }}
+      source_tag:
+        value: ${{ jobs.complete.outputs.source_tag }}
+      release_identity_tag:
+        value: ${{ jobs.complete.outputs.release_identity_tag }}
+      package_version:
+        value: ${{ jobs.complete.outputs.package_version }}
+      node_version:
+        value: ${{ jobs.complete.outputs.node_version }}
+      package_sha256:
+        value: ${{ jobs.complete.outputs.package_sha256 }}
+
+permissions:
+  contents: read
+
+# No cache-mode override: inherit the caller's explicit service-enforced cap.
+env:
+  PACKAGING_ROOT: .
+
+jobs:
+  build-package:
+    name: Build OpenClaw npm package
+    runs-on: ubuntu-latest
+    outputs:
+      source_sha: ${{ steps.resolve.outputs.sha }}
+      source_tag: ${{ steps.resolve.outputs.tag }}
+      release_identity_tag: ${{ steps.resolve.outputs.release_identity_tag }}
+      package_cache_key: ${{ steps.resolve.outputs.package_cache_key }}
+      package_version: ${{ steps.package.outputs.version }}
+      node_version: ${{ steps.package.outputs.node_version }}
+      package_sha256: ${{ steps.package.outputs.package_sha256 }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Download captured source
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-source-resolution
+          path: ${{ runner.temp }}/openclaw-source
+
+      - name: Resolve immutable OpenClaw source
+        id: resolve
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
+          SIGNING_MODE: ${{ inputs.signing_mode || 'unsigned' }}
+        run: |
+          $snapshotPath = Join-Path $env:RUNNER_TEMP 'openclaw-source/source-resolution.json'
+          $source = ./scripts/Get-WorkflowSource.ps1 `
+            -PolicyPath ./release-policy.json `
+            -OutputPath $snapshotPath `
+            -Ref $env:SOURCE_REF `
+            -GatewayVersion $env:GATEWAY_VERSION `
+            -SigningMode $env:SIGNING_MODE `
+            -WorkflowRunId $env:GITHUB_RUN_ID `
+            -PackagingCommit $env:GITHUB_SHA `
+            -WorkflowRef $env:GITHUB_WORKFLOW_REF -GitHubRef $env:GITHUB_REF -EventName $env:GITHUB_EVENT_NAME `
+            -ReuseSnapshot
+          $cacheKey = .\scripts\Get-OpenClawCacheKey.ps1 `
+            -Layer package `
+            -Commit $source.resolvedCommit
+          $releaseIdentitySource = if ($null -ne $source.PSObject.Properties['releaseIdentitySource']) {
+            $source.releaseIdentitySource
+          }
+          else { $source }
+          "sha=$($source.resolvedCommit)" >> $env:GITHUB_OUTPUT
+          "tag=v$($source.packageVersion)" >> $env:GITHUB_OUTPUT
+          "release_identity_tag=$($releaseIdentitySource.releaseTag)" >> $env:GITHUB_OUTPUT
+          "version=$($source.packageVersion)" >> $env:GITHUB_OUTPUT
+          "package_cache_key=$cacheKey" >> $env:GITHUB_OUTPUT
+          "OpenClaw $($source.packageVersion) ($($source.resolvedCommit)), selected by $($source.requestedRef)." >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Restore cached OpenClaw package
+        id: package-cache
+        if: ${{ inputs.signing_mode != 'official' && inputs.signing_mode != 'store' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/openclaw-package
+          key: ${{ steps.resolve.outputs.package_cache_key }}
+
+      # The OpenClaw checkout below must own GITHUB_WORKSPACE because its
+      # composite setup action resolves workspace files from that root. Keep
+      # the package verifier outside the workspace before replacing this
+      # checkout with the OpenClaw source tree.
+      - name: Stage package verifier
+        shell: pwsh
+        run: |
+          Copy-Item `
+            ./scripts/Test-OpenClawPackage.ps1 `
+            $env:RUNNER_TEMP/Test-OpenClawPackage.ps1
+
+      - name: Check out OpenClaw source
+        if: ${{ steps.package-cache.outputs.cache-hit != 'true' }}
+        uses: actions/checkout@v7
+        with:
+          repository: openclaw/openclaw
+          ref: ${{ steps.resolve.outputs.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up upstream Node.js and pnpm
+        if: ${{ steps.package-cache.outputs.cache-hit != 'true' }}
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          install-deps: "false"
+
+      - name: Install dependencies
+        if: ${{ steps.package-cache.outputs.cache-hit != 'true' }}
+        run: pnpm install --frozen-lockfile
+
+      - name: Build OpenClaw
+        if: ${{ steps.package-cache.outputs.cache-hit != 'true' }}
+        env:
+          OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1"
+        run: pnpm build
+
+      - name: Pack npm package
+        if: ${{ steps.package-cache.outputs.cache-hit != 'true' }}
+        env:
+          OPENCLAW_REF: ${{ steps.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          artifact_dir="${RUNNER_TEMP}/openclaw-package"
+          mkdir -p "${artifact_dir}"
+          node scripts/package-openclaw-for-docker.mjs \
+            --allow-unreleased-changelog \
+            --skip-build \
+            --pnpm-pack \
+            --output-dir "${artifact_dir}" \
+            --output-name openclaw.tgz
+
+          source_sha="$(git rev-parse HEAD)"
+          package_version="$(node -p "require('./package.json').version")"
+          node_version="$(node -p 'process.versions.node')"
+          package_sha256="$(sha256sum "${artifact_dir}/openclaw.tgz" | cut -d' ' -f1)"
+
+          cat > "${artifact_dir}/source.json" <<EOF
+          {
+            "repository": "https://github.com/openclaw/openclaw",
+            "requestedRef": "${OPENCLAW_REF}",
+            "resolvedCommit": "${source_sha}",
+            "packageVersion": "${package_version}",
+            "nodeVersion": "${node_version}",
+            "packageSha256": "${package_sha256}"
+          }
+          EOF
+
+      - name: Verify OpenClaw package
+        id: package
+        shell: pwsh
+        run: |
+          $packageDirectory = Join-Path $env:RUNNER_TEMP 'openclaw-package'
+          $metadataPath = Join-Path $packageDirectory 'source.json'
+          & "$env:RUNNER_TEMP/Test-OpenClawPackage.ps1" `
+            -PackageDirectory $packageDirectory `
+            -ExpectedCommit '${{ steps.resolve.outputs.sha }}' `
+            -ExpectedVersion '${{ steps.resolve.outputs.version }}' `
+            -RequestedRef '${{ steps.resolve.outputs.sha }}'
+          $metadata = Get-Content -LiteralPath $metadataPath -Raw |
+            ConvertFrom-Json
+          "version=$([string]$metadata.packageVersion)" >> $env:GITHUB_OUTPUT
+          "node_version=$([string]$metadata.nodeVersion)" >> $env:GITHUB_OUTPUT
+          "package_sha256=$([string]$metadata.packageSha256)" >> $env:GITHUB_OUTPUT
+
+      - name: Save OpenClaw package cache
+        if: ${{ inputs.cache_write && steps.package-cache.outputs.cache-hit != 'true' && (inputs.signing_mode != 'official' && inputs.signing_mode != 'store') }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/openclaw-package
+          key: ${{ steps.resolve.outputs.package_cache_key }}
+
+      - name: Upload intermediate package
+        uses: actions/upload-artifact@v7
+        with:
+          name: openclaw-gateway-npm-package
+          path: ${{ runner.temp }}/openclaw-package/
+          if-no-files-found: error
+          retention-days: 7
+
+  build-msix:
+    name: Build unsigned ${{ matrix.architecture }} Gateway MSIX
+    needs:
+      - build-package
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x64
+            runner: windows-latest
+          - architecture: arm64
+            runner: windows-11-arm
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ needs.build-package.outputs.node_version }}
+          architecture: ${{ matrix.architecture }}
+
+      - name: Test native payload installation
+        shell: pwsh
+        run: .\scripts\Test-NodeRuntimeInputs.Tests.ps1
+
+      - name: Download intermediate package
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-npm-package
+          path: ${{ runner.temp }}\openclaw-package
+
+      - name: Resolve payload cache key
+        id: payload-key
+        shell: pwsh
+        run: |
+          $cacheKey = .\scripts\Get-OpenClawCacheKey.ps1 `
+            -Layer payload `
+            -Commit '${{ needs.build-package.outputs.source_sha }}' `
+            -Architecture '${{ matrix.architecture }}' `
+            -NodeVersion '${{ needs.build-package.outputs.node_version }}' `
+            -PackageSha256 '${{ needs.build-package.outputs.package_sha256 }}'
+          "key=$cacheKey" >> $env:GITHUB_OUTPUT
+
+      - name: Restore cached Windows dependency tree
+        id: payload-cache
+        if: ${{ inputs.signing_mode != 'official' && inputs.signing_mode != 'store' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}\openclaw-stage-${{ matrix.architecture }}
+          key: ${{ steps.payload-key.outputs.key }}
+
+      - name: Build expanded payload
+        shell: pwsh
+        run: |
+          $parameters = @{
+            PackageDirectory = '${{ runner.temp }}\openclaw-package'
+            Architecture = '${{ matrix.architecture }}'
+            OutputDirectory = '${{ runner.temp }}\openclaw-payload'
+          }
+          if ('${{ steps.payload-cache.outputs.cache-hit }}' -eq 'true') {
+            $parameters.ReuseStagedInstall = $true
+          }
+          .\scripts\Build-Payload.ps1 @parameters
+
+      - name: Save Windows dependency tree cache
+        if: ${{ inputs.cache_write && steps.payload-cache.outputs.cache-hit != 'true' && (inputs.signing_mode != 'official' && inputs.signing_mode != 'store') }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}\openclaw-stage-${{ matrix.architecture }}
+          key: ${{ steps.payload-key.outputs.key }}
+
+      - name: Upload payload
+        if: ${{ github.event_name != 'pull_request' || inputs.payload_artifact == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: openclaw-gateway-payload-${{ matrix.architecture }}
+          path: ${{ runner.temp }}\openclaw-payload\
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: Directory.Packages.props
+
+      - name: Restore NativeAOT and MSIX dependencies
+        shell: pwsh
+        run: |
+          dotnet restore `
+            .\src\OpenClaw.Launcher\OpenClaw.Launcher.csproj `
+            --runtime 'win-${{ matrix.architecture }}' `
+            -p:PublishAot=true `
+            -p:IncludePackagingContent=true `
+            -p:Platform='${{ matrix.architecture }}'
+          if ($LASTEXITCODE -ne 0) { throw 'Launcher restore failed.' }
+          dotnet restore `
+            .\src\OpenClaw.SessionHost\OpenClaw.SessionHost.csproj `
+            --runtime 'win-${{ matrix.architecture }}' `
+            -p:PublishAot=true `
+            -p:Platform='${{ matrix.architecture }}'
+          if ($LASTEXITCODE -ne 0) { throw 'Session host restore failed.' }
+
+      - name: Compose unsigned Store and sideload MSIX packages
+        shell: pwsh
+        env:
+          SIGNING_MODE: ${{ inputs.signing_mode }}
+          VERSIONING_CHANGE: ${{ inputs.versioning }}
+          GATEWAY_TAG: ${{ needs.build-package.outputs.release_identity_tag }}
+        run: |
+          $versionParameters = @{
+            RunNumber = '${{ github.run_number }}'
+            RunAttempt = '${{ github.run_attempt }}'
+          }
+          if (
+            $env:SIGNING_MODE -in @('official', 'store') -or
+            $env:VERSIONING_CHANGE -eq 'true'
+          ) {
+            $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
+              ConvertFrom-Json
+            $identity = .\scripts\Get-MSIXReleaseIdentity.ps1 `
+              -GatewayTag $env:GATEWAY_TAG `
+              -MSIXRevision ([int]$policy.msixRevision)
+            $versionParameters.ReleaseVersion = $identity.PackageVersion
+          }
+          $packageVersion = .\scripts\Get-WorkflowPackageVersion.ps1 `
+            @versionParameters
+
+          .\scripts\Build-MSIX.ps1 `
+            -PayloadDirectory '${{ runner.temp }}\openclaw-payload' `
+            -Architecture '${{ matrix.architecture }}' `
+            -PackageVersion $packageVersion `
+            -SourceCommit '${{ github.sha }}' `
+            -IdentityChannel Store `
+            -OutputDirectory '${{ runner.temp }}\openclaw-msix-store' `
+            -SideloadOutputDirectory '${{ runner.temp }}\openclaw-msix-sideload'
+
+      - name: Upload unsigned Store MSIX
+        uses: actions/upload-artifact@v7
+        with:
+          name: openclaw-gateway-msix-store-unsigned-${{ matrix.architecture }}
+          path: |
+            ${{ runner.temp }}\openclaw-msix-store\OpenClawGateway-${{ matrix.architecture }}.msix
+            ${{ runner.temp }}\openclaw-msix-store\msix-metadata.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload unsigned sideload MSIX
+        uses: actions/upload-artifact@v7
+        with:
+          name: openclaw-gateway-msix-sideload-unsigned-${{ matrix.architecture }}
+          path: |
+            ${{ runner.temp }}\openclaw-msix-sideload\OpenClawGateway-${{ matrix.architecture }}.msix
+            ${{ runner.temp }}\openclaw-msix-sideload\msix-metadata.json
+          if-no-files-found: error
+          retention-days: 7
+
+  build-msix-bundle:
+    name: Build unsigned Store and sideload Gateway MSIX bundles
+    needs:
+      - build-package
+      - build-msix
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Download unsigned Store x64 package
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-store-unsigned-x64
+          path: artifacts\store\x64
+
+      - name: Download unsigned Store ARM64 package
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-store-unsigned-arm64
+          path: artifacts\store\arm64
+
+      - name: Download unsigned sideload x64 package
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-sideload-unsigned-x64
+          path: artifacts\sideload\x64
+
+      - name: Download unsigned sideload ARM64 package
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-sideload-unsigned-arm64
+          path: artifacts\sideload\arm64
+
+      - name: Compose unsigned Store and sideload MSIX bundles
+        shell: pwsh
+        env:
+          SIGNING_MODE: ${{ inputs.signing_mode }}
+          VERSIONING_CHANGE: ${{ inputs.versioning }}
+          GATEWAY_TAG: ${{ needs.build-package.outputs.release_identity_tag }}
+        run: |
+          $versionParameters = @{
+            RunNumber = '${{ github.run_number }}'
+            RunAttempt = '${{ github.run_attempt }}'
+          }
+          if (
+            $env:SIGNING_MODE -in @('official', 'store') -or
+            $env:VERSIONING_CHANGE -eq 'true'
+          ) {
+            $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
+              ConvertFrom-Json
+            $identity = .\scripts\Get-MSIXReleaseIdentity.ps1 `
+              -GatewayTag $env:GATEWAY_TAG `
+              -MSIXRevision ([int]$policy.msixRevision)
+            $versionParameters.ReleaseVersion = $identity.PackageVersion
+          }
+          $packageVersion = .\scripts\Get-WorkflowPackageVersion.ps1 `
+            @versionParameters
+
+          foreach ($channel in @('store', 'sideload')) {
+            .\scripts\Build-MSIXBundle.ps1 `
+              -X64Package "artifacts\$channel\x64\OpenClawGateway-x64.msix" `
+              -Arm64Package "artifacts\$channel\arm64\OpenClawGateway-arm64.msix" `
+              -PackageVersion $packageVersion `
+              -OutputPath "artifacts\$channel\bundle\OpenClawGateway.msixbundle"
+          }
+
+      - name: Upload unsigned Store MSIX bundle
+        if: ${{ github.event_name != 'pull_request' || inputs.versioning == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: openclaw-gateway-msix-store-unsigned-bundle
+          path: artifacts\store\bundle\OpenClawGateway.msixbundle
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload unsigned sideload MSIX bundle
+        if: ${{ github.event_name != 'pull_request' || inputs.versioning == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: openclaw-gateway-msix-sideload-unsigned-bundle
+          path: artifacts\sideload\bundle\OpenClawGateway.msixbundle
+          if-no-files-found: error
+          retention-days: 7
+
+  complete:
+    name: Validate shared build completion
+    if: ${{ always() }}
+    needs: [build-package, build-msix, build-msix-bundle]
+    runs-on: ubuntu-latest
+    outputs:
+      source_sha: ${{ needs.build-package.outputs.source_sha }}
+      source_tag: ${{ needs.build-package.outputs.source_tag }}
+      release_identity_tag: ${{ needs.build-package.outputs.release_identity_tag }}
+      package_version: ${{ needs.build-package.outputs.package_version }}
+      node_version: ${{ needs.build-package.outputs.node_version }}
+      package_sha256: ${{ needs.build-package.outputs.package_sha256 }}
+    steps:
+      - name: Require every build stage
+        shell: pwsh
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          $results = $env:RESULTS | ConvertFrom-Json
+          foreach ($job in $results.PSObject.Properties) {
+            if ($job.Value.result -cne 'success') {
+              throw "The shared build stage $($job.Name) did not succeed."
+            }
+          }

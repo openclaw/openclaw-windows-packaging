@@ -94,6 +94,8 @@ function Invoke-Test {
     $script:workflow = @{
         PolicyPath = $policyPath; OutputPath = Join-Path $testRoot "source-$testCount.json"
         WorkflowRunId = '123456'; PackagingCommit = 'd' * 40
+        WorkflowRef = 'openclaw/openclaw-windows-packaging/.github/workflows/gateway-msix.yml@refs/heads/main'
+        GitHubRef = 'refs/heads/main'; EventName = 'workflow_dispatch'
     }
     Save-Policy
     & $Body
@@ -358,6 +360,74 @@ try {
         Assert-Throws { & $workflowPath @workflow -ReuseSnapshot } 'Start a new workflow run'
         Assert-Equal $http.Calls.Count 0
     }
+    foreach ($case in @(
+            @{ Ref = 'refs/heads/main'; Event = 'push'; Override = ''; Route = 'trusted' },
+            @{ Ref = 'refs/heads/main'; Event = 'workflow_dispatch'; Override = ''; Route = 'trusted' },
+            @{ Ref = 'refs/heads/main'; Event = 'workflow_dispatch'; Override = $commit; Route = 'read-only' },
+            @{ Ref = 'refs/heads/topic'; Event = 'workflow_dispatch'; Override = ''; Route = 'read-only' },
+            @{ Ref = 'refs/heads/topic'; Event = 'workflow_dispatch'; Override = $commit; Route = 'read-only' },
+            @{ Ref = 'refs/tags/build-proof'; Event = 'workflow_dispatch'; Override = ''; Route = 'read-only' },
+            @{ Ref = 'refs/tags/build-proof'; Event = 'workflow_dispatch'; Override = $commit; Route = 'read-only' },
+            @{ Ref = 'refs/pull/42/merge'; Event = 'pull_request'; Override = ''; Route = 'read-only' }
+        )) {
+        Invoke-Test "routes $($case.Event) $($case.Ref) selector '$($case.Override)' without trust promotion" {
+            $workflow.GitHubRef = $case.Ref
+            $workflow.WorkflowRef = "openclaw/openclaw-windows-packaging/.github/workflows/gateway-msix.yml@$($case.Ref)"
+            $workflow.EventName = $case.Event
+            $source = & $workflowPath @workflow -Ref $case.Override
+            Assert-Equal $source.buildRoute $case.Route
+            Add-Release '2026.9.8' ('e' * 40) ('f' * 40)
+            $http.Responses['Registry:latest'].version = '2026.9.8'
+            $http.Calls.Clear()
+            # A stored route is not authority; replay computes it from bound provenance.
+            $source.buildRoute = 'trusted'
+            [IO.File]::WriteAllText($workflow.OutputPath, ($source | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+            $replayed = & $workflowPath @workflow -Ref $case.Override -ReuseSnapshot
+            Assert-Equal $replayed.buildRoute $case.Route
+            Assert-Equal $replayed.resolvedCommit $commit
+            Assert-Equal $http.Calls.Count 0
+        }
+    }
+    Invoke-Test 'foreign workflow and unsupported event/ref combinations fail before HTTP' {
+        foreach ($change in @(
+                @{ WorkflowRef = 'foreign/repository/.github/workflows/gateway-msix.yml@refs/heads/main' },
+                @{ WorkflowRef = 'openclaw/openclaw-windows-packaging/.github/workflows/other.yml@refs/heads/main' },
+                @{ GitHubRef = 'refs/heads/topic' },
+                @{ EventName = 'pull_request' },
+                @{ EventName = 'workflow_run' }
+            )) {
+            $changed = $workflow.Clone()
+            foreach ($key in $change.Keys) { $changed[$key] = $change[$key] }
+            Assert-Throws { & $workflowPath @changed } 'workflow ref|context'
+        }
+        Assert-Equal $http.Calls.Count 0
+    }
+    Invoke-Test 'snapshot workflow context cannot be changed or omitted during replay' {
+        $source = & $workflowPath @workflow
+        $http.Calls.Clear()
+        foreach ($field in @('workflowRef', 'githubRef', 'eventName')) {
+            $changed = $source | ConvertTo-Json | ConvertFrom-Json
+            $changed.$field = 'foreign'
+            [IO.File]::WriteAllText($workflow.OutputPath, ($changed | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+            Assert-Throws { & $workflowPath @workflow -ReuseSnapshot } 'workflow identity'
+            $changed.PSObject.Properties.Remove($field)
+            [IO.File]::WriteAllText($workflow.OutputPath, ($changed | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+            Assert-Throws { & $workflowPath @workflow -ReuseSnapshot } 'Missing required field'
+        }
+        Assert-Equal $http.Calls.Count 0
+    }
+    Invoke-Test 'non-main releases and non-dispatch signing fail before source capture' {
+        foreach ($mode in @('official', 'store')) {
+            $changed = $workflow.Clone()
+            $changed.GitHubRef = 'refs/heads/topic'
+            $changed.WorkflowRef = 'openclaw/openclaw-windows-packaging/.github/workflows/gateway-msix.yml@refs/heads/topic'
+            Assert-Throws { & $workflowPath @changed -SigningMode $mode } 'main workflow ref'
+        }
+        $changed = $workflow.Clone()
+        $changed.EventName = 'push'
+        Assert-Throws { & $workflowPath @changed -SigningMode test } 'workflow dispatch'
+        Assert-Equal $http.Calls.Count 0
+    }
     Invoke-Test 'changed or withdrawn policy pins cannot replay a saved selector' {
         $policy | Add-Member stableVersion $version
         Save-Policy
@@ -405,6 +475,7 @@ try {
         Invoke-Test "$mode release accepts a matching full SHA and preserves stable provenance" {
             $source = & $workflowPath @workflow -SigningMode $mode -Ref $commit
             Assert-Equal $source.resolvedCommit $commit
+            Assert-Equal $source.buildRoute 'trusted'
             Assert-Equal $source.channel 'stable'
             Assert-Equal $source.requestedRef 'stable'
             $http.Calls.Clear()
