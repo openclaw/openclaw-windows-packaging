@@ -46,6 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       packaging: ${{ steps.filter.outputs.packaging }}
+      payload_artifact: ${{ steps.filter.outputs.payload_artifact }}
       versioning: ${{ steps.filter.outputs.versioning }}
       upgrade_matrix: ${{ steps.filter.outputs.upgrade_matrix }}
     steps:
@@ -59,6 +60,7 @@ jobs:
         run: |
           if ($env:GITHUB_EVENT_NAME -ne 'pull_request') {
             'packaging=true' >> $env:GITHUB_OUTPUT
+            'payload_artifact=true' >> $env:GITHUB_OUTPUT
             'versioning=false' >> $env:GITHUB_OUTPUT
             return
           }
@@ -79,6 +81,11 @@ jobs:
 
           $pages = Get-Content -LiteralPath $fileListPath -Raw |
             ConvertFrom-Json
+          $payloadArtifact = .\scripts\Get-PackagingRelevance.ps1 `
+            -FileListPath $fileListPath `
+            -PayloadArtifact
+          "payload_artifact=$payloadArtifact" >> $env:GITHUB_OUTPUT
+
           $versioningPaths = @(
             '.github/workflows/gateway-msix.yml'
             'release-policy.json'
@@ -583,13 +590,16 @@ jobs:
           path: ${{ runner.temp }}\openclaw-stage-${{ matrix.architecture }}
           key: ${{ steps.payload-key.outputs.key }}
 
+      # Preserve the documented branch-deployment path when this PR can
+      # change the expanded app. MSIX composition consumes the local tree.
       - name: Upload payload
+        if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.payload_artifact == 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: openclaw-gateway-payload-${{ matrix.architecture }}
           path: ${{ runner.temp }}\openclaw-payload\
           if-no-files-found: error
-          retention-days: ${{ github.event_name == 'pull_request' && 1 || 7 }}
+          retention-days: 7
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v6

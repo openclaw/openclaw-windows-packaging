@@ -43,7 +43,10 @@ $requiredFragments = @(
     '-SourcePath source-resolution\source-resolution.json'
     '-WorkflowRunId $env:GITHUB_RUN_ID'
     '-SigningMode $env:SIGNING_MODE'
-    "retention-days: `${{ github.event_name == 'pull_request' && 1 || 7 }}"
+    'payload_artifact: ${{ steps.filter.outputs.payload_artifact }}'
+    "'payload_artifact=true' >> `$env:GITHUB_OUTPUT"
+    "`"payload_artifact=`$payloadArtifact`" >> `$env:GITHUB_OUTPUT"
+    '-PayloadArtifact'
     'name: Restore cached OpenClaw package'
     "if: `${{ github.event_name != 'workflow_dispatch' || (inputs.signing_mode != 'official' && inputs.signing_mode != 'store') }}"
     'uses: actions/cache/restore@v4'
@@ -161,6 +164,13 @@ if ($buildMsixJob.Contains(
         'name: Download payload',
         [StringComparison]::Ordinal)) {
     throw 'The build-msix job must compose the locally built payload directly.'
+}
+$payloadUploadMatch = [regex]::Match(
+    $buildMsixJob,
+    "(?ms)^\s*- name: Upload payload\s+if: `\$\{\{ github\.event_name != 'pull_request' \|\| needs\.changes\.outputs\.payload_artifact == 'true' \}\}\s+uses: actions/upload-artifact@v7"
+)
+if (-not $payloadUploadMatch.Success) {
+    throw 'Only pull requests that change packaged application content may upload expanded payload artifacts.'
 }
 $buildMsixCalls = [regex]::Matches(
     $buildMsixJob,

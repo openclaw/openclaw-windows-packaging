@@ -52,13 +52,18 @@ function Assert-Relevance {
         [ValidateSet('true', 'false')]
         [string]$Expected,
 
-        [int]$MaximumFiles = 3000
+        [int]$MaximumFiles = 3000,
+
+        [switch]$PayloadArtifact
     )
 
     $path = Write-FileList -Files $Files
-    $actual = & $scriptPath `
-        -FileListPath $path `
-        -MaximumFiles $MaximumFiles
+    $parameters = @{
+        FileListPath = $path
+        MaximumFiles = $MaximumFiles
+        PayloadArtifact = $PayloadArtifact
+    }
+    $actual = & $scriptPath @parameters
     if ($actual -cne $Expected) {
         throw "Expected packaging relevance $Expected; received $actual."
     }
@@ -72,11 +77,15 @@ function Assert-PathRelevance {
 
         [Parameter(Mandatory)]
         [ValidateSet('true', 'false')]
-        [string]$Expected
+        [string]$Expected,
+
+        [switch]$PayloadArtifact
     )
 
     $path = Write-PathList -Content $Content
-    $actual = & $scriptPath -PathListPath $path
+    $actual = & $scriptPath `
+        -PathListPath $path `
+        -PayloadArtifact:$PayloadArtifact
     if ($actual -cne $Expected) {
         throw "Expected packaging relevance $Expected; received $actual."
     }
@@ -123,6 +132,30 @@ try {
             previous_filename = 'scripts/Build-MSIX.ps1'
         }
     )
+    Assert-Relevance -PayloadArtifact -Expected false -Files @(
+        @{ filename = 'src/OpenClaw.Launcher/Program.cs' }
+        @{ filename = 'scripts/Build-MSIX.ps1' }
+        @{ filename = 'docs/local-development.md' }
+    )
+    foreach ($payloadPath in @(
+        '.github/workflows/gateway-msix.yml'
+        'release-policy.json'
+        'scripts/Build-Payload.ps1'
+        'scripts/Copy-PayloadTree.ps1'
+        'scripts/Get-WorkflowSource.ps1'
+        'scripts/OpenClawSource.ps1'
+        'plugins/gateway-isolation/index.js'
+    )) {
+        Assert-Relevance -PayloadArtifact -Expected true -Files @(
+            @{ filename = $payloadPath }
+        )
+    }
+    Assert-Relevance -PayloadArtifact -Expected true -Files @(
+        @{
+            filename = 'docs/renamed.md'
+            previous_filename = 'plugins/gateway-isolation/openclaw.plugin.json'
+        }
+    )
 
     $cappedFiles = @(
         for ($index = 0; $index -lt 3; $index++) {
@@ -130,6 +163,11 @@ try {
         }
     )
     Assert-Relevance `
+        -Expected true `
+        -Files $cappedFiles `
+        -MaximumFiles 3
+    Assert-Relevance `
+        -PayloadArtifact `
         -Expected true `
         -Files $cappedFiles `
         -MaximumFiles 3
@@ -167,6 +205,14 @@ try {
         -Content "README.md$([char]0)$([char]0)docs/x.md$([char]0)"
     Assert-PathRelevance -Expected false -Content ''
     Assert-PathRelevance -Expected true -Content "src/readme.md.cs$([char]0)"
+    Assert-PathRelevance `
+        -PayloadArtifact `
+        -Expected false `
+        -Content "src/App.cs$([char]0)scripts/Build-MSIX.ps1$([char]0)"
+    Assert-PathRelevance `
+        -PayloadArtifact `
+        -Expected true `
+        -Content "src/App.cs$([char]0)plugins/gateway-isolation/index.js$([char]0)"
 
     Assert-Fails -MessagePattern 'does not exist' -Action {
         & $scriptPath -PathListPath (Join-Path $testRoot 'missing-paths.bin')

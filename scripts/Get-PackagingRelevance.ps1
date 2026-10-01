@@ -8,7 +8,9 @@ param(
     [int]$MaximumFiles = 3000,
 
     [Parameter(Mandatory, ParameterSetName = 'PathList')]
-    [string]$PathListPath
+    [string]$PathListPath,
+
+    [switch]$PayloadArtifact
 )
 
 Set-StrictMode -Version Latest
@@ -16,6 +18,32 @@ $ErrorActionPreference = 'Stop'
 
 # FileList preserves CI's GitHub JSON contract; PathList accepts local git -z output.
 $documentationPathPattern = '^(?:.*\.md|docs/.*|LICENSE)$'
+# A PR payload artifact is a branch-deployment contract, not an input to later
+# workflow jobs. Publish it only when the branch can change the expanded app;
+# every other local deployment can use the equivalent successful main payload.
+$payloadArtifactPaths = @(
+    '.github/workflows/gateway-msix.yml'
+    'release-policy.json'
+    'scripts/Build-Payload.ps1'
+    'scripts/Copy-PayloadTree.ps1'
+    'scripts/Get-WorkflowSource.ps1'
+    'scripts/OpenClawSource.ps1'
+)
+
+function Test-RelevantPath {
+    param([string]$Path)
+
+    if ($PayloadArtifact) {
+        return (
+            $Path -in $payloadArtifactPaths -or
+            $Path.StartsWith(
+                'plugins/gateway-isolation/',
+                [StringComparison]::Ordinal
+            )
+        )
+    }
+    return $Path -notmatch $documentationPathPattern
+}
 
 if ($PSCmdlet.ParameterSetName -eq 'PathList') {
     if (-not (Test-Path -LiteralPath $PathListPath -PathType Leaf)) {
@@ -30,7 +58,7 @@ if ($PSCmdlet.ParameterSetName -eq 'PathList') {
             Where-Object { $_.Length -gt 0 }
     )
     foreach ($path in $paths) {
-        if ($path -notmatch $documentationPathPattern) {
+        if (Test-RelevantPath -Path $path) {
             return 'true'
         }
     }
@@ -90,7 +118,7 @@ foreach ($file in $files) {
         if ([string]::IsNullOrWhiteSpace($path)) {
             continue
         }
-        if ($path -notmatch $documentationPathPattern) {
+        if (Test-RelevantPath -Path $path) {
             return 'true'
         }
     }
