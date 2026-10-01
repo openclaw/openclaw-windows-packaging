@@ -7,9 +7,6 @@ param(
     [string]$CandidateCertificatePath,
 
     [Parameter(Mandatory)]
-    [string]$ExpectedBaselineVersion,
-
-    [Parameter(Mandatory)]
     [string]$ExpectedCandidateVersion,
 
     [Parameter(Mandatory)]
@@ -166,7 +163,6 @@ function Install-StoreBaseline {
     if (
         [string]$installed.PackageFamilyName -cne $packageFamilyName -or
         [string]$installed.Publisher -cne $publisher -or
-        [string]$installed.Version -cne $ExpectedBaselineVersion -or
         [string]$installed.Status -cne 'Ok'
     ) {
         throw (
@@ -190,9 +186,6 @@ if (
 ) {
     throw "The $($candidateIdentity.DeliveryType) Store candidate identity is unexpected."
 }
-if ([version]$ExpectedCandidateVersion -le [version]$ExpectedBaselineVersion) {
-    throw 'The Store candidate must be newer than the installed Store baseline.'
-}
 if (@(Get-StorePackage).Count -ne 0) {
     throw (
         'Refusing to run Store upgrade validation while the Gateway Store ' +
@@ -209,12 +202,19 @@ try {
         throw 'The Store candidate test certificate publisher is unexpected.'
     }
     $installedBaseline = Install-StoreBaseline
+    $baselineVersion = [string]$installedBaseline.Version
+    if ([version]$ExpectedCandidateVersion -le [version]$baselineVersion) {
+        throw (
+            "The Store candidate $ExpectedCandidateVersion must be newer than " +
+            "the installed Store baseline $baselineVersion."
+        )
+    }
     $localState = Join-Path `
         $env:LOCALAPPDATA `
         "Packages\$packageFamilyName\LocalState"
     New-Item -Path $localState -ItemType Directory -Force | Out-Null
     $markerPath = Join-Path $localState 'msix-store-upgrade-proof.txt'
-    $marker = "store-upgrade-from-$ExpectedBaselineVersion"
+    $marker = "store-upgrade-from-$baselineVersion"
     Set-Content -LiteralPath $markerPath -Value $marker -Encoding utf8
 
     Add-AppxPackage -Path $resolvedCandidatePath -ErrorAction Stop

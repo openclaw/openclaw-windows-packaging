@@ -80,7 +80,6 @@ $requiredFragments = @(
     '-IdentityChannel ${{ matrix.channel }}'
     "-TransitionMode '`${{ matrix.transition_mode }}'"
     "-BaselineAssetName '`${{ matrix.baseline_asset }}'"
-    "-ExpectedBaselineVersion '2026.9.404.0'"
     "-StoreProductId '9NV70LV3D6XC'"
     '-CandidatePath $candidatePath'
     'openclaw-gateway-msix-upgrade-evidence-${{ matrix.id }}'
@@ -116,6 +115,12 @@ foreach ($fragment in $requiredFragments) {
     if (-not $workflow.Contains($fragment, [StringComparison]::Ordinal)) {
         throw "Signing workflow is missing required configuration: $fragment"
     }
+}
+
+if ($workflow.Contains(
+        '-ExpectedBaselineVersion',
+        [StringComparison]::Ordinal)) {
+    throw 'Store upgrade validation must use the version installed by Microsoft Store.'
 }
 
 $buildMsixJobMatch = [regex]::Match(

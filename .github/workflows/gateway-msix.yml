@@ -875,7 +875,6 @@ jobs:
             .\scripts\Test-MSIXStoreUpgrade.ps1 `
               -CandidatePath $candidatePath `
               -CandidateCertificatePath $certificatePath `
-              -ExpectedBaselineVersion '2026.9.404.0' `
               -ExpectedCandidateVersion $identity.PackageVersion `
               -StoreProductId '9NV70LV3D6XC' `
               -EvidencePath 'evidence\${{ matrix.id }}.json'
