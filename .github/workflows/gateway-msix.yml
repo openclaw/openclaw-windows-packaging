@@ -834,50 +834,63 @@ jobs:
 
       - name: Apply temporary test signature
         shell: pwsh
+        env:
+          CANDIDATE_CHANNEL: ${{ matrix.channel }}
         run: |
           .\scripts\Sign-TestMSIX.ps1 `
-            -ArtifactsDirectory artifacts\${{ matrix.channel }} `
-            -OutputDirectory test-signed\${{ matrix.channel }} `
-            -IdentityChannel ${{ matrix.channel }}
+            -ArtifactsDirectory (Join-Path artifacts $env:CANDIDATE_CHANNEL) `
+            -OutputDirectory (Join-Path test-signed $env:CANDIDATE_CHANNEL) `
+            -IdentityChannel $env:CANDIDATE_CHANNEL
 
       - name: Download hash-pinned proof release
         if: ${{ matrix.transition_mode != 'store-in-place' }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          BASELINE_ASSET: ${{ matrix.baseline_asset }}
+          BASELINE_RELEASE_TAG: ${{ matrix.release_tag }}
         run: |
           New-Item -Path baselines -ItemType Directory -Force | Out-Null
-          & gh release download '${{ matrix.release_tag }}' `
+          & gh release download $env:BASELINE_RELEASE_TAG `
             --repo $env:GITHUB_REPOSITORY `
-            --pattern '${{ matrix.baseline_asset }}' `
+            --pattern $env:BASELINE_ASSET `
             --dir baselines
           if ($LASTEXITCODE -ne 0) {
-            throw "Unable to download ${{ matrix.release_tag }} upgrade baseline."
+            throw "Unable to download $env:BASELINE_RELEASE_TAG upgrade baseline."
           }
 
       - name: Test package transition
         shell: pwsh
         env:
           GATEWAY_TAG: ${{ needs.build-package.outputs.source_tag }}
+          BASELINE_ASSET: ${{ matrix.baseline_asset }}
+          CANDIDATE_CHANNEL: ${{ matrix.channel }}
+          CANDIDATE_FILE: ${{ matrix.candidate_file }}
+          DELIVERY_DIRECTORY: ${{ matrix.delivery_dir }}
+          EVIDENCE_ID: ${{ matrix.id }}
+          TRANSITION_MODE: ${{ matrix.transition_mode }}
         run: |
           $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
             ConvertFrom-Json
           $identity = .\scripts\Get-MSIXReleaseIdentity.ps1 `
             -GatewayTag $env:GATEWAY_TAG `
             -MSIXRevision ([int]$policy.msixRevision)
-          $candidateRoot = 'test-signed\${{ matrix.channel }}\${{ matrix.delivery_dir }}'
-          $candidatePath = Join-Path $candidateRoot '${{ matrix.candidate_file }}'
+          $candidateRoot = Join-Path `
+            (Join-Path test-signed $env:CANDIDATE_CHANNEL) `
+            $env:DELIVERY_DIRECTORY
+          $candidatePath = Join-Path $candidateRoot $env:CANDIDATE_FILE
           $certificatePath = Join-Path `
             $candidateRoot `
             'OpenClawGateway-test-signing.cer'
+          $evidencePath = Join-Path evidence "$env:EVIDENCE_ID.json"
           New-Item -Path evidence -ItemType Directory -Force | Out-Null
-          if ('${{ matrix.transition_mode }}' -ceq 'store-in-place') {
+          if ($env:TRANSITION_MODE -ceq 'store-in-place') {
             .\scripts\Test-MSIXStoreUpgrade.ps1 `
               -CandidatePath $candidatePath `
               -CandidateCertificatePath $certificatePath `
               -ExpectedCandidateVersion $identity.PackageVersion `
               -StoreProductId '9NV70LV3D6XC' `
-              -EvidencePath 'evidence\${{ matrix.id }}.json'
+              -EvidencePath $evidencePath
           }
           else {
             .\scripts\Test-MSIXUpgrade.ps1 `
@@ -886,9 +899,9 @@ jobs:
               -CandidatePath $candidatePath `
               -CandidateCertificatePath $certificatePath `
               -ExpectedCandidateVersion $identity.PackageVersion `
-              -TransitionMode '${{ matrix.transition_mode }}' `
-              -BaselineAssetName '${{ matrix.baseline_asset }}' `
-              -EvidencePath 'evidence\${{ matrix.id }}.json'
+              -TransitionMode $env:TRANSITION_MODE `
+              -BaselineAssetName $env:BASELINE_ASSET `
+              -EvidencePath $evidencePath
           }
 
       - name: Upload transition evidence

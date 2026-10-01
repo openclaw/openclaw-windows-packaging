@@ -715,13 +715,14 @@ verify the legacy identity, remove it, install the Store candidate through the
 same delivery format, and prove that Windows registered the reserved package
 family with isolated LocalState. The same gate updates each baseline in place
 to the new sideload candidate and proves that standalone and bundle delivery
-retain the exact LocalState marker. When the previous Store revision reached
-users, the gate also installs that exact published Store version by Store ID
-and proves that both Store candidate formats update it in place while retaining
-the marker. Changes to source-selection scripts also trigger this check against
-the selected release. Each baseline, delivery format, and transition mode runs
-on its own clean Windows runner; the identity-reset scenarios also prove that
-both Store candidate formats install fresh after the legacy package is removed.
+retain the exact LocalState marker. The gate also installs the package Microsoft
+Store currently delivers by Store ID, records its validated version, requires
+the candidate to be newer, and proves that the Store bundle updates it in place
+while retaining the marker. Changes to source-selection scripts also trigger
+this check against the selected release. Each baseline, delivery format, and
+transition mode runs on its own clean Windows runner. The identity-reset
+scenarios also prove that both Store candidate formats install fresh after the
+legacy package is removed.
 Each scenario refuses to run when a Gateway package is already registered and
 removes only packages installed by that test invocation. It temporarily trusts
 the ephemeral test-signing certificate in the local-machine Trusted People

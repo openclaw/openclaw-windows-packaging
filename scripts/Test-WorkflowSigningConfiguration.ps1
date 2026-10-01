@@ -77,9 +77,13 @@ $requiredFragments = @(
     'fail-fast: false'
     'name: Download unsigned candidate'
     'name: Apply temporary test signature'
-    '-IdentityChannel ${{ matrix.channel }}'
-    "-TransitionMode '`${{ matrix.transition_mode }}'"
-    "-BaselineAssetName '`${{ matrix.baseline_asset }}'"
+    'CANDIDATE_CHANNEL: ${{ matrix.channel }}'
+    'BASELINE_ASSET: ${{ matrix.baseline_asset }}'
+    'BASELINE_RELEASE_TAG: ${{ matrix.release_tag }}'
+    'TRANSITION_MODE: ${{ matrix.transition_mode }}'
+    '-IdentityChannel $env:CANDIDATE_CHANNEL'
+    '-TransitionMode $env:TRANSITION_MODE'
+    '-BaselineAssetName $env:BASELINE_ASSET'
     "-StoreProductId '9NV70LV3D6XC'"
     '-CandidatePath $candidatePath'
     'openclaw-gateway-msix-upgrade-evidence-${{ matrix.id }}'
@@ -121,6 +125,24 @@ if ($workflow.Contains(
         '-ExpectedBaselineVersion',
         [StringComparison]::Ordinal)) {
     throw 'Store upgrade validation must use the version installed by Microsoft Store.'
+}
+
+foreach ($unsafeMatrixInterpolation in @(
+    "release download '`${{ matrix."
+    'throw "Unable to download ${{ matrix.'
+    "= 'test-signed\`${{ matrix."
+    "Join-Path `$candidateRoot '`${{ matrix."
+    "if ('`${{ matrix."
+    "-TransitionMode '`${{ matrix."
+    "-BaselineAssetName '`${{ matrix."
+    "-EvidencePath 'evidence\`${{ matrix."
+    '-IdentityChannel ${{ matrix.channel }}'
+)) {
+    if ($workflow.Contains(
+            $unsafeMatrixInterpolation,
+            [StringComparison]::Ordinal)) {
+        throw 'Upgrade matrix values must enter PowerShell through environment data.'
+    }
 }
 
 $buildMsixJobMatch = [regex]::Match(
