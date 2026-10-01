@@ -63,6 +63,7 @@ $requiredFragments = @(
     'subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}'
     'uses: azure/artifact-signing-action@v2'
     'name: Compose unsigned Store and sideload MSIX bundles'
+    '-SideloadOutputDirectory ''${{ runner.temp }}\openclaw-msix-sideload'''
     'name: Upload unsigned Store MSIX bundle'
     'name: Upload unsigned sideload MSIX bundle'
     'name: Test MSIX upgrade (${{ matrix.name }})'
@@ -160,6 +161,13 @@ if ($buildMsixJob.Contains(
         'name: Download payload',
         [StringComparison]::Ordinal)) {
     throw 'The build-msix job must compose the locally built payload directly.'
+}
+$buildMsixCalls = [regex]::Matches(
+    $buildMsixJob,
+    [regex]::Escape('.\scripts\Build-MSIX.ps1')
+)
+if ($buildMsixCalls.Count -ne 1) {
+    throw 'The build-msix job must compile once per architecture.'
 }
 
 $dispatchDefaultMatch = [regex]::Match(

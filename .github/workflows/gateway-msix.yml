@@ -638,15 +638,14 @@ jobs:
           $packageVersion = .\scripts\Get-WorkflowPackageVersion.ps1 `
             @versionParameters
 
-          foreach ($channel in @('Store', 'Sideload')) {
-            .\scripts\Build-MSIX.ps1 `
-              -PayloadDirectory '${{ runner.temp }}\openclaw-payload' `
-              -Architecture '${{ matrix.architecture }}' `
-              -PackageVersion $packageVersion `
-              -SourceCommit '${{ github.sha }}' `
-              -IdentityChannel $channel `
-              -OutputDirectory "${{ runner.temp }}\openclaw-msix-$($channel.ToLowerInvariant())"
-          }
+          .\scripts\Build-MSIX.ps1 `
+            -PayloadDirectory '${{ runner.temp }}\openclaw-payload' `
+            -Architecture '${{ matrix.architecture }}' `
+            -PackageVersion $packageVersion `
+            -SourceCommit '${{ github.sha }}' `
+            -IdentityChannel Store `
+            -OutputDirectory '${{ runner.temp }}\openclaw-msix-store' `
+            -SideloadOutputDirectory '${{ runner.temp }}\openclaw-msix-sideload'
 
       - name: Upload unsigned Store MSIX
         uses: actions/upload-artifact@v7
