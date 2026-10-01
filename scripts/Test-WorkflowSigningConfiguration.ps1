@@ -31,16 +31,20 @@ $requiredFragments = @(
     'name: Save immutable source selection'
     'name: openclaw-source-resolution'
     './scripts/Get-WorkflowSource.ps1'
+    'GATEWAY_VERSION: ${{ inputs.gateway_version }}'
+    '-GatewayVersion $env:GATEWAY_VERSION'
     "'scripts/OpenClawSource.ps1'"
     "'scripts/Get-WorkflowSource.ps1'"
     "'scripts/Test-OpenClawSource.Tests.ps1'"
     '-ReuseSnapshot:($env:GITHUB_RUN_ATTEMPT -ne ''1'')'
     'ref: ${{ steps.resolve.outputs.sha }}'
     '-ExpectedVersion ''${{ steps.resolve.outputs.version }}'''
-    'GATEWAY_TAG: ${{ needs.build-package.outputs.source_tag }}'
+    'release_identity_tag: ${{ steps.resolve.outputs.release_identity_tag }}'
+    'GATEWAY_TAG: ${{ needs.build-package.outputs.release_identity_tag }}'
     '-GatewayTag $env:GATEWAY_TAG'
     'name: Download captured stable source'
     '-SourcePath source-resolution\source-resolution.json'
+    '-GatewayVersion $env:GATEWAY_VERSION'
     '-WorkflowRunId $env:GITHUB_RUN_ID'
     '-SigningMode $env:SIGNING_MODE'
     'payload_artifact: ${{ steps.filter.outputs.payload_artifact }}'
@@ -117,6 +121,7 @@ $requiredFragments = @(
     'tag_name: ${{ needs.authorize-signing.outputs.release_tag }}'
     'target_commitish: ${{ github.sha }}'
     'generate_release_notes: true'
+    'make_latest: true'
     'overwrite_files: false'
     'fail_on_unmatched_files: true'
     'release-assets/*.msixbundle'
@@ -209,6 +214,13 @@ $dispatchDefaultMatch = [regex]::Match(
 if (-not $dispatchDefaultMatch.Success -or
     $workflow -match "(?m)^\s*OPENCLAW_REF:.*\|\|\s*'[0-9a-f]{40}'") {
     throw 'An empty source input must follow stable; do not add a second source pin.'
+}
+$versionDefaultMatch = [regex]::Match(
+    $workflow,
+    '(?ms)gateway_version:\s+description:.*?required:\s*false\s+default:\s*''''\s+type:\s*string'
+)
+if (-not $versionDefaultMatch.Success) {
+    throw 'The optional Gateway version override must default to empty.'
 }
 
 $identityCalls = [regex]::Matches($workflow, '-GatewayTag \$env:GATEWAY_TAG')

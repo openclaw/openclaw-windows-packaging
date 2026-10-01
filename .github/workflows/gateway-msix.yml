@@ -12,6 +12,11 @@ on:
         required: false
         default: ''
         type: string
+      gateway_version:
+        description: Optional older exact stable payload; MSIX identity remains on release-policy stableVersion or npm latest
+        required: false
+        default: ''
+        type: string
       signing_mode:
         description: Package signing mode
         required: true
@@ -350,7 +355,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       source_sha: ${{ steps.resolve.outputs.sha }}
-      source_tag: ${{ steps.resolve.outputs.tag }}
+      release_identity_tag: ${{ steps.resolve.outputs.release_identity_tag }}
       package_cache_key: ${{ steps.resolve.outputs.package_cache_key }}
       package_version: ${{ steps.package.outputs.version }}
       node_version: ${{ steps.package.outputs.node_version }}
@@ -374,6 +379,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_REF: ${{ inputs.openclaw_ref }}
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
           SIGNING_MODE: ${{ inputs.signing_mode || 'unsigned' }}
         run: |
           $snapshotPath = Join-Path $env:RUNNER_TEMP 'openclaw-source/source-resolution.json'
@@ -381,6 +387,7 @@ jobs:
             -PolicyPath ./release-policy.json `
             -OutputPath $snapshotPath `
             -Ref $env:SOURCE_REF `
+            -GatewayVersion $env:GATEWAY_VERSION `
             -SigningMode $env:SIGNING_MODE `
             -WorkflowRunId $env:GITHUB_RUN_ID `
             -PackagingCommit $env:GITHUB_SHA `
@@ -388,11 +395,15 @@ jobs:
           $cacheKey = .\scripts\Get-OpenClawCacheKey.ps1 `
             -Layer package `
             -Commit $source.resolvedCommit
+          $releaseIdentitySource = if ($null -ne $source.PSObject.Properties['releaseIdentitySource']) {
+            $source.releaseIdentitySource
+          }
+          else { $source }
           "sha=$($source.resolvedCommit)" >> $env:GITHUB_OUTPUT
-          "tag=v$($source.packageVersion)" >> $env:GITHUB_OUTPUT
+          "release_identity_tag=$($releaseIdentitySource.releaseTag)" >> $env:GITHUB_OUTPUT
           "version=$($source.packageVersion)" >> $env:GITHUB_OUTPUT
           "package_cache_key=$cacheKey" >> $env:GITHUB_OUTPUT
-          "OpenClaw $($source.packageVersion) ($($source.resolvedCommit)), selected by $($source.requestedRef)." >> $env:GITHUB_STEP_SUMMARY
+          "OpenClaw $($source.packageVersion) ($($source.resolvedCommit)), selected by $($source.requestedRef); release identity $($releaseIdentitySource.releaseTag)." >> $env:GITHUB_STEP_SUMMARY
 
       - name: Save immutable source selection
         if: ${{ github.run_attempt == 1 }}
@@ -628,7 +639,7 @@ jobs:
         env:
           SIGNING_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode || 'unsigned' }}
           VERSIONING_CHANGE: ${{ needs.changes.outputs.versioning }}
-          GATEWAY_TAG: ${{ needs.build-package.outputs.source_tag }}
+          GATEWAY_TAG: ${{ needs.build-package.outputs.release_identity_tag }}
         run: |
           $versionParameters = @{
             RunNumber = '${{ github.run_number }}'
@@ -770,7 +781,7 @@ jobs:
         env:
           SIGNING_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode || 'unsigned' }}
           VERSIONING_CHANGE: ${{ needs.changes.outputs.versioning }}
-          GATEWAY_TAG: ${{ needs.build-package.outputs.source_tag }}
+          GATEWAY_TAG: ${{ needs.build-package.outputs.release_identity_tag }}
         run: |
           $versionParameters = @{
             RunNumber = '${{ github.run_number }}'
@@ -873,7 +884,7 @@ jobs:
       - name: Test package transition
         shell: pwsh
         env:
-          GATEWAY_TAG: ${{ needs.build-package.outputs.source_tag }}
+          GATEWAY_TAG: ${{ needs.build-package.outputs.release_identity_tag }}
           BASELINE_ASSET: ${{ matrix.baseline_asset }}
           CANDIDATE_CHANNEL: ${{ matrix.channel }}
           CANDIDATE_FILE: ${{ matrix.candidate_file }}
@@ -1007,6 +1018,7 @@ jobs:
         env:
           SIGNING_MODE: ${{ inputs.signing_mode }}
           SOURCE_REF: ${{ inputs.openclaw_ref }}
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
         run: |
           $source = .\scripts\Get-WorkflowSource.ps1 `
             -PolicyPath .\release-policy.json `
@@ -1015,11 +1027,16 @@ jobs:
             -PackagingCommit $env:GITHUB_SHA `
             -SigningMode $env:SIGNING_MODE `
             -Ref $env:SOURCE_REF `
+            -GatewayVersion $env:GATEWAY_VERSION `
             -ReuseSnapshot
           $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
             ConvertFrom-Json
+          $releaseIdentitySource = if ($null -ne $source.PSObject.Properties['releaseIdentitySource']) {
+            $source.releaseIdentitySource
+          }
+          else { $source }
           $identity = .\scripts\Get-MSIXReleaseIdentity.ps1 `
-            -GatewayTag $source.releaseTag `
+            -GatewayTag $releaseIdentitySource.releaseTag `
             -MSIXRevision ([int]$policy.msixRevision)
           $packageVersion = .\scripts\Get-WorkflowPackageVersion.ps1 `
             -RunNumber '${{ github.run_number }}' `
@@ -1036,6 +1053,7 @@ jobs:
         env:
           SIGNING_MODE: ${{ inputs.signing_mode }}
           SOURCE_REF: ${{ inputs.openclaw_ref }}
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
           PACKAGING_COMMIT: ${{ github.sha }}
         run: |
           foreach ($channel in @('Store', 'Sideload')) {
@@ -1046,6 +1064,7 @@ jobs:
               -BundlePath "artifacts\$channelDirectory\bundle\OpenClawGateway.msixbundle" `
               -SourcePath source-resolution\source-resolution.json `
               -RequestedRef $env:SOURCE_REF `
+              -GatewayVersion $env:GATEWAY_VERSION `
               -WorkflowRunId $env:GITHUB_RUN_ID `
               -SigningMode $env:SIGNING_MODE `
               -PackagingCommit $env:PACKAGING_COMMIT `

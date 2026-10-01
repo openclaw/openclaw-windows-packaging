@@ -26,6 +26,8 @@ param(
 
     [string]$RequestedRef = '',
 
+    [string]$GatewayVersion = '',
+
     [ValidateSet('Store', 'Sideload')]
     [string]$IdentityChannel = 'Store'
 )
@@ -197,9 +199,14 @@ $source = & (Join-Path $PSScriptRoot 'Get-WorkflowSource.ps1') `
     -PackagingCommit $PackagingCommit `
     -SigningMode $SigningMode `
     -Ref $RequestedRef `
+    -GatewayVersion $GatewayVersion `
     -ReuseSnapshot
+$releaseIdentitySource = if ($null -ne $source.PSObject.Properties['releaseIdentitySource']) {
+    $source.releaseIdentitySource
+}
+else { $source }
 $releaseIdentity = & (Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1') `
-    -GatewayTag $source.releaseTag `
+    -GatewayTag $releaseIdentitySource.releaseTag `
     -MSIXRevision ([int]$policy.msixRevision)
 $approvedPackageVersion = $releaseIdentity.PackageVersion
 $approvedPayloadVersion = $source.packageVersion

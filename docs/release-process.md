@@ -34,8 +34,14 @@ Gateway tag and `msixRevision`.
 
 Leave the workflow's `openclaw_ref` default empty: packaging runs follow the
 stable source selection described in the [README](../README.md#selecting-the-openclaw-revision).
-For `store` and `official`, leave it empty or supply the full commit SHA of the
-selected stable release. The SHA is a match assertion, not a source override;
+Set the optional `gateway_version` input to an exact stable version for a one-run
+payload rollback. The payload uses that older version, while package and release
+identity continue from the unmodified policy pin or npm latest so the MSIX remains
+an upgrade. Both verified sources are captured and replayed with the immutable
+snapshot; the input does not change release policy and must be older than the
+release-identity source.
+For `store` and `official`, leave `openclaw_ref` empty or supply the full commit
+SHA of the selected payload release. The SHA is a match assertion, not a source override;
 tags, branches, and nonmatching commits are rejected. The workflow also
 accepts `signing_mode`, whose choices are `unsigned`, `test`, `store`, and
 `official`. Select `store` to authorize and retain an unsigned Partner Center
@@ -51,6 +57,9 @@ Complete this checklist before dispatch. Merge any needed policy changes to
 
 1. Confirm the dispatch target is `main` and select `signing_mode=store` for a
    Partner Center submission or `official` for compatible Azure signing.
+   Leave `gateway_version` empty to package policy/latest, or set the exact older
+   stable payload required for this run. Confirm the resulting MSIX identity is
+   newer than the installed production baseline.
    Leave `openclaw_ref` empty to select stable, or supply the matching full SHA
    to assert the intended source. Release publication is rejected for every
    other workflow branch.
@@ -58,8 +67,9 @@ Complete this checklist before dispatch. Merge any needed policy changes to
    only when producing signed artifacts for an explicitly reviewed recovery.
 2. Confirm the policy selects the intended stable channel and publisher. Check
    for an exceptional `stableVersion` pin and remove it in a reviewed change
-   if the release should follow latest. The run records the exact upstream
-   commit, tag, and payload version at source resolution.
+   if the release identity should follow latest. The run records the exact
+   upstream commit, tag, and version for both release identity and payload when
+   `gateway_version` differs.
 3. Confirm the derived identity with
    `scripts\Get-MSIXReleaseIdentity.ps1` rather than calculating a version or
    release tag manually. Use the README's [identity guidance](../README.md#official-signing-setup)
@@ -166,8 +176,10 @@ Never mutate an accepted release tag or a proof-release baseline to repair a
 failed release. If the upstream tag and accepted commit are unchanged and only
 packaging must be rebuilt, increment `msixRevision` in a reviewed policy
 change, then repeat the process with the exact same upstream tag and commit.
-If stable has moved, an exceptional reviewed `stableVersion` pin can select
-that older release for the rebuild; remove it and reset `msixRevision` to `0`
-before publishing a new Gateway tag. A signing-authorization or upgrade-validation
+If stable has moved, set `gateway_version` to the exact older stable payload for
+the rebuild; release identity still follows the unmodified stable selector. A
+longer-lived compatibility pin can remain in reviewed policy as `stableVersion`;
+remove it and reset `msixRevision` to `0` before publishing a new Gateway tag. A
+signing-authorization or upgrade-validation
 failure is a stop condition: correct the reviewed inputs or packaging defect,
 then dispatch a new compliant run rather than publishing partial artifacts.

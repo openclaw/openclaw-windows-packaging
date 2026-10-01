@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory)][string]$PolicyPath,
     [Parameter(Mandatory)][string]$OutputPath,
     [string]$Ref = '',
+    [string]$GatewayVersion = '',
     [ValidateSet('unsigned', 'test', 'store', 'official')][string]$SigningMode = 'unsigned',
     [Parameter(Mandatory)][ValidatePattern('\A[1-9][0-9]*\z')][string]$WorkflowRunId,
     [Parameter(Mandatory)][ValidatePattern('\A[0-9a-fA-F]{40}\z')][string]$PackagingCommit,
@@ -14,9 +15,21 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'OpenClawSource.ps1')
 
 $policy = Read-OpenClawReleasePolicy -Path $PolicyPath
+$selectionPolicy = $policy | ConvertTo-Json -Depth 16 | ConvertFrom-Json -Depth 16 -NoEnumerate
+$null = Assert-OpenClawSourceText $GatewayVersion 'GatewayVersion' -AllowEmpty
+if ($GatewayVersion -ne '') {
+    Assert-OpenClawSourceVersion $GatewayVersion
+    # The payload selector is an effective one-run policy pin. Release identity
+    # continues from the unmodified stable selector and is captured beside it.
+    $selectionPolicy |
+        Add-Member -NotePropertyName stableVersion -NotePropertyValue $GatewayVersion -Force
+}
 $releaseMode = $SigningMode -in @('official', 'store')
 if ($releaseMode -and $Ref -ne '' -and $Ref -cnotmatch '\A[0-9a-fA-F]{40}\z') {
     throw 'Release publication requires an empty Ref or a full SHA matching stable.'
+}
+if (-not $releaseMode -and $Ref -ne '' -and $GatewayVersion -ne '') {
+    throw 'Ref and GatewayVersion cannot both select the source for an unsigned or test build.'
 }
 $sourceRef = if ($releaseMode) { '' } else { $Ref }
 if ($ReuseSnapshot) {
@@ -27,12 +40,34 @@ if ($ReuseSnapshot) {
 }
 else {
     if (Test-Path -LiteralPath $OutputPath) { throw "The source snapshot already exists: $OutputPath" }
-    $source = Resolve-OpenClawSource -Policy $policy -Ref $sourceRef
+    $source = Resolve-OpenClawSource -Policy $selectionPolicy -Ref $sourceRef
+    if ($GatewayVersion -ne '') {
+        $releaseIdentitySource = Resolve-OpenClawSource -Policy $policy
+        $source | Add-Member releaseIdentitySource $releaseIdentitySource
+    }
 }
-Assert-OpenClawSource -Source $source -Policy $policy -RequireChannel:$releaseMode
-$expectedRef = if ($sourceRef -eq '') { Get-OpenClawPolicyRef $policy } else { $sourceRef }
+Assert-OpenClawSource -Source $source -Policy $selectionPolicy -RequireChannel:$releaseMode
+$expectedRef = if ($sourceRef -eq '') { Get-OpenClawPolicyRef $selectionPolicy } else { $sourceRef }
 if ($source.requestedRef -cne $expectedRef -or (($sourceRef -eq '') -ne ($source.channel -ceq 'stable'))) {
     throw 'The source snapshot does not match the requested selector.'
+}
+$releaseIdentityProperty = $source.PSObject.Properties['releaseIdentitySource']
+if ($GatewayVersion -ne '') {
+    if ($null -eq $releaseIdentityProperty) {
+        throw 'The source snapshot is missing its release identity source.'
+    }
+    $releaseIdentitySource = $releaseIdentityProperty.Value
+    Assert-OpenClawSource -Source $releaseIdentitySource -Policy $policy -RequireChannel
+    $payloadIdentity = & (Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1') `
+        -GatewayTag $source.releaseTag -MSIXRevision 0
+    $releaseIdentity = & (Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1') `
+        -GatewayTag $releaseIdentitySource.releaseTag -MSIXRevision 0
+    if ([version]$releaseIdentity.PackageVersion -le [version]$payloadIdentity.PackageVersion) {
+        throw 'GatewayVersion must select a release older than the current stable release identity.'
+    }
+}
+elseif ($null -ne $releaseIdentityProperty) {
+    throw 'The source snapshot has an unexpected release identity source.'
 }
 if ($releaseMode -and $Ref -ne '' -and $Ref -ine $source.resolvedCommit) {
     throw 'The requested full SHA does not match the captured stable release.'

@@ -344,6 +344,8 @@ function Invoke-PolicyValidation {
 
         [string]$RequestedRef = '',
 
+        [string]$GatewayVersion = '',
+
         [switch]$PreserveBundle
     )
 
@@ -380,6 +382,7 @@ function Invoke-PolicyValidation {
         -WorkflowRunId '123456' `
         -SigningMode official `
         -RequestedRef $RequestedRef `
+        -GatewayVersion $GatewayVersion `
         -PackagingCommit $packagingCommit `
         -IdentityChannel $IdentityChannel
 }
@@ -664,6 +667,51 @@ try {
     Assert-Fails -MessagePattern 'requires an empty Ref or a full SHA' -Action {
         Invoke-PolicyValidation -Root $testRoot -RequestedRef 'main'
     }
+    $pinnedPayloadVersion = '2026.9.5'
+    $pinnedPayloadCommit = 'a' * 40
+    $source.requestedRef = $pinnedPayloadVersion
+    $source.resolvedCommit = $pinnedPayloadCommit
+    $source.packageVersion = $pinnedPayloadVersion
+    $source.releaseTag = "v$pinnedPayloadVersion"
+    $source.tagObject = 'b' * 40
+    $source['releaseIdentitySource'] = [ordered]@{
+        repository = $policy.repository
+        requestedRef = 'stable'
+        resolvedCommit = $approvedCommit
+        packageVersion = $approvedPayloadVersion
+        channel = 'stable'
+        releaseTag = "v$approvedPayloadVersion"
+        tagObject = 'd' * 40
+        resolvedAt = '2026-09-30T00:00:00Z'
+        registryIntegrity = 'sha512-' + [Convert]::ToBase64String([byte[]]::new(64))
+    }
+    Save-TestSource
+    Reset-TestArtifacts
+    Copy-TestArtifact `
+        -Root $testRoot `
+        -Architecture x64 `
+        -PayloadCommit $pinnedPayloadCommit `
+        -PayloadPackageVersion $pinnedPayloadVersion
+    Copy-TestArtifact `
+        -Root $testRoot `
+        -Architecture arm64 `
+        -PayloadCommit $pinnedPayloadCommit `
+        -PayloadPackageVersion $pinnedPayloadVersion
+    Invoke-PolicyValidation `
+        -Root $testRoot `
+        -GatewayVersion $pinnedPayloadVersion `
+        -RequestedRef $pinnedPayloadCommit
+    Assert-Fails -MessagePattern 'requestedRef' -Action {
+        Invoke-PolicyValidation -Root $testRoot
+    }
+    $source.requestedRef = 'stable'
+    $source.resolvedCommit = $approvedCommit
+    $source.packageVersion = $approvedPayloadVersion
+    $source.releaseTag = "v$approvedPayloadVersion"
+    $source.tagObject = 'd' * 40
+    $source.Remove('releaseIdentitySource')
+    Save-TestSource
+    Reset-TestArtifacts
 
     $sideloadRoot = Join-Path $suiteRoot 'sideload'
     Copy-TestArtifact `

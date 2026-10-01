@@ -260,6 +260,42 @@ try {
         Assert-Equal $http.Calls[0].Key "Registry:$version"
         Assert-Equal @(@($http.Calls.Key) -match 'Registry:latest').Count 0
     }
+    Invoke-Test 'a workflow payload override preserves the advancing release identity' {
+        Add-Release '2026.9.5' ('a' * 40) ('b' * 40)
+        Add-Release '2026.9.7' ('e' * 40) ('f' * 40)
+        $http.Responses['Registry:latest'].version = '2026.9.8'
+        $policy | Add-Member stableVersion '2026.9.7'
+        Save-Policy
+        $source = & $workflowPath @workflow -SigningMode official -GatewayVersion '2026.9.5' -Ref ('a' * 40)
+        Assert-Equal $source.requestedRef '2026.9.5'
+        Assert-Equal $source.packageVersion '2026.9.5'
+        Assert-Equal $source.resolvedCommit ('a' * 40)
+        Assert-Equal $source.channel 'stable'
+        Assert-Equal $http.Calls[0].Key 'Registry:2026.9.5'
+        Assert-Equal $source.releaseIdentitySource.requestedRef '2026.9.7'
+        Assert-Equal $source.releaseIdentitySource.packageVersion '2026.9.7'
+        Assert-Equal $source.releaseIdentitySource.resolvedCommit ('e' * 40)
+        Assert-Equal $source.releaseIdentitySource.releaseTag 'v2026.9.7'
+        Assert-Equal @(@($http.Calls.Key) -match 'Registry:latest').Count 0
+        $http.Calls.Clear()
+        $replayed = & $workflowPath @workflow -SigningMode official -GatewayVersion '2026.9.5' -Ref ('a' * 40) -ReuseSnapshot
+        Assert-Equal $replayed.resolvedCommit $source.resolvedCommit
+        Assert-Throws {
+            & $workflowPath @workflow -SigningMode official -GatewayVersion $version -Ref ('a' * 40) -ReuseSnapshot
+        } 'requestedRef'
+        Assert-Equal $http.Calls.Count 0
+    }
+    Invoke-Test 'a workflow payload override must remain below its release identity' {
+        Assert-Throws {
+            & $workflowPath @workflow -SigningMode official -GatewayVersion $version
+        } 'older than the current stable release identity'
+        Assert-Equal (Test-Path -LiteralPath $workflow.OutputPath) $false
+    }
+    Invoke-Test 'workflow version overrides reject invalid or ambiguous selectors before HTTP' {
+        Assert-Throws { & $workflowPath @workflow -GatewayVersion 'latest' } 'GatewayVersion|packageVersion'
+        Assert-Throws { & $workflowPath @workflow -GatewayVersion $version -Ref $commit } 'cannot both select'
+        Assert-Equal $http.Calls.Count 0
+    }
     Invoke-Test 'a withdrawn or mismatched exact pin never falls back' {
         $policy | Add-Member stableVersion '2026.8.31'
         Assert-Throws { Resolve-OpenClawSource $policy } 'Missing offline response'
@@ -306,10 +342,15 @@ try {
         Assert-Equal $replayed.resolvedCommit $source.resolvedCommit
         Assert-Equal ([Convert]::ToBase64String([IO.File]::ReadAllBytes($workflow.OutputPath))) ([Convert]::ToBase64String($bytes))
         Assert-Throws { & $workflowPath @workflow } 'already exists'
-        foreach ($field in @('WorkflowRunId', 'PackagingCommit', 'SigningMode', 'Ref')) {
+        foreach ($field in @('WorkflowRunId', 'PackagingCommit', 'SigningMode', 'Ref', 'GatewayVersion')) {
             $changed = $workflow.Clone()
-            $changed[$field] = @{ WorkflowRunId = '999'; PackagingCommit = 'e' * 40; SigningMode = 'test'; Ref = "v$version" }[$field]
-            Assert-Throws { & $workflowPath @changed -ReuseSnapshot } 'workflow identity|requested selector'
+            $changed[$field] = @{
+                WorkflowRunId = '999'; PackagingCommit = 'e' * 40; SigningMode = 'test'
+                Ref = "v$version"; GatewayVersion = '2026.9.3'
+            }[$field]
+            Assert-Throws {
+                & $workflowPath @changed -ReuseSnapshot
+            } 'workflow identity|requested selector|source channel|release identity source'
         }
         Assert-Equal $http.Calls.Count 0
     }
