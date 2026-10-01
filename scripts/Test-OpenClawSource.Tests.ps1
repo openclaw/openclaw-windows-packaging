@@ -133,6 +133,20 @@ try {
             Assert-Equal $call.Headers.ContainsKey('Authorization') ($call.Key.StartsWith('GitHub:'))
         }
     }
+    foreach ($verificationState in @('unsigned', 'absent')) {
+        Invoke-Test "stable source accepts $verificationState tag signing evidence" {
+            $tag = $http.Responses["GitHub:git/tags/$tagObject"]
+            if ($verificationState -eq 'unsigned') {
+                $tag.verification = [pscustomobject]@{ verified = $false; reason = 'unsigned' }
+            }
+            else { $tag.PSObject.Properties.Remove('verification') }
+            $source = Resolve-OpenClawSource $policy
+            Assert-Equal $source.resolvedCommit $commit
+            Assert-Equal $source.tagObject $tagObject
+            Assert-Equal $source.releaseTag "v$version"
+            Assert-Equal $source.registryIntegrity $integrity
+        }
+    }
     Invoke-Test 'a new resolution follows an advancing stable channel' {
         $first = Resolve-OpenClawSource $policy
         Add-Release '2026.9.5' ('a' * 40) ('b' * 40)
@@ -162,10 +176,8 @@ try {
             @{ Name = 'registry gitHead'; Edit = { $http.Responses["Registry:$version"].gitHead = 'a' * 40 }; Error = 'gitHead' },
             @{ Name = 'lightweight tag'; Edit = { $http.Responses["GitHub:git/ref/tags/v$version"].object.type = 'commit' }; Error = 'annotated tag' },
             @{ Name = 'wrong tag ref'; Edit = { $http.Responses["GitHub:git/ref/tags/v$version"].ref = 'refs/tags/other' }; Error = 'annotated tag' },
-            @{ Name = 'unsigned tag'; Edit = { $http.Responses["GitHub:git/tags/$tagObject"].verification.verified = $false }; Error = 'signature' },
-            @{ Name = 'nonboolean verification'; Edit = { $http.Responses["GitHub:git/tags/$tagObject"].verification.verified = 'true' }; Error = 'signature' },
-            @{ Name = 'wrong tag SHA'; Edit = { $http.Responses["GitHub:git/tags/$tagObject"].sha = 'a' * 40 }; Error = 'signature' },
-            @{ Name = 'wrong tag label'; Edit = { $http.Responses["GitHub:git/tags/$tagObject"].tag = 'v2026.9.5' }; Error = 'signature' },
+            @{ Name = 'wrong tag SHA'; Edit = { $http.Responses["GitHub:git/tags/$tagObject"].sha = 'a' * 40 }; Error = 'tag object and name' },
+            @{ Name = 'wrong tag label'; Edit = { $http.Responses["GitHub:git/tags/$tagObject"].tag = 'v2026.9.5' }; Error = 'tag object and name' },
             @{ Name = 'nested tag target'; Edit = { $http.Responses["GitHub:git/tags/$tagObject"].object.type = 'tag' }; Error = 'directly to a commit' },
             @{ Name = 'source name'; Edit = { Set-Package -Name 'other' }; Error = 'source package name' },
             @{ Name = 'source correction mismatch'; Edit = {

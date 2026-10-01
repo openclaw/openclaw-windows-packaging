@@ -183,10 +183,8 @@ function Resolve-OpenClawSource {
         $tagObject = $tagRef.object.sha.ToLowerInvariant()
         $tag = Invoke-OpenClawSourceRequest GitHub "git/tags/$tagObject"
         Assert-OpenClawSourceText $tag.sha 'tag SHA' -Pattern '\A[0-9a-fA-F]{40}\z'
-        if ($tag.sha -ine $tagObject -or $tag.tag -isnot [string] -or $tag.tag -cne $releaseTag -or
-            $tag.verification.verified -isnot [bool] -or -not $tag.verification.verified -or
-            $tag.verification.reason -isnot [string] -or $tag.verification.reason -cne 'valid') {
-            throw 'The release tag must match and have a valid GitHub-verified signature.'
+        if ($tag.sha -ine $tagObject -or $tag.tag -isnot [string] -or $tag.tag -cne $releaseTag) {
+            throw 'The release tag object and name must match the selected release.'
         }
         if ($tag.object.type -isnot [string] -or $tag.object.type -cne 'commit') {
             throw 'The annotated release tag must point directly to a commit.'
