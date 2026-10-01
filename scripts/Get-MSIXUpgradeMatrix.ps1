@@ -86,31 +86,19 @@ for ($index = 0; $index -lt $baselines.Count; $index++) {
     }
 }
 
-foreach ($delivery in @(
-    [pscustomobject]@{
-        type = 'standalone'
-        directory = 'x64'
-        suffix = 'x64'
-        file = 'OpenClawGateway-x64.msix'
-    },
-    [pscustomobject]@{
-        type = 'bundle'
-        directory = 'bundle'
-        suffix = 'bundle'
-        file = 'OpenClawGateway.msixbundle'
-    }
-)) {
-    $include.Add([pscustomobject]@{
-        name = "Store update · $($delivery.type)"
-        id = "store-$($delivery.type)"
-        transition_mode = 'store-in-place'
-        channel = 'store'
-        delivery_dir = $delivery.directory
-        artifact = "openclaw-gateway-msix-store-unsigned-$($delivery.suffix)"
-        candidate_file = $delivery.file
-        release_tag = ''
-        baseline_asset = ''
-    })
-}
+# The Store installs this product from a regular bundle. Windows services that
+# registration through a newer bundle, not through one extracted architecture
+# package. Standalone candidates are covered by the identity-reset scenarios.
+$include.Add([pscustomobject]@{
+    name = 'Store update · bundle'
+    id = 'store-bundle'
+    transition_mode = 'store-in-place'
+    channel = 'store'
+    delivery_dir = 'bundle'
+    artifact = 'openclaw-gateway-msix-store-unsigned-bundle'
+    candidate_file = 'OpenClawGateway.msixbundle'
+    release_tag = ''
+    baseline_asset = ''
+})
 
 @{ include = $include } | ConvertTo-Json -Depth 4 -Compress

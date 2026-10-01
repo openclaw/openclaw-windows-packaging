@@ -36,8 +36,8 @@ try {
     $matrix = & $scriptPath -ManifestPath $manifestPath |
         ConvertFrom-Json
     $scenarios = @($matrix.include)
-    if ($scenarios.Count -ne 14) {
-        throw "Expected 14 upgrade scenarios; received $($scenarios.Count)."
+    if ($scenarios.Count -ne 13) {
+        throw "Expected 13 upgrade scenarios; received $($scenarios.Count)."
     }
 
     foreach ($baseline in $baselines) {
@@ -59,11 +59,11 @@ try {
             Where-Object { $_.transition_mode -ceq 'store-in-place' }
     )
     if (
-        $storeScenarios.Count -ne 2 -or
-        @($storeScenarios.delivery_dir) -notcontains 'x64' -or
-        @($storeScenarios.delivery_dir) -notcontains 'bundle'
+        $storeScenarios.Count -ne 1 -or
+        [string]$storeScenarios[0].delivery_dir -cne 'bundle' -or
+        [string]$storeScenarios[0].candidate_file -cne 'OpenClawGateway.msixbundle'
     ) {
-        throw 'The matrix does not cover both authentic Store delivery formats.'
+        throw 'The matrix does not cover the authentic Store bundle update.'
     }
 }
 finally {
