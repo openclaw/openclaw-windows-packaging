@@ -1065,6 +1065,12 @@ jobs:
         shell: bash
         run: echo "All required workflow jobs succeeded or were intentionally skipped."
 
+      - name: Check out repository
+        if: ${{ always() }}
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
       - name: Require versioning upgrade tests
         if: ${{ always() }}
         shell: pwsh
