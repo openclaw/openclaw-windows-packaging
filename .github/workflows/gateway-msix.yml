@@ -108,6 +108,8 @@ jobs:
             'scripts/Test-MSIXStoreUpgrade.ps1'
             'scripts/Test-MSIXUpgrade.ps1'
             'scripts/Test-MSIXUpgradeMatrix.Tests.ps1'
+            'scripts/Assert-WorkflowJobResults.ps1'
+            'scripts/Test-WorkflowJobResults.Tests.ps1'
             'scripts/Test-WorkflowSigningConfiguration.ps1'
             'scripts/msix-upgrade-baselines.json'
           )
@@ -322,6 +324,11 @@ jobs:
         run: >
           .\scripts\Test-MSIXUpgradeMatrix.Tests.ps1
 
+      - name: Test workflow job results
+        shell: pwsh
+        run: >
+          .\scripts\Test-WorkflowJobResults.Tests.ps1
+
       - name: Test MSIX bundle build
         shell: pwsh
         run: >
@@ -490,7 +497,7 @@ jobs:
   test-sign-msix:
     cache-mode: none
     name: Test-sign Gateway MSIX packages
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode == 'test' }}
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.signing_mode == 'test' && needs.test-host.result == 'success' && needs.build.result == 'success' }}
     needs:
       - test-host
       - build
@@ -542,7 +549,7 @@ jobs:
   test-msix-upgrades:
     cache-mode: none
     name: Test MSIX upgrade (${{ matrix.name }})
-    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.versioning == 'true' }}
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.result == 'success' && needs.changes.outputs.versioning == 'true' && needs.test-host.result == 'success' && needs.build.result == 'success' }}
     needs:
       - changes
       - test-host
@@ -662,7 +669,7 @@ jobs:
   authorize-signing:
     cache-mode: none
     name: Authorize Gateway MSIX release
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.signing_mode == 'official' || inputs.signing_mode == 'store') && github.ref == 'refs/heads/main' }}
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && (inputs.signing_mode == 'official' || inputs.signing_mode == 'store') && github.ref == 'refs/heads/main' && needs.test-host.result == 'success' && needs.build.result == 'success' }}
     needs:
       - test-host
       - build
@@ -787,7 +794,7 @@ jobs:
   sign-msix:
     cache-mode: none
     name: Officially sign Gateway MSIX packages
-    if: ${{ inputs.signing_mode == 'official' && needs.authorize-signing.result == 'success' }}
+    if: ${{ !cancelled() && inputs.signing_mode == 'official' && needs.build.result == 'success' && needs.authorize-signing.result == 'success' }}
     needs:
       - build
       - authorize-signing
@@ -931,7 +938,7 @@ jobs:
   publish-release:
     cache-mode: none
     name: Publish signed Gateway MSIX release
-    if: ${{ inputs.publish_release && needs.sign-msix.result == 'success' }}
+    if: ${{ !cancelled() && inputs.publish_release && needs.build.result == 'success' && needs.authorize-signing.result == 'success' && needs.sign-msix.result == 'success' }}
     needs:
       - build
       - authorize-signing
@@ -1000,7 +1007,7 @@ jobs:
   retain-store-submission:
     cache-mode: none
     name: Retain authorized Microsoft Store submission bundle
-    if: ${{ needs.authorize-signing.result == 'success' }}
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.authorize-signing.result == 'success' }}
     needs:
       - build
       - authorize-signing
@@ -1057,3 +1064,22 @@ jobs:
       - name: Confirm workflow success
         shell: bash
         run: echo "All required workflow jobs succeeded or were intentionally skipped."
+
+      - name: Require versioning upgrade tests
+        if: ${{ always() }}
+        shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          VERSIONING: ${{ needs.changes.outputs.versioning }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          TEST_HOST_RESULT: ${{ needs.test-host.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          UPGRADE_RESULT: ${{ needs.test-msix-upgrades.result }}
+        run: |
+          ./scripts/Assert-WorkflowJobResults.ps1 `
+            -EventName $env:EVENT_NAME `
+            -Versioning $env:VERSIONING `
+            -ChangesResult $env:CHANGES_RESULT `
+            -TestHostResult $env:TEST_HOST_RESULT `
+            -BuildResult $env:BUILD_RESULT `
+            -UpgradeResult $env:UPGRADE_RESULT
