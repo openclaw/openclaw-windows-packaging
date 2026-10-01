@@ -874,18 +874,24 @@ public sealed class ClawCtlCommandLineTests
         ClawCtlConsole.WriteVersion(colored, useColor: true);
         string text = colored.ToString();
 
-        int versionIndex = text.IndexOf(
-            ClawCtlBuildMetadata.PackageVersion,
-            StringComparison.Ordinal);
-        int commitIndex = text.IndexOf(
-            ClawCtlBuildMetadata.PackageCommit,
-            StringComparison.Ordinal);
+        foreach ((string label, string version, string commit) in new[]
+        {
+            ("Package:", ClawCtlBuildMetadata.PackageVersion, ClawCtlBuildMetadata.PackageCommit),
+            ("Payload:", ClawCtlBuildMetadata.PayloadVersion, ClawCtlBuildMetadata.PayloadCommit),
+        })
+        {
+            string row = Assert.Single(text.Split('\n'), line => line.Contains(label, StringComparison.Ordinal));
+            int versionIndex = row.IndexOf(
+                version,
+                row.IndexOf(label, StringComparison.Ordinal) + label.Length,
+                StringComparison.Ordinal);
+            Assert.True(versionIndex >= 0);
+            int versionEnd = versionIndex + version.Length;
+            int commitIndex = row.IndexOf($"({commit})", versionEnd, StringComparison.Ordinal);
 
-        Assert.True(versionIndex >= 0 && commitIndex > versionIndex);
-        Assert.Contains(
-            "\u001b[",
-            text[versionIndex..commitIndex],
-            StringComparison.Ordinal);
+            Assert.True(commitIndex >= versionEnd);
+            Assert.Contains("\u001b[", row[versionEnd..commitIndex], StringComparison.Ordinal);
+        }
     }
 
     // The old parser rejected `--version` combined with anything else. The

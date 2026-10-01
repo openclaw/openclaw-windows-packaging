@@ -34,8 +34,9 @@ Gateway tag and `msixRevision`.
 
 Leave the workflow's `openclaw_ref` default empty: packaging runs follow the
 stable source selection described in the [README](../README.md#selecting-the-openclaw-revision).
-For `store` and `official`, an empty input is required; explicit ref overrides
-are rejected. The workflow also
+For `store` and `official`, leave it empty or supply the full commit SHA of the
+selected stable release. The SHA is a match assertion, not a source override;
+tags, branches, and nonmatching commits are rejected. The workflow also
 accepts `signing_mode`, whose choices are `unsigned`, `test`, `store`, and
 `official`. Select `store` to authorize and retain an unsigned Partner Center
 submission bundle without signing. Select `official` to retain that Store
@@ -50,8 +51,9 @@ Complete this checklist before dispatch. Merge any needed policy changes to
 
 1. Confirm the dispatch target is `main` and select `signing_mode=store` for a
    Partner Center submission or `official` for compatible Azure signing.
-   Leave `openclaw_ref` empty to select stable. Release publication is rejected
-   for every other branch.
+   Leave `openclaw_ref` empty to select stable, or supply the matching full SHA
+   to assert the intended source. Release publication is rejected for every
+   other workflow branch.
    Keep `publish_release=true` for a new official release. Set it to `false`
    only when producing signed artifacts for an explicitly reviewed recovery.
 2. Confirm the policy selects the intended stable channel and publisher. Check
@@ -96,7 +98,10 @@ and validates its workflow run ID, packaging commit, and signing mode without
 resolving latest again. That recorded source supplies the expected upstream
 commit, payload version, and derived release identity. The check validates
 policy-controlled publishers and every Store and sideload package and bundle
-against those inputs. For `official`, only after both channels
+against those inputs. A later channel change or upstream tag deletion does not
+rewrite or revoke a captured source snapshot; stop the workflow rather than
+retrying it if that captured release must no longer be published. For `official`,
+only after both channels
 pass does `sign-msix` use Azure login. It signs only the sideload x64, ARM64,
 and bundle artifacts; the Store bundle remains unsigned for Partner Center.
 

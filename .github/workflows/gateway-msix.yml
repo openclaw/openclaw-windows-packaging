@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       openclaw_ref:
-        description: Optional ref for unsigned/test builds; leave empty for stable channel selection (required for store/official publication)
+        description: Empty follows stable; store/official also accept a full SHA matching stable; other refs are unsigned/test only
         required: false
         default: ''
         type: string
@@ -995,6 +995,7 @@ jobs:
         shell: pwsh
         env:
           SIGNING_MODE: ${{ inputs.signing_mode }}
+          SOURCE_REF: ${{ inputs.openclaw_ref }}
         run: |
           $source = .\scripts\Get-WorkflowSource.ps1 `
             -PolicyPath .\release-policy.json `
@@ -1002,6 +1003,7 @@ jobs:
             -WorkflowRunId $env:GITHUB_RUN_ID `
             -PackagingCommit $env:GITHUB_SHA `
             -SigningMode $env:SIGNING_MODE `
+            -Ref $env:SOURCE_REF `
             -ReuseSnapshot
           $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
             ConvertFrom-Json
@@ -1022,6 +1024,7 @@ jobs:
         shell: pwsh
         env:
           SIGNING_MODE: ${{ inputs.signing_mode }}
+          SOURCE_REF: ${{ inputs.openclaw_ref }}
           PACKAGING_COMMIT: ${{ github.sha }}
         run: |
           foreach ($channel in @('Store', 'Sideload')) {
@@ -1031,6 +1034,7 @@ jobs:
               -PolicyPath .\release-policy.json `
               -BundlePath "artifacts\$channelDirectory\bundle\OpenClawGateway.msixbundle" `
               -SourcePath source-resolution\source-resolution.json `
+              -RequestedRef $env:SOURCE_REF `
               -WorkflowRunId $env:GITHUB_RUN_ID `
               -SigningMode $env:SIGNING_MODE `
               -PackagingCommit $env:PACKAGING_COMMIT `

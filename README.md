@@ -368,8 +368,10 @@ If compatibility requires an older known-good stable release, a reviewed
 example `"stableVersion": "2026.9.4"`. That pin applies to all modes until removed;
 it is not automatic fallback.
 
-For `store` and `official`, leave `openclaw_ref` empty. These modes require
-channel selection and reject explicit refs. Before authorization, the workflow
+For `store` and `official`, leave `openclaw_ref` empty to follow stable, or pass
+its full commit SHA as an assertion. A supplied SHA must match the captured
+stable release; it does not override channel selection. Tags and branches are
+rejected for publication. Before authorization, the workflow
 restores the same run's source snapshot and checks its workflow run ID,
 packaging commit, and signing mode. It does not resolve the moving channel again.
 
@@ -633,8 +635,8 @@ validation. Manual runs support four modes:
 - `test` uses the same source-selection rules and publishes MSIX packages signed with a
   temporary self-signed certificate plus the public `.cer` needed for local
   installation;
-- `store` follows stable, requires an empty `openclaw_ref`, may run only from
-  `main`, and retains an unsigned Partner Center submission bundle for 90 days;
+- `store` follows stable, optionally checks a matching full-SHA `openclaw_ref`,
+  may run only from `main`, and retains an unsigned Partner Center submission bundle for 90 days;
   Microsoft signs it during Store ingestion;
 - `official` uses the same source rules, may run only from `main`, and publishes
   signed packages as permanent GitHub Release assets when `publish_release`

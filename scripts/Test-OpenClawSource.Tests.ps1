@@ -361,9 +361,24 @@ try {
             Assert-Equal $replayed.releaseTag $source.releaseTag
             Assert-Equal $http.Calls.Count 0
         }
-        Invoke-Test "$mode release rejects SHA, tag, and branch overrides before HTTP" {
-            foreach ($ref in @($commit, "v$version", 'main')) {
-                Assert-Throws { & $workflowPath @workflow -SigningMode $mode -Ref $ref } 'requires stable channel selection'
+        Invoke-Test "$mode release accepts a matching full SHA and preserves stable provenance" {
+            $source = & $workflowPath @workflow -SigningMode $mode -Ref $commit
+            Assert-Equal $source.resolvedCommit $commit
+            Assert-Equal $source.channel 'stable'
+            Assert-Equal $source.requestedRef 'stable'
+            $http.Calls.Clear()
+            $replayed = & $workflowPath @workflow -SigningMode $mode -Ref $commit -ReuseSnapshot
+            Assert-Equal $replayed.resolvedCommit $commit
+            Assert-Throws { & $workflowPath @workflow -SigningMode $mode -Ref ('a' * 40) -ReuseSnapshot } 'does not match the captured stable release'
+            Assert-Equal $http.Calls.Count 0
+        }
+        Invoke-Test "$mode release rejects a different full SHA before recording source" {
+            Assert-Throws { & $workflowPath @workflow -SigningMode $mode -Ref ('a' * 40) } 'does not match the captured stable release'
+            Assert-Equal (Test-Path -LiteralPath $workflow.OutputPath) $false
+        }
+        Invoke-Test "$mode release rejects tag and branch overrides before HTTP" {
+            foreach ($ref in @("v$version", 'main')) {
+                Assert-Throws { & $workflowPath @workflow -SigningMode $mode -Ref $ref } 'requires an empty Ref or a full SHA'
             }
             Assert-Equal $http.Calls.Count 0
         }

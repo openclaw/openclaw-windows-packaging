@@ -342,6 +342,8 @@ function Invoke-PolicyValidation {
         [ValidateSet('Store', 'Sideload')]
         [string]$IdentityChannel = 'Store',
 
+        [string]$RequestedRef = '',
+
         [switch]$PreserveBundle
     )
 
@@ -377,6 +379,7 @@ function Invoke-PolicyValidation {
         -SourcePath $sourcePath `
         -WorkflowRunId '123456' `
         -SigningMode official `
+        -RequestedRef $RequestedRef `
         -PackagingCommit $packagingCommit `
         -IdentityChannel $IdentityChannel
 }
@@ -654,7 +657,13 @@ try {
     }
     Save-TestSource
     Reset-TestArtifacts
-    Invoke-PolicyValidation -Root $testRoot
+    Invoke-PolicyValidation -Root $testRoot -RequestedRef $approvedCommit
+    Assert-Fails -MessagePattern 'does not match the captured stable release' -Action {
+        Invoke-PolicyValidation -Root $testRoot -RequestedRef $unapprovedCommit
+    }
+    Assert-Fails -MessagePattern 'requires an empty Ref or a full SHA' -Action {
+        Invoke-PolicyValidation -Root $testRoot -RequestedRef 'main'
+    }
 
     $sideloadRoot = Join-Path $suiteRoot 'sideload'
     Copy-TestArtifact `

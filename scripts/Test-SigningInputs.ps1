@@ -24,6 +24,8 @@ param(
     [ValidatePattern('^[0-9a-fA-F]{40}$')]
     [string]$PackagingCommit,
 
+    [string]$RequestedRef = '',
+
     [ValidateSet('Store', 'Sideload')]
     [string]$IdentityChannel = 'Store'
 )
@@ -194,6 +196,7 @@ $source = & (Join-Path $PSScriptRoot 'Get-WorkflowSource.ps1') `
     -WorkflowRunId $WorkflowRunId `
     -PackagingCommit $PackagingCommit `
     -SigningMode $SigningMode `
+    -Ref $RequestedRef `
     -ReuseSnapshot
 $releaseIdentity = & (Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1') `
     -GatewayTag $source.releaseTag `
