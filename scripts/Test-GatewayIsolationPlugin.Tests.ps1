@@ -65,19 +65,26 @@ try {
 
     $bracketApplication = Join-Path $testRoot 'app[1]'
     [IO.Directory]::CreateDirectory($bracketApplication) | Out-Null
-    [IO.Directory]::CreateDirectory((Join-Path $testRoot 'app1')) | Out-Null
+    $siblingApplication = Join-Path $testRoot 'app1'
+    [IO.Directory]::CreateDirectory($siblingApplication) | Out-Null
+    [IO.File]::WriteAllText((Join-Path $bracketApplication 'selection.txt'), 'bracketed-application')
+    [IO.File]::WriteAllText((Join-Path $siblingApplication 'selection.txt'), 'sibling-application')
     $callerDirectory = (Get-Location).Path
-    $selectedDirectory = & {
+    $selectedApplicationMarker = & {
         param($selectorScript, $selectedApplication)
         function node {
-            (Get-Location).ProviderPath
+            [IO.File]::ReadAllText((Join-Path (Get-Location).ProviderPath 'selection.txt'))
             $global:LASTEXITCODE = 0
         }
         & $selectorScript -OpenClawDirectory $selectedApplication
     } (Join-Path $PSScriptRoot 'Test-GatewayIsolationContext.ps1') $bracketApplication
-    if ($selectedDirectory -cne $bracketApplication -or
+    if ($selectedApplicationMarker -cne 'bracketed-application' -or
         (Get-Location).Path -cne $callerDirectory) {
-        throw 'Prepared-runtime selection must preserve literal bracketed paths and restore the caller.'
+        throw (
+            'Prepared-runtime selection must read the bracketed application and restore the caller. ' +
+            "Observed marker: '$selectedApplicationMarker'. " +
+            "Caller before: '$callerDirectory'; after: '$((Get-Location).Path)'."
+        )
     }
 
     $emptyApplication = Join-Path $testRoot 'empty-application'
