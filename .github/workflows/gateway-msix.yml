@@ -52,6 +52,7 @@ jobs:
     outputs:
       packaging: ${{ steps.filter.outputs.packaging }}
       payload_artifact: ${{ steps.filter.outputs.payload_artifact }}
+      bundle_build: ${{ steps.filter.outputs.bundle_build }}
       versioning: ${{ steps.filter.outputs.versioning }}
       upgrade_matrix: ${{ steps.filter.outputs.upgrade_matrix }}
     steps:
@@ -66,6 +67,7 @@ jobs:
           if ($env:GITHUB_EVENT_NAME -ne 'pull_request') {
             'packaging=true' >> $env:GITHUB_OUTPUT
             'payload_artifact=true' >> $env:GITHUB_OUTPUT
+            'bundle_build=true' >> $env:GITHUB_OUTPUT
             'versioning=false' >> $env:GITHUB_OUTPUT
             return
           }
@@ -84,38 +86,23 @@ jobs:
             -FileListPath $fileListPath
           "packaging=$packaging" >> $env:GITHUB_OUTPUT
 
-          $pages = Get-Content -LiteralPath $fileListPath -Raw |
-            ConvertFrom-Json
           $payloadArtifact = .\scripts\Get-PackagingRelevance.ps1 `
             -FileListPath $fileListPath `
             -PayloadArtifact
           "payload_artifact=$payloadArtifact" >> $env:GITHUB_OUTPUT
 
-          $versioningPaths = @(
-            '.github/workflows/gateway-msix.yml'
-            'release-policy.json'
-            'scripts/Sign-TestMSIX.ps1'
-            'scripts/OpenClawSource.ps1'
-            'scripts/Get-WorkflowSource.ps1'
-            'scripts/Test-OpenClawSource.Tests.ps1'
-            'scripts/Get-MSIXReleaseIdentity.ps1'
-            'scripts/Get-MSIXUpgradeMatrix.ps1'
-            'scripts/Test-MSIXReleaseIdentity.Tests.ps1'
-            'scripts/Test-MSIXStoreUpgrade.ps1'
-            'scripts/Test-MSIXUpgrade.ps1'
-            'scripts/Test-MSIXUpgradeMatrix.Tests.ps1'
-            'scripts/Test-WorkflowSigningConfiguration.ps1'
-            'scripts/msix-upgrade-baselines.json'
-          )
-          $versioning = 'false'
-          foreach ($page in @($pages)) {
-            foreach ($file in @($page)) {
-              if ([string]$file.filename -in $versioningPaths) {
-                $versioning = 'true'
-              }
-            }
-          }
+          $versioning = .\scripts\Get-PackagingRelevance.ps1 `
+            -FileListPath $fileListPath `
+            -Versioning
           "versioning=$versioning" >> $env:GITHUB_OUTPUT
+
+          $bundleBuild = $versioning
+          if ($bundleBuild -ne 'true') {
+            $bundleBuild = .\scripts\Get-PackagingRelevance.ps1 `
+              -FileListPath $fileListPath `
+              -BundleBuild
+          }
+          "bundle_build=$bundleBuild" >> $env:GITHUB_OUTPUT
 
           $upgradeMatrix = .\scripts\Get-MSIXUpgradeMatrix.ps1
           "upgrade_matrix=$upgradeMatrix" >> $env:GITHUB_OUTPUT
@@ -741,6 +728,7 @@ jobs:
 
   build-msix-bundle:
     name: Build unsigned Store and sideload Gateway MSIX bundles
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.bundle_build == 'true' }}
     needs:
       - changes
       - build-package

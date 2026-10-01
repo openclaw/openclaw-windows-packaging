@@ -33,9 +33,6 @@ $requiredFragments = @(
     './scripts/Get-WorkflowSource.ps1'
     'GATEWAY_VERSION: ${{ inputs.gateway_version }}'
     '-GatewayVersion $env:GATEWAY_VERSION'
-    "'scripts/OpenClawSource.ps1'"
-    "'scripts/Get-WorkflowSource.ps1'"
-    "'scripts/Test-OpenClawSource.Tests.ps1'"
     '-ReuseSnapshot:($env:GITHUB_RUN_ATTEMPT -ne ''1'')'
     'ref: ${{ steps.resolve.outputs.sha }}'
     '-ExpectedVersion ''${{ steps.resolve.outputs.version }}'''
@@ -48,9 +45,14 @@ $requiredFragments = @(
     '-WorkflowRunId $env:GITHUB_RUN_ID'
     '-SigningMode $env:SIGNING_MODE'
     'payload_artifact: ${{ steps.filter.outputs.payload_artifact }}'
+    'bundle_build: ${{ steps.filter.outputs.bundle_build }}'
     "'payload_artifact=true' >> `$env:GITHUB_OUTPUT"
+    "'bundle_build=true' >> `$env:GITHUB_OUTPUT"
     "`"payload_artifact=`$payloadArtifact`" >> `$env:GITHUB_OUTPUT"
+    "`"bundle_build=`$bundleBuild`" >> `$env:GITHUB_OUTPUT"
     '-PayloadArtifact'
+    '-BundleBuild'
+    '-Versioning'
     'name: Restore cached OpenClaw package'
     "if: `${{ github.event_name != 'workflow_dispatch' || (inputs.signing_mode != 'official' && inputs.signing_mode != 'store') }}"
     'uses: actions/cache/restore@v4'
@@ -75,11 +77,10 @@ $requiredFragments = @(
     'name: Upload unsigned sideload MSIX bundle'
     'name: Test MSIX upgrade (${{ matrix.name }})'
     "needs.changes.outputs.versioning == 'true'"
-    "'.github/workflows/gateway-msix.yml'"
     'upgrade_matrix: ${{ steps.filter.outputs.upgrade_matrix }}'
     '.\scripts\Get-MSIXUpgradeMatrix.ps1'
     'matrix: ${{ fromJSON(needs.changes.outputs.upgrade_matrix) }}'
-    'scripts/Test-MSIXReleaseIdentity.Tests.ps1'
+    '.\scripts\Test-MSIXReleaseIdentity.Tests.ps1'
     'name: Test MSIX upgrade matrix'
     '.\scripts\Test-MSIXUpgradeMatrix.Tests.ps1'
     '.\scripts\msix-upgrade-baselines.json'
@@ -183,6 +184,16 @@ $buildMsixCalls = [regex]::Matches(
 )
 if ($buildMsixCalls.Count -ne 1) {
     throw 'The build-msix job must compile once per architecture.'
+}
+
+$bundleJobMatch = [regex]::Match(
+    $workflow,
+    "(?ms)^  build-msix-bundle:" +
+        ".*?^    if: `\$\{\{ github\.event_name != 'pull_request' \|\| " +
+        "needs\.changes\.outputs\.bundle_build == 'true' \}\}"
+)
+if (-not $bundleJobMatch.Success) {
+    throw 'Pull requests without bundle-facing changes must skip bundle composition.'
 }
 
 $bundleUploadCondition = (
