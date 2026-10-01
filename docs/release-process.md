@@ -63,10 +63,11 @@ Complete this checklist after the policy pull request has merged to `main`.
 4. Review the release-facing pull request titles. The published release notes
    are generated from merged pull request titles; `CONTRIBUTING.md` owns the
    required title format.
-5. Confirm the policy pull request's `test-msix-upgrades` job succeeded and
-   retained both identity-transition and in-place-upgrade evidence. That job runs only on pull requests
-   that change versioning inputs or source-selection scripts; it does not run
-   during the later official dispatch.
+5. Confirm every policy pull request `test-msix-upgrades` matrix job succeeded
+   and retained its identity-transition or in-place-upgrade evidence. The
+   matrix runs only on pull requests that change versioning inputs or
+   source-selection scripts; it does not run during the later official
+   dispatch.
 6. Do not reuse or alter an accepted GitHub release tag. Update the latest
    production entries in `scripts\msix-upgrade-baselines.json` only in a
    reviewed policy pull request, using the verified digest of an immutable
@@ -100,12 +101,12 @@ Observe these workflow outcomes:
 - `authorize-signing` succeeds before Azure login and signing begins.
 - `sign-msix` verifies signatures and refreshes package metadata.
 
-The policy pull request's upgrade job uses `scripts\Test-MSIXUpgrade.ps1` with
-the immutable, hash-pinned release fixtures in
+The policy pull request's upgrade matrix uses
+`scripts\Test-MSIXUpgrade.ps1` with the immutable, hash-pinned release fixtures in
 `scripts\msix-upgrade-baselines.json`. It requires an isolated clean Windows
-account and refuses to run when an OpenClaw Gateway package is already
-registered. It exercises two explicit modes for both standalone and bundle
-delivery:
+account per scenario and refuses to run when an OpenClaw Gateway package is
+already registered. It exercises two explicit modes for every baseline and
+both standalone and bundle delivery in parallel:
 
 - **Store identity reset:** install a signed sideload baseline, write a
   LocalState marker, remove that identity, install the test-signed Store

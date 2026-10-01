@@ -258,6 +258,15 @@ try {
         ) {
             throw 'The bundle test signature was not applied.'
         }
+
+        $certificatePath = Join-Path `
+            $destinationDirectory `
+            'OpenClawGateway-test-signing.cer'
+        Export-Certificate `
+            -Cert $certificate `
+            -FilePath $certificatePath `
+            -Type CERT |
+            Out-Null
     }
 }
 finally {

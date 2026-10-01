@@ -1,10 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [string]$CandidatePackagePath,
-
-    [Parameter(Mandatory)]
-    [string]$CandidateBundlePath,
+    [string]$CandidatePath,
 
     [Parameter(Mandatory)]
     [string]$CandidateCertificatePath,
@@ -181,33 +178,17 @@ function Install-StoreBaseline {
     $installed
 }
 
-$resolvedCandidatePath = (Resolve-Path -LiteralPath $CandidatePackagePath).Path
-$resolvedCandidateBundlePath = (
-    Resolve-Path -LiteralPath $CandidateBundlePath
-).Path
+$resolvedCandidatePath = (Resolve-Path -LiteralPath $CandidatePath).Path
 $resolvedCertificatePath = (
     Resolve-Path -LiteralPath $CandidateCertificatePath
 ).Path
-$candidates = @(
-    [pscustomobject]@{
-        deliveryType = 'standalone'
-        path = $resolvedCandidatePath
-    },
-    [pscustomobject]@{
-        deliveryType = 'bundle'
-        path = $resolvedCandidateBundlePath
-    }
-)
-foreach ($candidate in $candidates) {
-    $identity = Read-MSIXIdentity -Path $candidate.path
-    if (
-        $identity.Name -cne $packageName -or
-        $identity.Publisher -cne $publisher -or
-        $identity.Version -cne $ExpectedCandidateVersion -or
-        $identity.DeliveryType -cne $candidate.deliveryType
-    ) {
-        throw "The $($candidate.deliveryType) Store candidate identity is unexpected."
-    }
+$candidateIdentity = Read-MSIXIdentity -Path $resolvedCandidatePath
+if (
+    $candidateIdentity.Name -cne $packageName -or
+    $candidateIdentity.Publisher -cne $publisher -or
+    $candidateIdentity.Version -cne $ExpectedCandidateVersion
+) {
+    throw "The $($candidateIdentity.DeliveryType) Store candidate identity is unexpected."
 }
 if ([version]$ExpectedCandidateVersion -le [version]$ExpectedBaselineVersion) {
     throw 'The Store candidate must be newer than the installed Store baseline.'
@@ -222,56 +203,53 @@ if (@(Get-StorePackage).Count -ne 0) {
 $certificate = Import-Certificate `
     -FilePath $resolvedCertificatePath `
     -CertStoreLocation 'Cert:\LocalMachine\TrustedPeople'
-$results = [Collections.Generic.List[object]]::new()
+$result = $null
 try {
     if ([string]$certificate.Subject -cne $publisher) {
         throw 'The Store candidate test certificate publisher is unexpected.'
     }
-    foreach ($candidate in $candidates) {
-        Remove-TestPackage
-        $installedBaseline = Install-StoreBaseline
-        $localState = Join-Path `
-            $env:LOCALAPPDATA `
-            "Packages\$packageFamilyName\LocalState"
-        New-Item -Path $localState -ItemType Directory -Force | Out-Null
-        $markerPath = Join-Path $localState 'msix-store-upgrade-proof.txt'
-        $marker = "store-upgrade-from-$ExpectedBaselineVersion"
-        Set-Content -LiteralPath $markerPath -Value $marker -Encoding utf8
+    $installedBaseline = Install-StoreBaseline
+    $localState = Join-Path `
+        $env:LOCALAPPDATA `
+        "Packages\$packageFamilyName\LocalState"
+    New-Item -Path $localState -ItemType Directory -Force | Out-Null
+    $markerPath = Join-Path $localState 'msix-store-upgrade-proof.txt'
+    $marker = "store-upgrade-from-$ExpectedBaselineVersion"
+    Set-Content -LiteralPath $markerPath -Value $marker -Encoding utf8
 
-        Add-AppxPackage -Path $candidate.path -ErrorAction Stop
-        $packages = @(Get-StorePackage)
-        if ($packages.Count -ne 1) {
-            throw 'Windows did not retain exactly one Store Gateway registration.'
-        }
-        $installedCandidate = $packages[0]
-        $markerWasRetained = Test-Path -LiteralPath $markerPath -PathType Leaf
-        if ($markerWasRetained) {
-            $markerWasRetained = (
-                Get-Content -LiteralPath $markerPath -Raw
-            ).Trim() -ceq $marker
-        }
-        if (
-            [string]$installedCandidate.PackageFamilyName -cne $packageFamilyName -or
-            [string]$installedCandidate.Version -cne $ExpectedCandidateVersion -or
-            [string]$installedCandidate.Status -cne 'Ok' -or
-            -not $markerWasRetained
-        ) {
-            throw (
-                "The $($candidate.deliveryType) Store update did not retain " +
-                'package identity and LocalState.'
-            )
-        }
+    Add-AppxPackage -Path $resolvedCandidatePath -ErrorAction Stop
+    $packages = @(Get-StorePackage)
+    if ($packages.Count -ne 1) {
+        throw 'Windows did not retain exactly one Store Gateway registration.'
+    }
+    $installedCandidate = $packages[0]
+    $markerWasRetained = Test-Path -LiteralPath $markerPath -PathType Leaf
+    if ($markerWasRetained) {
+        $markerWasRetained = (
+            Get-Content -LiteralPath $markerPath -Raw
+        ).Trim() -ceq $marker
+    }
+    if (
+        [string]$installedCandidate.PackageFamilyName -cne $packageFamilyName -or
+        [string]$installedCandidate.Version -cne $ExpectedCandidateVersion -or
+        [string]$installedCandidate.Status -cne 'Ok' -or
+        -not $markerWasRetained
+    ) {
+        throw (
+            "The $($candidateIdentity.DeliveryType) Store update did not retain " +
+            'package identity and LocalState.'
+        )
+    }
 
-        $results.Add([pscustomobject]@{
-            storeProductId = $StoreProductId
-            deliveryType = $candidate.deliveryType
-            baselineVersion = [string]$installedBaseline.Version
-            candidateVersion = [string]$installedCandidate.Version
-            packageFamilyName = [string]$installedCandidate.PackageFamilyName
-            status = [string]$installedCandidate.Status
-            identityTransition = 'store-in-place'
-            localStateRetained = $true
-        })
+    $result = [pscustomobject]@{
+        storeProductId = $StoreProductId
+        deliveryType = $candidateIdentity.DeliveryType
+        baselineVersion = [string]$installedBaseline.Version
+        candidateVersion = [string]$installedCandidate.Version
+        packageFamilyName = [string]$installedCandidate.PackageFamilyName
+        status = [string]$installedCandidate.Status
+        identityTransition = 'store-in-place'
+        localStateRetained = $true
     }
 }
 finally {
@@ -296,9 +274,12 @@ if (-not [string]::IsNullOrWhiteSpace($evidenceDirectory)) {
     testedAt = (Get-Date).ToUniversalTime().ToString('o')
     runner = [Environment]::OSVersion.VersionString
     storeProductId = $StoreProductId
-    transitions = $results
+    transition = $result
 } |
     ConvertTo-Json -Depth 4 |
     Set-Content -LiteralPath $EvidencePath -Encoding utf8
 
-Write-Host 'Microsoft Store in-place upgrade validation passed for both delivery types.'
+Write-Host (
+    'Microsoft Store in-place upgrade validation passed for the ' +
+    "$($candidateIdentity.DeliveryType) candidate."
+)

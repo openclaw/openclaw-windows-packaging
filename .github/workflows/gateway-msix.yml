@@ -47,6 +47,7 @@ jobs:
     outputs:
       packaging: ${{ steps.filter.outputs.packaging }}
       versioning: ${{ steps.filter.outputs.versioning }}
+      upgrade_matrix: ${{ steps.filter.outputs.upgrade_matrix }}
     steps:
       - uses: actions/checkout@v6
 
@@ -79,13 +80,19 @@ jobs:
           $pages = Get-Content -LiteralPath $fileListPath -Raw |
             ConvertFrom-Json
           $versioningPaths = @(
+            '.github/workflows/gateway-msix.yml'
             'release-policy.json'
+            'scripts/Sign-TestMSIX.ps1'
             'scripts/OpenClawSource.ps1'
             'scripts/Get-WorkflowSource.ps1'
             'scripts/Test-OpenClawSource.Tests.ps1'
             'scripts/Get-MSIXReleaseIdentity.ps1'
+            'scripts/Get-MSIXUpgradeMatrix.ps1'
             'scripts/Test-MSIXReleaseIdentity.Tests.ps1'
+            'scripts/Test-MSIXStoreUpgrade.ps1'
             'scripts/Test-MSIXUpgrade.ps1'
+            'scripts/Test-MSIXUpgradeMatrix.Tests.ps1'
+            'scripts/Test-WorkflowSigningConfiguration.ps1'
             'scripts/msix-upgrade-baselines.json'
           )
           $versioning = 'false'
@@ -97,6 +104,9 @@ jobs:
             }
           }
           "versioning=$versioning" >> $env:GITHUB_OUTPUT
+
+          $upgradeMatrix = .\scripts\Get-MSIXUpgradeMatrix.ps1
+          "upgrade_matrix=$upgradeMatrix" >> $env:GITHUB_OUTPUT
 
   # Advisory only. This job annotates documentation-reference findings but is
   # deliberately absent from ci-gate's needs, so it can never block a merge.
@@ -290,6 +300,11 @@ jobs:
         shell: pwsh
         run: >
           .\scripts\Test-MSIXReleaseIdentity.Tests.ps1
+
+      - name: Test MSIX upgrade matrix
+        shell: pwsh
+        run: >
+          .\scripts\Test-MSIXUpgradeMatrix.Tests.ps1
 
       - name: Test MSIX bundle build
         shell: pwsh
@@ -791,7 +806,7 @@ jobs:
           retention-days: 7
 
   test-msix-upgrades:
-    name: Test MSIX identity transition and in-place upgrades
+    name: Test MSIX upgrade (${{ matrix.name }})
     if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.versioning == 'true' }}
     needs:
       - changes
@@ -802,73 +817,45 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.changes.outputs.upgrade_matrix) }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - name: Download unsigned Store x64 candidate
+      - name: Download unsigned candidate
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-store-unsigned-x64
-          path: artifacts\store\x64
+          name: ${{ matrix.artifact }}
+          path: artifacts\${{ matrix.channel }}\${{ matrix.delivery_dir }}
 
-      - name: Download unsigned Store bundle candidate
-        uses: actions/download-artifact@v8
-        with:
-          name: openclaw-gateway-msix-store-unsigned-bundle
-          path: artifacts\store\bundle
-
-      - name: Download unsigned sideload x64 candidate
-        uses: actions/download-artifact@v8
-        with:
-          name: openclaw-gateway-msix-sideload-unsigned-x64
-          path: artifacts\sideload\x64
-
-      - name: Download unsigned sideload bundle candidate
-        uses: actions/download-artifact@v8
-        with:
-          name: openclaw-gateway-msix-sideload-unsigned-bundle
-          path: artifacts\sideload\bundle
-
-      - name: Apply temporary Store test signature
+      - name: Apply temporary test signature
         shell: pwsh
         run: |
           .\scripts\Sign-TestMSIX.ps1 `
-            -ArtifactsDirectory artifacts\store `
-            -OutputDirectory test-signed\store `
-            -IdentityChannel store
+            -ArtifactsDirectory artifacts\${{ matrix.channel }} `
+            -OutputDirectory test-signed\${{ matrix.channel }} `
+            -IdentityChannel ${{ matrix.channel }}
 
-      - name: Apply temporary sideload test signature
-        shell: pwsh
-        run: |
-          .\scripts\Sign-TestMSIX.ps1 `
-            -ArtifactsDirectory artifacts\sideload `
-            -OutputDirectory test-signed\sideload `
-            -IdentityChannel sideload
-
-      - name: Download hash-pinned proof releases
+      - name: Download hash-pinned proof release
+        if: ${{ matrix.transition_mode != 'store-in-place' }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $baselines = Get-Content `
-            -LiteralPath .\scripts\msix-upgrade-baselines.json `
-            -Raw |
-            ConvertFrom-Json
           New-Item -Path baselines -ItemType Directory -Force | Out-Null
-          foreach ($baseline in $baselines.baselines) {
-            & gh release download ([string]$baseline.releaseTag) `
-              --repo $env:GITHUB_REPOSITORY `
-              --pattern ([string]$baseline.assetName) `
-              --dir baselines
-            if ($LASTEXITCODE -ne 0) {
-              throw "Unable to download $($baseline.releaseTag) upgrade baseline."
-            }
+          & gh release download '${{ matrix.release_tag }}' `
+            --repo $env:GITHUB_REPOSITORY `
+            --pattern '${{ matrix.baseline_asset }}' `
+            --dir baselines
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to download ${{ matrix.release_tag }} upgrade baseline."
           }
 
-      - name: Test Store identity reset and isolated LocalState
+      - name: Test package transition
         shell: pwsh
         env:
           GATEWAY_TAG: ${{ needs.build-package.outputs.source_tag }}
@@ -878,60 +865,38 @@ jobs:
           $identity = .\scripts\Get-MSIXReleaseIdentity.ps1 `
             -GatewayTag $env:GATEWAY_TAG `
             -MSIXRevision ([int]$policy.msixRevision)
-          .\scripts\Test-MSIXUpgrade.ps1 `
-            -BaselinesPath .\scripts\msix-upgrade-baselines.json `
-            -BaselinesDirectory baselines `
-            -CandidatePackagePath test-signed\store\x64\OpenClawGateway-x64.msix `
-            -CandidateBundlePath test-signed\store\bundle\OpenClawGateway.msixbundle `
-            -CandidateCertificatePath test-signed\store\x64\OpenClawGateway-test-signing.cer `
-            -ExpectedCandidateVersion $identity.PackageVersion `
-            -TransitionMode identity-reset `
-            -EvidencePath evidence\msix-identity-reset-evidence.json
+          $candidateRoot = 'test-signed\${{ matrix.channel }}\${{ matrix.delivery_dir }}'
+          $candidatePath = Join-Path $candidateRoot '${{ matrix.candidate_file }}'
+          $certificatePath = Join-Path `
+            $candidateRoot `
+            'OpenClawGateway-test-signing.cer'
+          New-Item -Path evidence -ItemType Directory -Force | Out-Null
+          if ('${{ matrix.transition_mode }}' -ceq 'store-in-place') {
+            .\scripts\Test-MSIXStoreUpgrade.ps1 `
+              -CandidatePath $candidatePath `
+              -CandidateCertificatePath $certificatePath `
+              -ExpectedBaselineVersion '2026.9.404.0' `
+              -ExpectedCandidateVersion $identity.PackageVersion `
+              -StoreProductId '9NV70LV3D6XC' `
+              -EvidencePath 'evidence\${{ matrix.id }}.json'
+          }
+          else {
+            .\scripts\Test-MSIXUpgrade.ps1 `
+              -BaselinesPath .\scripts\msix-upgrade-baselines.json `
+              -BaselinesDirectory baselines `
+              -CandidatePath $candidatePath `
+              -CandidateCertificatePath $certificatePath `
+              -ExpectedCandidateVersion $identity.PackageVersion `
+              -TransitionMode '${{ matrix.transition_mode }}' `
+              -BaselineAssetName '${{ matrix.baseline_asset }}' `
+              -EvidencePath 'evidence\${{ matrix.id }}.json'
+          }
 
-      - name: Test sideload in-place update and retained LocalState
-        shell: pwsh
-        env:
-          GATEWAY_TAG: ${{ needs.build-package.outputs.source_tag }}
-        run: |
-          $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
-            ConvertFrom-Json
-          $identity = .\scripts\Get-MSIXReleaseIdentity.ps1 `
-            -GatewayTag $env:GATEWAY_TAG `
-            -MSIXRevision ([int]$policy.msixRevision)
-          .\scripts\Test-MSIXUpgrade.ps1 `
-            -BaselinesPath .\scripts\msix-upgrade-baselines.json `
-            -BaselinesDirectory baselines `
-            -CandidatePackagePath test-signed\sideload\x64\OpenClawGateway-x64.msix `
-            -CandidateBundlePath test-signed\sideload\bundle\OpenClawGateway.msixbundle `
-            -CandidateCertificatePath test-signed\sideload\x64\OpenClawGateway-test-signing.cer `
-            -ExpectedCandidateVersion $identity.PackageVersion `
-            -TransitionMode in-place `
-            -EvidencePath evidence\msix-in-place-upgrade-evidence.json
-
-      - name: Test authentic Store in-place update and retained LocalState
-        shell: pwsh
-        env:
-          GATEWAY_TAG: ${{ needs.build-package.outputs.source_tag }}
-        run: |
-          $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
-            ConvertFrom-Json
-          $identity = .\scripts\Get-MSIXReleaseIdentity.ps1 `
-            -GatewayTag $env:GATEWAY_TAG `
-            -MSIXRevision ([int]$policy.msixRevision)
-          .\scripts\Test-MSIXStoreUpgrade.ps1 `
-            -CandidatePackagePath test-signed\store\x64\OpenClawGateway-x64.msix `
-            -CandidateBundlePath test-signed\store\bundle\OpenClawGateway.msixbundle `
-            -CandidateCertificatePath test-signed\store\x64\OpenClawGateway-test-signing.cer `
-            -ExpectedBaselineVersion '2026.9.404.0' `
-            -ExpectedCandidateVersion $identity.PackageVersion `
-            -StoreProductId '9NV70LV3D6XC' `
-            -EvidencePath evidence\msix-store-in-place-upgrade-evidence.json
-
-      - name: Upload identity-transition evidence
+      - name: Upload transition evidence
         uses: actions/upload-artifact@v7
         with:
-          name: openclaw-gateway-msix-upgrade-evidence
-          path: evidence\*.json
+          name: openclaw-gateway-msix-upgrade-evidence-${{ matrix.id }}
+          path: evidence\${{ matrix.id }}.json
           if-no-files-found: error
           retention-days: 90
 

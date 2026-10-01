@@ -62,21 +62,28 @@ $requiredFragments = @(
     'name: Compose unsigned Store and sideload MSIX bundles'
     'name: Upload unsigned Store MSIX bundle'
     'name: Upload unsigned sideload MSIX bundle'
-    'name: Test MSIX identity transition and in-place upgrades'
+    'name: Test MSIX upgrade (${{ matrix.name }})'
     "needs.changes.outputs.versioning == 'true'"
+    "'.github/workflows/gateway-msix.yml'"
+    'upgrade_matrix: ${{ steps.filter.outputs.upgrade_matrix }}'
+    '.\scripts\Get-MSIXUpgradeMatrix.ps1'
+    'matrix: ${{ fromJSON(needs.changes.outputs.upgrade_matrix) }}'
     'scripts/Test-MSIXReleaseIdentity.Tests.ps1'
+    'name: Test MSIX upgrade matrix'
+    '.\scripts\Test-MSIXUpgradeMatrix.Tests.ps1'
     '.\scripts\msix-upgrade-baselines.json'
     '.\scripts\Test-MSIXUpgrade.ps1'
     '.\scripts\Test-MSIXStoreUpgrade.ps1'
-    'name: Download unsigned Store bundle candidate'
-    'name: Download unsigned sideload bundle candidate'
-    '-IdentityChannel sideload'
-    '-TransitionMode identity-reset'
-    '-TransitionMode in-place'
+    'fail-fast: false'
+    'name: Download unsigned candidate'
+    'name: Apply temporary test signature'
+    '-IdentityChannel ${{ matrix.channel }}'
+    "-TransitionMode '`${{ matrix.transition_mode }}'"
+    "-BaselineAssetName '`${{ matrix.baseline_asset }}'"
     "-ExpectedBaselineVersion '2026.9.404.0'"
     "-StoreProductId '9NV70LV3D6XC'"
-    '-CandidateBundlePath test-signed\sideload\bundle\OpenClawGateway.msixbundle'
-    'openclaw-gateway-msix-upgrade-evidence'
+    '-CandidatePath $candidatePath'
+    'openclaw-gateway-msix-upgrade-evidence-${{ matrix.id }}'
     'retention-days: 90'
     '-IdentityChannel $channel'
     '-BundlePath "artifacts\$channelDirectory\bundle\OpenClawGateway.msixbundle"'
@@ -135,7 +142,7 @@ if (-not $dispatchDefaultMatch.Success -or
 }
 
 $identityCalls = [regex]::Matches($workflow, '-GatewayTag \$env:GATEWAY_TAG')
-if ($identityCalls.Count -ne 5) {
+if ($identityCalls.Count -ne 3) {
     throw 'MSIX, bundle and all upgrade verifications must use the same resolved Gateway tag.'
 }
 

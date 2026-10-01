@@ -719,17 +719,19 @@ retain the exact LocalState marker. When the previous Store revision reached
 users, the gate also installs that exact published Store version by Store ID
 and proves that both Store candidate formats update it in place while retaining
 the marker. Changes to source-selection scripts also trigger this check against
-the selected release. The gate additionally proves fresh installation of both
-Store candidate formats. It refuses to run when a Gateway package is
-already registered and removes only packages installed by that test
-invocation. It temporarily trusts the ephemeral test-signing certificate in
-the local-machine Trusted People store, as required by Windows deployment, and
-removes that certificate in `finally`. The resulting JSON evidence is retained
-as a workflow artifact for 90 days. This identity change is the explicitly
-approved breaking reset. Until Partner Center distributes a Store-signed
-package, later policy revisions repeat the reset and fresh-install proof. After
-the reserved identity reaches users, subsequent releases install the authentic
-Store baseline and prove in-place upgrade with LocalState retention.
+the selected release. Each baseline, delivery format, and transition mode runs
+on its own clean Windows runner; the identity-reset scenarios also prove that
+both Store candidate formats install fresh after the legacy package is removed.
+Each scenario refuses to run when a Gateway package is already registered and
+removes only packages installed by that test invocation. It temporarily trusts
+the ephemeral test-signing certificate in the local-machine Trusted People
+store, as required by Windows deployment, and removes that certificate in
+`finally`. The per-scenario JSON evidence artifacts are retained for 90 days.
+This identity change is the explicitly approved breaking reset. Until Partner
+Center distributes a Store-signed package, later policy revisions repeat the
+reset and fresh-install proof. After the reserved identity reaches users,
+subsequent releases install the authentic Store baseline and prove in-place
+upgrade with LocalState retention.
 
 An `.msixbundle` is a single installable container for the x64 and ARM64 MSIX
 packages; Windows selects the package appropriate for the device. An

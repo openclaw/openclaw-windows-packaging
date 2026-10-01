@@ -7,10 +7,7 @@ param(
     [string]$BaselinesDirectory,
 
     [Parameter(Mandatory)]
-    [string]$CandidatePackagePath,
-
-    [Parameter(Mandatory)]
-    [string]$CandidateBundlePath,
+    [string]$CandidatePath,
 
     [Parameter(Mandatory)]
     [string]$CandidateCertificatePath,
@@ -20,6 +17,9 @@ param(
 
     [ValidateSet('identity-reset', 'in-place')]
     [string]$TransitionMode = 'identity-reset',
+
+    [Parameter(Mandatory)]
+    [string]$BaselineAssetName,
 
     [Parameter(Mandatory)]
     [string]$EvidencePath
@@ -241,32 +241,17 @@ $resolvedBaselinesPath = (Resolve-Path -LiteralPath $BaselinesPath).Path
 $resolvedBaselinesDirectory = (
     Resolve-Path -LiteralPath $BaselinesDirectory
 ).Path
-$resolvedCandidatePath = (
-    Resolve-Path -LiteralPath $CandidatePackagePath
-).Path
-$resolvedCandidateBundlePath = (
-    Resolve-Path -LiteralPath $CandidateBundlePath
-).Path
+$resolvedCandidatePath = (Resolve-Path -LiteralPath $CandidatePath).Path
 $resolvedCertificatePath = (
     Resolve-Path -LiteralPath $CandidateCertificatePath
 ).Path
 $candidateIdentity = Read-MSIXIdentity -Path $resolvedCandidatePath
-$candidateBundleIdentity = Read-MSIXIdentity -Path $resolvedCandidateBundlePath
 if (
     $candidateIdentity.Name -cne $candidatePackageName -or
     $candidateIdentity.Architecture -cne 'x64' -or
     $candidateIdentity.Version -cne $ExpectedCandidateVersion
 ) {
     throw 'The candidate MSIX identity is unexpected.'
-}
-if (
-    $candidateBundleIdentity.Name -cne $candidateIdentity.Name -or
-    $candidateBundleIdentity.Publisher -cne $candidateIdentity.Publisher -or
-    $candidateBundleIdentity.Architecture -cne 'x64' -or
-    $candidateBundleIdentity.Version -cne $ExpectedCandidateVersion -or
-    $candidateBundleIdentity.DeliveryType -cne 'bundle'
-) {
-    throw 'The candidate MSIX bundle identity is unexpected.'
 }
 
 if ($candidateIdentity.Publisher -cne $candidatePublisher) {
@@ -275,8 +260,27 @@ if ($candidateIdentity.Publisher -cne $candidatePublisher) {
 
 $baselineManifest = Get-Content -LiteralPath $resolvedBaselinesPath -Raw |
     ConvertFrom-Json
-if ($baselineManifest.baselines.Count -ne 6) {
+$baselines = @($baselineManifest.baselines)
+if ($baselines.Count -ne 6) {
     throw 'Upgrade validation requires proof and latest-production baselines for both delivery types.'
+}
+$matchingBaselines = @(
+    $baselines |
+        Where-Object { [string]$_.assetName -ceq $BaselineAssetName }
+)
+if ($matchingBaselines.Count -ne 1) {
+    throw "Upgrade baseline '$BaselineAssetName' must identify exactly one manifest entry."
+}
+$baseline = $matchingBaselines[0]
+$deliveryType = [string]$baseline.deliveryType
+if ($deliveryType -notin @('standalone', 'bundle')) {
+    throw "Unknown delivery type '$deliveryType'."
+}
+if ($candidateIdentity.DeliveryType -cne $deliveryType) {
+    throw (
+        "The $($candidateIdentity.DeliveryType) candidate does not match " +
+        "the $deliveryType baseline."
+    )
 }
 if (@(Get-GatewayPackages).Count -ne 0) {
     throw (
@@ -288,168 +292,119 @@ if (@(Get-GatewayPackages).Count -ne 0) {
 $certificate = Import-Certificate `
     -FilePath $resolvedCertificatePath `
     -CertStoreLocation 'Cert:\LocalMachine\TrustedPeople'
-$results = [Collections.Generic.List[object]]::new()
-$freshInstall = $null
+$result = $null
 
 try {
-    foreach ($baseline in $baselineManifest.baselines) {
-        Remove-TestPackage
-        $baselinePath = Join-Path `
-            $resolvedBaselinesDirectory `
-            ([string]$baseline.assetName)
-        if (-not (Test-Path -LiteralPath $baselinePath -PathType Leaf)) {
-            throw "Missing upgrade baseline '$($baseline.assetName)'."
-        }
-        $actualHash = (
-            Get-FileHash -LiteralPath $baselinePath -Algorithm SHA256
-        ).Hash.ToLowerInvariant()
-        if ($actualHash -cne [string]$baseline.sha256) {
-            throw "Upgrade baseline '$($baseline.assetName)' failed hash validation."
-        }
-
-        $deliveryType = [string]$baseline.deliveryType
-        if ($deliveryType -notin @('standalone', 'bundle')) {
-            throw "Unknown delivery type '$deliveryType'."
-        }
-        $baselineIdentity = Read-MSIXIdentity -Path $baselinePath
-        if (
-            $baselineIdentity.Name -cne $previousPackageName -or
-            $baselineIdentity.Publisher -cne $previousPublisher -or
-            $baselineIdentity.Architecture -cne 'x64' -or
-            $baselineIdentity.Version -cne [string]$baseline.packageVersion -or
-            $baselineIdentity.DeliveryType -cne $deliveryType
-        ) {
-            throw "Upgrade baseline '$($baseline.assetName)' has an unexpected identity."
-        }
-        if (
-            [version]$candidateIdentity.Version -le
-            [version]$baselineIdentity.Version
-        ) {
-            throw 'The candidate MSIX must be newer than every upgrade baseline.'
-        }
-
-        $installedBaseline = Install-TestPackage `
-            -Path $baselinePath `
-            -ExpectedName $previousPackageName `
-            -ExpectedFamilyName $previousPackageFamilyName
-        if (
-            $null -eq $installedBaseline -or
-            [string]$installedBaseline.Version -cne $baselineIdentity.Version -or
-            [string]$installedBaseline.Status -cne 'Ok'
-        ) {
-            throw "Windows did not install '$($baseline.assetName)' successfully."
-        }
-
-        $localState = Join-Path `
-            $env:LOCALAPPDATA `
-            "Packages\$($installedBaseline.PackageFamilyName)\LocalState"
-        New-Item -Path $localState -ItemType Directory -Force | Out-Null
-        $markerPath = Join-Path $localState 'msix-upgrade-proof.txt'
-        $marker = "upgrade-from-$($baseline.packageVersion)"
-        Set-Content -LiteralPath $markerPath -Value $marker -Encoding utf8
-
-        $candidatePath = if ($deliveryType -ceq 'bundle') {
-            $resolvedCandidateBundlePath
-        }
-        else {
-            $resolvedCandidatePath
-        }
-        $installedCandidate = if ($TransitionMode -ceq 'in-place') {
-            Update-TestPackage `
-                -Path $candidatePath `
-                -ExpectedName $candidatePackageName `
-                -ExpectedFamilyName $candidatePackageFamilyName
-        }
-        else {
-            Remove-TestPackage
-            Install-TestPackage `
-                -Path $candidatePath `
-                -ExpectedName $candidatePackageName `
-                -ExpectedFamilyName $candidatePackageFamilyName
-        }
-        if (
-            $null -eq $installedCandidate -or
-            [string]$installedCandidate.Version -cne $candidateIdentity.Version -or
-            [string]$installedCandidate.Status -cne 'Ok'
-        ) {
-            throw "Windows did not install the candidate after '$($baseline.assetName)'."
-        }
-        $candidateLocalState = Join-Path `
-            $env:LOCALAPPDATA `
-            "Packages\$($installedCandidate.PackageFamilyName)\LocalState"
-        $retainedMarkerPath = Join-Path `
-            $candidateLocalState `
-            'msix-upgrade-proof.txt'
-        $markerExists = Test-Path `
-            -LiteralPath $retainedMarkerPath `
-            -PathType Leaf
-        $markerContentsMatch = $false
-        if ($markerExists) {
-            $markerContentsMatch = (
-                Get-Content -LiteralPath $retainedMarkerPath -Raw
-            ).Trim() -ceq $marker
-        }
-        if ($TransitionMode -ceq 'in-place') {
-            if (
-                $installedCandidate.PackageFamilyName -cne
-                    $installedBaseline.PackageFamilyName -or
-                -not $markerContentsMatch
-            ) {
-                throw 'The in-place update did not retain package identity and LocalState.'
-            }
-        }
-        elseif (
-            $installedCandidate.PackageFamilyName -ceq
-                $installedBaseline.PackageFamilyName -or
-            $markerExists
-        ) {
-            throw 'The Partner Center identity reset did not create isolated LocalState.'
-        }
-
-        $results.Add([pscustomobject]@{
-            baselineRelease = [string]$baseline.releaseTag
-            deliveryType = $deliveryType
-            baselineVersion = $baselineIdentity.Version
-            candidateVersion = $candidateIdentity.Version
-            packageFamilyName = [string]$installedCandidate.PackageFamilyName
-            status = [string]$installedCandidate.Status
-            previousPackageFamilyName = [string]$installedBaseline.PackageFamilyName
-            identityTransition = $TransitionMode
-            localStateRetained = ($TransitionMode -ceq 'in-place' -and $markerContentsMatch)
-        })
+    $baselinePath = Join-Path `
+        $resolvedBaselinesDirectory `
+        ([string]$baseline.assetName)
+    if (-not (Test-Path -LiteralPath $baselinePath -PathType Leaf)) {
+        throw "Missing upgrade baseline '$($baseline.assetName)'."
+    }
+    $actualHash = (
+        Get-FileHash -LiteralPath $baselinePath -Algorithm SHA256
+    ).Hash.ToLowerInvariant()
+    if ($actualHash -cne [string]$baseline.sha256) {
+        throw "Upgrade baseline '$($baseline.assetName)' failed hash validation."
     }
 
-    $freshInstalls = [Collections.Generic.List[object]]::new()
-    foreach ($candidate in @(
-        [pscustomobject]@{
-            deliveryType = 'standalone'
-            path = $resolvedCandidatePath
-        },
-        [pscustomobject]@{
-            deliveryType = 'bundle'
-            path = $resolvedCandidateBundlePath
-        }
-    )) {
-        Remove-TestPackage
-        $installedFresh = Install-TestPackage `
-            -Path $candidate.path `
+    $baselineIdentity = Read-MSIXIdentity -Path $baselinePath
+    if (
+        $baselineIdentity.Name -cne $previousPackageName -or
+        $baselineIdentity.Publisher -cne $previousPublisher -or
+        $baselineIdentity.Architecture -cne 'x64' -or
+        $baselineIdentity.Version -cne [string]$baseline.packageVersion -or
+        $baselineIdentity.DeliveryType -cne $deliveryType
+    ) {
+        throw "Upgrade baseline '$($baseline.assetName)' has an unexpected identity."
+    }
+    if ([version]$candidateIdentity.Version -le [version]$baselineIdentity.Version) {
+        throw 'The candidate MSIX must be newer than the upgrade baseline.'
+    }
+
+    $installedBaseline = Install-TestPackage `
+        -Path $baselinePath `
+        -ExpectedName $previousPackageName `
+        -ExpectedFamilyName $previousPackageFamilyName
+    if (
+        $null -eq $installedBaseline -or
+        [string]$installedBaseline.Version -cne $baselineIdentity.Version -or
+        [string]$installedBaseline.Status -cne 'Ok'
+    ) {
+        throw "Windows did not install '$($baseline.assetName)' successfully."
+    }
+
+    $localState = Join-Path `
+        $env:LOCALAPPDATA `
+        "Packages\$($installedBaseline.PackageFamilyName)\LocalState"
+    New-Item -Path $localState -ItemType Directory -Force | Out-Null
+    $markerPath = Join-Path $localState 'msix-upgrade-proof.txt'
+    $marker = "upgrade-from-$($baseline.packageVersion)"
+    Set-Content -LiteralPath $markerPath -Value $marker -Encoding utf8
+
+    $installedCandidate = if ($TransitionMode -ceq 'in-place') {
+        Update-TestPackage `
+            -Path $resolvedCandidatePath `
             -ExpectedName $candidatePackageName `
             -ExpectedFamilyName $candidatePackageFamilyName
-        if (
-            $null -eq $installedFresh -or
-            [string]$installedFresh.Version -cne $candidateIdentity.Version -or
-            [string]$installedFresh.Status -cne 'Ok'
-        ) {
-            throw "Windows did not accept a fresh $($candidate.deliveryType) installation."
-        }
-        $freshInstalls.Add([pscustomobject]@{
-            deliveryType = $candidate.deliveryType
-            candidateVersion = $candidateIdentity.Version
-            packageFamilyName = [string]$installedFresh.PackageFamilyName
-            status = [string]$installedFresh.Status
-        })
     }
-    $freshInstall = $freshInstalls
+    else {
+        Remove-TestPackage
+        Install-TestPackage `
+            -Path $resolvedCandidatePath `
+            -ExpectedName $candidatePackageName `
+            -ExpectedFamilyName $candidatePackageFamilyName
+    }
+    if (
+        $null -eq $installedCandidate -or
+        [string]$installedCandidate.Version -cne $candidateIdentity.Version -or
+        [string]$installedCandidate.Status -cne 'Ok'
+    ) {
+        throw "Windows did not install the candidate after '$($baseline.assetName)'."
+    }
+    $candidateLocalState = Join-Path `
+        $env:LOCALAPPDATA `
+        "Packages\$($installedCandidate.PackageFamilyName)\LocalState"
+    $retainedMarkerPath = Join-Path `
+        $candidateLocalState `
+        'msix-upgrade-proof.txt'
+    $markerExists = Test-Path `
+        -LiteralPath $retainedMarkerPath `
+        -PathType Leaf
+    $markerContentsMatch = $false
+    if ($markerExists) {
+        $markerContentsMatch = (
+            Get-Content -LiteralPath $retainedMarkerPath -Raw
+        ).Trim() -ceq $marker
+    }
+    if ($TransitionMode -ceq 'in-place') {
+        if (
+            $installedCandidate.PackageFamilyName -cne
+                $installedBaseline.PackageFamilyName -or
+            -not $markerContentsMatch
+        ) {
+            throw 'The in-place update did not retain package identity and LocalState.'
+        }
+    }
+    elseif (
+        $installedCandidate.PackageFamilyName -ceq
+            $installedBaseline.PackageFamilyName -or
+        $markerExists
+    ) {
+        throw 'The Partner Center identity reset did not create isolated LocalState.'
+    }
+
+    $result = [pscustomobject]@{
+        baselineRelease = [string]$baseline.releaseTag
+        deliveryType = $deliveryType
+        baselineVersion = $baselineIdentity.Version
+        candidateVersion = $candidateIdentity.Version
+        packageFamilyName = [string]$installedCandidate.PackageFamilyName
+        status = [string]$installedCandidate.Status
+        previousPackageFamilyName = [string]$installedBaseline.PackageFamilyName
+        identityTransition = $TransitionMode
+        localStateRetained = ($TransitionMode -ceq 'in-place' -and $markerContentsMatch)
+    }
 }
 finally {
     Remove-TestPackage
@@ -469,13 +424,9 @@ if (-not [string]::IsNullOrWhiteSpace($evidenceDirectory)) {
     testedAt = (Get-Date).ToUniversalTime().ToString('o')
     runner = [Environment]::OSVersion.VersionString
     candidateVersion = $candidateIdentity.Version
-    freshInstall = $freshInstall
-    transitions = $results
+    transition = $result
 } |
     ConvertTo-Json -Depth 4 |
     Set-Content -LiteralPath $EvidencePath -Encoding utf8
 
-Write-Host (
-    "MSIX $TransitionMode validation passed for " +
-    "$($results.Count) proof-release paths."
-)
+Write-Host "MSIX $TransitionMode validation passed for '$BaselineAssetName'."
