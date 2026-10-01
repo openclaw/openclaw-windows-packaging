@@ -11,11 +11,15 @@ import { createGatewayIsolationPlugin } from "../../plugins/gateway-isolation/in
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 assert.equal(process.platform, "win32", "The real-runtime lane requires Windows.");
 assert.ok(process.argv[2], "Pass the prepared OpenClaw payload directory.");
-const payloadRoot = await fs.realpath(process.argv[2]);
+const payloadRoot = path.resolve(process.argv[2]);
 const application = path.join(payloadRoot, "app");
-const metadataPath = await fs.realpath(path.join(payloadRoot, "payload-metadata.json"));
+const metadataPath = path.resolve(payloadRoot, "payload-metadata.json");
 if (!metadataPath.startsWith(payloadRoot + path.sep)) {
   throw new Error("Payload metadata must remain inside the prepared payload directory.");
+}
+const metadataEntry = await fs.lstat(metadataPath);
+if (!metadataEntry.isFile()) {
+  throw new Error("Payload metadata must be a regular file, not a symbolic link.");
 }
 const payload = JSON.parse(await fs.readFile(metadataPath, "utf8"));
 assert.equal(payload.repository, "https://github.com/openclaw/openclaw");
