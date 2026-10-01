@@ -328,8 +328,8 @@ application directory containing this checkout's plugin under
 ```
 
 This Windows-only lane verifies the application's build identity against
-`release-policy.json` and rejects stale plugin files. It does not download,
-build, install, or change the input application. Its disposable profile and
+the prepared payload's sibling `payload-metadata.json` and rejects stale plugin
+files. It does not download, build, install, or change the input application. Its disposable profile and
 workspace use synthetic data, a stripped child environment, a loopback-only
 fake provider on an allocated port, and only the `read` tool. No external model,
 real account, package registration, or scheduled task is involved.
@@ -377,7 +377,7 @@ states the host constraints at instruction priority; real-model testing showed
 that user context alone could reach the model yet still be ignored. The user
 interaction rule covers both launching and offering an unusable local dialog;
 validate proposed next steps as well as tool calls in real-model scenarios. The user
-copy remains a compatibility fallback because the approved v2026.9.4 runtime
+copy remains a compatibility fallback because the previously qualified v2026.9.4 runtime
 can replace system-context additions on runtime-only events. Remove that
 fallback only after the selected runtime preserves system context through
 those events and the request-boundary proof covers them. Until then,

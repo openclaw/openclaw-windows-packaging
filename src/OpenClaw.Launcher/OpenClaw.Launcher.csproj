@@ -71,27 +71,11 @@
     startup, and survives trimming and NativeAOT, which would otherwise be
     free to drop metadata nothing statically references.
 
-    Values come from the build that produces the package. release-policy.json
-    is the fallback so an ordinary build still reports the pin this checkout
-    describes instead of a placeholder.
+    Values come from the build that produces the package. Ordinary builds have
+    no selected upstream payload and report unknown until packaging supplies it.
   -->
   <PropertyGroup>
-    <_ReleasePolicyPath>$(MSBuildThisFileDirectory)..\..\release-policy.json</_ReleasePolicyPath>
-    <_ReleasePolicyText Condition="Exists('$(_ReleasePolicyPath)')">$([System.IO.File]::ReadAllText('$(_ReleasePolicyPath)'))</_ReleasePolicyText>
-
     <ClawCtlPackageVersion Condition="'$(ClawCtlPackageVersion)' == '' and '$(PackageIdentityVersion)' != ''">$(PackageIdentityVersion)</ClawCtlPackageVersion>
-    <_GatewayTag Condition="'$(ClawCtlPackageVersion)' == '' and '$(_ReleasePolicyText)' != ''">$([System.Text.RegularExpressions.Regex]::Replace($(_ReleasePolicyText), '(?s)^.*"gatewayTag"\s*:\s*"([^"]*)".*$', '$1'))</_GatewayTag>
-    <_MSIXRevision Condition="'$(ClawCtlPackageVersion)' == '' and '$(_ReleasePolicyText)' != ''">$([System.Text.RegularExpressions.Regex]::Replace($(_ReleasePolicyText), '(?s)^.*"msixRevision"\s*:\s*(\d+).*$','$1'))</_MSIXRevision>
-    <_GatewayYear Condition="'$(_GatewayTag)' != ''">$([System.Text.RegularExpressions.Regex]::Replace($(_GatewayTag), '^v(\d+)\.(\d+)\.(\d+)(?:-(\d+))?$', '$1'))</_GatewayYear>
-    <_GatewayMonth Condition="'$(_GatewayTag)' != ''">$([System.Text.RegularExpressions.Regex]::Replace($(_GatewayTag), '^v(\d+)\.(\d+)\.(\d+)(?:-(\d+))?$', '$2'))</_GatewayMonth>
-    <_GatewayPatch Condition="'$(_GatewayTag)' != ''">$([System.Text.RegularExpressions.Regex]::Replace($(_GatewayTag), '^v(\d+)\.(\d+)\.(\d+)(?:-(\d+))?$', '$3'))</_GatewayPatch>
-    <_GatewayReleaseSequence Condition="'$(_GatewayTag)' != ''">$([System.Text.RegularExpressions.Regex]::Replace($(_GatewayTag), '^v(\d+)\.(\d+)\.(\d+)-(\d+)$', '$4'))</_GatewayReleaseSequence>
-    <_GatewayReleaseSequence Condition="'$(_GatewayReleaseSequence)' == '$(_GatewayTag)'">1</_GatewayReleaseSequence>
-    <_PackageRevisionBase Condition="'$(_GatewayReleaseSequence)' != ''">$([MSBuild]::Multiply($(_GatewayReleaseSequence), 1000))</_PackageRevisionBase>
-    <_PackageRevision Condition="'$(_PackageRevisionBase)' != '' and '$(_MSIXRevision)' != ''">$([MSBuild]::Add($(_PackageRevisionBase), $(_MSIXRevision)))</_PackageRevision>
-    <ClawCtlPackageVersion Condition="'$(ClawCtlPackageVersion)' == '' and '$(_GatewayYear)' != '' and '$(_GatewayMonth)' != '' and '$(_GatewayPatch)' != '' and '$(_PackageRevision)' != ''">$(_GatewayYear).$(_GatewayMonth).$(_GatewayPatch).$(_PackageRevision)</ClawCtlPackageVersion>
-    <ClawCtlPayloadVersion Condition="'$(ClawCtlPayloadVersion)' == '' and '$(_ReleasePolicyText)' != ''">$([System.Text.RegularExpressions.Regex]::Replace($(_ReleasePolicyText), '(?s)^.*"payloadPackageVersion"\s*:\s*"([^"]*)".*$', '$1'))</ClawCtlPayloadVersion>
-    <ClawCtlPayloadCommit Condition="'$(ClawCtlPayloadCommit)' == '' and '$(_ReleasePolicyText)' != ''">$([System.Text.RegularExpressions.Regex]::Replace($(_ReleasePolicyText), '(?s)^.*"approvedCommit"\s*:\s*"([^"]*)".*$', '$1'))</ClawCtlPayloadCommit>
     <ClawCtlPackageCommit Condition="'$(ClawCtlPackageCommit)' == ''">$(SourceRevisionId)</ClawCtlPackageCommit>
 
     <ClawCtlPackageVersion Condition="'$(ClawCtlPackageVersion)' == ''">unknown</ClawCtlPackageVersion>

@@ -267,9 +267,8 @@ Those four values are compiled into the binary as constants by the build that
 produces the package, so the report cannot drift from the payload it shipped
 with and costs no file or process access at startup. `Build-MSIX.ps1` supplies
 the versions and commits it also records in `msix-metadata.json`; an ordinary
-build falls back to the pin recorded in `release-policy.json`, and reports
-`unknown` for a value no build supplied. The report never comes from the entry
-assembly, so it stays correct when the launcher is hosted by another process.
+build reports `unknown` for a value no build supplied. The report never comes
+from the entry assembly, so it stays correct when the launcher is hosted by another process.
 
 Response-file expansion is disabled. A leading `@` has no meaning to `clawctl`
 and is reported as an unrecognized argument rather than read from disk.
@@ -350,8 +349,8 @@ run starts: public npm `openclaw@latest`, or the exact `stableVersion` when
 `release-policy.json` pins one (see below). The resolver checks the exact
 published version, its annotated upstream tag and target commit, and the source
 package version before building. Git tag and commit signatures are not required;
-official publication still requires the reviewed `approvedCommit`, Gateway tag,
-and payload version in `release-policy.json`. There is no automatic fallback to another
+official publication uses the same stable selection and validates its recorded
+commit and version before signing. There is no automatic fallback to another
 version or channel; extended-stable and named prereleases are rejected.
 Source selection also checks the MSIX release-version rules before building:
 numeric correction suffixes must be `-2` through `-9`. Unsupported corrections
@@ -366,13 +365,13 @@ For a one-time unsigned/test override, provide a stable-source tag, branch, or
 full commit SHA in the manual `openclaw_ref` input. Empty means follow stable.
 If compatibility requires an older known-good stable release, a reviewed
 `stableVersion` field in `release-policy.json` can pin its exact version, for
-example `"stableVersion": "2026.9.4"`. A pin is not automatic fallback and does
-not grant official-signing approval.
+example `"stableVersion": "2026.9.4"`. That pin applies to all modes until removed;
+it is not automatic fallback.
 
-For official signing, the selected source must match `approvedCommit`,
-`gatewayTag`, and `payloadPackageVersion` in `release-policy.json`. An empty
-input selects stable and checks that approval; an explicit input must be the
-full approved commit SHA.
+For `store` and `official`, leave `openclaw_ref` empty. These modes require
+channel selection and reject explicit refs. Before authorization, the workflow
+restores the same run's source snapshot and checks its workflow run ID,
+packaging commit, and signing mode. It does not resolve the moving channel again.
 
 Payload composition validates that the selected OpenClaw runtime discovers and
 activates the packaging-owned Windows Launcher plugin by default, both without
@@ -405,11 +404,10 @@ The payload artifact records the requested ref and resolved upstream commit in
 OpenClaw commit, while embedded `payload-files.json` records every packaged
 application file's path, length, and SHA-256.
 
-`release-policy.json` records the immutable OpenClaw commit and Gateway tag
-approved for official signing, plus an independent MSIX packaging revision.
-Updating that
-policy requires a reviewed repository change. Official signing runs only from
-`main` and verifies the workflow input, policy-approved package version, both
+`release-policy.json` records the stable channel, MSIX packaging revision, and
+package identities. Updating that policy requires a reviewed repository change.
+Official signing runs only from `main` and verifies the recorded source snapshot,
+derived package version, both
 architecture metadata files, both MSIX hashes, the embedded manifests, and
 every file against the embedded application inventory. It also byte-compares
 the bundle's embedded packages with those authorized standalone packages before
@@ -534,12 +532,8 @@ merged by
 [`openclaw/openclaw#145409`](https://github.com/openclaw/openclaw/pull/145409).
 OpenClaw `v2026.9.5` at `ec9c1a13db8938e5a3eaa51fca2e981cde2395a9`
 includes that forwarding and has been qualified with this default-on plugin.
-Unsigned and test builds follow the stable-source selection above; that
-qualification is not an official runtime approval.
-The official-signing policy remains on the release-approved OpenClaw `v2026.9.4`
-baseline (`3a9d69db306cd7f081e06254cb89c4bcc14a7107`); that approval does not
-establish support for this default-on/theme contract. A compatible runtime
-requires separate reviewed approval before an official release. Without theme
+All build modes follow the stable-source selection above and validate plugin
+compatibility during payload composition. Without theme
 forwarding, the page uses the browser or operating system light/dark preference
 with a safe built-in palette.
 
@@ -639,12 +633,15 @@ validation. Manual runs support four modes:
 - `test` uses the same source-selection rules and publishes MSIX packages signed with a
   temporary self-signed certificate plus the public `.cer` needed for local
   installation;
-- `store` requires the reviewed immutable commit from `release-policy.json`,
-  may run only from `main`, and publishes permanent unsigned Partner Center
-  submission assets; Microsoft signs them during Store ingestion;
-- `official` requires the approved immutable commit from
-  `release-policy.json`, may run only from `main`, and publishes the signed
-  packages as permanent assets on a GitHub Release named by the policy.
+- `store` follows stable, requires an empty `openclaw_ref`, may run only from
+  `main`, and retains an unsigned Partner Center submission bundle for 90 days;
+  Microsoft signs it during Store ingestion;
+- `official` uses the same source rules, may run only from `main`, and publishes
+  signed packages as permanent GitHub Release assets when `publish_release`
+  is enabled.
+
+Following stable does not automatically sign or publish a new Gateway release;
+publication still requires a manual workflow dispatch.
 
 Official signing uses the protected `release-signing` environment, Azure OIDC,
 and the existing OpenClaw Artifact Signing account and certificate profile.
@@ -653,7 +650,8 @@ and are deleted before artifacts are uploaded. No signing secret or private
 key is stored in the repository.
 
 Official releases derive their GitHub tag and four-part numeric MSIX identity
-from `gatewayTag` and `msixRevision` in `release-policy.json`. The GitHub tag is
+from the recorded source snapshot's Gateway tag and `msixRevision` in
+`release-policy.json`. The GitHub tag is
 `<gateway-tag>-msix.<revision>`. The MSIX identity is
 `year.month.VVPN.0`: `VV` is the two-digit monthly Gateway release sequence,
 `P` is the Gateway correction digit, and `N` is the MSIX rebuild digit. The
@@ -677,17 +675,13 @@ Decimal place value guarantees Gateway release > Gateway correction > MSIX
 rebuild while keeping every component at four digits or fewer and reserving the
 fourth component as `0` for Microsoft Store submission.
 
-To prepare an official release, update these policy inputs together in a
-reviewed pull request:
+For a new Gateway release, keep `msixRevision` at `0`; if a previous packaging
+rebuild increased it, reset it in a reviewed pull request first. Increment it
+only to rebuild the same Gateway tag. No policy version or commit update is
+needed when stable advances.
 
-1. `gatewayTag` to the stable upstream Gateway tag;
-2. `approvedCommit` to the immutable commit resolved from that tag;
-3. `payloadPackageVersion` to the version reported by the pinned payload;
-4. `msixRevision` to `0`, or increment it for a packaging-only rebuild of the
-   same Gateway tag.
-
-After that pull request merges, manually run **Build OpenClaw Gateway MSIX** on
-`main` with `openclaw_ref` set to the approved commit. Use `signing_mode=store`
+Manually run **Build OpenClaw Gateway MSIX** on `main` with `openclaw_ref` empty.
+Use `signing_mode=store`
 to retain only the unsigned Partner Center bundle, or `signing_mode=official`
 to additionally sign and publish the sideload identity. The workflow derives
 the package version and release tag. Official mode creates the tag and

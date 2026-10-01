@@ -36,21 +36,40 @@ if (
 ) {
     throw 'The source package manifest does not match release policy.'
 }
-$approvedCommit = [string]$policy.approvedCommit
+$approvedCommit = 'c' * 40
 $unapprovedCommit = 'b' * 40
 $releaseIdentity = & (
     Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1'
 ) `
-    -GatewayTag ([string]$policy.gatewayTag) `
+    -GatewayTag 'v2026.9.7' `
     -MSIXRevision ([int]$policy.msixRevision)
 $approvedPackageVersion = $releaseIdentity.PackageVersion
-$approvedPayloadVersion = [string]$policy.payloadPackageVersion
+$approvedPayloadVersion = '2026.9.7'
 $packagingCommit = '1111111111111111111111111111111111111111'
 $suiteRoot = Join-Path $env:TEMP (
     "openclaw-signing-policy-$([guid]::NewGuid().ToString('N'))"
 )
 $canonicalRoot = Join-Path $suiteRoot 'canonical'
 $testRoot = Join-Path $suiteRoot 'case'
+$sourcePath = Join-Path $suiteRoot 'source-resolution.json'
+$source = [ordered]@{
+    repository = $policy.repository
+    requestedRef = 'stable'
+    resolvedCommit = $approvedCommit
+    packageVersion = $approvedPayloadVersion
+    channel = 'stable'
+    releaseTag = "v$approvedPayloadVersion"
+    tagObject = 'd' * 40
+    resolvedAt = '2026-09-30T00:00:00Z'
+    registryIntegrity = 'sha512-' + [Convert]::ToBase64String([byte[]]::new(64))
+    workflowRunId = '123456'
+    packagingCommit = $packagingCommit
+    signingMode = 'official'
+}
+
+function Save-TestSource {
+    [IO.File]::WriteAllText($sourcePath, ($source | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+}
 
 function New-TestArtifact {
     param(
@@ -320,8 +339,6 @@ function Invoke-PolicyValidation {
         [Parameter(Mandatory)]
         [string]$Root,
 
-        [string]$RequestedRef = $approvedCommit,
-
         [ValidateSet('Store', 'Sideload')]
         [string]$IdentityChannel = 'Store',
 
@@ -357,7 +374,9 @@ function Invoke-PolicyValidation {
         -ArtifactsDirectory $Root `
         -PolicyPath $policyPath `
         -BundlePath (Join-Path $Root 'bundle\OpenClawGateway.msixbundle') `
-        -RequestedRef $RequestedRef `
+        -SourcePath $sourcePath `
+        -WorkflowRunId '123456' `
+        -SigningMode official `
         -PackagingCommit $packagingCommit `
         -IdentityChannel $IdentityChannel
 }
@@ -633,6 +652,7 @@ try {
                 $canonicalDefaultRoot 'arm64\OpenClawGateway-arm64.msix') `
             -Algorithm SHA256).Hash.ToLowerInvariant()
     }
+    Save-TestSource
     Reset-TestArtifacts
     Invoke-PolicyValidation -Root $testRoot
 
@@ -702,13 +722,21 @@ try {
         }
 
     Reset-TestArtifacts
-    Assert-Fails `
-        -MessagePattern 'approved immutable OpenClaw commit' `
-        -Action {
-            Invoke-PolicyValidation `
-                -Root $testRoot `
-                -RequestedRef $unapprovedCommit
+    foreach ($field in @('workflowRunId', 'packagingCommit', 'signingMode')) {
+        $original = $source[$field]
+        $source[$field] = @{ workflowRunId = '999'; packagingCommit = 'e' * 40; signingMode = 'unsigned' }[$field]
+        Save-TestSource
+        Assert-Fails -MessagePattern "unexpected workflow identity: $field" -Action {
+            Invoke-PolicyValidation -Root $testRoot
         }
+        $source[$field] = $original
+    }
+    Save-TestSource
+    Remove-Item -LiteralPath $sourcePath
+    Assert-Fails -MessagePattern 'source snapshot is unavailable' -Action {
+        Invoke-PolicyValidation -Root $testRoot
+    }
+    Save-TestSource
     Reset-TestArtifacts -PayloadCommit $unapprovedCommit
     Assert-Fails `
         -MessagePattern 'MSIX metadata is not eligible for signing' `
@@ -738,13 +766,21 @@ try {
         -Action { Invoke-PolicyValidation -Root $testRoot }
 
     Reset-TestArtifacts
-    Assert-Fails `
-        -MessagePattern 'approved immutable OpenClaw commit' `
-        -Action {
-            Invoke-PolicyValidation `
-                -Root $testRoot `
-                -RequestedRef 'v2026.8.2'
-        }
+    $source.channel = ''
+    $source.requestedRef = $approvedCommit
+    $source.releaseTag = ''
+    $source.tagObject = ''
+    $source.registryIntegrity = ''
+    Save-TestSource
+    Assert-Fails -MessagePattern 'channel-resolved source' -Action {
+        Invoke-PolicyValidation -Root $testRoot
+    }
+    $source.channel = 'stable'
+    $source.requestedRef = 'stable'
+    $source.releaseTag = "v$approvedPayloadVersion"
+    $source.tagObject = 'd' * 40
+    $source.registryIntegrity = 'sha512-' + [Convert]::ToBase64String([byte[]]::new(64))
+    Save-TestSource
 
     Reset-TestArtifacts
     Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {

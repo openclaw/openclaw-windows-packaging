@@ -39,7 +39,10 @@ $requiredFragments = @(
     '-ExpectedVersion ''${{ steps.resolve.outputs.version }}'''
     'GATEWAY_TAG: ${{ needs.build-package.outputs.source_tag }}'
     '-GatewayTag $env:GATEWAY_TAG'
-    'OPENCLAW_REF: ${{ inputs.openclaw_ref || needs.build-package.outputs.source_sha }}'
+    'name: Download captured stable source'
+    '-SourcePath source-resolution\source-resolution.json'
+    '-WorkflowRunId $env:GITHUB_RUN_ID'
+    '-SigningMode $env:SIGNING_MODE'
     "retention-days: `${{ github.event_name == 'pull_request' && 1 || 7 }}"
     'name: Restore cached OpenClaw package'
     "if: `${{ github.event_name != 'workflow_dispatch' || (inputs.signing_mode != 'official' && inputs.signing_mode != 'store') }}"

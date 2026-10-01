@@ -12,10 +12,13 @@ const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".
 assert.equal(process.platform, "win32", "The real-runtime lane requires Windows.");
 assert.ok(process.argv[2], "Pass the prepared OpenClaw application directory.");
 const application = path.resolve(process.argv[2]);
-const policy = JSON.parse(await fs.readFile(path.join(repository, "release-policy.json"), "utf8"));
+const payload = JSON.parse(await fs.readFile(path.join(application, "..", "payload-metadata.json"), "utf8"));
+assert.equal(payload.repository, "https://github.com/openclaw/openclaw");
+assert.match(payload.resolvedCommit, /^[0-9a-f]{40}$/);
+assert.match(payload.packageVersion, /^\d{4}\.\d+\.\d+(?:-\d+)?$/);
 const identity = JSON.parse(await fs.readFile(path.join(application, "dist", "build-info.json"), "utf8"));
-assert.equal(identity.commit, policy.approvedCommit);
-assert.equal(identity.version, policy.payloadPackageVersion);
+assert.equal(identity.commit, payload.resolvedCommit);
+assert.equal(identity.version, payload.packageVersion);
 console.log(`Runtime: ${identity.version} ${identity.commit}; Node ${process.version}`);
 for (const name of ["index.js", "package.json", "openclaw.plugin.json"]) {
   assert.deepEqual(

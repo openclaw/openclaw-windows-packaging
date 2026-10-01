@@ -15,9 +15,8 @@ $ErrorActionPreference = 'Stop'
 
 $policy = Read-OpenClawReleasePolicy -Path $PolicyPath
 $releaseMode = $SigningMode -in @('official', 'store')
-if ($releaseMode -and $Ref -ne '' -and
-    ($Ref -cnotmatch '\A[0-9a-fA-F]{40}\z' -or $Ref -ine $policy.approvedCommit)) {
-    throw 'Release publication requires the full reviewed approvedCommit for an explicit Ref.'
+if ($releaseMode -and $Ref -ne '') {
+    throw 'Release publication requires stable channel selection; leave Ref empty.'
 }
 if ($ReuseSnapshot) {
     if (-not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) {
@@ -29,20 +28,10 @@ else {
     if (Test-Path -LiteralPath $OutputPath) { throw "The source snapshot already exists: $OutputPath" }
     $source = Resolve-OpenClawSource -Policy $policy -Ref $Ref
 }
-Assert-OpenClawSource -Source $source -Policy $policy
+Assert-OpenClawSource -Source $source -Policy $policy -RequireChannel:$releaseMode
 $expectedRef = if ($Ref -eq '') { Get-OpenClawPolicyRef $policy } else { $Ref }
 if ($source.requestedRef -cne $expectedRef -or (($Ref -eq '') -ne ($source.channel -ceq 'stable'))) {
     throw 'The source snapshot does not match the requested selector.'
-}
-if ($releaseMode) {
-    Assert-OpenClawSourceText $policy.approvedCommit 'approvedCommit' -Pattern '\A[0-9a-fA-F]{40}\z'
-    Assert-OpenClawSourceText $policy.payloadPackageVersion 'payloadPackageVersion'
-    Assert-OpenClawSourceText $policy.gatewayTag 'gatewayTag'
-    if ($source.resolvedCommit -ine $policy.approvedCommit -or
-        $source.packageVersion -cne $policy.payloadPackageVersion -or
-        "v$($source.packageVersion)" -cne $policy.gatewayTag) {
-        throw 'Release publication requires the reviewed approvedCommit, payloadPackageVersion, and gatewayTag.'
-    }
 }
 $context = [ordered]@{
     workflowRunId = $WorkflowRunId

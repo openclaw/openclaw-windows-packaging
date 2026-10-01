@@ -1,7 +1,7 @@
 # Gateway MSIX release process
 
 Use this guide to prepare and publish an OpenClaw Gateway MSIX release. It is a
-maintainer how-to: the release starts with a reviewed policy change and ends
+maintainer how-to: the release uses the reviewed stable-channel policy and ends
 when the GitHub Release and its transition evidence are available. For signing
 prerequisites, MSIX identity rules, and the identity
 examples, see the [official signing setup](../README.md#official-signing-setup)
@@ -9,53 +9,55 @@ in the README.
 
 ## Release decision and policy change
 
-`release-policy.json` is the release decision record. Update it in a reviewed
-pull request when accepting a new upstream release:
+`release-policy.json` controls source selection and package identity. The default
+follows the latest Gateway stable release; a new upstream release does not need
+a policy update. Change policy in a reviewed pull request when needed:
 
 | Field | Owner and purpose |
 |---|---|
 | `repository` | The upstream OpenClaw repository that the package source must come from. |
-| `gatewayTag` | The accepted stable upstream Gateway tag; it contributes to the release identity. |
+| `channel` | `stable`, resolved once per workflow run from public npm `openclaw@latest`. |
+| `stableVersion` | Optional exact stable version for an exceptional reviewed compatibility pin; omit to follow latest. |
 | `msixRevision` | The packaging rebuild number used to derive the MSIX and GitHub release identity. |
-| `payloadPackageVersion` | The expected version in the validated upstream payload. |
-| `approvedCommit` | The immutable upstream commit approved for official signing. |
 | `packageIdentityName` | The Partner Center-reserved MSIX identity name. |
 | `packageFamilyName` | The expected Windows package family name for that identity and publisher. |
 | `publisher` | The expected MSIX publisher subject used by packaging and signing validation. |
 | `sideloadPackageIdentity` | The Azure-signable legacy identity used for signed GitHub Release packages and transition proof. |
 
-For a new upstream tag, change `gatewayTag`, `approvedCommit`, and
-`payloadPackageVersion` together after verifying that the tag resolves to that
-commit and that its payload reports that version. Keep `repository` and
-package identity fields and `publisher` aligned with the reviewed release
-trust boundary. Set
-`msixRevision` to `0` for the tag's first package. Do not assign a release tag
-or MSIX version by hand: `scripts\Get-MSIXReleaseIdentity.ps1` derives them
-from `gatewayTag` and `msixRevision`.
+Keep `repository`, package identity fields, and `publisher` aligned with the
+reviewed release trust boundary. Set `msixRevision` to `0` for a new Gateway
+tag's first package; reset it in a reviewed change if a previous rebuild
+increased it. Increment it only for a packaging rebuild of the same Gateway
+tag. Do not assign a release tag or MSIX version by hand:
+`scripts\Get-MSIXReleaseIdentity.ps1` derives them from the run's resolved
+Gateway tag and `msixRevision`.
 
 Leave the workflow's `openclaw_ref` default empty: packaging runs follow the
 stable source selection described in the [README](../README.md#selecting-the-openclaw-revision).
-That selection does not grant official-signing approval. For an official
-dispatch, supply the full `approvedCommit`, or leave the input empty only when
-the selected stable release matches the reviewed policy. The workflow also
+For `store` and `official`, an empty input is required; explicit ref overrides
+are rejected. The workflow also
 accepts `signing_mode`, whose choices are `unsigned`, `test`, `store`, and
 `official`. Select `store` to authorize and retain an unsigned Partner Center
 submission bundle without signing. Select `official` to retain that Store
 bundle and sign the separate sideload-identity packages for GitHub Releases.
+Following stable does not automatically publish: both modes still require a
+manual dispatch from `main`.
 
 ## Before dispatch
 
-Complete this checklist after the policy pull request has merged to `main`.
+Complete this checklist before dispatch. Merge any needed policy changes to
+`main` first.
 
 1. Confirm the dispatch target is `main` and select `signing_mode=store` for a
    Partner Center submission or `official` for compatible Azure signing.
-   Set `openclaw_ref` to the policy's full `approvedCommit`, or leave it empty
-   to select stable. Release publication is rejected for every other branch.
+   Leave `openclaw_ref` empty to select stable. Release publication is rejected
+   for every other branch.
    Keep `publish_release=true` for a new official release. Set it to `false`
    only when producing signed artifacts for an explicitly reviewed recovery.
-2. Confirm the accepted immutable commit, payload version, and publisher match
-   `release-policy.json`. If leaving `openclaw_ref` empty, confirm the selected
-   stable source matches that same approved commit and version.
+2. Confirm the policy selects the intended stable channel and publisher. Check
+   for an exceptional `stableVersion` pin and remove it in a reviewed change
+   if the release should follow latest. The run records the exact upstream
+   commit, tag, and payload version at source resolution.
 3. Confirm the derived identity with
    `scripts\Get-MSIXReleaseIdentity.ps1` rather than calculating a version or
    release tag manually. Use the README's [identity guidance](../README.md#official-signing-setup)
@@ -63,7 +65,8 @@ Complete this checklist after the policy pull request has merged to `main`.
 4. Review the release-facing pull request titles. The published release notes
    are generated from merged pull request titles; `CONTRIBUTING.md` owns the
    required title format.
-5. Confirm every policy pull request `test-msix-upgrades` matrix job succeeded
+5. Confirm every relevant versioning or source-selection pull request's
+   `test-msix-upgrades` matrix job succeeded
    and retained its identity-transition or in-place-upgrade evidence. The
    matrix runs only on pull requests that change versioning inputs or
    source-selection scripts; it does not run during the later official
@@ -88,9 +91,12 @@ composes a multi-architecture bundle for each channel with
 and derived package version.
 
 Before publication or Azure credentials, `authorize-signing` runs
-`scripts\Test-SigningInputs.ps1`. That check validates the immutable requested
-commit, policy-controlled payload and publisher inputs, and every Store and
-sideload package and bundle identity. For `official`, only after both channels
+`scripts\Test-SigningInputs.ps1`. It restores the same run's source snapshot
+and validates its workflow run ID, packaging commit, and signing mode without
+resolving latest again. That recorded source supplies the expected upstream
+commit, payload version, and derived release identity. The check validates
+policy-controlled publishers and every Store and sideload package and bundle
+against those inputs. For `official`, only after both channels
 pass does `sign-msix` use Azure login. It signs only the sideload x64, ARM64,
 and bundle artifacts; the Store bundle remains unsigned for Partner Center.
 
@@ -101,7 +107,7 @@ Observe these workflow outcomes:
 - `authorize-signing` succeeds before Azure login and signing begins.
 - `sign-msix` verifies signatures and refreshes package metadata.
 
-The policy pull request's upgrade matrix uses
+The pull request's upgrade matrix uses
 `scripts\Test-MSIXUpgrade.ps1` with the immutable, hash-pinned release fixtures in
 `scripts\msix-upgrade-baselines.json`. It requires an isolated clean Windows
 account per scenario and refuses to run when an OpenClaw Gateway package is
@@ -121,7 +127,7 @@ both standalone and bundle delivery in parallel:
   require the candidate to be newer, write the marker, and update through the
   test-signed Store bundle. The package family and exact marker must survive.
 
-Before approving a policy bump, the release owner must confirm that the
+Before approving a release, the release owner must confirm that the
 candidate version is newer than the version Microsoft Store currently installs.
 A missing or differently identified Store package is a hard failure. If no
 installed Store baseline exists, record that owner decision and retain the
@@ -141,10 +147,12 @@ bundle plus signed x64 and ARM64 standalone MSIX assets.
 After publication, verify the release has the derived permanent tag, generated
 notes, three signed sideload assets, and valid signatures. Separately verify
 the run retained its unsigned Store submission bundle. Reconcile the release with the successful
-identity-transition and in-place-upgrade evidence from the policy pull request. Verify the bundle and both
+identity-transition and in-place-upgrade evidence from the relevant pull request.
+That evidence applies to the source it tested; when stable has advanced, record
+the validation gap and obtain current-source upgrade proof before release. Verify the bundle and both
 standalone packages are present; the bundle is the multi-architecture delivery,
 while the standalone packages support explicit architecture deployment. Keep
-both the release workflow run and the policy pull request's evidence available
+both the release workflow run and the relevant pull request's evidence available
 as the release record.
 
 ## Failure and rollback boundaries
@@ -153,8 +161,8 @@ Never mutate an accepted release tag or a proof-release baseline to repair a
 failed release. If the upstream tag and accepted commit are unchanged and only
 packaging must be rebuilt, increment `msixRevision` in a reviewed policy
 change, then repeat the process with the exact same upstream tag and commit.
-For a new upstream tag, update the reviewed policy inputs together--tag,
-immutable commit and payload version--and
-start a new release decision. A signing-authorization or upgrade-validation
+If stable has moved, an exceptional reviewed `stableVersion` pin can select
+that older release for the rebuild; remove it and reset `msixRevision` to `0`
+before publishing a new Gateway tag. A signing-authorization or upgrade-validation
 failure is a stop condition: correct the reviewed inputs or packaging defect,
 then dispatch a new compliant run rather than publishing partial artifacts.

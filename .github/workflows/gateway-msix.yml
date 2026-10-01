@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       openclaw_ref:
-        description: Optional stable-source ref; empty uses release-policy stable (the stableVersion pin, else npm latest); release publication still requires policy approval
+        description: Optional ref for unsigned/test builds; leave empty for stable channel selection (required for store/official publication)
         required: false
         default: ''
         type: string
@@ -984,14 +984,29 @@ jobs:
           name: openclaw-gateway-msix-sideload-unsigned-bundle
           path: artifacts\sideload\bundle
 
+      - name: Download captured stable source
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-source-resolution
+          path: source-resolution
+
       - name: Resolve official release metadata
         id: release
         shell: pwsh
+        env:
+          SIGNING_MODE: ${{ inputs.signing_mode }}
         run: |
+          $source = .\scripts\Get-WorkflowSource.ps1 `
+            -PolicyPath .\release-policy.json `
+            -OutputPath source-resolution\source-resolution.json `
+            -WorkflowRunId $env:GITHUB_RUN_ID `
+            -PackagingCommit $env:GITHUB_SHA `
+            -SigningMode $env:SIGNING_MODE `
+            -ReuseSnapshot
           $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
             ConvertFrom-Json
           $identity = .\scripts\Get-MSIXReleaseIdentity.ps1 `
-            -GatewayTag ([string]$policy.gatewayTag) `
+            -GatewayTag $source.releaseTag `
             -MSIXRevision ([int]$policy.msixRevision)
           $packageVersion = .\scripts\Get-WorkflowPackageVersion.ps1 `
             -RunNumber '${{ github.run_number }}' `
@@ -1006,7 +1021,7 @@ jobs:
       - name: Enforce reviewed release policy
         shell: pwsh
         env:
-          OPENCLAW_REF: ${{ inputs.openclaw_ref || needs.build-package.outputs.source_sha }}
+          SIGNING_MODE: ${{ inputs.signing_mode }}
           PACKAGING_COMMIT: ${{ github.sha }}
         run: |
           foreach ($channel in @('Store', 'Sideload')) {
@@ -1015,7 +1030,9 @@ jobs:
               -ArtifactsDirectory "artifacts\$channelDirectory" `
               -PolicyPath .\release-policy.json `
               -BundlePath "artifacts\$channelDirectory\bundle\OpenClawGateway.msixbundle" `
-              -RequestedRef $env:OPENCLAW_REF `
+              -SourcePath source-resolution\source-resolution.json `
+              -WorkflowRunId $env:GITHUB_RUN_ID `
+              -SigningMode $env:SIGNING_MODE `
               -PackagingCommit $env:PACKAGING_COMMIT `
               -IdentityChannel $channel
           }

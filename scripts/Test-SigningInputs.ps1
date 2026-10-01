@@ -10,7 +10,15 @@ param(
     [string]$BundlePath,
 
     [Parameter(Mandatory)]
-    [string]$RequestedRef,
+    [string]$SourcePath,
+
+    [Parameter(Mandatory)]
+    [ValidatePattern('\A[1-9][0-9]*\z')]
+    [string]$WorkflowRunId,
+
+    [Parameter(Mandatory)]
+    [ValidateSet('official', 'store')]
+    [string]$SigningMode,
 
     [Parameter(Mandatory)]
     [ValidatePattern('^[0-9a-fA-F]{40}$')]
@@ -156,11 +164,7 @@ $policy = Get-Content -LiteralPath $resolvedPolicyPath -Raw |
 
 if (
     $policy.repository -ne 'https://github.com/openclaw/openclaw' -or
-    [string]::IsNullOrWhiteSpace([string]$policy.gatewayTag) -or
     $policy.msixRevision -isnot [int64] -or
-    [string]::IsNullOrWhiteSpace([string]$policy.payloadPackageVersion) -or
-    $policy.gatewayTag -ne "v$($policy.payloadPackageVersion)" -or
-    $policy.approvedCommit -notmatch '^[0-9a-fA-F]{40}$' -or
     [string]::IsNullOrWhiteSpace([string]$policy.packageIdentityName) -or
     [string]::IsNullOrWhiteSpace([string]$policy.packageFamilyName) -or
     [string]::IsNullOrWhiteSpace([string]$policy.publisher) -or
@@ -183,24 +187,20 @@ else {
 }
 $expectedIdentityChannel = $IdentityChannel.ToLowerInvariant()
 
-$releaseIdentity = & (
-    Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1'
-) `
-    -GatewayTag ([string]$policy.gatewayTag) `
+# Replay the producer's source selection without querying the moving channel.
+$source = & (Join-Path $PSScriptRoot 'Get-WorkflowSource.ps1') `
+    -PolicyPath $resolvedPolicyPath `
+    -OutputPath $SourcePath `
+    -WorkflowRunId $WorkflowRunId `
+    -PackagingCommit $PackagingCommit `
+    -SigningMode $SigningMode `
+    -ReuseSnapshot
+$releaseIdentity = & (Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1') `
+    -GatewayTag $source.releaseTag `
     -MSIXRevision ([int]$policy.msixRevision)
 $approvedPackageVersion = $releaseIdentity.PackageVersion
-$approvedPayloadVersion = [string]$policy.payloadPackageVersion
-$approvedCommit = ([string]$policy.approvedCommit).ToLowerInvariant()
-$normalizedRequestedRef = $RequestedRef.Trim().ToLowerInvariant()
-if (
-    $normalizedRequestedRef -notmatch '^[0-9a-f]{40}$' -or
-    $normalizedRequestedRef -ne $approvedCommit
-) {
-    throw (
-        'Release authorization requires the approved immutable OpenClaw commit: ' +
-        $approvedCommit
-    )
-}
+$approvedPayloadVersion = $source.packageVersion
+$approvedCommit = $source.resolvedCommit
 
 $expectedPackagingCommit = $PackagingCommit.ToLowerInvariant()
 $expectedPackageVersion = $null

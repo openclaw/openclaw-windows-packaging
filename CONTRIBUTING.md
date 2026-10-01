@@ -294,9 +294,10 @@ bypassable, and required CI checks remain authoritative.
 - Metadata files are part of the release trust chain. Coordinate changes across
   payload creation, MSIX creation, signing validation, workflow artifacts, and
   tests.
-- Keep official release identity derived from `gatewayTag` and `msixRevision`.
-  The unsuffixed Gateway tag owns revision block `1000-1999`; correction tags
-  `-2` through `-64` own their corresponding 1,000-number blocks. Use revision
+- Keep official release identity derived from the run's resolved Gateway tag
+  and the policy's `msixRevision`, using `scripts\Get-MSIXReleaseIdentity.ps1`.
+  The MSIX identity uses `year.month.VVPN.0`: Gateway release sequence `VV`,
+  correction digit `P`, and rebuild digit `N`. Use revision
   `0` for the first MSIX of a Gateway tag and increment only for packaging-only
   rebuilds of that exact tag. Do not assign package versions or release tags by
   hand.

@@ -13,10 +13,9 @@ if ($parseErrors.Count -ne 0 -or $ast.BeginBlock -or $ast.ProcessBlock -or
             $_ -isnot [Management.Automation.Language.FunctionDefinitionAst]
         }).Count -ne 0) { throw 'The source helper must contain only valid function definitions.' }
 if (@(. $sourcePath).Count -ne 0) { throw 'Dot-sourcing the helper must not produce output.' }
-$basePolicy = Read-OpenClawReleasePolicy $policyPath
-$commit = $basePolicy.approvedCommit
-$version = $basePolicy.payloadPackageVersion
-$tagObject = '8bec206f3c1f787e1e9c45cfd34d3de2a78c7b8e'
+$commit = 'c' * 40
+$version = '2026.9.4'
+$tagObject = 'd' * 40
 $integrity = 'sha512-' + [Convert]::ToBase64String([byte[]]::new(64))
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) "openclaw-source-tests-$([guid]::NewGuid().ToString('N'))"
 $testCount = 0
@@ -287,7 +286,7 @@ try {
         foreach ($ref in @('extended-stable', 'refs/heads/extended-stable', 'refs/tags/extended-stable/test')) {
             Assert-Throws { Resolve-OpenClawSource $policy -Ref $ref } 'extended-stable'
         }
-        $policy | Add-Member channel 'extended-stable'
+        $policy.channel = 'extended-stable'
         Assert-Throws { Resolve-OpenClawSource $policy } 'channel'
         $policy.channel = 'stable'
         $policy | Add-Member stableVersion '2026.6.35'
@@ -347,35 +346,33 @@ try {
         Assert-Equal $http.Calls.Count 0
     }
     foreach ($mode in @('official', 'store')) {
-        foreach ($ref in @('', $commit)) {
-            Invoke-Test "$mode release accepts the reviewed release via selector '$ref'" {
-                $source = & $workflowPath @workflow -SigningMode $mode -Ref $ref
-                Assert-Equal $source.resolvedCommit $commit
-            }
+        Invoke-Test "$mode release follows stable and replays the captured release after latest advances" {
+            Add-Release '2026.9.7' ('a' * 40) ('b' * 40)
+            $http.Responses['Registry:latest'].version = '2026.9.7'
+            $source = & $workflowPath @workflow -SigningMode $mode
+            Assert-Equal $source.resolvedCommit ('a' * 40)
+            Assert-Equal $source.releaseTag 'v2026.9.7'
+            Assert-Equal $source.packageVersion '2026.9.7'
+            Add-Release '2026.9.8' ('e' * 40) ('f' * 40)
+            $http.Responses['Registry:latest'].version = '2026.9.8'
+            $http.Calls.Clear()
+            $replayed = & $workflowPath @workflow -SigningMode $mode -ReuseSnapshot
+            Assert-Equal $replayed.resolvedCommit $source.resolvedCommit
+            Assert-Equal $replayed.releaseTag $source.releaseTag
+            Assert-Equal $http.Calls.Count 0
         }
-    }
-    foreach ($mode in @('official', 'store')) {
-        Invoke-Test "a valid newer stable channel is not $mode release authority" {
-            Add-Release '2026.9.5' ('a' * 40) ('b' * 40)
-            $http.Responses['Registry:latest'].version = '2026.9.5'
-            Assert-Throws { & $workflowPath @workflow -SigningMode $mode } 'reviewed approvedCommit'
-            Assert-Equal (Test-Path -LiteralPath $workflow.OutputPath) $false
-        }
-    }
-    foreach ($field in @('approvedCommit', 'payloadPackageVersion', 'gatewayTag')) {
-        foreach ($mode in @('official', 'store')) {
-            Invoke-Test "$mode release still requires the reviewed $field" {
-                $policy.$field = @{ approvedCommit = 'a' * 40; payloadPackageVersion = '2026.9.3'; gatewayTag = 'v2026.9.3' }[$field]
-                Save-Policy
-                Assert-Throws { & $workflowPath @workflow -SigningMode $mode } 'reviewed approvedCommit'
+        Invoke-Test "$mode release rejects SHA, tag, and branch overrides before HTTP" {
+            foreach ($ref in @($commit, "v$version", 'main')) {
+                Assert-Throws { & $workflowPath @workflow -SigningMode $mode -Ref $ref } 'requires stable channel selection'
             }
+            Assert-Equal $http.Calls.Count 0
         }
-    }
-    foreach ($mode in @('official', 'store')) {
-        Invoke-Test "$mode explicit inputs must be the full approved SHA, not a tag or branch" {
-            foreach ($ref in @("v$version", 'main', ('a' * 40))) {
-                Assert-Throws { & $workflowPath @workflow -SigningMode $mode -Ref $ref } 'full reviewed approvedCommit'
-            }
+        Invoke-Test "$mode release cannot replay a ref override as channel provenance" {
+            $source = & $workflowPath @workflow -Ref $commit
+            $source.signingMode = $mode
+            [IO.File]::WriteAllText($workflow.OutputPath, ($source | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+            $http.Calls.Clear()
+            Assert-Throws { & $workflowPath @workflow -SigningMode $mode -ReuseSnapshot } 'channel-resolved'
             Assert-Equal $http.Calls.Count 0
         }
     }
