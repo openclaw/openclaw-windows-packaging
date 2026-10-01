@@ -180,6 +180,28 @@ if ($buildMsixCalls.Count -ne 1) {
     throw 'The build-msix job must compile once per architecture.'
 }
 
+$bundleUploadCondition = (
+    "if: `${{ github.event_name != 'pull_request' || " +
+    "needs.changes.outputs.versioning == 'true' }}"
+)
+foreach ($uploadName in @(
+    'Upload unsigned Store MSIX bundle'
+    'Upload unsigned sideload MSIX bundle'
+)) {
+    $uploadMatch = [regex]::Match(
+        $workflow,
+        "(?ms)^\s*- name: $([regex]::Escape($uploadName))" +
+            "\s+$([regex]::Escape($bundleUploadCondition))" +
+            '\s+uses: actions/upload-artifact@v7'
+    )
+    if (-not $uploadMatch.Success) {
+        throw (
+            'Pull requests without versioning changes must not upload ' +
+            "the unused bundle artifact: $uploadName"
+        )
+    }
+}
+
 $dispatchDefaultMatch = [regex]::Match(
     $workflow,
     '(?ms)openclaw_ref:\s+description:.*?required:\s*false\s+default:\s*''''\s+type:\s*string'

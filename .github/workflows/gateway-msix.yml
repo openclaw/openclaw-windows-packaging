@@ -799,6 +799,7 @@ jobs:
           }
 
       - name: Upload unsigned Store MSIX bundle
+        if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.versioning == 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: openclaw-gateway-msix-store-unsigned-bundle
@@ -807,6 +808,7 @@ jobs:
           retention-days: 7
 
       - name: Upload unsigned sideload MSIX bundle
+        if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.versioning == 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: openclaw-gateway-msix-sideload-unsigned-bundle
