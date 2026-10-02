@@ -72,7 +72,11 @@ $requiredFragments = @(
     'subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}'
     'uses: azure/artifact-signing-action@v2'
     'name: Compose unsigned Store and sideload MSIX bundles'
-    '-SideloadOutputDirectory ''${{ runner.temp }}\openclaw-msix-sideload'''
+    'BUILD_STORE_PACKAGE: ${{ github.event_name != ''pull_request'' || needs.changes.outputs.bundle_build == ''true'' }}'
+    "IdentityChannel = 'Sideload'"
+    "if (`$env:BUILD_STORE_PACKAGE -eq 'true')"
+    "`$packageParameters.IdentityChannel = 'Store'"
+    "`$packageParameters.SideloadOutputDirectory = '`${{ runner.temp }}\openclaw-msix-sideload'"
     'name: Upload unsigned Store MSIX bundle'
     'name: Upload unsigned sideload MSIX bundle'
     'name: Test MSIX upgrade (${{ matrix.name }})'
@@ -184,6 +188,33 @@ $buildMsixCalls = [regex]::Matches(
 )
 if ($buildMsixCalls.Count -ne 1) {
     throw 'The build-msix job must compile once per architecture.'
+}
+$storePackageCondition = (
+    "if: `${{ github.event_name != 'pull_request' || " +
+    "needs.changes.outputs.bundle_build == 'true' }}"
+)
+$storeUploadMatch = [regex]::Match(
+    $buildMsixJob,
+    "(?ms)^\s*- name: Upload unsigned Store MSIX" +
+        "\s+$([regex]::Escape($storePackageCondition))" +
+        '\s+uses: actions/upload-artifact@v7'
+)
+if (-not $storeUploadMatch.Success) {
+    throw (
+        'Pull requests without a Store-package consumer must not build or ' +
+        'upload Store MSIX artifacts.'
+    )
+}
+$sideloadUploadMatch = [regex]::Match(
+    $buildMsixJob,
+    '(?ms)^\s*- name: Upload unsigned sideload MSIX' +
+        '\s+uses: actions/upload-artifact@v7'
+)
+if (-not $sideloadUploadMatch.Success) {
+    throw (
+        'Every packaging build must retain its deployable sideload MSIX ' +
+        'artifact.'
+    )
 }
 
 $bundleJobMatch = [regex]::Match(

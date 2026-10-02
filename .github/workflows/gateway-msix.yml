@@ -621,9 +621,12 @@ jobs:
             -p:PublishAot=true `
             -p:Platform='${{ matrix.architecture }}'
 
-      - name: Compose unsigned Store and sideload MSIX packages
+      # Sideload is the deployable PR artifact. Store packages exist only for
+      # bundle, upgrade, and release consumers selected by bundle_build.
+      - name: Compose unsigned Gateway MSIX packages
         shell: pwsh
         env:
+          BUILD_STORE_PACKAGE: ${{ github.event_name != 'pull_request' || needs.changes.outputs.bundle_build == 'true' }}
           SIGNING_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode || 'unsigned' }}
           VERSIONING_CHANGE: ${{ needs.changes.outputs.versioning }}
           GATEWAY_TAG: ${{ needs.build-package.outputs.release_identity_tag }}
@@ -646,16 +649,23 @@ jobs:
           $packageVersion = .\scripts\Get-WorkflowPackageVersion.ps1 `
             @versionParameters
 
-          .\scripts\Build-MSIX.ps1 `
-            -PayloadDirectory '${{ runner.temp }}\openclaw-payload' `
-            -Architecture '${{ matrix.architecture }}' `
-            -PackageVersion $packageVersion `
-            -SourceCommit '${{ github.sha }}' `
-            -IdentityChannel Store `
-            -OutputDirectory '${{ runner.temp }}\openclaw-msix-store' `
-            -SideloadOutputDirectory '${{ runner.temp }}\openclaw-msix-sideload'
+          $packageParameters = @{
+            PayloadDirectory = '${{ runner.temp }}\openclaw-payload'
+            Architecture = '${{ matrix.architecture }}'
+            PackageVersion = $packageVersion
+            SourceCommit = '${{ github.sha }}'
+            IdentityChannel = 'Sideload'
+            OutputDirectory = '${{ runner.temp }}\openclaw-msix-sideload'
+          }
+          if ($env:BUILD_STORE_PACKAGE -eq 'true') {
+            $packageParameters.IdentityChannel = 'Store'
+            $packageParameters.OutputDirectory = '${{ runner.temp }}\openclaw-msix-store'
+            $packageParameters.SideloadOutputDirectory = '${{ runner.temp }}\openclaw-msix-sideload'
+          }
+          .\scripts\Build-MSIX.ps1 @packageParameters
 
       - name: Upload unsigned Store MSIX
+        if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.bundle_build == 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: openclaw-gateway-msix-store-unsigned-${{ matrix.architecture }}
