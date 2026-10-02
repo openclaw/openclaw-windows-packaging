@@ -65,6 +65,9 @@ $source = [ordered]@{
     workflowRunId = '123456'
     packagingCommit = $packagingCommit
     signingMode = 'official'
+    workflowRef = 'openclaw/openclaw-windows-packaging/.github/workflows/gateway-msix.yml@refs/heads/main'
+    githubRef = 'refs/heads/main'
+    eventName = 'workflow_dispatch'
 }
 
 function Save-TestSource {
@@ -384,6 +387,8 @@ function Invoke-PolicyValidation {
         -RequestedRef $RequestedRef `
         -GatewayVersion $GatewayVersion `
         -PackagingCommit $packagingCommit `
+        -WorkflowRef 'openclaw/openclaw-windows-packaging/.github/workflows/gateway-msix.yml@refs/heads/main' `
+        -GitHubRef 'refs/heads/main' -EventName 'workflow_dispatch' `
         -IdentityChannel $IdentityChannel
 }
 
@@ -779,9 +784,12 @@ try {
         }
 
     Reset-TestArtifacts
-    foreach ($field in @('workflowRunId', 'packagingCommit', 'signingMode')) {
+    foreach ($field in @('workflowRunId', 'packagingCommit', 'signingMode', 'workflowRef', 'githubRef', 'eventName')) {
         $original = $source[$field]
-        $source[$field] = @{ workflowRunId = '999'; packagingCommit = 'e' * 40; signingMode = 'unsigned' }[$field]
+        $source[$field] = @{
+            workflowRunId = '999'; packagingCommit = 'e' * 40; signingMode = 'unsigned'
+            workflowRef = 'foreign/workflow@refs/heads/main'; githubRef = 'refs/heads/topic'; eventName = 'push'
+        }[$field]
         Save-TestSource
         Assert-Fails -MessagePattern "unexpected workflow identity: $field" -Action {
             Invoke-PolicyValidation -Root $testRoot

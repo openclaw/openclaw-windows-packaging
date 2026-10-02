@@ -423,9 +423,22 @@ Run PowerShell policy suites by owning surface rather than indiscriminately:
 `Build-Payload.ps1` and `Build-MSIX.ps1`,
 `Test-MSIXReleaseIdentity.Tests.ps1` and
 `Test-WorkflowPackageVersion.Tests.ps1` for release/version identity,
+`Test-OpenClawSource.Tests.ps1` and
+`Test-WorkflowSigningConfiguration.ps1` for source capture, retry context,
+cache routing, and selected-build outcomes,
+`Test-MSIXUpgradeMatrix.Tests.ps1` for parallel upgrade scenario selection,
 `Test-Deploy-LocalPackage.Tests.ps1` for the loose-registration flow, and
 `Test-Sign-TestMSIX.Tests.ps1` for test signing. The Node input suite requires
 Node.js and npm; it uses a dependency-free local fixture.
+
+Cache-boundary checks are offline contracts, not platform proof. The workflow
+grants writes only to main/stable builds; arbitrary-ref unsigned/test dispatch
+remains supported with read-only caches, including when dispatched from main.
+The reusable workflow inherits that cap for explicit, NuGet, and upstream
+caches. Do not deploy or run the installed upgrade harness on a contributor
+account to validate this change. Cache reset, actual denied writes, cold/warm
+builds, and fresh CodeQL analysis remain separately authorized CI lanes; see
+[cache-boundary cutover](release-process.md#cache-boundary-cutover).
 
 The CI host-test job retains Release TRX results and available Debug Cobertura
 coverage data, TRX, and a readable summary in the `gateway-msix-test-results`
