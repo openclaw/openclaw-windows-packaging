@@ -26,7 +26,7 @@ $requiredFragments = @(
     "contains(needs.*.result, 'failure')"
     "contains(needs.*.result, 'cancelled')"
     'name: Upload payload'
-    'name: Test stable source selection'
+    'name: Test OpenClaw source selection'
     'name: Restore source selection for a retry'
     'name: Save immutable source selection'
     'name: openclaw-source-resolution'
@@ -39,7 +39,7 @@ $requiredFragments = @(
     'release_identity_tag: ${{ steps.resolve.outputs.release_identity_tag }}'
     'GATEWAY_TAG: ${{ needs.build-package.outputs.release_identity_tag }}'
     '-GatewayTag $env:GATEWAY_TAG'
-    'name: Download captured stable source'
+    'name: Download captured source selection'
     '-SourcePath source-resolution\source-resolution.json'
     '-GatewayVersion $env:GATEWAY_VERSION'
     '-WorkflowRunId $env:GITHUB_RUN_ID'

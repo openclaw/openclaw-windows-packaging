@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       openclaw_ref:
-        description: Empty follows stable; store/official also accept a full SHA matching stable; other refs are unsigned/test only
+        description: Optional OpenClaw branch, tag, or full SHA to package; empty follows stable
         required: false
         default: ''
         type: string
@@ -286,7 +286,7 @@ jobs:
         run: >
           .\scripts\Test-Measure-Coverage.Tests.ps1
 
-      - name: Test stable source selection
+      - name: Test OpenClaw source selection
         shell: pwsh
         run: .\scripts\Test-OpenClawSource.Tests.ps1
 
@@ -1004,7 +1004,7 @@ jobs:
           name: openclaw-gateway-msix-sideload-unsigned-bundle
           path: artifacts\sideload\bundle
 
-      - name: Download captured stable source
+      - name: Download captured source selection
         uses: actions/download-artifact@v8
         with:
           name: openclaw-source-resolution

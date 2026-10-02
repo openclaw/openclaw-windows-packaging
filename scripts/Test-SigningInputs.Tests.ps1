@@ -660,13 +660,42 @@ try {
     }
     Save-TestSource
     Reset-TestArtifacts
-    Invoke-PolicyValidation -Root $testRoot -RequestedRef $approvedCommit
-    Assert-Fails -MessagePattern 'does not match the captured stable release' -Action {
+    Invoke-PolicyValidation -Root $testRoot
+    Assert-Fails -MessagePattern 'requested selector' -Action {
         Invoke-PolicyValidation -Root $testRoot -RequestedRef $unapprovedCommit
     }
-    Assert-Fails -MessagePattern 'requires an empty Ref or a full SHA' -Action {
+    Assert-Fails -MessagePattern 'requested selector' -Action {
         Invoke-PolicyValidation -Root $testRoot -RequestedRef 'main'
     }
+    $source.requestedRef = 'hotfix/gateway'
+    $source.resolvedCommit = $unapprovedCommit
+    $source.channel = ''
+    $source.releaseTag = ''
+    $source.tagObject = ''
+    $source.registryIntegrity = ''
+    $source['releaseIdentitySource'] = [ordered]@{
+        repository = $policy.repository
+        requestedRef = 'stable'
+        resolvedCommit = $approvedCommit
+        packageVersion = $approvedPayloadVersion
+        channel = 'stable'
+        releaseTag = "v$approvedPayloadVersion"
+        tagObject = 'd' * 40
+        resolvedAt = '2026-09-30T00:00:00Z'
+        registryIntegrity = 'sha512-' + [Convert]::ToBase64String([byte[]]::new(64))
+    }
+    Save-TestSource
+    Reset-TestArtifacts -PayloadCommit $unapprovedCommit
+    Invoke-PolicyValidation -Root $testRoot -RequestedRef 'hotfix/gateway'
+    $source.requestedRef = 'stable'
+    $source.resolvedCommit = $approvedCommit
+    $source.channel = 'stable'
+    $source.releaseTag = "v$approvedPayloadVersion"
+    $source.tagObject = 'd' * 40
+    $source.registryIntegrity = 'sha512-' + [Convert]::ToBase64String([byte[]]::new(64))
+    $source.Remove('releaseIdentitySource')
+    Save-TestSource
+    Reset-TestArtifacts
     $pinnedPayloadVersion = '2026.9.5'
     $pinnedPayloadCommit = 'a' * 40
     $source.requestedRef = $pinnedPayloadVersion
@@ -699,8 +728,7 @@ try {
         -PayloadPackageVersion $pinnedPayloadVersion
     Invoke-PolicyValidation `
         -Root $testRoot `
-        -GatewayVersion $pinnedPayloadVersion `
-        -RequestedRef $pinnedPayloadCommit
+        -GatewayVersion $pinnedPayloadVersion
     Assert-Fails -MessagePattern 'requestedRef' -Action {
         Invoke-PolicyValidation -Root $testRoot
     }

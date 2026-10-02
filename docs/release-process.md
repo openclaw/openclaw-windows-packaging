@@ -32,19 +32,21 @@ tag. Do not assign a release tag or MSIX version by hand:
 `scripts\Get-MSIXReleaseIdentity.ps1` derives them from the run's resolved
 Gateway tag and `msixRevision`.
 
-Leave the workflow's `openclaw_ref` default empty: packaging runs follow the
-stable source selection described in the [README](../README.md#selecting-the-openclaw-revision).
+Leave the workflow's `openclaw_ref` default empty when packaging should follow
+the stable source selection described in the
+[README](../README.md#selecting-the-openclaw-revision). To hot release a patched
+OpenClaw revision, set it to an upstream branch, tag, or full commit SHA. The
+payload is pinned to the resolved commit while package and release identity
+continue from policy stable, and the payload version must not be newer than that
+identity source.
 Set the optional `gateway_version` input to an exact stable version for a one-run
 payload rollback. The payload uses that older version, while package and release
 identity continue from the unmodified policy pin or npm latest so the MSIX remains
 an upgrade. Both verified sources are captured and replayed with the immutable
 snapshot; the input does not change release policy and must be older than the
 release-identity source.
-For `store` and `official`, leave `openclaw_ref` empty or supply the full commit
-SHA of the selected payload release. The SHA is a match assertion, not a source override;
-tags, branches, and nonmatching commits are rejected. The workflow also
-accepts `signing_mode`, whose choices are `unsigned`, `test`, `store`, and
-`official`. Select `store` to authorize and retain an unsigned Partner Center
+The workflow also accepts `signing_mode`, whose choices are `unsigned`, `test`,
+`store`, and `official`. Select `store` to authorize and retain an unsigned Partner Center
 submission bundle without signing. Select `official` to retain that Store
 bundle and sign the separate sideload-identity packages for GitHub Releases.
 Following stable does not automatically publish: both modes still require a
@@ -60,16 +62,18 @@ Complete this checklist before dispatch. Merge any needed policy changes to
    Leave `gateway_version` empty to package policy/latest, or set the exact older
    stable payload required for this run. Confirm the resulting MSIX identity is
    newer than the installed production baseline.
-   Leave `openclaw_ref` empty to select stable, or supply the matching full SHA
-   to assert the intended source. Release publication is rejected for every
-   other workflow branch.
+   Leave `openclaw_ref` empty to select stable, or supply the OpenClaw branch,
+   tag, or full SHA containing the patch. Release publication is still rejected
+   when the packaging workflow itself is dispatched from any branch other than
+   `main`.
    Keep `publish_release=true` for a new official release. Set it to `false`
    only when producing signed artifacts for an explicitly reviewed recovery.
-2. Confirm the policy selects the intended stable channel and publisher. Check
+2. Confirm the policy selects the intended stable release identity and
+   publisher. Check
    for an exceptional `stableVersion` pin and remove it in a reviewed change
    if the release identity should follow latest. The run records the exact
-   upstream commit, tag, and version for both release identity and payload when
-   `gateway_version` differs.
+   upstream commit, selector, and version for both release identity and payload
+   whenever `openclaw_ref` or `gateway_version` selects a different payload.
 3. Confirm the derived identity with
    `scripts\Get-MSIXReleaseIdentity.ps1` rather than calculating a version or
    release tag manually. Use the README's [identity guidance](../README.md#official-signing-setup)
