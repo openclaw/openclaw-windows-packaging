@@ -25,11 +25,17 @@ if ($GatewayVersion -ne '') {
         Add-Member -NotePropertyName stableVersion -NotePropertyValue $GatewayVersion -Force
 }
 $releaseMode = $SigningMode -in @('official', 'store')
+$refAssertion = $releaseMode -and $GatewayVersion -ne '' -and $Ref -ne ''
 if ($Ref -ne '' -and $GatewayVersion -ne '') {
-    throw 'Ref and GatewayVersion cannot both select the payload source.'
+    if (-not $refAssertion) {
+        throw 'Ref and GatewayVersion cannot both select the payload source.'
+    }
+    if ($Ref -cnotmatch '\A[0-9a-fA-F]{40}\z') {
+        throw 'A release GatewayVersion accepts only a full SHA Ref assertion.'
+    }
 }
-$sourceRef = $Ref
-$separateReleaseIdentity = $GatewayVersion -ne '' -or ($releaseMode -and $Ref -ne '')
+$sourceRef = if ($refAssertion) { '' } else { $Ref }
+$separateReleaseIdentity = $GatewayVersion -ne '' -or ($releaseMode -and $sourceRef -ne '')
 if ($ReuseSnapshot) {
     if (-not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) {
         throw 'The source snapshot is unavailable. Start a new workflow run; do not re-resolve a retry.'
@@ -47,7 +53,7 @@ else {
 Assert-OpenClawSource `
     -Source $source `
     -Policy $selectionPolicy `
-    -RequireChannel:($releaseMode -and $Ref -eq '')
+    -RequireChannel:($releaseMode -and $sourceRef -eq '')
 $expectedRef = if ($sourceRef -eq '') { Get-OpenClawPolicyRef $selectionPolicy } else { $sourceRef }
 if ($source.requestedRef -cne $expectedRef -or (($sourceRef -eq '') -ne ($source.channel -ceq 'stable'))) {
     throw 'The source snapshot does not match the requested selector.'
@@ -71,13 +77,16 @@ if ($separateReleaseIdentity) {
         [version]$releaseIdentity.PackageVersion -le [version]$payloadIdentity.PackageVersion) {
         throw 'GatewayVersion must select a release older than the current stable release identity.'
     }
-    if ($Ref -ne '' -and
+    if ($sourceRef -ne '' -and
         [version]$releaseIdentity.PackageVersion -lt [version]$payloadIdentity.PackageVersion) {
         throw 'Ref must select a payload version that is not newer than the current stable release identity.'
     }
 }
 elseif ($null -ne $releaseIdentityProperty) {
     throw 'The source snapshot has an unexpected release identity source.'
+}
+if ($refAssertion -and $Ref -ine $source.resolvedCommit) {
+    throw 'The requested full SHA does not match the captured GatewayVersion release.'
 }
 $context = [ordered]@{
     workflowRunId = $WorkflowRunId

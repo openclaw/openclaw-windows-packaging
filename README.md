@@ -374,8 +374,9 @@ For a one-run rollback of the bundled payload in any signing mode, set
 while the MSIX and GitHub release identity continue from the unmodified stable
 selector above so the package remains an upgrade. Both sources are verified and
 captured in the immutable snapshot. The workflow rejects an override that is not
-older than the release-identity source. All modes reject combining it with an
-`openclaw_ref` source override.
+older than the release-identity source. Unsigned and test runs reject combining
+it with `openclaw_ref`; Store and official runs preserve a full-SHA
+`openclaw_ref` as an assertion that the version resolved to the intended commit.
 If compatibility requires an older known-good stable release, a reviewed
 `stableVersion` field in `release-policy.json` can pin its exact version, for
 example `"stableVersion": "2026.9.4"`. That pin applies to all modes until removed;
@@ -385,7 +386,9 @@ For `store` and `official`, `openclaw_ref` selects the payload source while the
 reviewed stable policy still owns release identity. Before authorization, the
 workflow restores the same run's payload and release-identity snapshot and
 checks its requested ref, workflow run ID, packaging commit, and signing mode.
-It does not resolve the moving branch or stable channel again.
+When `gateway_version` selects the payload instead, `openclaw_ref` may only be a
+full SHA and must match that release. The workflow does not resolve the moving
+branch or stable channel again.
 
 Payload composition validates that the selected OpenClaw runtime discovers and
 activates the packaging-owned Windows Launcher plugin by default, both without

@@ -44,7 +44,9 @@ payload rollback. The payload uses that older version, while package and release
 identity continue from the unmodified policy pin or npm latest so the MSIX remains
 an upgrade. Both verified sources are captured and replayed with the immutable
 snapshot; the input does not change release policy and must be older than the
-release-identity source.
+release-identity source. In Store or official mode, an accompanying full-SHA
+`openclaw_ref` remains a commit assertion for that version-selected payload;
+branches and tags cannot be combined with `gateway_version`.
 The workflow also accepts `signing_mode`, whose choices are `unsigned`, `test`,
 `store`, and `official`. Select `store` to authorize and retain an unsigned Partner Center
 submission bundle without signing. Select `official` to retain that Store

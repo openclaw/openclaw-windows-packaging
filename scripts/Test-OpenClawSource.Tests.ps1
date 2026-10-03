@@ -266,7 +266,7 @@ try {
         $http.Responses['Registry:latest'].version = '2026.9.8'
         $policy | Add-Member stableVersion '2026.9.7'
         Save-Policy
-        $source = & $workflowPath @workflow -SigningMode official -GatewayVersion '2026.9.5'
+        $source = & $workflowPath @workflow -SigningMode official -GatewayVersion '2026.9.5' -Ref ('a' * 40)
         Assert-Equal $source.requestedRef '2026.9.5'
         Assert-Equal $source.packageVersion '2026.9.5'
         Assert-Equal $source.resolvedCommit ('a' * 40)
@@ -278,11 +278,14 @@ try {
         Assert-Equal $source.releaseIdentitySource.releaseTag 'v2026.9.7'
         Assert-Equal @(@($http.Calls.Key) -match 'Registry:latest').Count 0
         $http.Calls.Clear()
-        $replayed = & $workflowPath @workflow -SigningMode official -GatewayVersion '2026.9.5' -ReuseSnapshot
+        $replayed = & $workflowPath @workflow -SigningMode official -GatewayVersion '2026.9.5' -Ref ('a' * 40) -ReuseSnapshot
         Assert-Equal $replayed.resolvedCommit $source.resolvedCommit
         Assert-Throws {
-            & $workflowPath @workflow -SigningMode official -GatewayVersion $version -ReuseSnapshot
+            & $workflowPath @workflow -SigningMode official -GatewayVersion $version -Ref ('a' * 40) -ReuseSnapshot
         } 'requestedRef'
+        Assert-Throws {
+            & $workflowPath @workflow -SigningMode official -GatewayVersion '2026.9.5' -Ref ('b' * 40) -ReuseSnapshot
+        } 'does not match the captured GatewayVersion release'
         Assert-Equal $http.Calls.Count 0
     }
     Invoke-Test 'a workflow payload override must remain below its release identity' {
@@ -439,8 +442,15 @@ try {
         Invoke-Test "$mode release rejects ambiguous ref and version selectors before HTTP" {
             Assert-Throws {
                 & $workflowPath @workflow -SigningMode $mode -Ref 'hotfix/gateway' -GatewayVersion $version
-            } 'cannot both select the payload source'
+            } 'full SHA Ref assertion'
             Assert-Equal $http.Calls.Count 0
+        }
+        Invoke-Test "$mode release rejects a mismatched GatewayVersion SHA assertion" {
+            Add-Release '2026.9.3' ('a' * 40) ('b' * 40)
+            Assert-Throws {
+                & $workflowPath @workflow -SigningMode $mode -GatewayVersion '2026.9.3' -Ref $commit
+            } 'does not match the captured GatewayVersion release'
+            Assert-Equal (Test-Path -LiteralPath $workflow.OutputPath) $false
         }
         Invoke-Test "$mode release cannot replay a ref override without its stable identity" {
             $source = & $workflowPath @workflow -Ref $commit

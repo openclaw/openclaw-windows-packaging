@@ -728,7 +728,14 @@ try {
         -PayloadPackageVersion $pinnedPayloadVersion
     Invoke-PolicyValidation `
         -Root $testRoot `
-        -GatewayVersion $pinnedPayloadVersion
+        -GatewayVersion $pinnedPayloadVersion `
+        -RequestedRef $pinnedPayloadCommit
+    Assert-Fails -MessagePattern 'does not match the captured GatewayVersion release' -Action {
+        Invoke-PolicyValidation `
+            -Root $testRoot `
+            -GatewayVersion $pinnedPayloadVersion `
+            -RequestedRef $unapprovedCommit
+    }
     Assert-Fails -MessagePattern 'requestedRef' -Action {
         Invoke-PolicyValidation -Root $testRoot
     }
