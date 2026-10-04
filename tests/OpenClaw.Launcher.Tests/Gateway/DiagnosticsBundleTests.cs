@@ -467,6 +467,39 @@ public sealed class DiagnosticsBundleTests : IDisposable
         Assert.Contains("--output", exception.Message, StringComparison.Ordinal);
     }
 
+    // A failure after CreateNew, such as a full disk while the archive is
+    // written, used to be reported as "already exists" because the new zip
+    // was already on disk. Only the create collision uses that message.
+    [Fact]
+    public async Task AnIoExceptionAfterTheBundleIsCreatedKeepsItsOwnMessage()
+    {
+        (GatewayRuntime runtime, HostPaths paths, _) = CreateRuntime();
+        Directory.CreateDirectory(Path.GetDirectoryName(paths.LogPath)!);
+        await File.WriteAllTextAsync(paths.LogPath, "host evidence");
+        string bundlePath = Path.Combine(_root, "late.zip");
+
+        IOException exception = await Assert.ThrowsAsync<IOException>(
+            () => runtime.CollectLogsAsync(
+                bundlePath,
+                environment: null,
+                new ThrowingProgress(new IOException("There is not enough space on the disk.")),
+                CancellationToken.None));
+
+        Assert.Contains("not enough space", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("already exists", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("--output", exception.Message, StringComparison.Ordinal);
+        Assert.True(File.Exists(bundlePath));
+    }
+
+    private sealed class ThrowingProgress(Exception exception) : IProgress<ClawCtlProgress>
+    {
+        public void Report(ClawCtlProgress value)
+        {
+            _ = value;
+            throw exception;
+        }
+    }
+
     public void Dispose()
     {
         Directory.Delete(_root, recursive: true);
