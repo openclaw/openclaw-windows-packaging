@@ -680,6 +680,36 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
     }
 
     [Fact]
+    public void TheLauncherEscapesPercentSignsSoCmdDoesNotExpandThem()
+    {
+        const string directory = @"C:\Users\50%off\AppData\Local\Packages\OpenClaw";
+        const string activation =
+            @"C:\Users\50%off\AppData\Local\Packages\OpenClaw\gateway.ps1";
+
+        string script = GatewayLauncherScript.Create(directory, activation);
+
+        Assert.Contains(
+            @"cd /d ""C:\Users\50%%off\AppData\Local\Packages\OpenClaw""",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            @"-File ""C:\Users\50%%off\AppData\Local\Packages\OpenClaw\gateway.ps1""",
+            script,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("50%off", script, StringComparison.Ordinal);
+        Assert.Contains("exit /b %ERRORLEVEL%", script, StringComparison.Ordinal);
+
+        string fallback = GatewayLauncherScript.CreateFallback(
+            @"C:\Users\50%off\AppData\Local\Packages\OpenClaw\gateway.cmd");
+        Assert.Contains(
+            @"call ""C:\Users\50%%off\AppData\Local\Packages\OpenClaw\gateway.cmd""",
+            fallback,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("50%off", fallback, StringComparison.Ordinal);
+        Assert.Contains("exit /b %ERRORLEVEL%", fallback, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task TheLauncherEntersAControlledWorkingDirectory()
     {
         // At logon the task's working directory is the system directory.
