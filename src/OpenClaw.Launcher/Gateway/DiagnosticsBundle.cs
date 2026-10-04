@@ -253,6 +253,20 @@ internal sealed partial class GatewayRuntime
         }
     }
 
+    /// <summary>
+    /// Staged agent logs use the same tail cap as gateway launch logs.
+    /// </summary>
+    /// <remarks>
+    /// The guest workspace copy is unbounded. Reading a log to the end keeps
+    /// the whole file in memory, so a large agent log fails the bundle
+    /// instead of producing one. Configuration files stay complete.
+    /// </remarks>
+    private static int? AgentLogByteLimit(string entryName) =>
+        entryName.StartsWith("agent/", StringComparison.OrdinalIgnoreCase) &&
+        entryName.EndsWith(".log", StringComparison.OrdinalIgnoreCase)
+            ? MaximumGatewayFileBytes
+            : null;
+
     private static string? GatewayLaunchStem(string fileName) =>
         fileName.EndsWith(GatewayStatusSuffix, StringComparison.OrdinalIgnoreCase)
             ? fileName[..^GatewayStatusSuffix.Length]
@@ -522,7 +536,7 @@ internal sealed partial class GatewayRuntime
         return files;
     }
 
-    private static void AddEntry(
+    internal static void AddEntry(
         ZipArchive archive,
         string name,
         string path,
@@ -530,6 +544,7 @@ internal sealed partial class GatewayRuntime
         SessionWorkspaceOperation? operation = null,
         int? maximumBytes = null)
     {
+        maximumBytes ??= AgentLogByteLimit(name);
         string fileName = Path.GetFileName(path);
 
         // The guest already refused these. Re-checking here covers host-side
