@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -387,6 +388,95 @@ public sealed class SessionInspectorTests
         {
             GuestProcessObserverTests.Kill(child);
         }
+    }
+
+    [Fact]
+    public void AccessDeniedMeansTheRecordedPidIsNotOurProcess()
+    {
+        using Process child = StartHolder();
+        try
+        {
+            SessionInspectResult result = SessionInspector.Inspect(
+                RequestFor(child),
+                _ => throw new FileNotFoundException(),
+                probeAccess: _ => throw new Win32Exception(5));
+
+            Assert.True(result.ProcessFound);
+            Assert.False(result.StartTimeMatches);
+            Assert.Null(result.Error);
+            Assert.False(result.IsOwnedAndHealthy);
+            Assert.False(child.HasExited);
+        }
+        finally
+        {
+            GuestProcessObserverTests.Kill(child);
+        }
+    }
+
+    [Fact]
+    public void AccessDeniedDoesNotStopAnotherAccountsProcess()
+    {
+        using Process child = StartHolder();
+        try
+        {
+            SessionInspectResult result = SessionTerminator.Stop(
+                RequestFor(child),
+                _ => throw new FileNotFoundException(),
+                _ => throw new Win32Exception(5));
+
+            Assert.True(result.ProcessFound);
+            Assert.False(result.StartTimeMatches);
+            Assert.Null(result.Error);
+            Assert.False(child.HasExited);
+        }
+        finally
+        {
+            GuestProcessObserverTests.Kill(child);
+        }
+    }
+
+    [Fact]
+    public void ADifferentWin32FailureStaysAnUnknownInspection()
+    {
+        using Process child = StartHolder();
+        try
+        {
+            SessionInspectResult inspected = SessionInspector.Inspect(
+                RequestFor(child),
+                _ => throw new FileNotFoundException(),
+                probeAccess: _ => throw new Win32Exception(6));
+            SessionInspectResult stopped = SessionTerminator.Stop(
+                RequestFor(child),
+                _ => throw new FileNotFoundException(),
+                _ => throw new Win32Exception(6));
+
+            Assert.False(inspected.ProcessFound);
+            Assert.NotNull(inspected.Error);
+            Assert.NotNull(stopped.Error);
+            Assert.False(child.HasExited);
+        }
+        finally
+        {
+            GuestProcessObserverTests.Kill(child);
+        }
+    }
+
+    private static Process StartHolder()
+    {
+        string windowsCmd = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.System),
+            "cmd.exe");
+        if (File.Exists(windowsCmd))
+        {
+            return GuestProcessObserverTests.StartLongRunningProcess();
+        }
+
+        return Process.Start(new ProcessStartInfo
+        {
+            FileName = "/bin/sleep",
+            ArgumentList = { "30" },
+            UseShellExecute = false
+        })!;
     }
 
     [Fact]

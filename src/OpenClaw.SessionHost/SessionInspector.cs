@@ -16,6 +16,8 @@ namespace OpenClaw.SessionHost;
 /// </remarks>
 internal static class SessionInspector
 {
+    private const int ErrorAccessDenied = 5;
+
     public static int Run(
         string requestPath,
         Func<string, string> readFile,
@@ -46,7 +48,8 @@ internal static class SessionInspector
     internal static SessionInspectResult Inspect(
         SessionInspectRequest request,
         Func<string, string> readFile,
-        Func<IReadOnlyDictionary<int, ulong>>? captureSequences = null)
+        Func<IReadOnlyDictionary<int, ulong>>? captureSequences = null,
+        Action<Process>? probeAccess = null)
     {
         if (request.LaunchPending)
         {
@@ -65,7 +68,15 @@ internal static class SessionInspector
         try
         {
             using Process process = Process.GetProcessById(request.ProcessId);
-            _ = process.Handle;
+            if (ProbeDeniesAccess(process, probeAccess))
+            {
+                // The identifier is live, but this account cannot open it.
+                // After reboot that PID often belongs to another account.
+                // Reporting the denial as an inspection failure leaves start,
+                // stop, and logon recovery wedged until teardown --force.
+                return NotOurProcess(request);
+            }
+
             if (process.HasExited)
             {
                 return NotFound(request, readFile);
@@ -126,6 +137,35 @@ internal static class SessionInspector
             exception is Win32Exception or InvalidOperationException or NotSupportedException or InvalidDataException)
         {
             return new SessionInspectResult { RequestId = request.RequestId, Error = exception.Message };
+        }
+    }
+
+    internal static SessionInspectResult NotOurProcess(SessionInspectRequest request) =>
+        new()
+        {
+            RequestId = request.RequestId,
+            ProcessFound = true,
+            StartTimeMatches = false
+        };
+
+    internal static bool ProbeDeniesAccess(Process process, Action<Process>? probeAccess = null)
+    {
+        try
+        {
+            if (probeAccess is not null)
+            {
+                probeAccess(process);
+            }
+            else
+            {
+                _ = process.Handle;
+            }
+
+            return false;
+        }
+        catch (Win32Exception exception) when (exception.NativeErrorCode == ErrorAccessDenied)
+        {
+            return true;
         }
     }
 

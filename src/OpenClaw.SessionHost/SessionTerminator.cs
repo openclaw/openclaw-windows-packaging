@@ -42,12 +42,17 @@ internal static class SessionTerminator
 
     internal static SessionInspectResult Stop(
         SessionInspectRequest request,
-        Func<string, string> readFile)
+        Func<string, string> readFile,
+        Action<Process>? probeAccess = null)
     {
         try
         {
             using Process process = Process.GetProcessById(request.ProcessId);
-            _ = process.Handle;
+            if (SessionInspector.ProbeDeniesAccess(process, probeAccess))
+            {
+                return SessionInspector.NotOurProcess(request);
+            }
+
             if (process.HasExited)
             {
                 return new SessionInspectResult { RequestId = request.RequestId };
