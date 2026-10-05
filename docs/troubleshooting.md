@@ -384,9 +384,30 @@ its workspace, but cannot read a path on your computer or collect from that
 computer through an unrelated runner. If the target is elsewhere, supply its
 diagnostics or collect there; this machine's state is not a substitute.
 
-The report inventories component versions and evidence coverage, explains
-findings and a supported root cause (or explicit hypotheses), and checks
-public GitHub issues, fixes, and releases separately, with context links.
+The report leads with findings and next steps, including verified recovery or
+workaround commands when available and their prerequisites, effects, and
+success checks. Supporting versions, evidence, and related issue/fix/release
+links follow at the bottom. Once the evidence conclusively identifies the
+issue and a useful next action, the agent stops rather than collecting
+unnecessary context. A known issue whose fix is not yet available needs a
+clear answer, not another bundle or a complete version inventory.
+
+When further investigation is needed, the agent provides copy/pastable,
+targeted steps near the top of the report and offers to save a handoff Markdown
+file at a new path you choose. The handoff includes the incident facts,
+remaining questions, essential Windows packaging context, full source links,
+and a starter prompt for another Copilot session. It does not require that
+session to know this conversation, have this agent installed, or have a source
+checkout or GitHub access. Supply the referenced evidence files with it.
+
+The handoff guides that session toward a supported resolution or, if the
+problem remains unresolved, a reviewed evidence package with findings,
+relevant original/new diagnostics, collection warnings, and precise remaining
+gaps. Collection, state-changing reproduction/recovery, and evidence-package
+creation require explicit authorization; neither documents nor packages are
+written or uploaded automatically.
+
+The agent checks public GitHub issues, fixes, and releases separately.
 It distinguishes an upstream fix from its adoption into a Windows package,
 and a GitHub sideload release from unverified Store availability. Missing
 evidence results in targeted requests for source-machine context or specific
