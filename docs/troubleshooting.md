@@ -354,18 +354,35 @@ registration, and the agent account.
 
 The repository includes a
 [`collect-logs-investigator` agent](../.github/agents/collect-logs-investigator.agent.md)
-for local, read-only investigation. Start GitHub Copilot CLI from this checkout,
-select the agent, then supply an accessible ZIP path or file mention:
+for evidence-based investigation. In GitHub Copilot CLI, select the agent and
+provide a file or folder accessible to that session. For example, with a ZIP
+in your current directory:
 
 ```text
 /agent collect-logs-investigator
-Investigate @E:\logs\openclaw-diagnostics.zip
+Investigate @.\openclaw-diagnostics.zip
 ```
+
+You can instead specify a folder containing a ZIP, an extracted bundle, or
+diagnostic logs, or supply a single log file. With several bundles, give a
+timeframe or name the one to investigate; the agent will ask rather than
+silently choose the newest or combine unrelated incidents. No fixed drive or
+logs directory is required.
+
+To collect and investigate on the machine where the agent runs, explicitly
+request it, for example: "Run `clawctl collect-logs` on this machine and
+investigate the result." The agent uses `clawctl collect-logs --json`, validates
+the returned ZIP, and preserves it. Collection can start the recorded session
+and write/stage diagnostics; it is not a passive operation. The agent will not
+collect merely because no input was provided, install missing tools, or run
+other package lifecycle commands.
 
 You can add guidance, such as the failing command, expected result, approximate
 failure time and timezone, or whether the run happened on a VM. Guidance is
-optional. The ZIP must be accessible to the local CLI; a GitHub-hosted agent
-cannot read a path on your computer.
+optional. A GitHub-hosted agent can investigate evidence made accessible in
+its workspace, but cannot read a path on your computer or collect from that
+computer through an unrelated runner. If the target is elsewhere, supply its
+diagnostics or collect there; this machine's state is not a substitute.
 
 The report inventories component versions and evidence coverage, explains
 findings and a supported root cause (or explicit hypotheses), and checks
@@ -374,14 +391,16 @@ It distinguishes an upstream fix from its adoption into a Windows package,
 and a GitHub sideload release from unverified Store availability. Missing
 evidence results in targeted requests for source-machine context or specific
 `collect-logs`/logging improvement recommendations, not a guessed diagnosis.
-If the ZIP is missing or unreadable, provide its accessible path; if public
+If evidence is missing or unreadable, provide an accessible file/folder or
+explicitly request collection on the correct machine; if public
 GitHub access is unavailable, release and issue status remains unverified.
 
 Review the ZIP before supplying it: best-effort redaction can leave private
 information. Copilot processes the supplied content; "local" describes where
 the CLI reads the file, not offline model processing. The agent does not upload
-the ZIP to issue trackers, execute its contents, run `clawctl` probes, or change
-package/session state. It uses sanitized signatures for public GitHub searches
+the ZIP to issue trackers or execute its contents. Except for explicitly
+requested collection, it does not run package commands or change package/session
+state. It uses sanitized signatures for public GitHub searches
 and does not treat this computer's installed state as evidence of another
 machine's failure.
 
