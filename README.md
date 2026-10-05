@@ -136,7 +136,7 @@ it enabled.
 | `clawctl pwsh` | Open an interactive PowerShell session inside the agent session. |
 | `clawctl pwsh --command <text>` | Run one quoted PowerShell command string inside the agent session and return its exit code. |
 | `clawctl pwsh --file <path> [-- <arguments>]` | Run an agent-visible PowerShell script and return its exit code. Relative paths start in the shared folder reported by `clawctl status`; use `--` before script arguments that begin with `-`. |
-| `clawctl collect-logs [--output <path>]` | Create a redacted host-and-agent diagnostics ZIP. |
+| `clawctl collect-logs [--output <path>]` | Create a redacted host-and-agent diagnostics ZIP. See [local Copilot bundle investigation](docs/troubleshooting.md#investigating-a-bundle-with-copilot-cli). |
 | `clawctl gateway-service start` | Start the OpenClaw gateway in the isolated session and wait for it to listen. Requires setup. |
 | `clawctl gateway-service status` | Inspect the gateway without starting it. When the gateway is not running, it may start/probe only the already-recorded isolated session to report file-only config readiness; it never provisions a replacement or starts the gateway. |
 | `clawctl gateway-service stop` | Stop the gateway while retaining the session and its data. |

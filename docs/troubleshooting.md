@@ -350,6 +350,41 @@ collector does not enumerate arbitrary agent-profile files. The host log and
 manifest also name local paths, such as the install location of a loose-layout
 registration, and the agent account.
 
+## Investigating a bundle with Copilot CLI
+
+The repository includes a
+[`collect-logs-investigator` agent](../.github/agents/collect-logs-investigator.agent.md)
+for local, read-only investigation. Start GitHub Copilot CLI from this checkout,
+select the agent, then supply an accessible ZIP path or file mention:
+
+```text
+/agent collect-logs-investigator
+Investigate @E:\logs\openclaw-diagnostics.zip
+```
+
+You can add guidance, such as the failing command, expected result, approximate
+failure time and timezone, or whether the run happened on a VM. Guidance is
+optional. The ZIP must be accessible to the local CLI; a GitHub-hosted agent
+cannot read a path on your computer.
+
+The report inventories component versions and evidence coverage, explains
+findings and a supported root cause (or explicit hypotheses), and checks
+public GitHub issues, fixes, and releases separately, with context links.
+It distinguishes an upstream fix from its adoption into a Windows package,
+and a GitHub sideload release from unverified Store availability. Missing
+evidence results in targeted requests for source-machine context or specific
+`collect-logs`/logging improvement recommendations, not a guessed diagnosis.
+If the ZIP is missing or unreadable, provide its accessible path; if public
+GitHub access is unavailable, release and issue status remains unverified.
+
+Review the ZIP before supplying it: best-effort redaction can leave private
+information. Copilot processes the supplied content; "local" describes where
+the CLI reads the file, not offline model processing. The agent does not upload
+the ZIP to issue trackers, execute its contents, run `clawctl` probes, or change
+package/session state. It uses sanitized signatures for public GitHub searches
+and does not treat this computer's installed state as evidence of another
+machine's failure.
+
 ## Bug report collection checklist
 
 Attach the reviewed diagnostics ZIP, the exact command and complete output,
