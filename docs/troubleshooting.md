@@ -394,7 +394,13 @@ clear answer, not another bundle or a complete version inventory.
 
 When further investigation is needed, the agent provides copy/pastable,
 targeted steps near the top of the report and offers to save a handoff Markdown
-file at a new path you choose. The handoff includes the incident facts,
+file at a new path you choose. Unresolved reports use an explicit order:
+finding, next steps, a fenced incident-specific investigation prompt, the
+handoff-file offer, then supporting context. A recovery/workaround command
+does not replace that prompt when the cause still needs investigation.
+Knowing the rejected operation or error code is not a conclusive causal
+explanation; unknown credential or pairing history still requires this flow.
+The handoff includes the incident facts,
 remaining questions, essential Windows packaging context, full source links,
 and a starter prompt for another Copilot session. It does not require that
 session to know this conversation, have this agent installed, or have a source
