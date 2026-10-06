@@ -17,8 +17,8 @@ internal sealed record ClawCtlHandlers
     public required Func<CancellationToken, Task<int>> GatewayStatus { get; init; }
     public required Func<CancellationToken, Task<int>> GatewayStop { get; init; }
     public required Func<CancellationToken, Task<int>> GatewayRestart { get; init; }
-    public Func<int, bool, CancellationToken, Task<int>> CompanionPrepare { get; init; } =
-        (_, _, _) => Task.FromResult(1);
+    public Func<int, bool, bool, CancellationToken, Task<int>> CompanionPrepare { get; init; } =
+        (_, _, _, _) => Task.FromResult(1);
 }
 
 internal sealed record SetupOptions(bool Fresh, bool Force);
@@ -358,9 +358,14 @@ internal static class ClawCtlCommandLine
         {
             Description = "Read the agent's effective port and token without changing configuration or health observations."
         };
+        Option<bool> companionRestoreToken = new("--restore-token-stdin")
+        {
+            Description = "Restore Companion's saved token from standard input when the agent config has no token."
+        };
         Option<bool> companionJson = CreateJsonOption();
         companionPrepare.Options.Add(companionPort);
         companionPrepare.Options.Add(companionCheck);
+        companionPrepare.Options.Add(companionRestoreToken);
         companionPrepare.Options.Add(companionJson);
         companionPrepare.Validators.Add(result =>
         {
@@ -369,13 +374,18 @@ internal static class ClawCtlCommandLine
             {
                 result.AddError("'--port' requires a TCP port from 1 through 65535.");
             }
+            if (result.GetValue(companionCheck) && result.GetValue(companionRestoreToken))
+            {
+                result.AddError("'--restore-token-stdin' cannot be combined with '--check'.");
+            }
         });
         companionPrepare.SetAction((parsed, token) =>
         {
             outputOptions.Json = IsJsonRequested(parsed, rootJson, companionJson);
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.CompanionPrepare(
-                parsed.GetValue(companionPort), parsed.GetValue(companionCheck), token);
+                parsed.GetValue(companionPort), parsed.GetValue(companionCheck),
+                parsed.GetValue(companionRestoreToken), token);
         });
         companion.Subcommands.Add(companionPrepare);
 

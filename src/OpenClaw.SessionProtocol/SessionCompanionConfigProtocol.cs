@@ -18,6 +18,9 @@ public sealed record SessionCompanionConfigRequest
     [JsonPropertyName("checkOnly")]
     public bool CheckOnly { get; init; }
 
+    [JsonPropertyName("token")]
+    public string? Token { get; init; }
+
     [JsonPropertyName("nodePath")]
     public string? NodePath { get; init; }
 
@@ -75,6 +78,10 @@ public static class SessionCompanionConfigProtocol
             ? request.Port is >= 0 and <= 65535
             : request.Port is >= 1 and <= 65535;
         if (!IsSafeRequestId(request.RequestId) || !hasValidPort ||
+            (request.Token is not null &&
+             (request.CheckOnly || string.IsNullOrWhiteSpace(request.Token) ||
+              request.Token.Length > 4096 ||
+              request.Token.Any(char.IsControl))) ||
             request.NodePath is not { Length: > 0 } ||
             !Path.IsPathFullyQualified(request.NodePath) ||
             request.ApplicationDirectory is not { Length: > 0 } ||

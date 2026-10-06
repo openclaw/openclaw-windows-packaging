@@ -160,7 +160,8 @@ internal static class SessionCompanionConfig
         }
 
         int port = existingPort ?? request.Port;
-        string token = existingToken ?? Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+        string token = existingToken ?? request.Token ??
+            Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         string patchPath = Path.Combine(
             Path.GetDirectoryName(configPath)!,
             ".companion-config-" + Guid.NewGuid().ToString("N") + ".json");

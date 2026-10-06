@@ -102,7 +102,8 @@ internal sealed record GatewayCommandResult(
     AgentConfigReadinessStatus? Readiness = null,
     string? SandboxId = null,
     string? AgentUserSid = null,
-    IReadOnlyList<OpenClaw.SessionProtocol.SessionOwnedListener>? OwnedListeners = null) : IClawCtlResult
+    IReadOnlyList<OpenClaw.SessionProtocol.SessionOwnedListener>? OwnedListeners = null,
+    SessionAvailability? SessionAvailability = null) : IClawCtlResult
 {
     public string Command => $"gateway-service {Action}";
 }

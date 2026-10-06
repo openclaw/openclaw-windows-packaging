@@ -185,7 +185,7 @@ public sealed class ClawCtlCommandLineTests
             GatewayStatus = _ => Task.FromResult(0),
             GatewayStop = _ => Task.FromResult(0),
             GatewayRestart = _ => Task.FromResult(0),
-            CompanionPrepare = (port, checkOnly, _) =>
+            CompanionPrepare = (port, checkOnly, _, _) =>
             {
                 receivedPort = port;
                 receivedCheckOnly = checkOnly;
@@ -198,6 +198,35 @@ public sealed class ClawCtlCommandLineTests
         Assert.Equal(0, exitCode);
         Assert.Equal(0, receivedPort);
         Assert.True(receivedCheckOnly);
+    }
+
+    [Fact]
+    public async Task CompanionRestoreTokenUsesTheExplicitStdinOption()
+    {
+        bool receivedRestoreToken = false;
+        RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
+        {
+            Setup = (_, _) => Task.FromResult(0),
+            Status = _ => Task.FromResult(0),
+            CollectLogs = (_, _) => Task.FromResult(0),
+            Teardown = (_, _) => Task.FromResult(0),
+            PowerShell = (_, _) => Task.FromResult(0),
+            GatewayStart = (_, _) => Task.FromResult(0),
+            GatewayStatus = _ => Task.FromResult(0),
+            GatewayStop = _ => Task.FromResult(0),
+            GatewayRestart = _ => Task.FromResult(0),
+            CompanionPrepare = (_, _, restoreToken, _) =>
+            {
+                receivedRestoreToken = restoreToken;
+                return Task.FromResult(0);
+            }
+        });
+
+        int exitCode = await root.Parse(
+            "companion prepare --port 19001 --restore-token-stdin --json").InvokeAsync();
+
+        Assert.Equal(0, exitCode);
+        Assert.True(receivedRestoreToken);
     }
 
     [Fact]

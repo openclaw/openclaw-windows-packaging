@@ -119,6 +119,20 @@ public sealed class SessionCompanionConfigTests : IDisposable
     }
 
     [Fact]
+    public void MissingAgentConfigRestoresCompanionsSavedToken()
+    {
+        int exitCode = Run(Request() with { Token = "saved-companion-token" }, ApplyPatch);
+
+        Assert.Equal(0, exitCode);
+        SessionCompanionConfigResult result = SessionCompanionConfigProtocol.ReadResult(
+            File.ReadAllText(ResultPath), "companion-1");
+        Assert.Equal("saved-companion-token", result.Token);
+        using JsonDocument persisted = JsonDocument.Parse(File.ReadAllText(ConfigPath));
+        Assert.Equal("saved-companion-token", persisted.RootElement.GetProperty("gateway")
+            .GetProperty("auth").GetProperty("token").GetString());
+    }
+
+    [Fact]
     public void ExistingAgentConfigPreservesPortTokenAndUnrelatedSettings()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath)!);

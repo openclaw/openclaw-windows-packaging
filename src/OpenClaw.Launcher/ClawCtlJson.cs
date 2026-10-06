@@ -256,6 +256,9 @@ internal static class ClawCtlJson
                 true,
                 SchemaVersion,
                 result.Command,
+                Session: result.SessionAvailability is { } successAvailability
+                    ? new ClawCtlJsonSession(DescribeSession(successAvailability))
+                    : null,
                 Gateway: new ClawCtlJsonGateway(
                     DescribeGateway(result.State),
                     result.Port,
@@ -271,6 +274,9 @@ internal static class ClawCtlJson
                 false,
                 SchemaVersion,
                 result.Command,
+                Session: result.SessionAvailability is { } failureAvailability
+                    ? new ClawCtlJsonSession(DescribeSession(failureAvailability))
+                    : null,
                 Gateway: result.Readiness is null
                     ? null
                     : new ClawCtlJsonGateway(

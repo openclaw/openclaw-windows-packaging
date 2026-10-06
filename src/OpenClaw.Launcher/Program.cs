@@ -514,7 +514,8 @@ internal static class Program
         TimeProvider? clock = null,
         Func<string, Task>? launchBrowserAsync = null,
         Action? beforeBrowserValidation = null,
-        string? environment = null)
+        string? environment = null,
+        Func<CancellationToken, Task<string?>>? readInputLine = null)
     {
         Session.IInstallationLifecycle lifecycle =
             installationLifecycle ?? Session.InstallationLifecycle.Production;
@@ -964,9 +965,10 @@ internal static class Program
                                     cancellationToken)
                                 .ConfigureAwait(false);
                             Session.AgentConfigReadinessStatus? configReadiness = null;
+                            Session.SessionStatus? session = null;
                             if (result.State != Gateway.GatewayState.Running)
                             {
-                                Session.SessionStatus session =
+                                session =
                                     await sessionRuntime.Coordinator
                                         .ProbeRecordedStatusAsync(cancellationToken)
                                         .ConfigureAwait(false);
@@ -994,7 +996,8 @@ internal static class Program
                                 Readiness: configReadiness,
                                 SandboxId: result.SandboxId,
                                 AgentUserSid: result.AgentUserSid,
-                                OwnedListeners: result.OwnedListeners);
+                                OwnedListeners: result.OwnedListeners,
+                                SessionAvailability: session?.Availability);
                         }).ConfigureAwait(false);
                     return WriteResult(commandResult);
                 },
@@ -1046,10 +1049,19 @@ internal static class Program
 
                     return WriteGatewayStartResult("restart", result.Start);
                 },
-                CompanionPrepare = async (port, checkOnly, cancellationToken) =>
+                CompanionPrepare = async (port, checkOnly, restoreToken, cancellationToken) =>
                 {
                     try
                     {
+                        string? token = restoreToken
+                            ? await (readInputLine ?? ReadRedirectedInputLineAsync)(cancellationToken)
+                                .ConfigureAwait(false)
+                            : null;
+                        if (restoreToken && string.IsNullOrEmpty(token))
+                        {
+                            throw new Session.SessionException(
+                                "Companion did not provide a token on standard input.");
+                        }
                         Session.SessionRuntime runtime = GetSessionRuntime();
                         Session.SessionRecord record = await runtime.StartForExecutionAsync(cancellationToken)
                             .ConfigureAwait(false);
@@ -1068,6 +1080,7 @@ internal static class Program
                                 nativeRoot is null ? null : ResolveNativeRedirectPreloadPath(),
                                 CompanionEnvironment(applicationDirectory, nativeRoot),
                                 checkOnly,
+                                token,
                                 cancellationToken).ConfigureAwait(false);
                         return WriteResult(new CompanionPrepareResult(0, result.Port, result.Token));
                     }
@@ -1100,6 +1113,25 @@ internal static class Program
             .Parse(args, ClawCtlCommandLine.CreateParserConfiguration())
             .InvokeAsync(configuration)
             .ConfigureAwait(false);
+    }
+
+    private static async Task<string?> ReadRedirectedInputLineAsync(
+        CancellationToken cancellationToken)
+    {
+        if (!Console.IsInputRedirected)
+        {
+            throw new Session.SessionException(
+                "'--restore-token-stdin' requires redirected standard input.");
+        }
+
+        using Stream input = Console.OpenStandardInput();
+        using var reader = new StreamReader(
+            input,
+            Console.InputEncoding,
+            detectEncodingFromByteOrderMarks: true,
+            bufferSize: 1024,
+            leaveOpen: false);
+        return await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
     }
 
     internal static Task LaunchBrowserAsync(
