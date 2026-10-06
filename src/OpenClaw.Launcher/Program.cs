@@ -2,6 +2,7 @@ using System.CommandLine;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Text;
 using OpenClaw.SessionProtocol;
 
 namespace OpenClaw.Launcher;
@@ -1124,14 +1125,49 @@ internal static class Program
                 "'--restore-token-stdin' requires redirected standard input.");
         }
 
-        using Stream input = Console.OpenStandardInput();
-        using var reader = new StreamReader(
+        Stream input = Console.OpenStandardInput();
+        return await ReadInputLineAsync(input, Console.InputEncoding, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    [SuppressMessage(
+        "Reliability",
+        "CA2000:Dispose objects before losing scope",
+        Justification =
+            "Cancellation must return without waiting for the Windows console read. " +
+            "The read completion continuation owns and disposes the reader on that path.")]
+    internal static async Task<string?> ReadInputLineAsync(
+        Stream input,
+        Encoding encoding,
+        CancellationToken cancellationToken)
+    {
+        var reader = new StreamReader(
             input,
-            Console.InputEncoding,
+            encoding,
             detectEncodingFromByteOrderMarks: true,
             bufferSize: 1024,
             leaveOpen: false);
-        return await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+        Task<string?> read = reader.ReadLineAsync(CancellationToken.None).AsTask();
+        try
+        {
+            return await read.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (read.IsCompleted)
+            {
+                reader.Dispose();
+            }
+            else
+            {
+                _ = read.ContinueWith(
+                    static (_, state) => ((StreamReader)state!).Dispose(),
+                    reader,
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
+        }
     }
 
     internal static Task LaunchBrowserAsync(
