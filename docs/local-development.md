@@ -356,12 +356,11 @@ real account, package registration, or scheduled task is involved.
 The fixture captures actual embedded-runner requests before the first tool,
 through a forced context-overflow/compaction retry, on the next turn, and in
 new, subagent-key, and cron-key sessions. It checks the complete two-sentence
-instruction block in both system and user context rather than just hook
-registration; user context is the fallback for the pinned runtime's replacement
-of system additions on runtime-only turns. It also checks plugin/hook opt-outs and
-unchanged user configuration and instruction files. It does not schedule cron
-jobs, spawn remote agents, evaluate model obedience, or prove attachment
-delivery/user-side filesystem access.
+instruction block exactly once in system context and verifies that it is absent
+from user context, rather than just checking hook registration. It also checks
+plugin/hook opt-outs and unchanged user configuration and instruction files.
+It does not schedule cron jobs, spawn remote agents, evaluate model obedience,
+or prove attachment delivery/user-side filesystem access.
 
 The same lane verifies the skill's advertised packaged location, absence of
 eager body injection, and complete on-demand reads of `SKILL.md` and both branch
@@ -407,18 +406,15 @@ For in-chat requests, require a new attachment from the tested response before
 checking downloaded bytes; an older card cannot satisfy the case. Record
 corrective prompts and browser reloads separately from first-pass delivery.
 
-The plugin uses `before_prompt_build` with `appendSystemContext` and
-`prependContext`, both derived from the same static instructions. System context
-states the host constraints at instruction priority; real-model testing showed
+The plugin uses `before_prompt_build` with `appendSystemContext` to supply
+static instructions without adding a user-context copy. System context states
+the host constraints at instruction priority; real-model testing showed
 that user context alone could reach the model yet still be ignored. The user
 interaction rule covers both launching and offering an unusable local dialog;
-validate proposed next steps as well as tool calls in real-model scenarios. The user
-copy remains a compatibility fallback because the previously qualified v2026.9.4 runtime
-can replace system-context additions on runtime-only events. Remove that
-fallback only after the selected runtime preserves system context through
-those events and the request-boundary proof covers them. Until then,
-this lane does not synthesize those events or qualify external CLI/realtime
-backends. Raw-model and settled-finalization operations omit prompt hooks.
+validate proposed next steps as well as tool calls in real-model scenarios.
+This lane does not synthesize internal runtime events or qualify external
+CLI/realtime backends. Raw-model and settled-finalization operations omit prompt
+hooks.
 Do not treat successful registration as universal context coverage. Repeat
 the request-boundary proof when the approved runtime changes.
 

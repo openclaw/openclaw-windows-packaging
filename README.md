@@ -507,11 +507,8 @@ is exactly `enabled`. Its `before_prompt_build` hook supplies two sentences
 explaining that local windows are invisible to the user, local file access does
 not imply user access, and essential credential, MFA/consent, ACL/isolation,
 human-GUI, and private-workspace prohibitions apply before any skill is loaded.
-Procedural detail stays in the skill. Static guidance belongs in
-`appendSystemContext`; the plugin also returns
-`prependContext` as a fallback because the pinned OpenClaw v2026.9.4 runtime can
-replace system additions on runtime-only turns. This duplicates the short block
-on ordinary turns. Remove the fallback only after a runtime fix is verified.
+Procedural detail stays in the skill. Static guidance is appended through
+`appendSystemContext`, without duplicating it in the user prompt.
 This is guidance, not isolation enforcement or a file-export feature; it does
 not overwrite workspace instructions or configuration.
 It is not a blanket prohibition on agent-only GUI work.

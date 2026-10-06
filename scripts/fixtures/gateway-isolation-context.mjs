@@ -52,7 +52,7 @@ let instructions;
 createGatewayIsolationPlugin({ CLAWCTL_GATEWAY_ISOLATION: "enabled" }, "win32").register({
   on(name, handler) {
     assert.equal(name, "before_prompt_build");
-    instructions = handler().prependContext;
+    instructions = handler().appendSystemContext;
   },
   session: { controls: { registerControlUiDescriptor() {} } },
   registerHttpRoute() {},
@@ -110,9 +110,10 @@ const server = http.createServer(async (request, response) => {
       }
       for (const roles of [["system", "developer"], ["user"]]) {
         const rendered = JSON.stringify(body.messages.filter(message => roles.includes(message.role)));
-        assert.equal(rendered.split("## Windows agent session").length - 1, scenario.guidance ? 1 : 0,
-          `Each tool-bearing request must have one instruction block in ${roles.join("/")} context.`);
-        if (scenario.guidance) {
+        const expectedBlocks = scenario.guidance && roles.includes("system") ? 1 : 0;
+        assert.equal(rendered.split("## Windows agent session").length - 1, expectedBlocks,
+          `Each tool-bearing request must have ${expectedBlocks} instruction blocks in ${roles.join("/")} context.`);
+        if (expectedBlocks > 0) {
           assert.ok(rendered.includes(JSON.stringify(instructions).slice(1, -1)),
             "The entire instruction block must reach the model, not just its heading.");
         }
@@ -197,7 +198,7 @@ const config = {
     },
   },
   plugins: { allow: ["gateway-isolation", "openai"] },
-  tools: { allow: ["read"] },
+  tools: { allow: ["read"], toolSearch: false, codeMode: false },
   logging: { file: path.join(root, "runtime.log") },
 };
 const env = {};

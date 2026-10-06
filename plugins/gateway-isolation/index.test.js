@@ -45,26 +45,23 @@ function registerPlugin(mode, platform = "win32") {
   return { descriptors, routes, hooks };
 }
 
-test("supplies brief local-session guidance with the pinned runtime fallback without reading the conversation", () => {
+test("supplies brief system-only local-session guidance without reading the conversation", () => {
   const { hooks } = registerPlugin("enabled");
   assert.deepEqual(hooks.map(hook => hook.name), ["before_prompt_build"]);
   const unreadable = new Proxy({}, {
     get() { throw new Error("Static guidance must not inspect conversation data."); },
   });
   const result = hooks[0].handler(unreadable, unreadable);
-  assert.deepEqual(Object.keys(result), ["prependContext", "appendSystemContext"]);
-  const text = result.prependContext;
-  assert.equal(result.appendSystemContext, text);
-  assert.ok(text.length <= 600, "Static guidance must remain brief even with the runtime fallback.");
+  assert.deepEqual(Object.keys(result), ["appendSystemContext"]);
+  const text = result.appendSystemContext;
+  assert.ok(text.length <= 600, "Static guidance must remain brief.");
   assert.deepEqual(text.split("\n\n"), [
     "## Windows agent session",
     "The Gateway and local tools run in an isolated Windows agent session, not the user's desktop: local windows are invisible to the user, and local file access does not imply user access.",
     "Do not solicit or expose credentials/tokens, bypass MFA/consent, alter ACLs/isolation, open local GUI for human participation, or export private workspaces; consult windows-agent-handoff for supported GUI, sign-in, and verified nonsensitive file delivery.",
   ]);
   assert.deepEqual(hooks[0].handler(), result);
-  result.prependContext = "caller mutation";
   result.appendSystemContext = "caller mutation";
-  assert.equal(hooks[0].handler().prependContext, text);
   assert.equal(hooks[0].handler().appendSystemContext, text);
 });
 

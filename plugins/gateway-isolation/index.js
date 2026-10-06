@@ -387,9 +387,7 @@ export function createGatewayIsolationPlugin(env = process.env, platform = proce
     description: "Reports Windows isolation status and supplies local-session agent guidance.",
     register(api) {
       if (platform === "win32" && launchMode === "enabled") {
-        // Keep the user-context fallback: v2026.9.4 replaces system additions on runtime-only turns.
         api.on("before_prompt_build", () => ({
-          prependContext: ISOLATION_AGENT_CONTEXT,
           appendSystemContext: ISOLATION_AGENT_CONTEXT,
         }));
       }

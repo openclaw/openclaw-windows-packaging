@@ -46,10 +46,10 @@ if (args[0] === "--version") {
     plugin.register({
       on(name, handler) {
         hooks.push({ name });
-        assert.deepEqual(Object.keys(handler()), ["prependContext", "appendSystemContext"]);
-        assert.match(handler().prependContext, /isolated Windows agent session/);
-        assert.ok(handler().prependContext.length <= 600, "Packaged guidance must remain brief.");
-        assert.equal(handler().appendSystemContext, handler().prependContext);
+        const result = handler();
+        assert.deepEqual(Object.keys(result), ["appendSystemContext"]);
+        assert.match(result.appendSystemContext, /isolated Windows agent session/);
+        assert.ok(result.appendSystemContext.length <= 600, "Packaged guidance must remain brief.");
       },
       session: {
         controls: {
