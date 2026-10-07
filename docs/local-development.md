@@ -413,6 +413,11 @@ For ordinary managed-code changes, use the contributor quality and test lanes:
 dotnet test .\OpenClaw.Gateway.MSIX.slnx --configuration Release --no-restore
 ```
 
+For CodeQL configuration changes, use the
+[CodeQL analysis suite](../CONTRIBUTING.md#codeql-analysis). It requires a CodeQL
+bundle and checks actual source selection; managed and NativeAOT tests do not
+cover that contract.
+
 Run PowerShell policy suites by owning surface rather than indiscriminately:
 `Test-SigningInputs.Tests.ps1` for signing inputs,
 `Test-NodeRuntimeInputs.Tests.ps1` for Node runtime inputs,
