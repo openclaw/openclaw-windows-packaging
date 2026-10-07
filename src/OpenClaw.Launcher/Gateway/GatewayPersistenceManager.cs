@@ -200,6 +200,24 @@ internal sealed class GatewayPersistenceManager
         if (registration.Succeeded)
         {
             _log($"Registered the logon task '{_identity.Name}'.");
+            // A successful schtasks write is not evidence that its normalized
+            // principal and trigger match. Keep any fallback until read-back proves it.
+            GatewayPersistenceStatus verified = await GetStatusAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (verified.State != GatewayPersistenceState.Ready ||
+                verified.Lane != GatewayPersistenceLane.TaskScheduler)
+            {
+                _log($"Registered logon recovery could not be verified: {DiagnosticFailure.SingleLine(verified.Detail ?? verified.Message)}");
+                return new GatewayPersistenceInstallResult(
+                    verified.State == GatewayPersistenceState.Unknown
+                        ? GatewayPersistenceState.Unknown
+                        : GatewayPersistenceState.ActionRequired,
+                    GatewayPersistenceLane.TaskScheduler,
+                    "The logon task was registered, but its recovery configuration could not be verified.",
+                    Changed: true,
+                    verified.Detail ?? verified.Message,
+                    RepairCommand);
+            }
             _ = RemoveFallback();
             return new GatewayPersistenceInstallResult(
                 GatewayPersistenceState.Ready,
@@ -271,12 +289,16 @@ internal sealed class GatewayPersistenceManager
         }
         else if (!MatchesUserSid(actual.LogonTriggerUserId, desired.LogonTriggerUserId))
         {
-            differences.Add("The logon trigger is scoped to a different user.");
+            differences.Add(
+                $"The logon trigger is scoped to a different user. " +
+                $"Expected '{desired.LogonTriggerUserId}', observed '{actual.LogonTriggerUserId}'.");
         }
 
         if (!Same(actual.UserId, desired.UserId))
         {
-            differences.Add("The task runs as a different user.");
+            differences.Add(
+                $"The task runs as a different user. " +
+                $"Expected '{desired.UserId}', observed '{actual.UserId}'.");
         }
 
         if (!Same(actual.LogonType, desired.LogonType))

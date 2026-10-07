@@ -12,6 +12,8 @@ internal sealed class FakeGatewayTaskScheduler : IGatewayTaskScheduler
 
     public GatewayTaskProbe Probe { get; set; } = GatewayTaskProbe.Missing;
 
+    public GatewayTaskProbe? RegistrationProbe { get; set; }
+
     public GatewayTaskOperation RegisterResult { get; set; } =
         GatewayTaskOperation.Success;
 
@@ -38,6 +40,14 @@ internal sealed class FakeGatewayTaskScheduler : IGatewayTaskScheduler
     {
         Calls.Add($"register:{taskName}");
         RegisteredXml = taskXml;
+        if (RegisterResult.Succeeded)
+        {
+            if (!GatewayTaskDefinition.TryParse(taskXml, out var snapshot, out var detail))
+            {
+                throw new InvalidOperationException(detail);
+            }
+            Probe = RegistrationProbe ?? GatewayTaskProbe.Present(snapshot!);
+        }
         return Task.FromResult(RegisterResult);
     }
 

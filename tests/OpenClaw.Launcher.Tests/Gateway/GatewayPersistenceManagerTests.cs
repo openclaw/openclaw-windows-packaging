@@ -86,6 +86,54 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task SuccessfulRegistrationWithTriggerDriftDoesNotClaimRecoveryIsReady()
+    {
+        _scheduler.RegistrationProbe = GatewayTaskProbe.Present(DesiredSnapshot() with
+        {
+            LogonTriggerUserId = "S-1-5-21-2"
+        });
+        GatewayPersistenceManager manager = CreateManager();
+        Directory.CreateDirectory(StartupFolder);
+        File.WriteAllText(manager.FallbackPath, "existing fallback");
+
+        var result = await manager.InstallAsync(CancellationToken.None);
+
+        Assert.Equal(GatewayPersistenceState.ActionRequired, result.State);
+        Assert.Contains("Expected 'S-1-5-21-1', observed 'S-1-5-21-2'", result.Detail, StringComparison.Ordinal);
+        Assert.Equal(GatewayPersistenceManager.RepairCommand, result.Remediation);
+        Assert.True(File.Exists(manager.FallbackPath));
+        Assert.Single(_scheduler.Calls, call => call.StartsWith("register:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task SuccessfulRegistrationWithUnreadableResultRemainsUnknown()
+    {
+        _scheduler.RegistrationProbe = GatewayTaskProbe.Unreadable("Access is denied.");
+
+        var result = await CreateManager().InstallAsync(CancellationToken.None);
+
+        Assert.Equal(GatewayPersistenceState.Unknown, result.State);
+        Assert.Contains("Access is denied.", result.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RepairReplacesWrongTriggerAndStatusConfirmsTheRegisteredIdentity()
+    {
+        _scheduler.Probe = GatewayTaskProbe.Present(DesiredSnapshot() with
+        {
+            LogonTriggerUserId = "S-1-5-21-2"
+        });
+        var manager = CreateManager();
+
+        var installed = await manager.InstallAsync(CancellationToken.None);
+        var status = await manager.GetStatusAsync(CancellationToken.None);
+
+        Assert.Equal(GatewayPersistenceState.Ready, installed.State);
+        Assert.Equal(GatewayPersistenceState.Ready, status.State);
+        Assert.Equal("S-1-5-21-1", _scheduler.Probe.Snapshot!.LogonTriggerUserId);
+    }
+
+    [Fact]
     public async Task TheRegisteredActionRunsTheLauncherNotTheAliasDirectly()
     {
         // The indirection is the point: the launcher can be rewritten
