@@ -576,7 +576,8 @@ internal static class Program
 
         async Task<T> NarrateOperationAsync<T>(
             ClawCtlProgress initial,
-            Func<IProgress<ClawCtlProgress>, Task<T>> operation)
+            Func<IProgress<ClawCtlProgress>, Task<T>> operation,
+            bool allowLiveStatus = true)
         {
             (bool useColor, IDisposable? restore) = outputOptions.Json
                 ? (false, null)
@@ -588,7 +589,8 @@ internal static class Program
                     useColor,
                     narrate: !outputOptions.Json,
                     initial,
-                    operation).ConfigureAwait(false);
+                    operation,
+                    allowLiveStatus).ConfigureAwait(false);
             }
         }
 
@@ -695,14 +697,26 @@ internal static class Program
                 },
                 Restore = async (restoreOptions, cancellationToken) =>
                 {
-                    StateArchiveCommandResult result = await CreateStateTransfer()
-                        .RestoreAsync(restoreOptions, cancellationToken).ConfigureAwait(false);
+                    StateArchiveCommandResult result = await NarrateOperationAsync(
+                        new ClawCtlProgress(restoreOptions.DryRun
+                            ? "Verifying the state archive and previewing restoration."
+                            : restoreOptions.Rollback
+                                ? "Rolling back interrupted state activation."
+                                : "Preparing protected state restoration."),
+                        _ => CreateStateTransfer().RestoreAsync(restoreOptions, cancellationToken),
+                        allowLiveStatus: restoreOptions.DryRun || restoreOptions.Yes)
+                        .ConfigureAwait(false);
                     return WriteResult(result);
                 },
                 Recover = async (recoverOptions, cancellationToken) =>
                 {
-                    StateArchiveCommandResult result = await CreateStateTransfer()
-                        .RecoverAsync(recoverOptions, cancellationToken).ConfigureAwait(false);
+                    StateArchiveCommandResult result = await NarrateOperationAsync(
+                        new ClawCtlProgress(recoverOptions.DryRun
+                            ? "Inspecting the offline profile for recovery."
+                            : "Preparing protected recovery of the offline profile."),
+                        _ => CreateStateTransfer().RecoverAsync(recoverOptions, cancellationToken),
+                        allowLiveStatus: recoverOptions.DryRun || recoverOptions.Yes)
+                        .ConfigureAwait(false);
                     return WriteResult(result);
                 },
                 Setup = RunSetupCommandAsync,
