@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -387,6 +388,167 @@ public sealed class SessionInspectorTests
         {
             GuestProcessObserverTests.Kill(child);
         }
+    }
+
+    [Fact]
+    public void WindowsQueryHandleRetainsTheRecordedIdentityAfterTheProcessExits()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+        using Process child = GuestProcessObserverTests.StartLongRunningProcess();
+        try
+        {
+            using var pinned = SessionProcessQuery.Open(child.Id);
+            var created = SessionProcessQuery.StartTime(pinned);
+            GuestProcessObserverTests.Kill(child);
+            child.WaitForExit();
+
+            Assert.True(SessionProcessQuery.HasExited(pinned));
+            Assert.Equal(created, SessionProcessQuery.StartTime(pinned));
+        }
+        finally
+        {
+            GuestProcessObserverTests.Kill(child);
+        }
+    }
+
+    [Fact]
+    public void WindowsInspectionQueriesARestrictedOwnedProcessWithoutFullAccess()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+        using Process child = GuestProcessObserverTests.StartLongRunningProcess();
+        try
+        {
+            var request = RequestFor(child);
+            using var permissions = new ProcessAccessScope(child);
+            ProcessAccessScope.WithoutDebugPrivilege(() =>
+            {
+                using Process fresh = Process.GetProcessById(child.Id);
+                Assert.Equal(5, Assert.Throws<Win32Exception>(() => _ = fresh.Handle).NativeErrorCode);
+
+                var inspected = SessionInspector.Inspect(request, _ => throw new FileNotFoundException());
+                var stopped = SessionTerminator.Stop(request, _ => throw new FileNotFoundException());
+
+                Assert.True(inspected.ProcessFound);
+                Assert.True(inspected.StartTimeMatches);
+                Assert.Null(inspected.Error);
+                Assert.NotNull(stopped.Error);
+                Assert.False(child.HasExited);
+            });
+        }
+        finally
+        {
+            GuestProcessObserverTests.Kill(child);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MissingPidSnapshotReconcilesDeniedAccessWithoutSelectingAProcess(bool stopping)
+    {
+        using var current = Process.GetCurrentProcess();
+        var request = new SessionInspectRequest
+        {
+            RequestId = "missing-pid",
+            ProcessId = current.Id,
+            ProcessStartTimeUtc = current.StartTime.ToUniversalTime(),
+            HelperPath = current.MainModule!.FileName
+        };
+        static IReadOnlyDictionary<int, DateTimeOffset> Missing() => new Dictionary<int, DateTimeOffset>();
+        var result = stopping
+            ? SessionTerminator.Stop(request, _ => throw new FileNotFoundException(),
+                _ => throw new Win32Exception(5), Missing)
+            : SessionInspector.Inspect(request, _ => throw new FileNotFoundException(),
+                probeAccess: _ => throw new Win32Exception(5), captureCreationTimes: Missing);
+
+        Assert.Null(result.Error);
+        Assert.False(result.ProcessFound);
+        Assert.False(result.StartTimeMatches);
+        Assert.False(current.HasExited);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AccessDeniedRequiresAnObservedCreationTimeMismatch(bool sameIdentity)
+    {
+        using Process current = Process.GetCurrentProcess();
+        SessionInspectRequest request = new SessionInspectRequest
+        {
+            RequestId = "denied-identity",
+            ProcessId = current.Id,
+            ProcessStartTimeUtc = current.StartTime.ToUniversalTime(),
+            HelperPath = current.MainModule!.FileName
+        };
+        var times = new Dictionary<int, DateTimeOffset>
+        {
+            [current.Id] = sameIdentity ? request.ProcessStartTimeUtc : DateTimeOffset.UnixEpoch
+        };
+        SessionInspectResult inspected = SessionInspector.Inspect(
+            request, _ => throw new FileNotFoundException(),
+            probeAccess: _ => throw new Win32Exception(5), captureCreationTimes: () => times);
+        SessionInspectResult stopped = SessionTerminator.Stop(
+            request, _ => throw new FileNotFoundException(),
+            probeAccess: _ => throw new Win32Exception(5), captureCreationTimes: () => times);
+
+        foreach (SessionInspectResult result in new[] { inspected, stopped })
+        {
+            Assert.Equal(request.RequestId, result.RequestId);
+            Assert.False(result.StartTimeMatches);
+            Assert.Equal(sameIdentity, result.Error is not null);
+            Assert.Equal(!sameIdentity, result.ProcessFound);
+            Assert.False(result.IsOwnedAndHealthy);
+        }
+        Assert.False(current.HasExited);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AccessDeniedWithoutAnIdentitySnapshotRemainsUnknown(bool stopping)
+    {
+        using Process current = Process.GetCurrentProcess();
+        var request = new SessionInspectRequest
+        {
+            RequestId = "denied-identity",
+            ProcessId = current.Id,
+            ProcessStartTimeUtc = current.StartTime.ToUniversalTime(),
+            HelperPath = current.MainModule!.FileName
+        };
+        SessionInspectResult result = stopping
+            ? SessionTerminator.Stop(request, _ => throw new FileNotFoundException(),
+                _ => throw new Win32Exception(5), () => throw new NotSupportedException())
+            : SessionInspector.Inspect(request, _ => throw new FileNotFoundException(),
+                probeAccess: _ => throw new Win32Exception(5),
+                captureCreationTimes: () => throw new InvalidDataException());
+
+        Assert.NotNull(result.Error);
+        Assert.False(result.IsOwnedAndHealthy);
+        Assert.False(current.HasExited);
+    }
+
+    [Fact]
+    public void ADifferentNativeFailureDoesNotUseTheRecoverySnapshot()
+    {
+        using Process current = Process.GetCurrentProcess();
+        SessionInspectResult result = SessionInspector.Inspect(
+            new SessionInspectRequest
+            {
+                RequestId = "denied-identity",
+                ProcessId = current.Id,
+                ProcessStartTimeUtc = current.StartTime.ToUniversalTime(),
+                HelperPath = current.MainModule!.FileName
+            }, _ => throw new FileNotFoundException(),
+            probeAccess: _ => throw new Win32Exception(6),
+            captureCreationTimes: () => throw new Xunit.Sdk.XunitException("Unexpected snapshot"));
+
+        Assert.NotNull(result.Error);
     }
 
     [Fact]
