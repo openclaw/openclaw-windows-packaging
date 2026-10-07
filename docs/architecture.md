@@ -189,7 +189,12 @@ persists launch choices because the later logon task has no interactive caller
 from which to recover them. [`SchTasksGatewayScheduler`](../src/OpenClaw.Launcher/Gateway/SchTasksGatewayScheduler.cs)
 uses the inbox `schtasks.exe` and a task registered for the signed-in user's
 logon, avoiding NativeAOT-incompatible Task Scheduler COM interop and avoiding
-elevation that would make the task user-unmanageable.
+elevation that would make the task user-unmanageable. After registration, the
+persistence manager reads the task back before reporting recovery ready or
+removing a Startup-folder fallback. Trigger or principal drift reports the
+expected and observed identities; an unreadable result remains unknown. The
+owning token SID and the interactive logon SID remain separate for account
+compatibility, rather than silently redirecting recovery to another user.
 
 The real control command is `gateway-service`, not `gateway`. The configured
 port is distinct from the upstream default. The launcher does not force the
