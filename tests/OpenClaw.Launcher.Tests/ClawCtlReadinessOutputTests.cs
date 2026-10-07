@@ -70,6 +70,30 @@ public sealed class ClawCtlReadinessOutputTests
     }
 
     [Fact]
+    public void GatewayStatusCarriesStaleSessionAndMissingConfigForCompanionRecovery()
+    {
+        var result = new GatewayCommandResult(
+            "status",
+            GatewayState.Unknown,
+            "The isolated session is stale.",
+            null,
+            1,
+            Readiness: new AgentConfigReadinessStatus(
+                AgentConfigReadinessState.Absent,
+                SessionConfigReadinessReason.ConfigFileMissing),
+            SessionAvailability: SessionAvailability.Stale);
+        using var output = new StringWriter();
+
+        ClawCtlJson.WriteResult(output, result);
+
+        using JsonDocument document = JsonDocument.Parse(output.ToString());
+        JsonElement root = document.RootElement;
+        Assert.Equal("stale", root.GetProperty("session").GetProperty("state").GetString());
+        Assert.Equal("config-file-missing", root.GetProperty("gateway")
+            .GetProperty("readiness").GetProperty("reason").GetString());
+    }
+
+    [Fact]
     public void RunningGatewayOmitsReadinessFromHumanAndJsonOutput()
     {
         var result = new GatewayCommandResult(

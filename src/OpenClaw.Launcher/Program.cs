@@ -2,6 +2,7 @@ using System.CommandLine;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Text;
 using OpenClaw.SessionProtocol;
 
 namespace OpenClaw.Launcher;
@@ -514,7 +515,8 @@ internal static class Program
         TimeProvider? clock = null,
         Func<string, Task>? launchBrowserAsync = null,
         Action? beforeBrowserValidation = null,
-        string? environment = null)
+        string? environment = null,
+        Func<CancellationToken, Task<string?>>? readInputLine = null)
     {
         Session.IInstallationLifecycle lifecycle =
             installationLifecycle ?? Session.InstallationLifecycle.Production;
@@ -964,9 +966,10 @@ internal static class Program
                                     cancellationToken)
                                 .ConfigureAwait(false);
                             Session.AgentConfigReadinessStatus? configReadiness = null;
+                            Session.SessionStatus? session = null;
                             if (result.State != Gateway.GatewayState.Running)
                             {
-                                Session.SessionStatus session =
+                                session =
                                     await sessionRuntime.Coordinator
                                         .ProbeRecordedStatusAsync(cancellationToken)
                                         .ConfigureAwait(false);
@@ -994,7 +997,8 @@ internal static class Program
                                 Readiness: configReadiness,
                                 SandboxId: result.SandboxId,
                                 AgentUserSid: result.AgentUserSid,
-                                OwnedListeners: result.OwnedListeners);
+                                OwnedListeners: result.OwnedListeners,
+                                SessionAvailability: session?.Availability);
                         }).ConfigureAwait(false);
                     return WriteResult(commandResult);
                 },
@@ -1046,10 +1050,19 @@ internal static class Program
 
                     return WriteGatewayStartResult("restart", result.Start);
                 },
-                CompanionPrepare = async (port, checkOnly, cancellationToken) =>
+                CompanionPrepare = async (port, checkOnly, restoreToken, cancellationToken) =>
                 {
                     try
                     {
+                        string? token = restoreToken
+                            ? await (readInputLine ?? ReadRedirectedInputLineAsync)(cancellationToken)
+                                .ConfigureAwait(false)
+                            : null;
+                        if (restoreToken && string.IsNullOrEmpty(token))
+                        {
+                            throw new Session.SessionException(
+                                "Companion did not provide a token on standard input.");
+                        }
                         Session.SessionRuntime runtime = GetSessionRuntime();
                         Session.SessionRecord record = await runtime.StartForExecutionAsync(cancellationToken)
                             .ConfigureAwait(false);
@@ -1068,6 +1081,7 @@ internal static class Program
                                 nativeRoot is null ? null : ResolveNativeRedirectPreloadPath(),
                                 CompanionEnvironment(applicationDirectory, nativeRoot),
                                 checkOnly,
+                                token,
                                 cancellationToken).ConfigureAwait(false);
                         return WriteResult(new CompanionPrepareResult(0, result.Port, result.Token));
                     }
@@ -1100,6 +1114,60 @@ internal static class Program
             .Parse(args, ClawCtlCommandLine.CreateParserConfiguration())
             .InvokeAsync(configuration)
             .ConfigureAwait(false);
+    }
+
+    private static async Task<string?> ReadRedirectedInputLineAsync(
+        CancellationToken cancellationToken)
+    {
+        if (!Console.IsInputRedirected)
+        {
+            throw new Session.SessionException(
+                "'--restore-token-stdin' requires redirected standard input.");
+        }
+
+        Stream input = Console.OpenStandardInput();
+        return await ReadInputLineAsync(input, Console.InputEncoding, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    [SuppressMessage(
+        "Reliability",
+        "CA2000:Dispose objects before losing scope",
+        Justification =
+            "Cancellation must return without waiting for the Windows console read. " +
+            "The read completion continuation owns and disposes the reader on that path.")]
+    internal static async Task<string?> ReadInputLineAsync(
+        Stream input,
+        Encoding encoding,
+        CancellationToken cancellationToken)
+    {
+        var reader = new StreamReader(
+            input,
+            encoding,
+            detectEncodingFromByteOrderMarks: true,
+            bufferSize: 1024,
+            leaveOpen: false);
+        Task<string?> read = reader.ReadLineAsync(CancellationToken.None).AsTask();
+        try
+        {
+            return await read.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (read.IsCompleted)
+            {
+                reader.Dispose();
+            }
+            else
+            {
+                _ = read.ContinueWith(
+                    static (_, state) => ((StreamReader)state!).Dispose(),
+                    reader,
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
+        }
     }
 
     internal static Task LaunchBrowserAsync(

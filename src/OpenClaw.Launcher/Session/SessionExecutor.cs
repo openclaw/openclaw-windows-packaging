@@ -481,6 +481,7 @@ internal sealed class SessionExecutor
         string? preloadPath,
         IReadOnlyDictionary<string, string> environment,
         bool checkOnly,
+        string? token,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(record);
@@ -493,7 +494,8 @@ internal sealed class SessionExecutor
             NativeRootPath = nativeRootPath,
             PreloadPath = preloadPath,
             Environment = environment,
-            CheckOnly = checkOnly
+            CheckOnly = checkOnly,
+            Token = token
         };
         (string resultText, int exitCode) = await RunCompanionOperationAsync(
             record, helperPath, request, "--companion-config",
