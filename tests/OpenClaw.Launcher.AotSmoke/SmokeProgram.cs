@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using OpenClaw.Launcher.Gateway;
@@ -56,6 +58,7 @@ internal static class SmokeProgram
             ("Spectre renders clawctl output under NativeAOT", SpectreOutputRenders),
             ("gateway narration survives NativeAOT", GatewayNarrationRenders),
             ("Windows logon identity survives NativeAOT", WindowsLogonIdentityWorks),
+            ("Windows process identity survives NativeAOT", WindowsProcessIdentityWorks),
             ("package provenance reads survive NativeAOT", PackageProvenanceReadsBind),
             ("diagnostics redaction survives NativeAOT", DiagnosticsRedactionWorks),
             ("missing application reports diagnostics", MissingApplicationReportsAsync),
@@ -106,6 +109,35 @@ internal static class SmokeProgram
             id.Length == 17 && id[8] == ':' &&
             id.Where(character => character != ':').All(Uri.IsHexDigit),
             $"Unexpected Windows logon identity '{id}'.");
+        return Task.CompletedTask;
+    }
+
+    // Read-only native queries exercise the same interop as guest inspection.
+    // A synthetic denial tests reconciliation without modifying any process DACL.
+    private static Task WindowsProcessIdentityWorks()
+    {
+        using Process process = Process.GetCurrentProcess();
+        using var handle = SessionProcessQuery.Open(process.Id);
+        DateTimeOffset created = SessionProcessQuery.StartTime(handle);
+        Assert(!SessionProcessQuery.HasExited(handle), "The running driver was reported as exited.");
+        Assert(created == process.StartTime.ToUniversalTime(), "The pinned creation time changed.");
+        Assert(string.Equals(SessionProcessQuery.ImagePath(handle), Environment.ProcessPath,
+            StringComparison.OrdinalIgnoreCase), "The pinned process image did not match the driver.");
+        Assert(WindowsProcessSnapshot.CaptureCreationTimes()[process.Id] == created,
+            "The OS process table disagreed with the pinned identity.");
+
+        var request = new SessionInspectRequest
+        {
+            RequestId = "aot-process-identity",
+            ProcessId = process.Id,
+            ProcessStartTimeUtc = created
+        };
+        SessionInspectResult owned = SessionInspector.ReconcileAccessDenied(request, new Win32Exception(5), null);
+        Assert(owned.Error is not null, "Access denial discarded a matching process identity.");
+        SessionInspectResult reused = SessionInspector.ReconcileAccessDenied(
+            request with { ProcessStartTimeUtc = created.AddTicks(-1) }, new Win32Exception(5), null);
+        Assert(reused.Error is null && reused.ProcessFound && !reused.StartTimeMatches,
+            "OS creation-time mismatch did not permit stale-record recovery.");
         return Task.CompletedTask;
     }
 

@@ -1,4 +1,6 @@
+using System.ComponentModel;
 using OpenClaw.Launcher.Gateway;
+using OpenClaw.SessionHost;
 using OpenClaw.Launcher.Mxc;
 using OpenClaw.Launcher.Session;
 using OpenClaw.Launcher.Tests.Session;
@@ -661,6 +663,45 @@ public sealed class GatewayControllerTests : IDisposable
 
         Assert.False(result.AlreadyRunning);
         Assert.Equal(2, _client.Calls.Count(call => call == "start"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DeniedPidRecoveryRequiresIdentityEvidenceBeforeReplacingTheGateway(bool sameIdentity)
+    {
+        _client.Inspection = Healthy();
+        var controller = CreateController();
+        await controller.StartAsync("helper.exe", CancellationToken.None);
+        var recorded = Store.Read().Record!;
+        string persisted = File.ReadAllText(Path.Combine(_root, "gateway.json"));
+        var request = new SessionInspectRequest
+        {
+            RequestId = "denied-controller",
+            ProcessId = recorded.ProcessId,
+            ProcessStartTimeUtc = recorded.ProcessStartTimeUtc
+        };
+        _client.InspectionSequence.Enqueue(SessionInspector.ReconcileAccessDenied(
+            request, new Win32Exception(5), () => new Dictionary<int, DateTimeOffset>
+            {
+                [recorded.ProcessId] = sameIdentity
+                    ? recorded.ProcessStartTimeUtc
+                    : DateTimeOffset.UnixEpoch
+            }));
+
+        if (sameIdentity)
+        {
+            await Assert.ThrowsAsync<SessionException>(() =>
+                controller.StartAsync("helper.exe", CancellationToken.None));
+            Assert.Equal(persisted, File.ReadAllText(Path.Combine(_root, "gateway.json")));
+        }
+        else
+        {
+            var result = await controller.StartAsync("helper.exe", CancellationToken.None);
+            Assert.Equal(GatewayState.Running, result.State);
+        }
+        Assert.Equal(sameIdentity ? 1 : 2, _client.Calls.Count(call => call == "start"));
+        Assert.DoesNotContain(_client.Calls, call => call.StartsWith("stop:", StringComparison.Ordinal));
     }
 
     [Fact]

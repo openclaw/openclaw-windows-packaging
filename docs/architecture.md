@@ -204,6 +204,15 @@ under one lifecycle lock. A missing or already-exited gateway makes the stop a
 no-op and the start continues. If the gateway cannot be confirmed stopped, the
 operation retains its ownership record and does not launch a replacement.
 
+Process access denial is not evidence that a recorded PID belongs to another
+process. Inspection uses query rights instead of requesting a full-access
+handle. If Windows denies inspection or termination, the session helper reads
+the OS process creation-time snapshot without opening the target. Only an
+observed missing PID or creation-time mismatch permits stale-record recovery.
+A matching identity or unavailable snapshot remains unknown: its record stays
+intact and no replacement is launched. Stop still pins and verifies its handle
+before termination, and never kills a PID selected only by a snapshot.
+
 ## Companion uses the package's isolated session
 
 The Windows Companion app selects the current-user Gateway MSIX by its exact
