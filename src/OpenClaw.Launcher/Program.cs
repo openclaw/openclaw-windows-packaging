@@ -140,7 +140,8 @@ internal static class Program
                     error,
                     startup.InstallationLifecycle,
                     controlOutputOptions: controlOutputOptions,
-                    environment: environment).ConfigureAwait(false)
+                    environment: environment,
+                    archiveDirectory: startup.ArchiveDirectory).ConfigureAwait(false)
                 : await RunAgentAsync(
                     options,
                     WriteDiagnostic,
@@ -516,7 +517,8 @@ internal static class Program
         Func<string, Task>? launchBrowserAsync = null,
         Action? beforeBrowserValidation = null,
         string? environment = null,
-        Func<CancellationToken, Task<string?>>? readInputLine = null)
+        Func<CancellationToken, Task<string?>>? readInputLine = null,
+        string? archiveDirectory = null)
     {
         Session.IInstallationLifecycle lifecycle =
             installationLifecycle ?? Session.InstallationLifecycle.Production;
@@ -525,6 +527,32 @@ internal static class Program
         Session.SessionRuntime? sessionRuntime = null;
         Session.SessionRuntime GetSessionRuntime() =>
             sessionRuntime ??= lifecycle.CreateRuntime(log);
+        StateTransfer.StateTransferCoordinator CreateStateTransfer() =>
+            new(
+                options,
+                GetSessionRuntime,
+                new StateTransfer.StateArchiveStore(
+                    archiveDirectory ??
+                        throw new Session.SessionException(
+                            "The invoking user's archive directory could not be resolved."),
+                    log,
+                    clock),
+                log,
+                !outputOptions.Json && !Console.IsInputRedirected &&
+                    ReferenceEquals(output, Console.Out) &&
+                    WindowsHostConsole.Instance.IsInteractiveOutput(output)
+                    ? ConfirmStateTransferAsync
+                    : null);
+
+        Task<bool> ConfirmStateTransferAsync(string source, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            (bool useColor, IDisposable? restore) = PrepareColor(error);
+            using (restore)
+            {
+                return Task.FromResult(ClawCtlConsole.ConfirmStateReplacement(error, useColor, source));
+            }
+        }
 
         // Narration goes to standard error and the result to standard output,
         // so colour is decided for the stream being written: redirecting one
@@ -655,6 +683,28 @@ internal static class Program
         RootCommand command = ClawCtlCommandLine.Create(
             new ClawCtlHandlers
             {
+                Backup = async (backupOptions, cancellationToken) =>
+                {
+                    StateArchiveCommandResult result = await NarrateOperationAsync(
+                        new ClawCtlProgress(backupOptions.List
+                            ? "Listing retained recovery archives."
+                            : "Capturing and verifying agent state."),
+                        _ => CreateStateTransfer().BackupAsync(backupOptions, cancellationToken))
+                        .ConfigureAwait(false);
+                    return WriteResult(result);
+                },
+                Restore = async (restoreOptions, cancellationToken) =>
+                {
+                    StateArchiveCommandResult result = await CreateStateTransfer()
+                        .RestoreAsync(restoreOptions, cancellationToken).ConfigureAwait(false);
+                    return WriteResult(result);
+                },
+                Recover = async (recoverOptions, cancellationToken) =>
+                {
+                    StateArchiveCommandResult result = await CreateStateTransfer()
+                        .RecoverAsync(recoverOptions, cancellationToken).ConfigureAwait(false);
+                    return WriteResult(result);
+                },
                 Setup = RunSetupCommandAsync,
                 Status = async cancellationToken =>
                 {
@@ -675,8 +725,11 @@ internal static class Program
                             Gateway.GatewayPersistenceStatus recovery = await lifecycle
                                 .GetRecoveryStatusAsync(log, cancellationToken)
                                 .ConfigureAwait(false);
+                            OpenClaw.SessionProtocol.SessionStateTransferResult? stateTransfer =
+                                await StateTransfer.StateTransferCoordinator.InspectAvailableAsync(
+                                    runtime, status, log, cancellationToken).ConfigureAwait(false);
                             Session.AgentConfigReadinessStatus? configReadiness =
-                                gateway.State == Gateway.GatewayState.Running
+                                gateway.State == Gateway.GatewayState.Running || stateTransfer?.Pending == true
                                     ? null
                                     : await Session.AgentConfigReadinessProbe.CheckAsync(
                                         runtime,
@@ -690,7 +743,8 @@ internal static class Program
                                 gateway,
                                 recovery,
                                 setup.Record?.AgentNodeVersion,
-                                configReadiness);
+                                configReadiness,
+                                stateTransfer);
                         }).ConfigureAwait(false);
                     return WriteResult(result);
                 },
@@ -965,21 +1019,21 @@ internal static class Program
                                     sessionRuntime.HelperPath,
                                     cancellationToken)
                                 .ConfigureAwait(false);
-                            Session.AgentConfigReadinessStatus? configReadiness = null;
-                            Session.SessionStatus? session = null;
-                            if (result.State != Gateway.GatewayState.Running)
-                            {
-                                session =
-                                    await sessionRuntime.Coordinator
-                                        .ProbeRecordedStatusAsync(cancellationToken)
-                                        .ConfigureAwait(false);
-                                configReadiness =
-                                    await Session.AgentConfigReadinessProbe.CheckAsync(
+                            Session.SessionStatus session =
+                                await sessionRuntime.Coordinator
+                                    .ProbeRecordedStatusAsync(cancellationToken)
+                                    .ConfigureAwait(false);
+                            OpenClaw.SessionProtocol.SessionStateTransferResult? stateTransfer =
+                                await StateTransfer.StateTransferCoordinator.InspectAvailableAsync(
+                                    sessionRuntime, session, log, cancellationToken).ConfigureAwait(false);
+                            Session.AgentConfigReadinessStatus? configReadiness =
+                                result.State == Gateway.GatewayState.Running || stateTransfer?.Pending == true
+                                    ? null
+                                    : await Session.AgentConfigReadinessProbe.CheckAsync(
                                         sessionRuntime,
                                         session,
                                         log,
                                         cancellationToken).ConfigureAwait(false);
-                            }
 
                             int? port = result.Record?.ObservedPorts is { Count: 1 }
                                 ? result.Record.ObservedPorts[0]
@@ -989,16 +1043,18 @@ internal static class Program
                                 result.State,
                                 result.Message,
                                 result.Detail,
-                                result.State is Gateway.GatewayState.Running or
-                                    Gateway.GatewayState.NotStarted
-                                    ? configReadiness?.ProbeFailed == true ? 1 : 0
-                                    : 1,
+                                (result.State is Gateway.GatewayState.Running or Gateway.GatewayState.NotStarted) &&
+                                    configReadiness?.ProbeFailed != true && stateTransfer?.Pending != true &&
+                                    stateTransfer?.Error is null ? 0 : 1,
                                 port,
                                 Readiness: configReadiness,
                                 SandboxId: result.SandboxId,
                                 AgentUserSid: result.AgentUserSid,
                                 OwnedListeners: result.OwnedListeners,
-                                SessionAvailability: session?.Availability);
+                                SessionAvailability: result.State == Gateway.GatewayState.Running
+                                    ? null
+                                    : session.Availability,
+                                StateTransfer: stateTransfer);
                         }).ConfigureAwait(false);
                     return WriteResult(commandResult);
                 },

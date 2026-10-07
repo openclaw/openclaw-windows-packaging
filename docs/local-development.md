@@ -79,7 +79,7 @@ Use options for a concrete reason:
 | `-RefreshPayload` | A cached payload must be downloaded again; the previous payload remains available until the replacement registers successfully. |
 | `-Force` | You intentionally need to re-register although the recorded inputs have not changed. |
 | `-SkipSetup` | You only need the registration and intentionally want to defer setup. If setup state is absent, the next `openclaw` invocation performs setup automatically unless `CLAWCTL_AUTO_SETUP` suppresses it; run `clawctl setup` when you want to provision or recover explicitly. |
-| `-ReplaceExistingInstall` | You explicitly accept removal of an installed MSIX or a registration owned by another checkout. This is destructive because app data cannot survive the loose/installed transition. |
+| `-ReplaceExistingInstall` | You explicitly accept removal of an installed MSIX, another checkout's registration, or an owned development registration needing destructive repair. Removal can delete the isolated profile; packaged app data also cannot survive a loose/installed transition. |
 | `-Patch <name>` | You are iterating on a change; this is the recommended default. Name it for the work so its commands, app data, and isolated session stay separate from the base package. See [side-by-side patched identities](#side-by-side-patched-identities). |
 
 The command is idempotent, not timestamp-driven. `LocalPackage.psm1` records
@@ -102,6 +102,15 @@ two content-hash fingerprints:
 With both fingerprints unchanged, the command reports that the package is
 current. Any change to a covered input redeploys with a new version, even an
 edit, such as a comment, that leaves the binaries unchanged.
+
+Ordinary redeployment updates the owned development registration in place,
+including `-Force`; it does not unregister first. Windows can delete the
+MXC-owned agent account and profile during package removal even when
+`-PreserveApplicationData` is used. That flag protects neither the isolated
+profile nor its workspaces. If damaged registration cannot be repaired in
+place, retain a verified backup before explicitly authorizing removal with
+`-ReplaceExistingInstall`; never treat that operation as a state-preserving
+update.
 
 **Never delete `artifacts\local-package` or the checkout while it is
 registered.** The Developer Mode package reads those live files, so either
@@ -198,9 +207,10 @@ clawctl-pwsh-exec teardown --force
 
 Teardown removes the patch's isolated session, its data, any gateway logon
 task, and its setup state. `-Unregister -Patch pwsh-exec` then removes only
-that registration and preserves its app data. If you unregister first, the
-isolated session stays behind; redeploy the same patch to reach it again, then
-tear it down. `-Unregister` without `-Patch` never removes patched
+that registration and requests packaged app-data preservation. Unregistering
+first can delete the isolated agent profile or leave incomplete lifecycle
+resources; do not rely on it to keep the session or data recoverable.
+`-Unregister` without `-Patch` never removes patched
 registrations. To find patches you have not removed, run
 `Get-AppxPackage -Name 'OpenClawFoundation.OpenClawGateway-*'`.
 
@@ -436,6 +446,29 @@ failed coverage step for the cause. The workflow attempts the results upload
 even when tests fail; an artifact-service failure also reports a warning
 without changing the Release test gate, but may leave no artifact. Inspect
 the failed upload step logs in that case.
+
+For state-transfer changes, the focused file/protocol/Node-adapter scenarios
+use fixture-owned old and current profiles; they never modify real agent data:
+
+```powershell
+dotnet test .\tests\OpenClaw.Launcher.Tests\OpenClaw.Launcher.Tests.csproj `
+  --configuration Release --no-restore `
+  --filter "FullyQualifiedName~StateArchive|FullyQualifiedName~StateTransfer"
+node --test .\plugins\gateway-isolation\index.test.js
+```
+
+Shared state-gate, command-tree, status, process-lifetime, or protocol changes
+also require the full Release suite and NativeAOT lane. The focused SQLite
+scenario creates a real committed WAL row, proves it is absent from a
+main-database-only copy, normalizes the private snapshot through its fixture
+boundary, and verifies the restored row and unchanged source digest. Worker
+and process-tree scenarios use kernel leases and explicit pipe synchronization,
+not sleeps or PID-based liveness guesses. SDK and archive fixture results
+prove adapter behavior and transport, not that a particular bundled upstream revision
+produces a canonical SQLite recovery archive. Real bundled-payload and
+old/new-account ACL proof belongs in an explicitly authorized disposable
+Windows account/VM. Do not deploy a patch, recreate profiles, or stop real
+writers on the development user's machine to obtain that evidence.
 
 When changing command-line parsing, help, version output, startup, trimming, or
 NativeAOT-sensitive code, also run:

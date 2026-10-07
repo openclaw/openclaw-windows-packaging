@@ -24,7 +24,7 @@ namespace OpenClaw.Launcher.AotSmoke;
 // diagnostic log is created at an explicit path the driver owns, the writers are
 // in-memory, and the Node and launch delegates cannot start a real process.
 // Nothing here reads or writes the user's profile.
-internal static class SmokeProgram
+internal static partial class SmokeProgram
 {
     [SuppressMessage(
         "Design",
@@ -55,6 +55,8 @@ internal static class SmokeProgram
             ("version JSON survives NativeAOT", VersionJsonIsStructuredAsync),
             ("Companion JSON survives NativeAOT", CompanionJsonIsStructured),
             ("Companion snapshot and patch survive NativeAOT", CompanionSnapshotAndPatchAreStructured),
+            ("state-transfer commands survive NativeAOT", StateTransferCommandsAsync),
+            ("state activation and rollback survive NativeAOT", StateActivationAndRollback),
             ("Spectre renders clawctl output under NativeAOT", SpectreOutputRenders),
             ("gateway narration survives NativeAOT", GatewayNarrationRenders),
             ("Windows logon identity survives NativeAOT", WindowsLogonIdentityWorks),
@@ -886,6 +888,7 @@ internal static class SmokeProgram
                 Entrypoint = _entrypoint,
                 CreateDiagnostics = () => HostDiagnosticLog.Create(LogPath),
                 BaseDirectory = Root,
+                ArchiveDirectory = Path.Combine(Root, "archives"),
                 Output = Output,
                 Error = Error,
                 InstallationLifecycle =

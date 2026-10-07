@@ -75,6 +75,24 @@ redirection, CI, and `NO_COLOR` remain plain; `FORCE_COLOR` remains authoritativ
 
 ## Failures and diagnostics
 
+State-transfer results report retained archive paths, verified length, asset
+mappings, activation phase, current-state protection (or explicit absence),
+file-only readiness when available, and whether the managed gateway was
+stopped. Paths and metadata are not archive contents: never print credentials,
+raw captured upstream stderr, or configuration/history text. An archive result
+warns that it contains credentials and is not encrypted.
+
+Dry-run output describes a preview, not activated readiness. On interrupted
+activation, both status commands report attention and
+`clawctl restore --rollback --yes`; neither may present partial data as startup
+eligible. Unavailable inspection reports that uncertainty rather than claiming
+a live writer block was observed. A finalized operation with incomplete
+temporary-data cleanup keeps its completed/rolled-back phase and reports the
+retained directory in a warning. Preserve retained archive
+and protection paths on failures so operators can recover without recapturing
+the original profile. Human replacement confirmation defaults to no; JSON
+and redirected execution require `--yes` and never prompt.
+
 Expected refusals should state the condition and the next usable action without
 asking the user to file an issue. Unexpected faults should explain how to
 capture diagnostics and where to report the problem:

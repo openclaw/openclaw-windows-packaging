@@ -1051,10 +1051,13 @@ function Remove-LocalPackageRegistration {
     }
     foreach ($registration in $registrations) {
         $installed = $registration.Package
-        # Development-mode packages allow preserving app data, so unregistering
-        # does not throw away the extracted Node.js runtime.
+        Write-Warning (
+            'Unregistering can remove the MXC-owned agent account and profile. ' +
+            'App-data preservation does not protect isolated-session data; ' +
+            'finish teardown or retain a verified backup first.'
+        )
         & $services.RemovePackage $installed.PackageFullName $true | Out-Null
-        Write-Host "Unregistered $($installed.PackageFullName); its app data was preserved."
+        Write-Host "Unregistered $($installed.PackageFullName); app-data preservation was requested."
     }
     $statePath = Join-Path $state 'state.json'
     if (Test-Path -LiteralPath $statePath) { Remove-Item -LiteralPath $statePath -Force }
@@ -1342,12 +1345,13 @@ function Invoke-LocalPackageDeployment {
                 -Identity $identity
         }
         Invoke-LocalPackagePhase $progress 'Register package' {
-            # Re-registering over an existing development registration does not
-            # reliably repair one whose layout was deleted or damaged: the
-            # package still reports Status Ok while its aliases fail with "The
-            # process has no package identity". Removing first, preserving app
-            # data, makes registration deterministic and self-healing.
-            if ($null -ne $installed -and $installed.IsDevelopmentMode) {
+            # Windows may delete the MXC-owned profile on unregister even when
+            # packaged app data is preserved. Ordinary updates stay in place.
+            if ($null -ne $installed -and $installed.IsDevelopmentMode -and $ReplaceExistingInstall) {
+                Write-Warning (
+                    'Explicitly replacing this development registration can ' +
+                    'remove its isolated agent account and profile.'
+                )
                 & $services.RemovePackage $installed.PackageFullName $true | Out-Null
             }
             & $services.RegisterPackage $manifestPath

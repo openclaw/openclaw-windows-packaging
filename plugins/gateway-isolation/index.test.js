@@ -245,6 +245,9 @@ const expectedCommands = [
   ["Restart Gateway", "clawctl gateway-service restart"],
   ["Open dashboard", "clawctl open"],
   ["Agent session PowerShell", "clawctl pwsh"],
+  ["Back up agent state", "clawctl backup"],
+  ["Restore saved state", "clawctl restore"],
+  ["Recover an old profile", "clawctl recover --help"],
   ["Launcher help", "clawctl --help"],
   ["Gateway chat TUI", "openclaw tui"],
   ["OpenClaw help", "openclaw --help"],
@@ -258,9 +261,9 @@ test("groups the brief cheat sheet with ClawCtl first and packaged OpenClaw seco
       [1, "Windows Launcher"],
       [2, "Command reference"],
       [3, "ClawCtl"],
-      ...expectedCommands.slice(0, 5).map(([title]) => [4, title]),
+      ...expectedCommands.slice(0, 8).map(([title]) => [4, title]),
       [3, "OpenClaw"],
-      ...expectedCommands.slice(5).map(([title]) => [4, title]),
+      ...expectedCommands.slice(8).map(([title]) => [4, title]),
     ],
   );
   const groups = [...html.matchAll(/<section aria-labelledby="([^"]+)">([\s\S]*?)<\/section>/g)];
@@ -268,7 +271,7 @@ test("groups the brief cheat sheet with ClawCtl first and packaged OpenClaw seco
   assert.match(groups[0][2], /<h3 id="clawctl-title" class="command-group-title">ClawCtl<\/h3>/);
   assert.match(html, /<h2 class="command-reference-title">Command reference<\/h2>\s*<p class="intro">Run these commands in your normal Windows terminal \(user session\)\.<\/p>\s*<section aria-labelledby="clawctl-title">/);
   assert.match(groups[1][2], /<h3 id="openclaw-title" class="command-group-title">OpenClaw<\/h3>\s*<p class="intro">The packaged openclaw command forwards to your agent session\. Inside clawctl pwsh, it runs directly\.<\/p>/);
-  for (const [index, expected] of [expectedCommands.slice(0, 5), expectedCommands.slice(5)].entries()) {
+  for (const [index, expected] of [expectedCommands.slice(0, 8), expectedCommands.slice(8)].entries()) {
     assert.deepEqual(
       [...groups[index][2].matchAll(/<h4>([^<]+)<\/h4>/g)].map(match => match[1]),
       expected.map(([title]) => title),
@@ -281,6 +284,9 @@ test("groups the brief cheat sheet with ClawCtl first and packaged OpenClaw seco
       "Restart the gateway, keeping the session and its data. Starts it if no gateway is running.",
       "Open the dashboard in your default browser. Requires completed setup and a running gateway. Does not print authenticated URLs or tokens.",
       "Open PowerShell inside the isolated agent. openclaw and node are available there; clawctl manages the session from outside it.",
+      "Save a verified archive containing configuration, credentials, history, and workspaces. Store it securely.",
+      "Select the newest retained archive and confirm replacement. Keeps the current agent identity and leaves the gateway stopped.",
+      "Show how to rescue an explicitly named offline agent profile without changing the original.",
       "List launcher commands.",
       "Chat in the terminal.",
       "List OpenClaw commands.",

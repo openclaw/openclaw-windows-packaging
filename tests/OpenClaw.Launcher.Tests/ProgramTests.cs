@@ -1336,6 +1336,78 @@ public sealed class ProgramTests : IDisposable
     }
 
     [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    [InlineData(true, true, true)]
+    public async Task StatusReportsPendingOrUnavailableActivationWithoutClaimingConfigReadiness(
+        bool json,
+        bool unavailable,
+        bool gatewayOnly)
+    {
+        string applicationDirectory = await CreateApplicationAsync().ConfigureAwait(true);
+        SessionRuntime runtime = CreateSessionRuntime();
+        var lifecycle = new FailingFreshLifecycle(runtime);
+        Assert.Equal(0, await Program.RunControlAsync(
+            CreateSetupOptions(applicationDirectory), ["setup"], _ => { },
+            TextWriter.Null, TextWriter.Null, installationLifecycle: lifecycle));
+        var backend = (FakeMxcSessionClient)runtime.Backend;
+        backend.ExecuteBehavior = _ =>
+        {
+            string requestPath = Directory.GetFiles(
+                backend.Metadata!.EphemeralWorkspacePath, "state-transfer-*.json").Single();
+            SessionStateTransferRequest request = SessionStateTransferProtocol.ReadRequest(File.ReadAllText(requestPath));
+            Assert.Equal(SessionStateTransferAction.Inspect, request.Action);
+            if (unavailable)
+            {
+                return Task.FromException<MxcExecutionResult>(
+                    new MxcException(MxcErrorCode.BackendError, "state inspection unavailable"));
+            }
+            File.WriteAllText(SessionLaunchProtocol.ResultPathFor(requestPath),
+                SessionStateTransferProtocol.SerializeResult(new SessionStateTransferResult
+                {
+                    RequestId = request.RequestId,
+                    Pending = true,
+                    TransactionId = Guid.NewGuid().ToString("N"),
+                    ProfileDirectory = @"C:\Users\agent_1",
+                    Phase = "activating"
+                }));
+            return Task.FromResult(new MxcExecutionResult(0, "", ""));
+        };
+        using var output = new StringWriter();
+        string[] arguments = gatewayOnly ? ["gateway-service", "status"] : ["status"];
+        if (json)
+        {
+            arguments = [.. arguments, "--json"];
+        }
+
+        int exit = await Program.RunControlAsync(
+            CreateSetupOptions(applicationDirectory), arguments,
+            _ => { }, output, TextWriter.Null, installationLifecycle: lifecycle);
+
+        Assert.Equal(1, exit);
+        if (json)
+        {
+            using JsonDocument result = JsonDocument.Parse(output.ToString());
+            Assert.False(result.RootElement.GetProperty("ok").GetBoolean());
+            JsonElement transfer = result.RootElement.GetProperty("stateTransfer");
+            Assert.True(transfer.GetProperty("pending").GetBoolean());
+            Assert.Equal(unavailable ? "unavailable" : "activating", transfer.GetProperty("phase").GetString());
+            Assert.False(result.RootElement.GetProperty("gateway").TryGetProperty("readiness", out _));
+        }
+        else
+        {
+            Assert.Contains(unavailable ? "unavailable" : "activating", output.ToString(), StringComparison.Ordinal);
+            Assert.Contains("restore --rollback", output.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("startup eligible", output.ToString(), StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]
     [InlineData(true, false)]
@@ -1359,6 +1431,10 @@ public sealed class ProgramTests : IDisposable
         {
             backend.ExecuteBehavior = _ =>
             {
+                if (WriteStateInspectionResult(backend))
+                {
+                    return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
+                }
                 string requestPath = Directory.GetFiles(
                     backend.Metadata!.EphemeralWorkspacePath,
                     "config-readiness-*.json").Single();
@@ -1377,10 +1453,10 @@ public sealed class ProgramTests : IDisposable
         }
         else
         {
-            backend.ExecuteFailure =
-                new MxcException(
-                    MxcErrorCode.BackendError,
-                    "readiness backend unavailable");
+            backend.ExecuteBehavior = _ => WriteStateInspectionResult(backend)
+                ? Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty))
+                : Task.FromException<MxcExecutionResult>(new MxcException(
+                    MxcErrorCode.BackendError, "readiness backend unavailable"));
         }
         using var output = new StringWriter();
 
@@ -3013,6 +3089,10 @@ public sealed class ProgramTests : IDisposable
     {
         backend.ExecuteBehavior = _ =>
         {
+            if (WriteStateInspectionResult(backend))
+            {
+                return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
+            }
             string requestPath = Directory.GetFiles(
                 backend.Metadata!.EphemeralWorkspacePath,
                 "config-readiness-*.json").Single();
@@ -3031,6 +3111,26 @@ public sealed class ProgramTests : IDisposable
             return Task.FromResult(
                 new MxcExecutionResult(0, string.Empty, string.Empty));
         };
+    }
+
+    private static bool WriteStateInspectionResult(FakeMxcSessionClient backend)
+    {
+        string[] paths = Directory.GetFiles(
+            backend.Metadata!.EphemeralWorkspacePath, "state-transfer-*.json");
+        if (paths.Length == 0)
+        {
+            return false;
+        }
+        string path = paths.Single();
+        SessionStateTransferRequest request = SessionStateTransferProtocol.ReadRequest(File.ReadAllText(path));
+        Assert.Equal(SessionStateTransferAction.Inspect, request.Action);
+        File.WriteAllText(SessionLaunchProtocol.ResultPathFor(path),
+            SessionStateTransferProtocol.SerializeResult(new SessionStateTransferResult
+            {
+                RequestId = request.RequestId,
+                ProfileDirectory = @"C:\Users\agent_1"
+            }));
+        return true;
     }
 
     private sealed class FailingFreshLifecycle : IInstallationLifecycle

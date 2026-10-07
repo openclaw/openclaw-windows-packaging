@@ -142,6 +142,60 @@ longer usable.
 repair or reuse the package-owned session. Do not create or adopt an unrelated
 agent account or session.
 
+## State transfer is blocked or interrupted
+
+**Check.** Run `clawctl status` and `clawctl backup --list`. Listing archives
+does not need a usable session. For a saved archive or an explicitly selected
+old profile, preview before replacing data:
+
+```powershell
+clawctl restore "C:\Backups\openclaw.tar.gz" --dry-run
+clawctl recover "C:\Users\A1-B2" --dry-run
+```
+
+**Likely cause.** An activation is pending, another agent writer is still
+active, required data is external/missing/unresolvable, the source is live or
+inaccessible, or the bundled OpenClaw lacks the supported backup/restore
+contract. `--yes` confirms replacement; it bypasses none of those checks.
+
+**Fix.** Finish ordinary agent commands and PowerShell shells, then retry.
+Do not kill unrelated processes. To undo an interrupted activation, run:
+
+```powershell
+clawctl restore --rollback --yes
+```
+
+Rollback requires the same recorded current agent and validated journal.
+An invalid journal, changed object identity, or missing original data is a
+preserve-and-escalate condition: collect diagnostics rather than deleting the
+journal or attempting path-based cleanup. A successful rollback reports
+`rolled-back`; successful activation reports `completed`. Both leave the
+managed gateway stopped.
+
+Both status commands suppress config readiness when activation is pending or
+cannot be inspected. A prepared-content mismatch requires rollback before
+retrying the original archive. A cleanup warning after `completed` or
+`rolled-back` is different: state replacement or rollback already finished,
+but the named temporary directory remains and may contain credentials.
+Preserve the retained archives and collect diagnostics before cleaning that
+directory; do not treat the warning as an interrupted activation.
+
+For offline source access denial, retry explicitly from an elevated terminal
+on the machine holding the profile. Recovery does not elevate itself, change
+ACLs, or take ownership. Stop source writers before retrying a locked-file
+refusal. Required external or relative/environment-dependent paths need an
+explicit manual migration; automatic recovery never skips them and claims
+success.
+
+Retained archives contain credentials and are not encrypted or redacted.
+Do not include them in a public issue or diagnostics upload. Current-state
+protection remains under the invoking user's
+`.openclaw-backups\before-restore`; a retained recovery archive can be retried
+with `clawctl restore <archive> --yes` without rereading the old profile.
+Review approvals and messaging state, resolve reported upstream plugin
+installation requirements, and relink nonportable credentials before restarting
+with `clawctl gateway-service start`.
+
 ## The gateway is not started, not listening, or is unhealthy
 
 **Check.** Inspect only the gateway first:
@@ -453,6 +507,10 @@ The behavior above is verified against:
   `SessionExecutorTests.cs`
 - `src\OpenClaw.SessionHost\SessionConfigReadinessChecker.cs` and
   `SessionConfigReadinessCheckerTests.cs`
+- `src\OpenClaw.Launcher\StateTransfer`,
+  `src\OpenClaw.SessionHost\SessionStateTransfer.cs`,
+  `SessionStateAccess.cs`, and behavioral scenarios under
+  `tests\OpenClaw.Launcher.Tests\StateTransfer`
 - gateway status, address, persistence, and diagnostics implementations and
   tests under `src\OpenClaw.Launcher\Gateway` and
   `tests\OpenClaw.Launcher.Tests\Gateway`

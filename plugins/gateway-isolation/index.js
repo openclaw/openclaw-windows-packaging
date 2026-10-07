@@ -39,6 +39,24 @@ const COMMAND_GROUPS = [
         command: "clawctl pwsh",
       },
       {
+        id: "state-backup",
+        title: "Back up agent state",
+        description: "Save a verified archive containing configuration, credentials, history, and workspaces. Store it securely.",
+        command: "clawctl backup",
+      },
+      {
+        id: "state-restore",
+        title: "Restore saved state",
+        description: "Select the newest retained archive and confirm replacement. Keeps the current agent identity and leaves the gateway stopped.",
+        command: "clawctl restore",
+      },
+      {
+        id: "state-recover",
+        title: "Recover an old profile",
+        description: "Show how to rescue an explicitly named offline agent profile without changing the original.",
+        command: "clawctl recover --help",
+      },
+      {
         id: "launcher-help",
         title: "Launcher help",
         description: "List launcher commands.",
