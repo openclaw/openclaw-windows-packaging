@@ -21,6 +21,10 @@ should describe that environment in terms an operator can act on, while
 - Begin status probes, diagnostics collection, teardown, Control UI handoff,
   and gateway lifecycle operations with narration before waiting on the
   isolated session or another process.
+- Narrate state-transfer previews, restore, recovery, and rollback before
+  waiting on the recorded session. Replacement commands that may prompt use
+  durable stage lines rather than a live status, so confirmation never nests
+  inside an active Spectre display. `--yes` and previews can use live status.
 - Do not add narration to `completion`, whose standard output is the completion
   script, or `pwsh`, which preserves the launched PowerShell process's streams
   and may remain attached for the lifetime of an interactive shell. Immediate

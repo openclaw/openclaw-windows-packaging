@@ -366,12 +366,13 @@ internal static class ClawCtlConsole
         bool useColor,
         bool narrate,
         ClawCtlProgress initial,
-        Func<IProgress<ClawCtlProgress>, Task<T>> operation) =>
+        Func<IProgress<ClawCtlProgress>, Task<T>> operation,
+        bool allowLiveStatus = true) =>
         await NarrateAsync(
             output,
             useColor,
             narrate,
-            IsInteractiveConsole(output),
+            allowLiveStatus && IsInteractiveConsole(output),
             initial,
             operation).ConfigureAwait(false);
 
