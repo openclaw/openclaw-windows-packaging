@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -91,7 +90,8 @@ internal static class SessionCompanionConfig
         Action<string, string> writeFile,
         string? profileRoot = null,
         Func<SessionCompanionConfigRequest, string, int>? applyPatch = null,
-        Func<SessionCompanionConfigRequest, (int ExitCode, string Output)>? readEffectiveConfiguration = null)
+        Func<SessionCompanionConfigRequest, (int ExitCode, string Output)>? readEffectiveConfiguration = null,
+        Func<IDisposable>? enterState = null)
     {
         string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
         string? requestId = null;
@@ -100,6 +100,8 @@ internal static class SessionCompanionConfig
             SessionCompanionConfigRequest request =
                 SessionCompanionConfigProtocol.ReadRequest(readFile(requestPath));
             requestId = request.RequestId;
+            enterState ??= SessionStateAccess.ForAgent().EnterReader;
+            using IDisposable state = enterState();
             string configPath = Path.Combine(profileRoot ?? AgentProfile.GetPath(), ".openclaw", "openclaw.json");
             SessionCompanionConfigResult result = Configure(
                 request, configPath, writeFile,
@@ -311,49 +313,20 @@ internal static class SessionCompanionConfig
         SessionCompanionConfigRequest request,
         IReadOnlyList<string> arguments)
     {
-        using FileStream? lease = SessionNativeStager.OpenConsumerLease(request.NativeRootPath);
-        using Process process = new()
-        {
-            StartInfo = new ProcessStartInfo(request.NodePath!)
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = AppContext.BaseDirectory,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            }
-        };
-        ProcessStartInfo start = process.StartInfo;
+        List<string> nodeArguments = [];
         if (request.NativeRootPath is not null)
         {
-            start.ArgumentList.Add("--import");
-            start.ArgumentList.Add(new Uri(request.PreloadPath!).AbsoluteUri);
+            nodeArguments.AddRange(["--import", new Uri(request.PreloadPath!).AbsoluteUri]);
         }
-        foreach (string argument in arguments)
+        nodeArguments.AddRange(arguments);
+        SessionProcessOutput output = SessionProcessLauncher.Capture(new SessionLaunchRequest
         {
-            start.ArgumentList.Add(argument);
-        }
-        foreach ((string name, string value) in request.Environment!)
-        {
-            start.Environment[name] = value;
-        }
-        start.Environment["PATH"] = Path.GetDirectoryName(request.NodePath) +
-            Path.PathSeparator + start.Environment["PATH"];
-        if (!process.Start())
-        {
-            throw new SessionLaunchException("The packaged OpenClaw command could not be started.");
-        }
-        Task<string> output = process.StandardOutput.ReadToEndAsync();
-        Task<string> error = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(120_000))
-        {
-            process.Kill(entireProcessTree: true);
-            process.WaitForExit();
-            throw new SessionLaunchException(
-                "The packaged OpenClaw command did not finish within two minutes. Retry Companion setup.");
-        }
-        string stdout = output.GetAwaiter().GetResult();
-        _ = error.GetAwaiter().GetResult();
-        return (process.ExitCode, stdout);
+            Executable = request.NodePath,
+            Arguments = nodeArguments,
+            WorkingDirectory = AppContext.BaseDirectory,
+            Environment = request.Environment,
+            NativeRootPath = request.NativeRootPath
+        }, TimeSpan.FromMinutes(2));
+        return (output.ExitCode, output.StandardOutput);
     }
 }

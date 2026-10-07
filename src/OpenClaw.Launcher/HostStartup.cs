@@ -22,6 +22,7 @@ internal sealed class HostStartup
     public bool UsesProcessConsoleWriters { get; init; }
 
     public Session.IInstallationLifecycle? InstallationLifecycle { get; init; }
+    public string? ArchiveDirectory { get; init; }
 
     public Func<string, string?>? ReadEnvironmentVariable { get; init; }
 
@@ -43,6 +44,9 @@ internal sealed class HostStartup
         Output = Console.Out,
         Error = Console.Error,
         UsesProcessConsoleWriters = true,
-        InstallationLifecycle = Session.InstallationLifecycle.Production
+        InstallationLifecycle = Session.InstallationLifecycle.Production,
+        ArchiveDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            StateTransfer.StateArchiveStore.DirectoryName)
     };
 }

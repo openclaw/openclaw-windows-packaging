@@ -29,6 +29,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\OpenClaw.Launcher\OpenClaw.Launcher.csproj" />
     <ProjectReference Include="..\..\src\OpenClaw.SessionHost\OpenClaw.SessionHost.csproj" />
+    <Compile Include="..\OpenClaw.Launcher.Tests\StateTransfer\ArchiveFixtureApplication.cs" Link="ArchiveFixtureApplication.cs" />
   </ItemGroup>
 
 </Project>

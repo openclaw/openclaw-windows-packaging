@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.IO.Pipes;
+using System.Text;
 using OpenClaw.SessionProtocol;
 
 namespace OpenClaw.SessionHost;
@@ -29,16 +31,40 @@ internal interface ISessionProcessLauncher
 /// </remarks>
 internal sealed record SessionDetachedProcess(int ProcessId, DateTimeOffset StartTimeUtc);
 
+internal sealed record SessionProcessOutput(
+    int ExitCode,
+    string StandardOutput,
+    string StandardError);
+
 /// <summary>
 /// Launches the requested executable shell-free, so no quoting, metacharacter,
 /// or <c>%VAR%</c> interpretation can alter the arguments.
 /// </summary>
 internal sealed class SessionProcessLauncher(
-    Action? initializeConsole = null, string? invocationMode = null) : ISessionProcessLauncher
+    Action? initializeConsole = null,
+    string? invocationMode = null,
+    Func<IDisposable>? enterState = null) : ISessionProcessLauncher
 {
     private const string NodeOptionsVariable = "NODE_OPTIONS";
+    private readonly Func<IDisposable> _enterState = enterState ?? EnterDefaultState;
 
     public int Run(SessionLaunchRequest request)
+    {
+        using IDisposable state = _enterState();
+        return RunCore(request, capture: false, initializeConsole: initializeConsole, invocationMode: invocationMode).ExitCode;
+    }
+
+    private static IDisposable EnterDefaultState() => SessionStateAccess.ForAgent().EnterReader();
+
+    internal static SessionProcessOutput Capture(SessionLaunchRequest request, TimeSpan? timeout = null) =>
+        RunCore(request, capture: true, timeout);
+
+    private static SessionProcessOutput RunCore(
+        SessionLaunchRequest request,
+        bool capture,
+        TimeSpan? timeout = null,
+        Action? initializeConsole = null,
+        string? invocationMode = null)
     {
         string workingDirectory = request.WorkingDirectory!;
         if (!Directory.Exists(workingDirectory))
@@ -55,7 +81,8 @@ internal sealed class SessionProcessLauncher(
 
             // No shell: the isolated session's console handles are inherited.
             UseShellExecute = false,
-            WorkingDirectory = workingDirectory
+            WorkingDirectory = workingDirectory,
+            CreateNoWindow = capture
         };
 
         foreach (string argument in request.Arguments!)
@@ -78,19 +105,21 @@ internal sealed class SessionProcessLauncher(
         using FileStream? lease =
             SessionNativeStager.OpenConsumerLease(request.NativeRootPath);
 
-        Process? process = null;
         try
         {
+            if (capture)
+            {
+                return CaptureInJobAsync(startInfo, timeout).GetAwaiter().GetResult();
+            }
             if (invocationMode is not null)
             {
                 WindowsInvocationJob.Join(invocationMode);
             }
             initializeConsole?.Invoke();
-            process = Process.Start(startInfo) ??
-                throw new SessionLaunchException(
-                    $"Unable to start '{request.Executable}'.");
+            using WindowsKillOnCloseJob job = WindowsKillOnCloseJob.Create();
+            using Process process = job.StartProcess(startInfo);
             process.WaitForExit();
-            return process.ExitCode;
+            return new SessionProcessOutput(process.ExitCode, string.Empty, string.Empty);
         }
         catch (Exception exception) when (
             exception is System.ComponentModel.Win32Exception or
@@ -101,10 +130,92 @@ internal sealed class SessionProcessLauncher(
             throw new SessionLaunchException(
                 $"Unable to start '{request.Executable}': {exception.Message}");
         }
+    }
+
+    private static async Task<SessionProcessOutput> CaptureInJobAsync(
+        ProcessStartInfo startInfo,
+        TimeSpan? timeout)
+    {
+        using WindowsKillOnCloseJob job = WindowsKillOnCloseJob.Create();
+        using var input = new FileStream("NUL", FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var stdout = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.None);
+        using var stderr = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.None);
+        using Process process = job.StartProcess(
+            startInfo, input.SafeFileHandle, stdout.ClientSafePipeHandle, stderr.ClientSafePipeHandle);
+        stdout.DisposeLocalCopyOfClientHandle();
+        stderr.DisposeLocalCopyOfClientHandle();
+        using var outputReader = new StreamReader(stdout, Encoding.UTF8);
+        using var errorReader = new StreamReader(stderr, Encoding.UTF8);
+        Task<string> output = ReadCaptureAsync(outputReader);
+        Task<string> error = ReadCaptureAsync(errorReader);
+        bool timedOut = false;
+        string capturedOutput;
+        string capturedError;
+        using var budget = new CancellationTokenSource();
+        if (timeout is { } limit)
+        {
+            budget.CancelAfter(limit);
+        }
+        try
+        {
+            await process.WaitForExitAsync(budget.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (budget.IsCancellationRequested)
+        {
+            timedOut = true;
+        }
         finally
         {
-            process?.Dispose();
+            // The state lease cannot end while descendants still have access
+            // to the profile. Drain both pipes before disposing their readers.
+            job.Dispose();
+            try
+            {
+                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            finally
+            {
+                try
+                {
+                    capturedOutput = await output.ConfigureAwait(false);
+                }
+                finally
+                {
+                    capturedError = await error.ConfigureAwait(false);
+                }
+            }
         }
+        if (timedOut)
+        {
+            throw new SessionLaunchException("The packaged state operation did not finish within its execution budget.");
+        }
+        return new SessionProcessOutput(
+            process.ExitCode, capturedOutput, capturedError);
+    }
+
+    private static async Task<string> ReadCaptureAsync(StreamReader reader)
+    {
+        const int maximumCharacters = 16 * 1024 * 1024;
+        var result = new StringBuilder();
+        char[] buffer = new char[4096];
+        bool tooLarge = false;
+        int count;
+        while ((count = await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false)) != 0)
+        {
+            if (result.Length + count > maximumCharacters)
+            {
+                tooLarge = true;
+            }
+            if (!tooLarge)
+            {
+                result.Append(buffer, 0, count);
+            }
+        }
+        if (tooLarge)
+        {
+            throw new SessionLaunchException("The packaged state operation exceeded the supported metadata-output limit.");
+        }
+        return result.ToString();
     }
 
     /// <summary>

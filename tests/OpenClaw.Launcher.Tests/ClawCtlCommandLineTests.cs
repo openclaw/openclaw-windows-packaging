@@ -107,7 +107,10 @@ public sealed class ClawCtlCommandLineTests
                 ClawCtlCommandLine.CompletionCommandName,
                 "pwsh",
                 "gateway-service",
-                "companion"
+                "companion",
+                "backup",
+                "restore",
+                "recover"
             ],
             root.Subcommands.Select(command => command.Name));
     }
