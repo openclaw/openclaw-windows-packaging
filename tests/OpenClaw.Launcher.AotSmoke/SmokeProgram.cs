@@ -56,6 +56,7 @@ internal static partial class SmokeProgram
             ("Companion JSON survives NativeAOT", CompanionJsonIsStructured),
             ("Companion snapshot and patch survive NativeAOT", CompanionSnapshotAndPatchAreStructured),
             ("state-transfer commands survive NativeAOT", StateTransferCommandsAsync),
+            ("state-transfer startup failures identify their command", StateTransferFailureNamesCommandAsync),
             ("state activation and rollback survive NativeAOT", StateActivationAndRollback),
             ("Spectre renders clawctl output under NativeAOT", SpectreOutputRenders),
             ("gateway narration survives NativeAOT", GatewayNarrationRenders),
@@ -881,7 +882,8 @@ internal static partial class SmokeProgram
 
         public async Task<int> RunAsync(
             string[] args,
-            Func<string, string?>? readEnvironmentVariable = null)
+            Func<string, string?>? readEnvironmentVariable = null,
+            Func<HostOptions, HostEnvironment>? readEnvironment = null)
         {
             HostStartup startup = new()
             {
@@ -896,6 +898,7 @@ internal static partial class SmokeProgram
                     _lifecycle ??
                     (IInstallationLifecycle)InstallationLifecycle.Production,
                 ReadEnvironmentVariable = readEnvironmentVariable ?? (_ => null),
+                ReadEnvironment = readEnvironment,
                 ProbeReadiness = _agentLifecycle is null
                     ? null
                     : _ => Task.FromResult(new MxcReadinessReport(

@@ -247,7 +247,8 @@ internal static class Program
                 return action is null ? argument : $"{argument} {action}";
             }
 
-            if (argument is "setup" or "status" or "collect-logs" or "teardown" or "open" or "pwsh")
+            if (argument is "setup" or "status" or "collect-logs" or "teardown" or
+                "open" or "pwsh" or "backup" or "restore" or "recover")
             {
                 return argument;
             }

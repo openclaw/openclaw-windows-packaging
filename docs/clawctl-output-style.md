@@ -96,6 +96,8 @@ retained directory in a warning. Preserve retained archive
 and protection paths on failures so operators can recover without recapturing
 the original profile. Human replacement confirmation defaults to no; JSON
 and redirected execution require `--yes` and never prompt.
+State-transfer failures retain the selected `backup`, `restore`, or `recover`
+command name even when startup fails before command dispatch.
 
 Expected refusals should state the condition and the next usable action without
 asking the user to file an issue. Unexpected faults should explain how to
