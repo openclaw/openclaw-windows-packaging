@@ -37,8 +37,6 @@ console.log(`Runtime: ${identity.version} ${identity.commit}; Node ${process.ver
 const skillName = "windows-agent-handoff";
 const skillFiles = [
   path.join("skills", skillName, "SKILL.md"),
-  path.join("skills", skillName, "references", "gui-and-sign-in.md"),
-  path.join("skills", skillName, "references", "file-handoff.md"),
 ];
 const pluginRelativeDirectory = path.join("dist", "extensions", "gateway-isolation");
 for (const name of ["index.js", "package.json", "openclaw.plugin.json", ...skillFiles]) {
@@ -103,6 +101,9 @@ const server = http.createServer(async (request, response) => {
         "Skill discovery must respect plugin, environment, and skill eligibility.");
       assert.ok(!systemText.includes(skillReads[0].text),
         "Detailed skill instructions must not be injected into the system prompt.");
+      assert.ok(!JSON.stringify(body.messages.filter(message => message.role === "user"))
+        .includes(JSON.stringify(skillReads[0].text).slice(1, -1)),
+      "Detailed skill instructions must not be eagerly injected into user context.");
       if (advertisedSkill) {
         scenario.skillPath = advertisedSkill[1].replace(/^~(?=[\\/]|$)/, root);
         assert.equal(await fs.realpath(scenario.skillPath), await fs.realpath(skillReads[0].path),
@@ -236,7 +237,7 @@ async function agent(name, {
     agentRequests: 0, summaries: 0, toolResults: 0 };
   const result = await run([
     "agent", "--local", "--agent", "main", "--session-key", sessionKey,
-    "--message", `${readSkill ? "Consult windows-agent-handoff and its references before reading" : "Read"} the fixture deliverable. Scenario: ${name}.`,
+    "--message", `${readSkill ? "Consult the complete windows-agent-handoff SKILL.md before reading" : "Read"} the fixture deliverable. Scenario: ${name}.`,
     "--thinking", "off", "--timeout", "60", "--json",
   ]);
   assert.ok(scenario.agentRequests >= 2, JSON.stringify(result));
@@ -278,21 +279,21 @@ async function inspect(name, value, { active = true, hook = true, mode = "enable
 try {
   const configBytes = JSON.stringify(config);
   await fs.writeFile(configPath, configBytes);
-  await agent("on-demand skill and reference reads", { readSkill: true,
+  await agent("on-demand self-contained skill read", { readSkill: true,
     sessionKey: "agent:main:skill-read-fixture" });
-  await agent("first turn");
-  await agent("same-run compaction", { overflow: true });
-  await agent("post-compaction turn");
+  await agent("first turn", { readSkill: true });
+  await agent("same-run compaction", { overflow: true, readSkill: true });
+  await agent("post-compaction turn", { readSkill: true });
   assert.equal(await fs.readFile(configPath, "utf8"), configBytes);
   config.agents.defaults.compaction.mode = "default";
   config.agents.defaults.compaction.recentTurnsPreserve = 0;
   const summaryConfigBytes = JSON.stringify(config);
   await fs.writeFile(configPath, summaryConfigBytes);
-  await agent("same-run summary compaction", { overflow: true, summaryExpected: true });
-  await agent("post-summary-compaction turn");
-  await agent("new session", { sessionKey: "agent:main:another-fixture" });
-  await agent("subagent session key", { sessionKey: "agent:main:subagent:fixture" });
-  await agent("cron session key", { sessionKey: "agent:main:cron:fixture" });
+  await agent("same-run summary compaction", { overflow: true, summaryExpected: true, readSkill: true });
+  await agent("post-summary-compaction turn", { readSkill: true });
+  await agent("new session", { readSkill: true, sessionKey: "agent:main:another-fixture" });
+  await agent("subagent session key", { readSkill: true, sessionKey: "agent:main:subagent:fixture" });
+  await agent("cron session key", { readSkill: true, sessionKey: "agent:main:cron:fixture" });
   assert.equal(await fs.readFile(configPath, "utf8"), summaryConfigBytes);
   const denied = structuredClone(config);
   denied.plugins.entries = { "gateway-isolation": { hooks: { allowPromptInjection: false } } };

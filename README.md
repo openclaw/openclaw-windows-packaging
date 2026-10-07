@@ -517,9 +517,13 @@ The plugin also bundles the
 [`windows-agent-handoff` skill](plugins/gateway-isolation/skills/windows-agent-handoff/SKILL.md).
 The short context names it for user-facing GUI, sign-in, and file delivery.
 OpenClaw advertises eligible skills and loads their instructions on demand;
-the detailed procedures are not inserted into every prompt. The skill separates
-GUI/authentication and file-delivery branches, checks the exact isolation report
-before acting, and requires observable completion evidence. Its Windows and
+the detailed procedures are not inserted into every prompt. One successful
+`SKILL.md` read supplies the complete GUI/authentication, client delivery, and
+filesystem handoff procedures, without branch-file lookups. It checks the exact
+isolation report before acting and requires observable completion evidence.
+For an unknown sign-in service, it asks which service and waits; for a known
+service without official instructions, it obtains or requests those instructions
+before proposing a flow. Its Windows and
 environment metadata are discovery filters, not authorization. Disabling the
 plugin removes its skill; `skills.entries.windows-agent-handoff.enabled=false`
 disables the skill independently. Hook opt-outs do not disable manifest skills.

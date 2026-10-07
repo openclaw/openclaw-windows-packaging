@@ -32,6 +32,12 @@ if (args[0] === "--version") {
   const manifest = JSON.parse(
     fs.readFileSync(path.join(pluginRoot, "openclaw.plugin.json"), "utf8"),
   );
+  assert.deepEqual(manifest.skills, ["./skills"]);
+  const skillDirectory = path.join(pluginRoot, "skills", "windows-agent-handoff");
+  assert.deepEqual(fs.readdirSync(skillDirectory), ["SKILL.md"],
+    "The packaged handoff skill must be self-contained, without reference files or test sources.");
+  assert.ok(fs.lstatSync(path.join(skillDirectory, "SKILL.md")).isFile(),
+    "The packaged skill must be a regular file.");
   const enabled = manifest.enabledByDefault === true && entry?.enabled !== false;
   if (process.env.OPENCLAW_FIXTURE_FAIL_RUNTIME === "1") {
     throw new Error("Requested runtime inspection fixture failure.");

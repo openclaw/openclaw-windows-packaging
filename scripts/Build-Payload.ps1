@@ -161,8 +161,6 @@ $pluginFiles = @(
     'openclaw.plugin.json'
     'index.js'
     'skills\windows-agent-handoff\SKILL.md'
-    'skills\windows-agent-handoff\references\gui-and-sign-in.md'
-    'skills\windows-agent-handoff\references\file-handoff.md'
 )
 foreach ($pluginFile in $pluginFiles) {
     $sourcePath = Join-Path $pluginSource $pluginFile

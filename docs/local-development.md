@@ -318,7 +318,7 @@ finally {
 
 Run `.\scripts\Test-GatewayIsolationPlugin.Tests.ps1` for the Windows Launcher
 plugin's output, platform/report gates, staging, and payload inspection.
-The suite verifies that the skill and both branch references reach the payload
+The suite verifies that the self-contained skill reaches the payload
 unchanged, without shipping plugin tests. It also checks prepared-application
 file confinement, including traversal, sibling-directory, and directory-link
 escapes. The runtime lane resolves each application input to a regular file
@@ -331,8 +331,12 @@ facility, not Copilot's repository skill directories. Author it using upstream's
 [skill-creator workflow](https://github.com/openclaw/openclaw/blob/3a9d69db306cd7f081e06254cb89c4bcc14a7107/skills/skill-creator/SKILL.md)
 and [creating-skills guidance](https://github.com/openclaw/openclaw/blob/3a9d69db306cd7f081e06254cb89c4bcc14a7107/docs/tools/creating-skills.md):
 keep the description selective, one line, and under 160 characters; keep shared
-workflow and safety boundaries in `SKILL.md`; link branch-only detail from
-`references`; verify discovery and actual tool reads. The short environment
+workflow, safety boundaries, GUI/authentication, and all file-handoff routes in
+one self-contained `SKILL.md`; verify discovery and its complete on-demand read.
+Do not require branch-reference lookups after that read. Missing authentication
+inputs are stopping points: ask which service and wait when it is unknown;
+obtain or request official instructions before proposing a known service's
+flow. The short environment
 context names the skill only for its relevant scenarios, rather than relying
 solely on description matching or loading its body every turn.
 It keeps the essential first-action prohibitions always present; skill loading
@@ -363,8 +367,8 @@ It does not schedule cron jobs, spawn remote agents, evaluate model obedience,
 or prove attachment delivery/user-side filesystem access.
 
 The same lane verifies the skill's advertised packaged location, absence of
-eager body injection, and complete on-demand reads of `SKILL.md` and both branch
-references. It checks skill/plugin opt-outs and missing isolation-report
+eager body injection, and a complete on-demand read of the self-contained
+`SKILL.md`. It checks skill/plugin opt-outs and missing isolation-report
 eligibility using fresh session keys. The fake provider deliberately requests
 the reads; this proves runtime discovery and loading, not autonomous model
 selection or compliance with the procedures.
@@ -374,8 +378,10 @@ Observational live-model cases are recorded in
 They cover explicit invocation, natural selection, a headless-work negative
 route, truthful completion, unsafe export requests, and authorized agent-only
 GUI work. These cases must not execute side effects. Evaluate actual responses
-and skill/reference reads before claiming model-routing or safety compliance;
+and complete skill reads before claiming model-routing or safety compliance;
 the deterministic runtime lane is not a substitute.
+Observations from one model do not qualify other models or backends and do not
+guarantee GUI automation, authentication, or delivery.
 
 In authorized installed-environment tests, pair a human-participation case with
 an agent-only GUI case that needs no human viewing or input. A GUI process is
