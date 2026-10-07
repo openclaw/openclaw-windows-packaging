@@ -157,7 +157,10 @@ internal static class ClawCtlJson
             false,
             SchemaVersion,
             command,
-            Error: new ClawCtlJsonError("cli_error", NormalizeMessage(message))));
+            Error: new ClawCtlJsonError("cli_error", NormalizeMessage(message)),
+            // Capability is a package fact, not proof that setup or status succeeded.
+            // Companion must still be able to reach explicit setup after a probe fails.
+            Integration: new ClawCtlJsonIntegration("isolated-session", 1)));
     }
 
     private static ClawCtlJsonDocument FromSetup(SetupCommandResult result)

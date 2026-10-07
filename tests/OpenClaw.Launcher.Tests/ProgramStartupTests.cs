@@ -145,7 +145,7 @@ public sealed class ProgramStartupTests : IDisposable
     [InlineData("--json status", "status")]
     [InlineData("gateway-service start --json", "gateway-service start")]
     [InlineData("gateway-service restart --json", "gateway-service restart")]
-    public async Task JsonOperationalFailurePreservesTheSelectedCommand(
+    public async Task JsonOperationalFailurePreservesTheSelectedCommandAndIntegration(
         string commandLine,
         string expectedCommand)
     {
@@ -159,6 +159,12 @@ public sealed class ProgramStartupTests : IDisposable
         Assert.Equal(1, exitCode);
         using System.Text.Json.JsonDocument document =
             System.Text.Json.JsonDocument.Parse(output.ToString());
+        Assert.False(document.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Equal(1, document.RootElement.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("isolated-session",
+            document.RootElement.GetProperty("integration").GetProperty("kind").GetString());
+        Assert.Equal(1,
+            document.RootElement.GetProperty("integration").GetProperty("version").GetInt32());
         Assert.Equal(expectedCommand, document.RootElement.GetProperty("command").GetString());
     }
 

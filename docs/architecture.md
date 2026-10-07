@@ -223,7 +223,12 @@ before termination, and never kills a PID selected only by a snapshot.
 The Windows Companion app selects the current-user Gateway MSIX by its exact
 package registration and qualified `clawctl.exe` alias. It probes
 `clawctl status --json` for the versioned `isolated-session` integration
-contract. After setup, `clawctl companion prepare --port <port> --json`
+contract. Operational exception responses retain this capability metadata with
+`ok: false`, the selected command, and the original error. Capability does not
+assert session readiness or authorize credential handoff: Companion can reach
+its existing explicit package setup step, whose successful ready-session
+response is still required. Status itself never provisions or repairs a session.
+After setup, `clawctl companion prepare --port <port> --json`
 instructs [`SessionCompanionConfig`](../src/OpenClaw.SessionHost/SessionCompanionConfig.cs)
 to read the agent's effective Gateway configuration through upstream-owned
 runtime code. The packaged `plugin-sdk/health` snapshot reader runs with
