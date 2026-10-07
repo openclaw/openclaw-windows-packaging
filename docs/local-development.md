@@ -318,6 +318,29 @@ finally {
 
 Run `.\scripts\Test-GatewayIsolationPlugin.Tests.ps1` for the Windows Launcher
 plugin's output, platform/report gates, staging, and payload inspection.
+The suite verifies that the self-contained skill reaches the payload
+unchanged, without shipping plugin tests. It also checks prepared-application
+file confinement, including traversal, sibling-directory, and directory-link
+escapes. The runtime lane resolves each application input to a regular file
+inside the physical selected application directory before reading or launching it.
+The PowerShell entry point owns application selection and runs the fixture in
+that directory, restoring the caller's directory even when validation fails.
+
+The plugin-owned `windows-agent-handoff` skill uses OpenClaw's manifest `skills`
+facility, not Copilot's repository skill directories. Author it using upstream's
+[skill-creator workflow](https://github.com/openclaw/openclaw/blob/3a9d69db306cd7f081e06254cb89c4bcc14a7107/skills/skill-creator/SKILL.md)
+and [creating-skills guidance](https://github.com/openclaw/openclaw/blob/3a9d69db306cd7f081e06254cb89c4bcc14a7107/docs/tools/creating-skills.md):
+keep the description selective, one line, and under 160 characters; keep shared
+workflow, safety boundaries, GUI/authentication, and all file-handoff routes in
+one self-contained `SKILL.md`; verify discovery and its complete on-demand read.
+Do not require branch-reference lookups after that read. Missing authentication
+inputs are stopping points: ask which service and wait when it is unknown;
+obtain or request official instructions before proposing a known service's
+flow. The short environment
+context names the skill only for its relevant scenarios, rather than relying
+solely on description matching or loading its body every turn.
+It keeps the essential first-action prohibitions always present; skill loading
+selects detailed procedures, not whether those prohibitions apply.
 
 For actual prompt coverage, use a prepared, dependency-complete OpenClaw
 application directory containing this checkout's plugin under
@@ -336,11 +359,29 @@ real account, package registration, or scheduled task is involved.
 
 The fixture captures actual embedded-runner requests before the first tool,
 through a forced context-overflow/compaction retry, on the next turn, and in
-new, subagent-key, and cron-key sessions. It checks the complete instruction
-block in both system and user context rather than just hook registration, plus plugin/hook opt-outs and
-unchanged user configuration and instruction files. It does not schedule cron
-jobs, spawn remote agents, evaluate model obedience, or prove attachment
-delivery/user-side filesystem access.
+new, subagent-key, and cron-key sessions. It checks the complete two-sentence
+instruction block exactly once in system context and verifies that it is absent
+from user context, rather than just checking hook registration. It also checks
+plugin/hook opt-outs and unchanged user configuration and instruction files.
+It does not schedule cron jobs, spawn remote agents, evaluate model obedience,
+or prove attachment delivery/user-side filesystem access.
+
+The same lane verifies the skill's advertised packaged location, absence of
+eager body injection, and a complete on-demand read of the self-contained
+`SKILL.md`. It checks skill/plugin opt-outs and missing isolation-report
+eligibility using fresh session keys. The fake provider deliberately requests
+the reads; this proves runtime discovery and loading, not autonomous model
+selection or compliance with the procedures.
+
+Observational live-model cases are recorded in
+[`windows-agent-handoff.test-cases.json`](../scripts/fixtures/windows-agent-handoff.test-cases.json).
+They cover explicit invocation, natural selection, a headless-work negative
+route, truthful completion, unsafe export requests, and authorized agent-only
+GUI work. These cases must not execute side effects. Evaluate actual responses
+and complete skill reads before claiming model-routing or safety compliance;
+the deterministic runtime lane is not a substitute.
+Observations from one model do not qualify other models or backends and do not
+guarantee GUI automation, authentication, or delivery.
 
 In authorized installed-environment tests, pair a human-participation case with
 an agent-only GUI case that needs no human viewing or input. A GUI process is
@@ -371,18 +412,15 @@ For in-chat requests, require a new attachment from the tested response before
 checking downloaded bytes; an older card cannot satisfy the case. Record
 corrective prompts and browser reloads separately from first-pass delivery.
 
-The plugin uses `before_prompt_build` with `appendSystemContext` and
-`prependContext`, both derived from the same static instructions. System context
-states the host constraints at instruction priority; real-model testing showed
+The plugin uses `before_prompt_build` with `appendSystemContext` to supply
+static instructions without adding a user-context copy. System context states
+the host constraints at instruction priority; real-model testing showed
 that user context alone could reach the model yet still be ignored. The user
 interaction rule covers both launching and offering an unusable local dialog;
-validate proposed next steps as well as tool calls in real-model scenarios. The user
-copy remains a compatibility fallback because the previously qualified v2026.9.4 runtime
-can replace system-context additions on runtime-only events. Remove that
-fallback only after the selected runtime preserves system context through
-those events and the request-boundary proof covers them. Until then,
-this lane does not synthesize those events or qualify external CLI/realtime
-backends. Raw-model and settled-finalization operations omit prompt hooks.
+validate proposed next steps as well as tool calls in real-model scenarios.
+This lane does not synthesize internal runtime events or qualify external
+CLI/realtime backends. Raw-model and settled-finalization operations omit prompt
+hooks.
 Do not treat successful registration as universal context coverage. Repeat
 the request-boundary proof when the approved runtime changes.
 
