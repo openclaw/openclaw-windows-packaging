@@ -8,6 +8,39 @@ namespace OpenClaw.Launcher.AotSmoke;
 
 internal static partial class SmokeProgram
 {
+    private static async Task StateTransferFailureNamesCommandAsync()
+    {
+        using Fixture fixture = Fixture.CreateWithoutApplication();
+        foreach (string command in new[] { "backup", "restore", "recover" })
+        {
+            foreach (bool json in new[] { false, true })
+            {
+                fixture.ClearOutput();
+                int exitCode = await fixture.RunAsync(
+                    json ? [command, "--json"] : [command],
+                    readEnvironment: _ => throw new InvalidOperationException("fixture startup failure"))
+                    .ConfigureAwait(false);
+                AssertExitCode(1, exitCode, fixture);
+                if (json)
+                {
+                    using JsonDocument document = JsonDocument.Parse(fixture.Output.ToString());
+                    Assert(document.RootElement.GetProperty("command").GetString() == command,
+                        "Native startup failure lost the selected state-transfer command.");
+                    AssertContains(document.RootElement.GetProperty("error").GetProperty("message").GetString()!,
+                        "fixture startup failure", fixture);
+                    AssertNotContains(fixture.Error.ToString(), "fixture startup failure", fixture);
+                }
+                else
+                {
+                    AssertContains(fixture.Error.ToString(), $"clawctl {command}", fixture);
+                    AssertContains(fixture.Error.ToString(), "fixture startup failure", fixture);
+                    AssertNotContains(fixture.Output.ToString(), "fixture startup failure", fixture);
+                }
+            }
+        }
+        fixture.AssertNoInstallationWorkStarted();
+    }
+
     private static async Task StateTransferCommandsAsync()
     {
         using Fixture fixture = await Fixture.CreateWithApplicationAsync().ConfigureAwait(false);
