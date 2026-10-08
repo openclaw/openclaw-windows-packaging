@@ -464,20 +464,30 @@ internal static class SmokeProgram
 
     private static async Task JsonFailureIsStructuredAsync()
     {
-        using Fixture fixture = Fixture.CreateWithoutApplication();
+        foreach (string command in new[] { "setup", "status" })
+        {
+            using Fixture fixture = Fixture.CreateWithoutApplication();
 
-        int exitCode = await fixture.RunAsync(["setup", "--json"]).ConfigureAwait(false);
+            int exitCode = await fixture.RunAsync([command, "--json"]).ConfigureAwait(false);
 
-        AssertExitCode(1, exitCode, fixture);
-        using JsonDocument document = JsonDocument.Parse(fixture.Output.ToString());
-        JsonElement root = document.RootElement;
-        Assert(!root.GetProperty("ok").GetBoolean(), "The JSON failure reported success.");
-        Assert(
-            root.GetProperty("schemaVersion").GetInt32() == 1,
-            "The JSON failure did not report schema version 1.");
-        Assert(
-            root.GetProperty("error").GetProperty("type").GetString() == "cli_error",
-            "The JSON failure did not use the cli_error envelope.");
+            AssertExitCode(1, exitCode, fixture);
+            using JsonDocument document = JsonDocument.Parse(fixture.Output.ToString());
+            JsonElement root = document.RootElement;
+            Assert(!root.GetProperty("ok").GetBoolean(), "The JSON failure reported success.");
+            Assert(
+                root.GetProperty("schemaVersion").GetInt32() == 1,
+                "The JSON failure did not report schema version 1.");
+            Assert(
+                root.GetProperty("error").GetProperty("type").GetString() == "cli_error",
+                "The JSON failure did not use the cli_error envelope.");
+            Assert(root.GetProperty("command").GetString() == command,
+                "The JSON failure lost the selected command.");
+            Assert(root.GetProperty("integration").GetProperty("kind").GetString() == "isolated-session" &&
+                root.GetProperty("integration").GetProperty("version").GetInt32() == 1,
+                "The JSON failure hid the package's isolated-session capability.");
+            Assert(!root.TryGetProperty("session", out _) && !root.TryGetProperty("companion", out _),
+                "The JSON failure fabricated session readiness or Companion credentials.");
+        }
     }
 
     // Spectre.Console composes the renderables; this proves the composition,
