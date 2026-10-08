@@ -1,7 +1,6 @@
 {
   "repository": "https://github.com/openclaw/openclaw",
   "channel": "stable",
-  "stableVersion": "2026.9.8",
   "msixRevision": 1,
   "packageIdentityName": "OpenClawFoundation.OpenClawGateway",
   "packageFamilyName": "OpenClawFoundation.OpenClawGateway_rfcbke2p71se2",
