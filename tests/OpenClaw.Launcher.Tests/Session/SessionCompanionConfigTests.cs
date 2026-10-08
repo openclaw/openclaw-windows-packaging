@@ -48,7 +48,8 @@ public sealed class SessionCompanionConfigTests : IDisposable
                     Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
                         File.Exists(ConfigPath) ? File.ReadAllText(ConfigPath) : ""))),
                     File.Exists(ConfigPath)), CompanionConfigPatchContext.Default.CompanionConfigSnapshot));
-            });
+            },
+            enterState: new SessionStateAccess(Path.Combine(_root, "state-access")).EnterReader);
     }
 
     private int RunWithoutPatch(

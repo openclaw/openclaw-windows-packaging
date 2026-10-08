@@ -2,7 +2,12 @@ using Microsoft.Win32.SafeHandles;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 
+#if OPENCLAW_SESSION_HOST
+using SessionException = OpenClaw.SessionProtocol.SessionLaunchException;
+namespace OpenClaw.SessionHost;
+#else
 namespace OpenClaw.Launcher.Session;
+#endif
 
 /// <summary>Rejects path redirection below a caller-established root.</summary>
 internal static partial class TrustedPath
@@ -68,7 +73,7 @@ internal static partial class TrustedPath
             set => stream.Position = value;
         }
 
-        public override void Flush() => stream.Flush();
+        public override void Flush() => stream.Flush(flushToDisk: true);
 
         public override int Read(byte[] buffer, int offset, int count) =>
             stream.Read(buffer, offset, count);
@@ -171,14 +176,17 @@ internal static partial class TrustedPath
         "Reliability",
         "CA2000:Dispose objects before losing scope",
         Justification = "The FileStream constructor takes ownership of the SafeFileHandle.")]
-    public static FileStream OpenRead(string trustedRoot, string candidatePath)
+    public static FileStream OpenRead(
+        string trustedRoot,
+        string candidatePath,
+        bool protectContents = false)
     {
         EnsureNoReparsePoints(trustedRoot, candidatePath);
 
         SafeFileHandle handle = CreateFile(
             candidatePath,
             GenericRead,
-            FileShareRead | FileShareWrite | FileShareDelete,
+            protectContents ? FileShareRead : FileShareRead | FileShareWrite | FileShareDelete,
             IntPtr.Zero,
             OpenExisting,
             FileFlagOpenReparsePoint,
@@ -323,6 +331,41 @@ internal static partial class TrustedPath
     {
         using ValidatedDirectory? directory = TryOpenValidatedDirectory(path, expectedIdentity: null);
         return directory?.Identity;
+    }
+
+    [SuppressMessage(
+        "Reliability",
+        "CA2000:Dispose objects before losing scope",
+        Justification = "The returned FileStream owns the relative SafeFileHandle.")]
+    internal static FileStream OpenLock(
+        ValidatedDirectory root,
+        string name,
+        bool exclusive)
+    {
+        if (string.IsNullOrWhiteSpace(name) || Path.GetFileName(name) != name)
+        {
+            throw new SessionException("The state-access lock name is invalid.");
+        }
+        SafeFileHandle handle = CreateRelative(
+            root.Handle,
+            name,
+            exclusive ? GenericRead | GenericWrite : GenericRead,
+            exclusive ? 0 : FileShareRead,
+            3, // FILE_OPEN_IF creates the lock once without truncating it.
+            FileNonDirectoryFile | FileOpenReparsePoint);
+        try
+        {
+            if ((File.GetAttributes(handle) & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new SessionException("The state-access lock is a reparse point.");
+            }
+            return new FileStream(handle, exclusive ? FileAccess.ReadWrite : FileAccess.Read);
+        }
+        catch
+        {
+            handle.Dispose();
+            throw;
+        }
     }
 
     internal static ValidatedDirectory? TryOpenValidatedDirectory(

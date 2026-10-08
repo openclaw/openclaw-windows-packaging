@@ -290,6 +290,63 @@ Companion verifies the live listener and checks that the agent's port and token
 still match its setup record. It matches the pending request to its own device
 ID and public key, then approves only that exact request.
 
+## State transfer preserves the current session identity
+
+[`StateTransferCoordinator`](../src/OpenClaw.Launcher/StateTransfer/StateTransferCoordinator.cs)
+owns host-side backup, restore, and recovery orchestration. It requires ready
+setup, starts only the recorded session, binds exchanges to its generation, and
+uses its staged helper and agent-owned Node.js runtime. The archive store
+publishes hash/length-checked files without overwriting an existing destination.
+Listing that store does not contact MXC.
+
+[`SessionStateTransfer`](../src/OpenClaw.SessionHost/SessionStateTransfer.cs)
+owns guest preparation, activation, and rollback.
+[`StateArchiveApplication`](../src/OpenClaw.SessionHost/StateArchiveApplication.cs)
+invokes immutable packaged OpenClaw for inventory, canonical SQLite snapshots,
+verification, and fresh-target extraction. It inspects configuration through
+the upstream SDK and relocates only declared filesystem fields and `$include`
+documents in staging, never arbitrary credential/history strings. Missing,
+external, relative, or environment-dependent required paths remain explicit
+automatic-recovery refusals. Windows/profile portability is not account or
+package migration.
+
+Restore verifies and prepares before asking the existing gateway owner to stop
+the managed gateway. It acquires exclusive state access, captures and retains
+verified current-state protection, and only then requests activation. Asset
+roots are collapsed to non-overlapping profile-relative mappings. A durable,
+source-generated journal outside `.openclaw` records the current profile
+identity, transaction, prepared-tree digest, asset identities, protection, and
+progress before same-volume moves. Activation rechecks the prepared contents
+before moving any original data. Rollback reconciles recorded identities with the moved
+objects, including interruption between a move and its next host response.
+It does not terminate an unrelated process or treat journal paths as
+unrestricted authority. Backend/setup identity is never replaced.
+
+[`SessionStateAccess`](../src/OpenClaw.SessionHost/SessionStateAccess.cs)
+owns one required cross-process access gate. Intent blocks new attached
+launches, detached supervision, PowerShell, and configuration writers;
+existing readers must finish before maintenance can obtain exclusive access.
+A separate worker lease prevents rollback while an activation worker remains
+alive. Kernel-released leases provide liveness without trusting a reusable PID.
+The helpers own child process trees in kill-on-close jobs so a lease cannot end
+while their descendants keep writing. Inspection and diagnostics remain
+available when activation is pending. Successful activation or explicit
+rollback clears intent; an unreadable journal fails closed. Finalized state
+remains finalized if deleting disposable transaction data or a private recovery
+snapshot fails: the result names the retained directory in a cleanup warning
+instead of falsely reporting interrupted activation. Retained archives are
+not part of that cleanup.
+
+Recovery's host-side
+[`RecoverySource`](../src/OpenClaw.Launcher/StateTransfer/RecoverySource.cs)
+reads only an explicitly selected old profile. It pins source identities,
+refuses writable/locked files and reparse points, checks inventory stability,
+and carries required profile-contained dependencies into a shadow profile.
+The guest preserves WAL bytes in that shadow copy before invoking the upstream
+canonical producer. The verified recovery archive is retained first, then fed
+through ordinary restore. Neither recovery nor rollback recreates an old
+Windows account, changes ACLs, provisions a new session, or restarts the gateway.
+
 ## Diagnostics and build inputs have different trust roles
 
 [`HostDiagnosticLog`](../src/OpenClaw.Launcher/HostDiagnosticLog.cs) writes
@@ -377,6 +434,7 @@ flowchart LR
 | Package applications, aliases, and launcher dispatch | [`Package.appxmanifest`](../src/OpenClaw.Launcher/Package.appxmanifest), [`HostEntrypoint.cs`](../src/OpenClaw.Launcher/HostEntrypoint.cs), [`HostStartup.cs`](../src/OpenClaw.Launcher/HostStartup.cs), [`Program.cs`](../src/OpenClaw.Launcher/Program.cs) |
 | Setup state and session lifecycle | [`SetupStateStore.cs`](../src/OpenClaw.Launcher/Session/SetupStateStore.cs), [`SessionRuntime.cs`](../src/OpenClaw.Launcher/Session/SessionRuntime.cs), [`SessionCoordinator.cs`](../src/OpenClaw.Launcher/Session/SessionCoordinator.cs), [`SessionExecutor.cs`](../src/OpenClaw.Launcher/Session/SessionExecutor.cs) |
 | Guest protocol and helper staging | [`OpenClaw.SessionHost/Program.cs`](../src/OpenClaw.SessionHost/Program.cs), [`SessionLaunchProtocol.cs`](../src/OpenClaw.SessionProtocol/SessionLaunchProtocol.cs), [`SessionHelperStager.cs`](../src/OpenClaw.Launcher/Session/SessionHelperStager.cs) |
+| State transfer and activation | [`SessionStateTransferProtocol.cs`](../src/OpenClaw.SessionProtocol/SessionStateTransferProtocol.cs), [`StateTransferCoordinator.cs`](../src/OpenClaw.Launcher/StateTransfer/StateTransferCoordinator.cs), [`SessionStateTransfer.cs`](../src/OpenClaw.SessionHost/SessionStateTransfer.cs), [`SessionStateAccess.cs`](../src/OpenClaw.SessionHost/SessionStateAccess.cs), [`StateActivationJournal.cs`](../src/OpenClaw.SessionHost/StateActivationJournal.cs) |
 | MXC runtime and wire boundary | [`mxc-runtime.lock.json`](../mxc-runtime.lock.json), [`Get-MxcRuntime.ps1`](../scripts/Get-MxcRuntime.ps1), [`MxcRuntimeLocator.cs`](../src/OpenClaw.Launcher/Mxc/MxcRuntimeLocator.cs), [`MxcCliSessionClient.cs`](../src/OpenClaw.Launcher/Mxc/MxcCliSessionClient.cs), [`MxcWireProtocol.cs`](../src/OpenClaw.Launcher/Mxc/MxcWireProtocol.cs) |
 | Agent runtime installation | [`SessionRuntimeInstaller.cs`](../src/OpenClaw.SessionHost/SessionRuntimeInstaller.cs) |
 | Gateway lifecycle | [`SchTasksGatewayScheduler.cs`](../src/OpenClaw.Launcher/Gateway/SchTasksGatewayScheduler.cs), [`GatewayController.cs`](../src/OpenClaw.Launcher/Gateway/GatewayController.cs), [`GatewayConfigurationStore.cs`](../src/OpenClaw.Launcher/Gateway/GatewayConfigurationStore.cs) |

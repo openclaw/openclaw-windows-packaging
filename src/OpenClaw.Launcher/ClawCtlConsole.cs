@@ -85,6 +85,9 @@ internal static class ClawCtlConsole
             case GatewayCommandResult gateway:
                 WriteGateway(view, gateway);
                 break;
+            case StateArchiveCommandResult state:
+                WriteStateArchive(view, state);
+                break;
             default:
                 throw new ArgumentOutOfRangeException(
                     nameof(result),
@@ -363,12 +366,13 @@ internal static class ClawCtlConsole
         bool useColor,
         bool narrate,
         ClawCtlProgress initial,
-        Func<IProgress<ClawCtlProgress>, Task<T>> operation) =>
+        Func<IProgress<ClawCtlProgress>, Task<T>> operation,
+        bool allowLiveStatus = true) =>
         await NarrateAsync(
             output,
             useColor,
             narrate,
-            IsInteractiveConsole(output),
+            allowLiveStatus && IsInteractiveConsole(output),
             initial,
             operation).ConfigureAwait(false);
 
@@ -463,6 +467,82 @@ internal static class ClawCtlConsole
 
         public void Report(ClawCtlProgress value)
         {
+        }
+    }
+
+    internal static bool ConfirmStateReplacement(TextWriter output, bool useColor, string source)
+    {
+        IAnsiConsole console = CreateConsole(output, useColor, SupportsUnicode(output),
+            ResolveWidth(output), InteractionSupport.Yes);
+        console.Write(new Text("Source: " + source + Environment.NewLine));
+        console.Write(new Text("This replaces the current agent's OpenClaw data and leaves the gateway stopped." + Environment.NewLine));
+        return console.Prompt(new ConfirmationPrompt("Replace current agent state?") { DefaultValue = false });
+    }
+
+    private static void WriteStateArchive(ResultView view, StateArchiveCommandResult result)
+    {
+        string state = result.Error is not null ? "failed" :
+            result.Transfer?.Pending == true ? "pending" :
+            result.Transfer?.Phase == "preview" ? "preview" : "complete";
+        view.Row("State", Status(view,
+            result.Error is not null ? StatusKind.Failure :
+                result.Transfer?.Pending == true ? StatusKind.Warning : StatusKind.Success,
+            state));
+        if (result.Error is { } error)
+        {
+            view.Detail(error);
+        }
+        if (result.Archives is { } archives)
+        {
+            view.Row("Archives", new Text(archives.Count.ToString(CultureInfo.InvariantCulture)));
+            foreach (StateTransfer.StateArchiveEntry entry in archives)
+            {
+                view.Row(entry.Protection ? "Protection" : "Archive", new Text(entry.Path));
+            }
+            return;
+        }
+        if (result.Transfer is not { } transfer)
+        {
+            return;
+        }
+        if (transfer.ProfileDirectory is { } profile)
+        {
+            view.Row("Agent profile", new Text(profile));
+        }
+        if (transfer.Phase is { } phase)
+        {
+            view.Row("Activation", new Text(phase));
+        }
+        if (transfer.GatewayStopped)
+        {
+            view.Row("Gateway", new Text("stopped"));
+        }
+        if (transfer.ProtectionArchive is { } protection)
+        {
+            view.Row("Before restore", new Text(protection));
+        }
+        if (transfer.Archive is { } archive)
+        {
+            view.Row("Archive", new Text(archive.Path));
+            view.Row("Bytes", new Text(archive.Length.ToString(CultureInfo.InvariantCulture)));
+            view.Row("Verified", Status(view, StatusKind.Success, "yes"));
+            view.Detail("This archive contains credentials and is not encrypted. Store it securely.");
+        }
+        else
+        {
+            view.Row("Inventory", new Text(transfer.Assets.Count.ToString(CultureInfo.InvariantCulture)));
+        }
+        foreach (string warning in transfer.Warnings)
+        {
+            view.Detail(warning);
+        }
+        foreach (StateTransferMapping mapping in transfer.Mappings)
+        {
+            view.Row("Mapping", new Text(mapping.SourcePath + " -> " + mapping.ProfileRelativePath));
+        }
+        if (transfer.Readiness?.State is { } readiness)
+        {
+            view.Row("Readiness", new Text(readiness.ToString()));
         }
     }
 
@@ -604,6 +684,8 @@ internal static class ClawCtlConsole
 
         WriteReadiness(view, result.Readiness);
 
+        WriteStateActivation(view, result.StateTransfer);
+
         view.Row("Recovery", DescribeRecovery(view, result.Recovery));
         if (!string.IsNullOrWhiteSpace(result.Recovery.Detail))
         {
@@ -651,6 +733,27 @@ internal static class ClawCtlConsole
         view.Command("Report an issue", IssueUrl);
         view.Blank();
         view.Line("Bundle:");
+    }
+
+    private static void WriteStateActivation(ResultView view, OpenClaw.SessionProtocol.SessionStateTransferResult? transfer)
+    {
+        if (transfer is null)
+        {
+            return;
+        }
+        view.Row("Activation", Status(view,
+            transfer.Pending ? StatusKind.Warning : StatusKind.Success,
+            transfer.Phase ?? "none pending"));
+        if (transfer.Error is { } error)
+        {
+            view.Detail(error);
+        }
+        if (transfer.Pending)
+        {
+            view.Detail(transfer.Phase == "unavailable"
+                ? "Resolve the reported error before starting writers. If activation is pending, run `clawctl restore --rollback --yes`."
+                : "New state writers are blocked. Run `clawctl restore --rollback --yes`.");
+        }
     }
 
     private static void WriteTeardown(ResultView view, TeardownCommandResult result)
@@ -730,6 +833,8 @@ internal static class ClawCtlConsole
         }
 
         WriteReadiness(view, result.Readiness);
+
+        WriteStateActivation(view, result.StateTransfer);
 
         // The authenticated handoff is owned by OpenClaw and must not expose
         // a reusable token at the console.

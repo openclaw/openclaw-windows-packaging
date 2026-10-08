@@ -95,7 +95,7 @@ internal sealed record SessionCommandCaptureResult(
 /// travel as JSON in the shared workspace and are never exposed to that
 /// flattening.
 /// </remarks>
-internal sealed class SessionExecutor
+internal sealed partial class SessionExecutor
 {
     private const int ControlCExitCode = unchecked((int)0xc000013a);
     private const int PortableInterruptedExitCode = 130;

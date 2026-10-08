@@ -91,10 +91,10 @@ internal sealed class SessionWorkspaceOperation : IDisposable
         return await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public FileStream OpenRead(string path)
+    public FileStream OpenRead(string path, bool protectContents = false)
     {
         EnsureCurrent();
-        return TrustedPath.OpenRead(WorkspacePath, path);
+        return TrustedPath.OpenRead(WorkspacePath, path, protectContents);
     }
 
     public Stream CreateNew(string path)

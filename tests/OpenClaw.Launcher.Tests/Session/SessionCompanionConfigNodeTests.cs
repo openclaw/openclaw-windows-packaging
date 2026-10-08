@@ -86,6 +86,7 @@ public sealed class SessionCompanionConfigNodeTests : IDisposable
         {
             File.WriteAllText(Path.Combine(sdk, module + ".js"), SdkFixture);
         }
+        using IDisposable state = new SessionStateAccess(Path.Combine(_root, "state-access")).EnterReader();
     }
 
     public void Dispose() => Directory.Delete(_root, recursive: true);
@@ -125,7 +126,8 @@ public sealed class SessionCompanionConfigNodeTests : IDisposable
         }));
 
         int exit = SessionCompanionConfig.Run(requestPath, File.ReadAllText, File.WriteAllText,
-            profileRoot: Profile);
+            profileRoot: Profile,
+            enterState: new SessionStateAccess(Path.Combine(_root, "state-access")).EnterReader);
         return (exit, SessionCompanionConfigProtocol.ReadResult(
             File.ReadAllText(SessionLaunchProtocol.ResultPathFor(requestPath)), "node-contract"));
     }

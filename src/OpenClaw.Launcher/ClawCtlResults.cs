@@ -1,5 +1,7 @@
 using OpenClaw.Launcher.Gateway;
 using OpenClaw.Launcher.Session;
+using OpenClaw.Launcher.StateTransfer;
+using OpenClaw.SessionProtocol;
 
 namespace OpenClaw.Launcher;
 
@@ -9,6 +11,13 @@ internal interface IClawCtlResult
 
     int ExitCode { get; }
 }
+
+internal sealed record StateArchiveCommandResult(
+    string Command,
+    int ExitCode,
+    SessionStateTransferResult? Transfer = null,
+    IReadOnlyList<StateArchiveEntry>? Archives = null,
+    string? Error = null) : IClawCtlResult;
 
 internal record ClawCtlProgress(string Message);
 
@@ -41,7 +50,8 @@ internal sealed record StatusCommandResult(
     GatewayStatusReport Gateway,
     GatewayPersistenceStatus Recovery,
     string? NodeVersion,
-    AgentConfigReadinessStatus? Readiness = null) : IClawCtlResult
+    AgentConfigReadinessStatus? Readiness = null,
+    SessionStateTransferResult? StateTransfer = null) : IClawCtlResult
 {
     public string Command => "status";
 
@@ -53,7 +63,8 @@ internal sealed record StatusCommandResult(
         Gateway.State is GatewayState.Unhealthy or GatewayState.Unknown ||
         Recovery.State is GatewayPersistenceState.ActionRequired or
             GatewayPersistenceState.Unknown ||
-        Readiness?.ProbeFailed == true
+        Readiness?.ProbeFailed == true ||
+        StateTransfer?.Pending == true || StateTransfer?.Error is not null
             ? 1
             : 0;
 }
@@ -103,7 +114,8 @@ internal sealed record GatewayCommandResult(
     string? SandboxId = null,
     string? AgentUserSid = null,
     IReadOnlyList<OpenClaw.SessionProtocol.SessionOwnedListener>? OwnedListeners = null,
-    SessionAvailability? SessionAvailability = null) : IClawCtlResult
+    SessionAvailability? SessionAvailability = null,
+    SessionStateTransferResult? StateTransfer = null) : IClawCtlResult
 {
     public string Command => $"gateway-service {Action}";
 }
