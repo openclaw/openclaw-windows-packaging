@@ -146,26 +146,16 @@ internal sealed partial class GatewayRuntime
                 return new DiagnosticsBundleResult(null, sessionReached, Shareable(notes));
             }
 
-            try
-            {
-                WriteBundle(
-                    bundlePath,
-                    hostFiles,
-                    gatewayFiles,
-                    gatewayOperation,
-                    staged,
-                    stagingOperation,
-                    environment,
-                    notes,
-                    progress);
-            }
-            catch (IOException exception) when (File.Exists(bundlePath))
-            {
-                throw new IOException(
-                    $"The diagnostics bundle already exists: {bundlePath}. " +
-                    "Choose another path with --output.",
-                    exception);
-            }
+            WriteBundle(
+                bundlePath,
+                hostFiles,
+                gatewayFiles,
+                gatewayOperation,
+                staged,
+                stagingOperation,
+                environment,
+                notes,
+                progress);
             return new DiagnosticsBundleResult(bundlePath, sessionReached, Shareable(notes));
         }
         finally
@@ -401,67 +391,84 @@ internal sealed partial class GatewayRuntime
     {
         Directory.CreateDirectory(Path.GetDirectoryName(bundlePath)!);
 
-        using FileStream stream = new(
-            bundlePath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-        using ZipArchive archive = new(stream, ZipArchiveMode.Create);
-
-        foreach (HostSource source in hostFiles)
+        FileStream stream;
+        try
         {
-            progress.Report(new ClawCtlProgress($"Collecting {source.Description}."));
-            AddEntry(archive, source.Name, source.Path, notes);
+            stream = new FileStream(
+                bundlePath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        }
+        catch (IOException exception) when (File.Exists(bundlePath))
+        {
+            // CreateNew fails when the path is already present. Later write
+            // failures, such as a full disk while the archive is flushed,
+            // must keep their own message. The file exists in both cases.
+            throw new IOException(
+                $"The diagnostics bundle already exists: {bundlePath}. " +
+                "Choose another path with --output.",
+                exception);
         }
 
-        if (gatewayFiles.Count > 0 && gatewayOperation is not null)
+        using (stream)
+        using (ZipArchive archive = new(stream, ZipArchiveMode.Create))
         {
-            progress.Report(new ClawCtlProgress("Collecting the gateway launch logs."));
-            foreach (string file in gatewayFiles)
+            foreach (HostSource source in hostFiles)
             {
-                AddEntry(
-                    archive,
-                    $"gateway/{Path.GetFileName(file)}",
-                    file,
-                    notes,
-                    gatewayOperation,
-                    MaximumGatewayFileBytes);
+                progress.Report(new ClawCtlProgress($"Collecting {source.Description}."));
+                AddEntry(archive, source.Name, source.Path, notes);
             }
-        }
 
-        if (staged is not null &&
-            stagingOperation is not null &&
-            Directory.Exists(staged))
-        {
-            progress.Report(new ClawCtlProgress(
-                "Adding the OpenClaw logs and configuration from the isolated session."));
-            stagingOperation.EnsureCurrent();
-            foreach (string file in EnumerateStagedFiles(
-                stagingOperation.WorkspacePath,
-                staged,
-                notes))
+            if (gatewayFiles.Count > 0 && gatewayOperation is not null)
             {
-                string relative = Path.GetRelativePath(staged, file).Replace('\\', '/');
-                AddEntry(
-                    archive,
-                    $"agent/{relative}",
-                    file,
-                    notes,
-                    stagingOperation);
+                progress.Report(new ClawCtlProgress("Collecting the gateway launch logs."));
+                foreach (string file in gatewayFiles)
+                {
+                    AddEntry(
+                        archive,
+                        $"gateway/{Path.GetFileName(file)}",
+                        file,
+                        notes,
+                        gatewayOperation,
+                        MaximumGatewayFileBytes);
+                }
             }
-        }
 
-        ZipArchiveEntry manifest = archive.CreateEntry("manifest.txt");
-        using StreamWriter writer = new(manifest.Open());
-        writer.WriteLine($"Collected: {DateTimeOffset.UtcNow:u}");
-        if (environment is not null)
-        {
-            writer.WriteLine(DiagnosticsRedactor.Redact($"Environment: {environment}"));
-        }
+            if (staged is not null &&
+                stagingOperation is not null &&
+                Directory.Exists(staged))
+            {
+                progress.Report(new ClawCtlProgress(
+                    "Adding the OpenClaw logs and configuration from the isolated session."));
+                stagingOperation.EnsureCurrent();
+                foreach (string file in EnumerateStagedFiles(
+                    stagingOperation.WorkspacePath,
+                    staged,
+                    notes))
+                {
+                    string relative = Path.GetRelativePath(staged, file).Replace('\\', '/');
+                    AddEntry(
+                        archive,
+                        $"agent/{relative}",
+                        file,
+                        notes,
+                        stagingOperation);
+                }
+            }
 
-        writer.WriteLine(
-            "Redaction is best-effort and targets credential-shaped values. " +
-            "Review before sharing.");
-        foreach (string note in Shareable(notes))
-        {
-            writer.WriteLine(note);
+            ZipArchiveEntry manifest = archive.CreateEntry("manifest.txt");
+            using StreamWriter writer = new(manifest.Open());
+            writer.WriteLine($"Collected: {DateTimeOffset.UtcNow:u}");
+            if (environment is not null)
+            {
+                writer.WriteLine(DiagnosticsRedactor.Redact($"Environment: {environment}"));
+            }
+
+            writer.WriteLine(
+                "Redaction is best-effort and targets credential-shaped values. " +
+                "Review before sharing.");
+            foreach (string note in Shareable(notes))
+            {
+                writer.WriteLine(note);
+            }
         }
     }
 
