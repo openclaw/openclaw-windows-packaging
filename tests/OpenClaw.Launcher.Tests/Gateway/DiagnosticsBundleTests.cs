@@ -302,6 +302,51 @@ public sealed class DiagnosticsBundleTests : IDisposable
                 StringComparison.Ordinal));
     }
 
+    // Agent logs are staged from a guest-writable profile with no size bound.
+    // collect-logs has to keep only the tail, or a large log is read whole
+    // and the bundle is never produced. Configuration stays complete.
+    [Fact]
+    public async Task StagedAgentLogsKeepOnlyTheLastMegabyte()
+    {
+        string logPath = Path.Combine(_root, "openclaw.log");
+        var longLog = new StringBuilder();
+        for (int line = 0; longLog.Length <= GatewayRuntime.MaximumGatewayFileBytes * 2; line++)
+        {
+            longLog.Append(CultureInfo.InvariantCulture, $"agent line {line:D8}\n");
+        }
+
+        longLog.Append("the last agent line\n");
+        await File.WriteAllTextAsync(logPath, longLog.ToString());
+        string configPath = Path.Combine(_root, "openclaw.json");
+        const string configText = """{"gateway":{"mode":"local"}}""";
+        await File.WriteAllTextAsync(configPath, configText);
+        string bundlePath = Path.Combine(_root, "agent-bounded.zip");
+        List<string> notes = [];
+        using (FileStream stream = new(bundlePath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        using (ZipArchive archive = new(stream, ZipArchiveMode.Create))
+        {
+            GatewayRuntime.AddEntry(archive, "agent/logs/openclaw.log", logPath, notes);
+            GatewayRuntime.AddEntry(archive, "agent/config/openclaw.json", configPath, notes);
+        }
+
+        using ZipArchive bundled = ZipFile.OpenRead(bundlePath);
+        string kept = await ReadEntryAsync(bundled, "agent/logs/openclaw.log");
+        Assert.True(
+            kept.Length <= GatewayRuntime.MaximumGatewayFileBytes,
+            $"kept {kept.Length} characters");
+        Assert.StartsWith("agent line ", kept, StringComparison.Ordinal);
+        Assert.EndsWith("the last agent line\n", kept, StringComparison.Ordinal);
+        Assert.Contains(
+            notes,
+            note => note.StartsWith(
+                "agent/logs/openclaw.log: only the last 1024 KiB of ",
+                StringComparison.Ordinal));
+        Assert.Equal(configText, await ReadEntryAsync(bundled, "agent/config/openclaw.json"));
+        Assert.DoesNotContain(
+            notes,
+            note => note.Contains("openclaw.json", StringComparison.Ordinal));
+    }
+
     // A recorded gateway means the user was told to collect its log, so a
     // workspace that cannot be read must be named rather than skipped.
     [Fact]
