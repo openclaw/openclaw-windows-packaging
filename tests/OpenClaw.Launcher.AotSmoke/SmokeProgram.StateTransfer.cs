@@ -1,5 +1,9 @@
 using System.Security.Cryptography;
+using System.IO.Compression;
+using System.Security.Principal;
 using System.Text.Json;
+using OpenClaw.Launcher.Session;
+using OpenClaw.Launcher.StateTransfer;
 using OpenClaw.Launcher.Tests.StateTransfer;
 using OpenClaw.SessionHost;
 using OpenClaw.SessionProtocol;
@@ -8,6 +12,79 @@ namespace OpenClaw.Launcher.AotSmoke;
 
 internal static partial class SmokeProgram
 {
+    private static Task InvalidRuntimeImageRepairs()
+    {
+        using Fixture fixture = Fixture.CreateWithoutApplication();
+        string archiveRoot = "node-v24.21.0-win-x64";
+        string archivePath = Path.Combine(fixture.Root, archiveRoot + ".zip");
+        using (ZipArchive archive = ZipFile.Open(archivePath, ZipArchiveMode.Create))
+        using (var writer = new StreamWriter(archive.CreateEntry(archiveRoot + "/node.exe").Open()))
+        {
+            writer.Write("synthetic replacement");
+        }
+        string executable = Path.Combine(fixture.Root, "runtime-data", "OpenClawGatewayMSIX",
+            "agent-node", archiveRoot, "node.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+        File.WriteAllText(executable, "not an executable");
+        Directory.CreateDirectory(fixture.ApplicationDirectory);
+        string requestPath = Path.Combine(fixture.Root, "runtime-repair.json");
+        File.WriteAllText(requestPath, SessionRuntimeProtocol.SerializeRequest(new SessionRuntimeInstallRequest
+        {
+            RequestId = "native-runtime-repair",
+            ArchivePath = archivePath,
+            ApplicationDirectory = fixture.ApplicationDirectory,
+            UpdateUserPath = false
+        }));
+
+        int exitCode = SessionRuntimeInstaller.Run(
+            requestPath, File.ReadAllText, File.WriteAllText,
+            getLocalApplicationData: () => Path.Combine(fixture.Root, "runtime-data"));
+
+        Assert(exitCode == 0, "Native invalid-image runtime repair failed.");
+        Assert(File.ReadAllText(executable) == "synthetic replacement",
+            "Native repair did not replace the unlaunchable image from its selected archive.");
+        fixture.AssertNoInstallationWorkStarted();
+        return Task.CompletedTask;
+    }
+
+    private static async Task PrivateStateArchivesAsync()
+    {
+        using Fixture fixture = Fixture.CreateWithoutApplication();
+        string workspace = Path.Combine(fixture.Root, "private-exchange");
+        Directory.CreateDirectory(workspace);
+        using WindowsIdentity identity = WindowsIdentity.GetCurrent();
+        SecurityIdentifier user = identity.User ??
+            throw new InvalidOperationException("The native fixture user is unavailable.");
+        var record = new SessionRecord
+        {
+            WorkspacePath = workspace,
+            Generation = "native-private",
+            AgentUserSid = user.Value
+        };
+        string privateRoot;
+        using (var exchange = new SessionWorkspaceOperation(record, _ => true, privateData: true,
+            log: message => throw new InvalidOperationException(message)))
+        {
+            privateRoot = exchange.WorkspacePath;
+            Assert(new DirectoryInfo(privateRoot).GetAccessControl().AreAccessRulesProtected,
+                "Native state-transfer exchange inherited its parent permissions.");
+            byte[] data = "native synthetic archive"u8.ToArray();
+            var archive = new StateTransferArchive(
+                Path.Combine(privateRoot, "input.tar.gz"), data.Length,
+                Convert.ToHexString(SHA256.HashData(data)), Verified: true);
+            var store = new StateArchiveStore(Path.Combine(fixture.Root, "private-archives"), _ => { });
+            using var input = new MemoryStream(data);
+            string retained = await store.PublishAsync(
+                input, archive, null, protection: true, CancellationToken.None).ConfigureAwait(false);
+            Assert(new FileInfo(retained).GetAccessControl().AreAccessRulesProtected,
+                "Native protection archive inherited parent readers.");
+            Assert(File.ReadAllBytes(retained).SequenceEqual(data),
+                "Native private publication changed archive bytes.");
+        }
+        Assert(!Directory.Exists(privateRoot), "Native private exchange cleanup did not finish.");
+        fixture.AssertNoInstallationWorkStarted();
+    }
+
     private static async Task StateTransferFailureNamesCommandAsync()
     {
         using Fixture fixture = Fixture.CreateWithoutApplication();

@@ -183,7 +183,7 @@ internal sealed class SessionStateTransfer
         try
         {
             using FileStream archive = VerifyArchive(request);
-            Directory.CreateDirectory(root);
+            CreatePrivateStaging(root);
             StateArchiveApplicationResult incoming =
                 _application.Extract(_profile, request.ArchivePath!, extracted);
             string original = incoming.SourceProfile ??
@@ -395,6 +395,7 @@ internal sealed class SessionStateTransfer
             {
                 throw new SessionLaunchException("The offline recovery snapshot changed before normalization.");
             }
+            CreatePrivateStaging(snapshot);
             StateTransferFiles.Copy(source, snapshot);
             IReadOnlyList<string> required = _application.RequiredSources(snapshot, request.SourceProfile);
             List<string> missing = [];
@@ -514,6 +515,14 @@ internal sealed class SessionStateTransfer
             throw new SessionLaunchException("The activation transaction id is invalid.");
         }
         return Path.Combine(_directory, "transactions", transaction);
+    }
+
+    private void CreatePrivateStaging(string path)
+    {
+        using TrustedPath.ValidatedDirectory root =
+            TrustedPath.TryOpenValidatedDirectory(_directory, expectedIdentity: null)
+            ?? throw new SessionLaunchException("The private state-transfer root is unavailable.");
+        using TrustedPath.ValidatedDirectory staging = TrustedPath.CreatePrivateDirectory(root, path);
     }
 
     private StateActivationJournal RequireJournal(SessionStateTransferRequest request)

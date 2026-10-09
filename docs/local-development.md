@@ -528,11 +528,28 @@ main-database-only copy, normalizes the private snapshot through its fixture
 boundary, and verifies the restored row and unchanged source digest. Worker
 and process-tree scenarios use kernel leases and explicit pipe synchronization,
 not sleeps or PID-based liveness guesses. SDK and archive fixture results
-prove adapter behavior and transport, not that a particular bundled upstream revision
-produces a canonical SQLite recovery archive. Real bundled-payload and
-old/new-account ACL proof belongs in an explicitly authorized disposable
-Windows account/VM. Do not deploy a patch, recreate profiles, or stop real
-writers on the development user's machine to obtain that evidence.
+prove adapter behavior and transport, not that a particular bundled upstream
+revision produces a canonical SQLite recovery archive.
+
+Private-retention scenarios inspect the actual Windows DACL before the first
+archive byte is read, verify published and automatic-protection access under a
+broadly readable fixture parent, and refuse denied creation without another
+destination. They also exercise private exchange/scratch and normalization
+paths through recovery. Permission fixtures modify only test-owned directories.
+
+Qualify canonical SQLite snapshots, source preservation, path rebasing,
+protection replay, and interrupted activation against the selected bundled
+application using synthetic profiles and injected transport/gateway boundaries.
+Use short, test-owned profile roots comparable to real agent profiles.
+OpenClaw `2026.9.9` archive publication can fail on long Windows output paths
+when its `.openclaw-backup-publish-*` temporary directory extends the path.
+Retain that refusal in the qualification evidence; extended-length launcher
+file access does not establish upstream long-path support.
+
+Real old/new-account ACL and installed-package proof belongs in an explicitly
+authorized disposable Windows account/VM. Do not deploy a patch, recreate
+profiles, or stop real writers on the development user's machine to obtain
+that evidence.
 
 When changing command-line parsing, help, version output, startup, trimming, or
 NativeAOT-sensitive code, also run:

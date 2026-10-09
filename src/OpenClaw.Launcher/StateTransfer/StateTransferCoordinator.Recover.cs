@@ -32,7 +32,8 @@ internal sealed partial class StateTransferCoordinator
             using ISessionLockHandle lifecycle = AcquireLock(runtime);
             _ = runtime.RequireSetup();
             SessionRecord record = await runtime.Coordinator.StartRecordedAsync(cancellationToken).ConfigureAwait(false);
-            using var operation = new SessionWorkspaceOperation(record, runtime.IsCurrentSessionRecord);
+            using var operation = new SessionWorkspaceOperation(
+                record, runtime.IsCurrentSessionRecord, privateData: true, log: _log);
             SessionStateTransferResult current = await InspectAsync(runtime, record, cancellationToken).ConfigureAwait(false);
             if (current.Pending)
             {

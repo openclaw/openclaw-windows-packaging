@@ -3055,7 +3055,7 @@ public sealed class ProgramTests : IDisposable
         backend.ExecuteBehavior = _ =>
         {
             string requestPath = Directory.GetFiles(
-                backend.Metadata!.EphemeralWorkspacePath, "state-transfer-*.json")
+                backend.Metadata!.EphemeralWorkspacePath, "state-transfer-*.json", SearchOption.AllDirectories)
                 .Single(path => !path.EndsWith(".result.json", StringComparison.Ordinal));
             SessionStateTransferRequest request =
                 SessionStateTransferProtocol.ReadRequest(File.ReadAllText(requestPath));

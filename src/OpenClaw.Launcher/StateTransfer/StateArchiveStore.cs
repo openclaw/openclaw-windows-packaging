@@ -115,7 +115,7 @@ internal sealed class StateArchiveStore
         {
             using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             long length = 0;
-            using (Stream output = TrustedPath.CreateNew(root, temporary))
+            using (Stream output = TrustedPath.CreateNewPrivate(root, temporary))
             {
                 byte[] buffer = new byte[64 * 1024];
                 int count;

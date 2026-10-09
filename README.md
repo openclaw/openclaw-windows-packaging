@@ -211,6 +211,11 @@ explicitly disabled. JSON output never contains terminal escape sequences.
 Backups contain configuration, credentials, persistent history/state, and
 workspaces selected by bundled OpenClaw. They are **not encrypted**. Store them
 privately; a recovery archive is not a redacted diagnostics bundle.
+New retained archives, including temporary publication and pre-restore
+protection, grant access only to the invoking user, SYSTEM, and administrators.
+State-transfer exchanges and runtime scratch use a private workspace shared
+with the recorded agent. This does not encrypt archives, change existing
+archive permissions, or protect them from administrators.
 
 ```powershell
 clawctl backup

@@ -64,6 +64,8 @@ internal static partial class SmokeProgram
             ("state-transfer commands survive NativeAOT", StateTransferCommandsAsync),
             ("state-transfer startup failures identify their command", StateTransferFailureNamesCommandAsync),
             ("state activation and rollback survive NativeAOT", StateActivationAndRollback),
+            ("private state archives survive NativeAOT", PrivateStateArchivesAsync),
+            ("invalid runtime images repair before launch", InvalidRuntimeImageRepairs),
             ("Spectre renders clawctl output under NativeAOT", SpectreOutputRenders),
             ("gateway narration survives NativeAOT", GatewayNarrationRenders),
             ("pending gateway JSON survives NativeAOT", PendingGatewayJsonIsStructured),

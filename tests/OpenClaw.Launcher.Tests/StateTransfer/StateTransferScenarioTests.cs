@@ -2,6 +2,8 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Diagnostics;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using OpenClaw.Launcher.Gateway;
 using OpenClaw.Launcher.Mxc;
 using OpenClaw.Launcher.Session;
@@ -69,7 +71,8 @@ public sealed class StateTransferScenarioTests : IDisposable
         _backend.Calls.Clear();
         _backend.ExecuteBehavior = _ =>
         {
-            string requestPath = Directory.GetFiles(record.WorkspacePath!, "state-transfer-*.json")
+            string requestPath = Directory.GetFiles(
+                record.WorkspacePath!, "state-transfer-*.json", SearchOption.AllDirectories)
                 .Single(path => !path.EndsWith(".result.json", StringComparison.Ordinal));
             SessionStateTransferRequest request = SessionStateTransferProtocol.ReadRequest(File.ReadAllText(requestPath));
             if (_changeSnapshot && request.SourceDirectory is { } source)
@@ -98,6 +101,54 @@ public sealed class StateTransferScenarioTests : IDisposable
                 File.WriteAllText(GatewayMarker, "stopped");
                 return Task.FromResult(new GatewayStopResult(true, "stopped"));
             });
+    }
+
+    [Fact]
+    public async Task RecoveryUsesPrivateExchangeAndProtectionDespiteBroadParentReaders()
+    {
+        StateTransferCoordinator coordinator = await PrepareAsync();
+        WriteProfile(Current, "current");
+        WriteProfile(Old, "old");
+        var workspace = new DirectoryInfo(_backend.Metadata!.EphemeralWorkspacePath);
+        DirectorySecurity security = workspace.GetAccessControl();
+        security.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(WellKnownSidType.WorldSid, null),
+            FileSystemRights.ReadAndExecute,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+            PropagationFlags.None, AccessControlType.Allow));
+        workspace.SetAccessControl(security);
+        bool inspectedSource = false;
+        _beforeTransfer = request =>
+        {
+            if (request.Action == SessionStateTransferAction.Inspect)
+            {
+                return;
+            }
+            Assert.NotEqual(workspace.FullName, request.WorkspaceDirectory);
+            DirectorySecurity permissions = new DirectoryInfo(request.WorkspaceDirectory!).GetAccessControl();
+            Assert.True(permissions.AreAccessRulesProtected);
+            Assert.DoesNotContain(permissions.GetAccessRules(true, true, typeof(SecurityIdentifier))
+                .Cast<FileSystemAccessRule>(), rule =>
+                    rule.IdentityReference.Equals(new SecurityIdentifier(WellKnownSidType.WorldSid, null)));
+            if (request.SourceDirectory is { } snapshot)
+            {
+                StateArchiveStoreTests.AssertPrivateFile(
+                    Path.Combine(snapshot, ".openclaw", "credentials.json"),
+                    protectedAcl: false, participantSid: _backend.Metadata.AgentUserSid);
+                inspectedSource = true;
+            }
+        };
+
+        StateArchiveCommandResult result = await coordinator.RecoverAsync(
+            new RecoverOptions(Old, null, false, true), CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(inspectedSource);
+        StateArchiveStoreTests.AssertPrivateFile(result.Transfer!.Archive!.Path);
+        StateArchiveStoreTests.AssertPrivateFile(result.Transfer.ProtectionArchive!);
+        Assert.Empty(Directory.GetDirectories(workspace.FullName, "state-private-*"));
+        Assert.DoesNotContain(_log, entry => entry.Contains("cleanup failed", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain("old-synthetic-token", string.Join('\n', _log), StringComparison.Ordinal);
     }
 
     private void Move(string source, string destination)
@@ -740,7 +791,7 @@ public sealed class StateTransferScenarioTests : IDisposable
             if (request.Action == SessionStateTransferAction.Activate)
             {
                 string snapshot = Directory.GetDirectories(
-                    _backend.Metadata!.EphemeralWorkspacePath, "state-source-*").Single();
+                    request.WorkspaceDirectory!, "state-source-*").Single();
                 _cleanupBlocker = File.Open(Path.Combine(snapshot, ".openclaw", "history.txt"),
                     FileMode.Open, FileAccess.Read, FileShare.Read);
             }

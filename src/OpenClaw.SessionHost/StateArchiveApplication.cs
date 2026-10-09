@@ -272,6 +272,17 @@ internal sealed class StateArchiveApplication : IStateArchiveApplication
         environment["OPENCLAW_HOME"] = profile;
         environment["OPENCLAW_STATE_DIR"] = Path.Combine(profile, ".openclaw");
         environment["OPENCLAW_CONFIG_PATH"] = Path.Combine(profile, ".openclaw", "openclaw.json");
+        string workspace = _request.WorkspaceDirectory ??
+            throw new SessionLaunchException("The state operation has no private scratch workspace.");
+        string scratch = Path.Combine(workspace, $"state-scratch-{Guid.NewGuid():N}");
+        using (TrustedPath.ValidatedDirectory root =
+            TrustedPath.TryOpenValidatedDirectory(workspace, expectedIdentity: null) ??
+                throw new SessionLaunchException("The private scratch workspace is unavailable."))
+        {
+            TrustedPath.EnsureDirectory(root, scratch);
+        }
+        environment["TEMP"] = scratch;
+        environment["TMP"] = scratch;
         SessionProcessOutput output = SessionProcessLauncher.Capture(new SessionLaunchRequest
         {
             RequestId = _request.RequestId,

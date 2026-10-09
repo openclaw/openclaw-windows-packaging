@@ -231,6 +231,11 @@ not the package host's LocalState. The two identities do not share readable
 per-account package state. Extraction by the account that will execute Node
 also gives that account ownership of the extracted files.
 
+Runtime reuse checks executable PE headers before entering the Windows loader.
+A corrupt non-executable runtime is repaired from the selected package archive
+instead of reaching `Process.Start`, whose creation wait precedes the process
+exit timeout. This does not add a packaging-owned Node.js version policy.
+
 The installer version-checks the extracted runtime and can prepend its runtime
 directory to the agent user's `PATH`. Launch requests also carry a
 process-specific path prefix, so Node is discoverable by the intended guest
@@ -380,6 +385,13 @@ setup, starts only the recorded session, binds exchanges to its generation, and
 uses its staged helper and agent-owned Node.js runtime. The archive store
 publishes hash/length-checked files without overwriting an existing destination.
 Listing that store does not contact MXC.
+Archive files receive a protected DACL when their handle is created, before
+credential bytes are written; inherited readers of the archive folder do not
+gain access. The shared `TrustedPath` owner also creates the per-command
+exchange for the invoking user and recorded agent, excluding broad parent
+readers. Upstream scratch remains in that private exchange. Guest transaction
+and normalization roots are private to the agent, SYSTEM, and administrators.
+Existing folder, profile, and archive permissions are not rewritten.
 
 [`SessionStateTransfer`](../src/OpenClaw.SessionHost/SessionStateTransfer.cs)
 owns guest preparation, activation, and rollback.

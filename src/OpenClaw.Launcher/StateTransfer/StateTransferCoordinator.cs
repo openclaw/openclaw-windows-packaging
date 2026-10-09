@@ -45,7 +45,8 @@ internal sealed partial class StateTransferCoordinator
             _ = runtime.RequireSetup();
             SessionRecord record = await runtime.Coordinator
                 .StartRecordedAsync(cancellationToken).ConfigureAwait(false);
-            using var operation = new SessionWorkspaceOperation(record, runtime.IsCurrentSessionRecord);
+            using var operation = new SessionWorkspaceOperation(
+                record, runtime.IsCurrentSessionRecord, privateData: true, log: _log);
             SessionStateTransferRequest request = CreateRequest(
                 runtime,
                 SessionStateTransferAction.Capture) with

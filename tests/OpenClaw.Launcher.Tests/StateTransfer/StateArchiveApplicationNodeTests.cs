@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using OpenClaw.SessionHost;
 using OpenClaw.SessionProtocol;
+using HostTrustedPath = OpenClaw.Launcher.Session.TrustedPath;
 
 namespace OpenClaw.Launcher.Tests.StateTransfer;
 
@@ -12,6 +13,7 @@ public sealed class StateArchiveApplicationNodeTests : IDisposable
     private string Target => Path.Combine(_root, "C3-D4");
     private string Application => Path.Combine(_root, "app");
     private string Config => Path.Combine(Staged, ".openclaw", "openclaw.json");
+    private string Exchange => Path.Combine(_root, "exchange");
 
     private const string SdkFixture = """
         import { readFileSync, writeFileSync, existsSync } from "node:fs";
@@ -69,6 +71,10 @@ public sealed class StateArchiveApplicationNodeTests : IDisposable
           process.exitCode = 23;
         } else {
           const archivePath = args[args.indexOf("--output") + 1];
+          if (control.scratch) {
+            writeFileSync(join(process.env.TEMP, "scratch.txt"), "synthetic scratch");
+            writeFileSync(join(process.env.OPENCLAW_HOME, "scratch-path.txt"), process.env.TEMP);
+          }
           if (!args.includes("--dry-run")) writeFileSync(archivePath, "synthetic archive");
           process.stdout.write(JSON.stringify({
             archivePath, verified: control.verified,
@@ -80,6 +86,9 @@ public sealed class StateArchiveApplicationNodeTests : IDisposable
 
     public StateArchiveApplicationNodeTests()
     {
+        using var parent = HostTrustedPath.TryOpenValidatedDirectory(_root, expectedIdentity: null) ??
+            throw new InvalidOperationException("The fixture root is unavailable.");
+        using var exchange = HostTrustedPath.CreatePrivateDirectory(parent, Exchange);
         Directory.CreateDirectory(Path.GetDirectoryName(Config)!);
         Directory.CreateDirectory(Path.Combine(Staged, "Work"));
         string sdk = Path.Combine(Application, "dist", "plugin-sdk");
@@ -123,11 +132,25 @@ public sealed class StateArchiveApplicationNodeTests : IDisposable
         return new StateArchiveApplication(new SessionStateTransferRequest
         {
             RequestId = Guid.NewGuid().ToString("N"),
+            WorkspaceDirectory = Exchange,
             NodePath = node,
             ApplicationDirectory = Application,
             NativePreloadPath = preload,
             Environment = environment
         });
+    }
+
+    [Fact]
+    public void CaptureKeepsRuntimeScratchInsideThePrivateExchange()
+    {
+        File.WriteAllText(Path.Combine(Staged, "contract.json"), """{"verified":true,"scratch":true}""");
+
+        _ = Create().Capture(Staged, Path.Combine(Exchange, "capture.tar.gz"), dryRun: false);
+
+        string scratch = File.ReadAllText(Path.Combine(Staged, "scratch-path.txt"));
+        Assert.StartsWith(Exchange + Path.DirectorySeparatorChar, scratch, StringComparison.Ordinal);
+        Assert.Equal("synthetic scratch", File.ReadAllText(Path.Combine(scratch, "scratch.txt")));
+        StateArchiveStoreTests.AssertPrivateFile(Path.Combine(scratch, "scratch.txt"), protectedAcl: false);
     }
 
     private void WriteConfiguration(string workspace)
