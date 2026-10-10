@@ -62,29 +62,6 @@ public sealed class MxcRuntimeLocatorTests : IDisposable
             StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void AnIncompleteRuntimeIsRejectedRatherThanPartiallyUsed()
-    {
-        string runtimeDirectory = Path.Combine(_testDirectory, "experiment");
-        Directory.CreateDirectory(runtimeDirectory);
-        File.WriteAllText(
-            Path.Combine(runtimeDirectory, MxcRuntimeLocator.ExecutorFileName),
-            string.Empty);
-
-        MxcException exception = Assert.Throws<MxcException>(
-            () => MxcRuntimeLocator.Locate(
-                _testDirectory,
-                name => name == MxcRuntimeLocator.RuntimeDirectoryVariable
-                    ? runtimeDirectory
-                    : null));
-
-        Assert.Equal(MxcErrorCode.RuntimeUnavailable, exception.Code);
-        Assert.Contains(
-            MxcRuntimeLocator.PackageLifecycleFileName,
-            exception.Message,
-            StringComparison.Ordinal);
-    }
-
     [Theory]
     [InlineData("not json")]
     [InlineData("{}")]
@@ -111,16 +88,9 @@ public sealed class MxcRuntimeLocatorTests : IDisposable
     private static string StageRuntime(string runtimeDirectory)
     {
         Directory.CreateDirectory(runtimeDirectory);
-        foreach (string fileName in new[]
-        {
-            MxcRuntimeLocator.ExecutorFileName,
-            MxcRuntimeLocator.PackageLifecycleFileName
-        })
-        {
-            File.WriteAllText(
-                Path.Combine(runtimeDirectory, fileName),
-                string.Empty);
-        }
+        File.WriteAllText(
+            Path.Combine(runtimeDirectory, MxcRuntimeLocator.ExecutorFileName),
+            string.Empty);
 
         return runtimeDirectory;
     }

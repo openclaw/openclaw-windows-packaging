@@ -7,16 +7,15 @@ public sealed class MxcCliSessionClientTests
     private static readonly MxcRuntimeLocation Runtime = new(
         @"C:\package\mxc\x64",
         @"C:\package\mxc\x64\wxc-exec.exe",
-        @"C:\package\mxc\x64\plm.exe",
-        new MxcRuntimeProvenance("@microsoft/mxc-sdk", "0.8.0", "x64"));
+        new MxcRuntimeProvenance("@microsoft/mxc-sdk", "1.0.0", "x64"));
 
     private static readonly MxcSandboxId SandboxId = MxcSandboxId.Parse("iso:abc");
 
     [Fact]
-    public async Task ProvisionInvokesTheStagedExecutorWithAnEncodedEnvelope()
+    public async Task ProvisionInvokesTheExecutorWithTheStableCliContract()
     {
         var invoker = new RecordingInvoker(
-            """{"result":{"sandboxId":"iso:abc","correlationVector":"cv-1"}}""");
+            """{"result":{"sandboxId":"iso:abc"}}""");
         var client = new MxcCliSessionClient(Runtime, invoker);
 
         MxcProvisionResult result = await client.ProvisionAsync(
@@ -26,17 +25,18 @@ public sealed class MxcCliSessionClientTests
         Assert.Equal("iso:abc", result.SandboxId.Value);
         Assert.Equal(Runtime.ExecutorPath, invoker.Invocation!.ExecutorPath);
         Assert.Equal("--config-base64", invoker.Invocation.Arguments[0]);
-
-        // The state-aware lifecycle surface is gated behind this flag; without
-        // it the executor rejects the request before reading the envelope.
-        Assert.Contains("--experimental", invoker.Invocation.Arguments);
+        Assert.Equal("--operation", invoker.Invocation.Arguments[2]);
+        Assert.Equal("provision", invoker.Invocation.Arguments[3]);
+        Assert.DoesNotContain("--container-id", invoker.Invocation.Arguments);
+        Assert.DoesNotContain("--experimental", invoker.Invocation.Arguments);
 
         MxcRequestEnvelope sent =
             MxcWireProtocol.DecodeConfig(invoker.Invocation.Arguments[1]);
-        Assert.Equal(MxcWireProtocol.ProvisionPhase, sent.Phase);
+        Assert.Equal("1.0.0", sent.Version);
+        Assert.Equal("isolation_session", sent.Containment);
         Assert.Equal(
             "PFN:Contoso.App_8wekyb3d8bbwe",
-            sent.Experimental?.IsolationSession?.Provision?.AppId);
+            sent.IsolationSession?.Provision?.AppId);
     }
 
     [Fact]
@@ -58,7 +58,7 @@ public sealed class MxcCliSessionClientTests
     [InlineData(MxcWireProtocol.StartPhase)]
     [InlineData(MxcWireProtocol.StopPhase)]
     [InlineData(MxcWireProtocol.DeprovisionPhase)]
-    public async Task LifecyclePhasesReplayTheSandboxIdentityAndCorrelation(
+    public async Task LifecycleOperationsUseCliRouting(
         string phase)
     {
         var invoker = new RecordingInvoker("""{"result":{}}""");
@@ -67,20 +67,24 @@ public sealed class MxcCliSessionClientTests
         await (phase switch
         {
             MxcWireProtocol.StartPhase =>
-                client.StartAsync(SandboxId, "cv-9", CancellationToken.None),
+                client.StartAsync(SandboxId, CancellationToken.None),
             MxcWireProtocol.StopPhase =>
-                client.StopAsync(SandboxId, "cv-9", CancellationToken.None),
+                client.StopAsync(SandboxId, CancellationToken.None),
             _ => client.DeprovisionAsync(
                 SandboxId,
-                "cv-9",
                 CancellationToken.None)
         }).ConfigureAwait(true);
 
         MxcRequestEnvelope sent =
             MxcWireProtocol.DecodeConfig(invoker.Invocation!.Arguments[1]);
-        Assert.Equal(phase, sent.Phase);
-        Assert.Equal(SandboxId.Value, sent.SandboxId);
-        Assert.Equal("cv-9", sent.CorrelationVector);
+        Assert.Equal("--operation", invoker.Invocation.Arguments[2]);
+        Assert.Equal(phase, invoker.Invocation.Arguments[3]);
+        Assert.Equal("--container-id", invoker.Invocation.Arguments[4]);
+        Assert.Equal(SandboxId.Value, invoker.Invocation.Arguments[5]);
+        Assert.Equal("1.0.0", sent.Version);
+        Assert.Null(sent.Containment);
+        Assert.Null(sent.Network);
+        Assert.Null(sent.IsolationSession);
     }
 
     [Fact]
@@ -93,7 +97,7 @@ public sealed class MxcCliSessionClientTests
                 exitCode: 1));
 
         MxcException exception = await Assert.ThrowsAsync<MxcException>(
-            () => client.StartAsync(SandboxId, null, CancellationToken.None));
+            () => client.StartAsync(SandboxId, CancellationToken.None));
 
         Assert.Equal(MxcErrorCode.StaleId, exception.Code);
         Assert.Equal("sandbox is gone", exception.Message);
@@ -110,7 +114,7 @@ public sealed class MxcCliSessionClientTests
                 standardError: "backend unavailable"));
 
         MxcException exception = await Assert.ThrowsAsync<MxcException>(
-            () => client.StopAsync(SandboxId, null, CancellationToken.None));
+            () => client.StopAsync(SandboxId, CancellationToken.None));
 
         Assert.Equal(MxcErrorCode.ProtocolViolation, exception.Code);
         Assert.Contains("backend unavailable", exception.Message, StringComparison.Ordinal);
@@ -130,7 +134,7 @@ public sealed class MxcCliSessionClientTests
                 standardError: "fatal runtime error"));
 
         MxcException exception = await Assert.ThrowsAsync<MxcException>(
-            () => client.StartAsync(SandboxId, null, CancellationToken.None));
+            () => client.StartAsync(SandboxId, CancellationToken.None));
 
         Assert.Equal(MxcErrorCode.ProtocolViolation, exception.Code);
         Assert.Contains("(exit code -1073740791)", exception.Message, StringComparison.Ordinal);
@@ -153,7 +157,7 @@ public sealed class MxcCliSessionClientTests
             new RecordingInvoker(standardOutput: output, exitCode: 1));
 
         MxcException exception = await Assert.ThrowsAsync<MxcException>(
-            () => client.StartAsync(SandboxId, null, CancellationToken.None));
+            () => client.StartAsync(SandboxId, CancellationToken.None));
 
         Assert.Contains("... (10000 characters)", exception.Message, StringComparison.Ordinal);
         Assert.True(exception.Message.Length < 1_000, exception.Message);
@@ -172,7 +176,6 @@ public sealed class MxcCliSessionClientTests
         MxcExecutionResult result = await client.ExecuteAsync(
             SandboxId,
             new MxcExecutionRequest("\"C:\\helper.exe\" --request r.json"),
-            null,
             CancellationToken.None);
 
         Assert.Equal(3, result.ExitCode);
@@ -181,44 +184,25 @@ public sealed class MxcCliSessionClientTests
     }
 
     [Fact]
-    public async Task FailingCommandThatPrintsErrorShapedJsonIsNotADispatchFailure()
+    public async Task ExecutionReturnsJsonLookingGuestOutputOnBothStreamsUnchanged()
     {
-        // OpenClaw legitimately emits JSON. Treating it as an MXC fault would
-        // replace a real command failure with a misleading session error.
+        const string stdout = """{"error":{"reason":"guest output"}}""";
+        const string stderr = """{"error":{"reason":"guest warning"}}""";
         var client = new MxcCliSessionClient(
             Runtime,
             new RecordingInvoker(
-                standardOutput: """{"error":{"reason":"login required"}}""",
-                exitCode: 1));
+                standardOutput: stdout,
+                exitCode: 1,
+                standardError: stderr));
 
         MxcExecutionResult result = await client.ExecuteAsync(
             SandboxId,
             new MxcExecutionRequest("helper.exe"),
-            null,
             CancellationToken.None);
 
         Assert.Equal(1, result.ExitCode);
-        Assert.Contains("login required", result.StandardOutput, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task DispatchFailureDuringExecutionIsReportedAsASessionError()
-    {
-        var client = new MxcCliSessionClient(
-            Runtime,
-            new RecordingInvoker(
-                standardOutput:
-                    """{"error":{"code":"stale_id","message":"sandbox is gone"}}""",
-                exitCode: 1));
-
-        MxcException exception = await Assert.ThrowsAsync<MxcException>(
-            () => client.ExecuteAsync(
-                SandboxId,
-                new MxcExecutionRequest("helper.exe"),
-                null,
-                CancellationToken.None));
-
-        Assert.Equal(MxcErrorCode.StaleId, exception.Code);
+        Assert.Equal(stdout, result.StandardOutput);
+        Assert.Equal(stderr, result.StandardError);
     }
 
     [Fact]
@@ -234,7 +218,6 @@ public sealed class MxcCliSessionClientTests
         MxcExecutionResult result = await client.ExecuteAsync(
             SandboxId,
             new MxcExecutionRequest("helper.exe"),
-            null,
             CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
@@ -250,7 +233,6 @@ public sealed class MxcCliSessionClientTests
             () => client.ExecuteAsync(
                 SandboxId,
                 new MxcExecutionRequest("   "),
-                null,
                 CancellationToken.None));
 
         Assert.Equal(MxcErrorCode.PolicyValidation, exception.Code);
@@ -260,9 +242,6 @@ public sealed class MxcCliSessionClientTests
     [Fact]
     public async Task ProbeAsksTheExecutorWithoutAnEnvelopeOrSandbox()
     {
-        // The probe must stay non-mutating: no config envelope, no
-        // experimental lifecycle flag, and therefore no sandbox is created on
-        // the read-only setup path.
         var invoker = new RecordingInvoker(
             """{"tier":"base-container","warnings":[],"probes":{"isolationSessionAvailable":true}}""");
         var client = new MxcCliSessionClient(Runtime, invoker);

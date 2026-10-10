@@ -163,7 +163,6 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
                 session.ToSandboxIdOrThrow(),
                 new MxcExecutionRequest(
                     SessionExecutor.BuildGuestCommandLine(helperPath, requestPath)),
-                null,
                 cancellationToken).ConfigureAwait(false);
 
             SessionLaunchResult result = await ReadLaunchResultAsync(
@@ -263,7 +262,6 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
                         stagedHelperPath,
                         requestPath,
                         option)),
-                null,
                 cancellationToken).ConfigureAwait(false);
 
             try

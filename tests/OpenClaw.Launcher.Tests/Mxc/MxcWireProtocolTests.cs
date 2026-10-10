@@ -9,91 +9,105 @@ public sealed class MxcWireProtocolTests
     private const string SandboxIdValue = "iso:abc123";
 
     [Fact]
-    public void ProvisionEnvelopeCarriesApplicationIdentityAndNetworkAcknowledgement()
+    public void ProvisionRequestUsesTheStableV1ConfigAndCliOperation()
     {
-        MxcRequestEnvelope envelope =
-            MxcWireProtocol.BuildProvisionEnvelope("PFN:Contoso.App_8wekyb3d8bbwe");
+        MxcCliRequest request =
+            MxcWireProtocol.BuildProvisionRequest("PFN:Contoso.App_8wekyb3d8bbwe");
 
-        JsonElement encoded = Decode(MxcWireProtocol.EncodeConfig(envelope));
+        JsonElement encoded = Decode(MxcWireProtocol.EncodeConfig(request.Config));
 
         Assert.Equal(
-            MxcWireProtocol.IsolationSessionSchemaVersion,
+            "1.0.0",
             encoded.GetProperty("version").GetString());
-        Assert.Equal("provision", encoded.GetProperty("phase").GetString());
+        Assert.Equal("provision", request.Operation);
+        Assert.Null(request.ContainerId);
         Assert.Equal(
             "isolation_session",
             encoded.GetProperty("containment").GetString());
         Assert.Equal(
             "allow",
-            encoded.GetProperty("network").GetProperty("defaultPolicy").GetString());
-        Assert.True(
-            encoded.GetProperty("network")
-                .GetProperty("allowLocalNetwork")
-                .GetBoolean());
+            encoded.GetProperty("network").GetProperty("egress")
+                .GetProperty("default").GetString());
+        Assert.Equal(
+            "allow",
+            encoded.GetProperty("network").GetProperty("ingress")
+                .GetProperty("default").GetString());
+        Assert.Equal(
+            "allow",
+            encoded.GetProperty("network").GetProperty("ingress")
+                .GetProperty("hostLoopback").GetString());
 
-        // The backend only accepts appId nested per backend and phase; a
-        // top-level appId is silently ignored and the session would then be
-        // provisioned without this package's identity.
         Assert.Equal(
             "PFN:Contoso.App_8wekyb3d8bbwe",
-            encoded.GetProperty("experimental")
-                .GetProperty("isolation_session")
+            encoded.GetProperty("isolationSession")
                 .GetProperty("provision")
                 .GetProperty("appId")
                 .GetString());
         Assert.False(encoded.TryGetProperty("appId", out _));
+        Assert.False(encoded.TryGetProperty("phase", out _));
         Assert.False(encoded.TryGetProperty("sandboxId", out _));
+        Assert.False(encoded.TryGetProperty("experimental", out _));
+
+        IReadOnlyList<string> arguments = MxcWireProtocol.BuildArguments(request);
+        Assert.Equal("--config-base64", arguments[0]);
+        Assert.Equal("--operation", arguments[2]);
+        Assert.Equal("provision", arguments[3]);
+        Assert.DoesNotContain("--container-id", arguments);
+        Assert.DoesNotContain("--experimental", arguments);
     }
 
     [Fact]
-    public void PostProvisionEnvelopeOmitsPolicyFixedAtProvision()
+    public void PostProvisionRequestCarriesRoutingOnlyInCliArguments()
     {
-        MxcRequestEnvelope envelope = MxcWireProtocol.BuildPhaseEnvelope(
+        MxcCliRequest request = MxcWireProtocol.BuildPhaseRequest(
             MxcWireProtocol.ExecPhase,
             MxcSandboxId.Parse(SandboxIdValue),
-            "cv-1",
             "\"C:\\Program Files\\helper.exe\" --request r.json");
 
-        JsonElement encoded = Decode(MxcWireProtocol.EncodeConfig(envelope));
+        JsonElement encoded = Decode(MxcWireProtocol.EncodeConfig(request.Config));
 
-        Assert.Equal("exec", encoded.GetProperty("phase").GetString());
-        Assert.Equal(SandboxIdValue, encoded.GetProperty("sandboxId").GetString());
-        Assert.Equal("cv-1", encoded.GetProperty("correlationVector").GetString());
+        Assert.Equal("1.0.0", encoded.GetProperty("version").GetString());
         Assert.Equal(
             "\"C:\\Program Files\\helper.exe\" --request r.json",
             encoded.GetProperty("process").GetProperty("commandLine").GetString());
 
-        // network and appId are fixed at provision and are rejected on later
-        // phases, so resending them would fail the whole request. Confirmed
-        // against wxc-exec.exe 0.8.0, which rejects a post-provision
-        // containment with malformed_request: "State-aware 'stop' requests
-        // must not carry 'containment'".
+        Assert.False(encoded.TryGetProperty("phase", out _));
+        Assert.False(encoded.TryGetProperty("sandboxId", out _));
+        Assert.False(encoded.TryGetProperty("correlationVector", out _));
         Assert.False(encoded.TryGetProperty("network", out _));
         Assert.False(encoded.TryGetProperty("containment", out _));
-        Assert.False(encoded.TryGetProperty("experimental", out _));
+        Assert.False(encoded.TryGetProperty("isolationSession", out _));
+
+        IReadOnlyList<string> arguments = MxcWireProtocol.BuildArguments(request);
+        Assert.Equal("--operation", arguments[2]);
+        Assert.Equal("exec", arguments[3]);
+        Assert.Equal("--container-id", arguments[4]);
+        Assert.Equal(SandboxIdValue, arguments[5]);
     }
 
     [Fact]
-    public void PhaseEnvelopeOmitsProcessWhenNoCommandIsSupplied()
+    public void LifecycleRequestWithoutCommandOmitsProcessAndKeepsContainerIdInCli()
     {
-        JsonElement encoded = Decode(MxcWireProtocol.EncodeConfig(
-            MxcWireProtocol.BuildPhaseEnvelope(
-                MxcWireProtocol.StopPhase,
-                MxcSandboxId.Parse(SandboxIdValue),
-                correlationVector: null)));
+        MxcCliRequest request = MxcWireProtocol.BuildPhaseRequest(
+            MxcWireProtocol.StopPhase,
+            MxcSandboxId.Parse(SandboxIdValue));
+        JsonElement encoded = Decode(MxcWireProtocol.EncodeConfig(request.Config));
 
         Assert.False(encoded.TryGetProperty("process", out _));
-        Assert.False(encoded.TryGetProperty("correlationVector", out _));
+        Assert.False(encoded.TryGetProperty("phase", out _));
+        Assert.False(encoded.TryGetProperty("sandboxId", out _));
+        IReadOnlyList<string> arguments = MxcWireProtocol.BuildArguments(request);
+        Assert.Equal("stop", arguments[3]);
+        Assert.Equal(SandboxIdValue, arguments[5]);
     }
 
     [Fact]
-    public void PhaseEnvelopeRejectsAnotherBackendsSandboxId()
+    public void PhaseRequestRejectsAnotherBackendsSandboxId()
     {
         MxcException exception = Assert.Throws<MxcException>(
-            () => MxcWireProtocol.BuildPhaseEnvelope(
+            () => MxcWireProtocol.BuildPhaseRequest(
                 MxcWireProtocol.StartPhase,
-                MxcSandboxId.Parse("wsb:abc123"),
-                correlationVector: null));
+                MxcSandboxId.Parse("wsb:abc123")));
 
         Assert.Equal(MxcErrorCode.MalformedId, exception.Code);
     }
@@ -128,38 +142,19 @@ public sealed class MxcWireProtocolTests
         Assert.Equal(MxcErrorCode.ProtocolViolation, exception.Code);
     }
 
-    [Theory]
-    [InlineData("hello from the sandbox")]
-    [InlineData("{\"error\":\"something the command printed\"}")]
-    [InlineData("{\"error\":{\"message\":\"no code\"}}")]
-    [InlineData("{\"result\":{\"sandboxId\":\"iso:x\"}}")]
-    public void CommandOutputIsNotMistakenForADispatchFailure(string output) =>
-        Assert.Null(MxcWireProtocol.TryParseExecutionError(output));
-
-    [Fact]
-    public void DispatchFailureDuringExecutionIsRecognized()
-    {
-        MxcException? exception = MxcWireProtocol.TryParseExecutionError(
-            """{"error":{"code":"stale_id","message":"gone"}}""");
-
-        Assert.NotNull(exception);
-        Assert.Equal(MxcErrorCode.StaleId, exception.Code);
-    }
-
     [Fact]
     public void ProvisionResultReportsIdentityAndWorkspaceMetadata()
     {
         MxcProvisionResult result = MxcWireProtocol.ReadProvisionResult(
             MxcWireProtocol.ParseNonExecutionResponse(
                 """
-                {"result":{"sandboxId":"iso:abc123","correlationVector":"cv-1",
+                {"result":{"sandboxId":"iso:abc123",
                 "metadata":{"agentUserName":"MxcAgent_1","agentUserSid":"S-1-5-21-1",
                 "ephemeralWorkspacePath":"C:\\ws\\1"}}}
                 """));
 
         Assert.Equal("iso:abc123", result.SandboxId.Value);
         Assert.True(result.SandboxId.IsIsolationSession);
-        Assert.Equal("cv-1", result.CorrelationVector);
         Assert.Equal("MxcAgent_1", result.Metadata?.AgentUserName);
         Assert.Equal("S-1-5-21-1", result.Metadata?.AgentUserSid);
         Assert.Equal("C:\\ws\\1", result.Metadata?.EphemeralWorkspacePath);
@@ -171,7 +166,7 @@ public sealed class MxcWireProtocolTests
         MxcException exception = Assert.Throws<MxcException>(
             () => MxcWireProtocol.ReadProvisionResult(
                 MxcWireProtocol.ParseNonExecutionResponse(
-                    """{"result":{"correlationVector":"cv-1"}}""")));
+                    """{"result":{}}""")));
 
         Assert.Equal(MxcErrorCode.ProtocolViolation, exception.Code);
     }
@@ -190,10 +185,6 @@ public sealed class MxcWireProtocolTests
 
         Assert.Null(result.Metadata);
     }
-
-    // The envelopes below are verbatim captures from @microsoft/mxc-sdk 0.8.0
-    // wxc-exec.exe running against the Windows IsolationSession backend, so
-    // they pin the real contract rather than an assumed one.
 
     [Theory]
     [InlineData("malformed_id", nameof(MxcErrorCode.MalformedId))]
@@ -219,15 +210,14 @@ public sealed class MxcWireProtocolTests
     }
 
     [Fact]
-    public void ExecutionAgainstStoppedSessionSurfacesBackendRemediation()
+    public void LifecycleFailurePreservesBackendRemediationAndOperation()
     {
-        // captured from an exec issued after a successful stop.
         const string envelope = """
             {"error":{"code":"backend_error",
-            "message":"No active session exists.",
-            "operation":"IsoSessionOps.RunProcessWithOptionsAsync",
+            "message":"The session could not be started.",
+            "operation":"IsoSessionOps.StartSessionAsync",
             "nativeCode":"0x80070520",
-            "remediation":"No active session found for this agent user. Start a session first, then retry."}}
+            "remediation":"Start the session from an interactive session, then retry."}}
             """;
 
         MxcException exception = Assert.Throws<MxcException>(
@@ -237,13 +227,13 @@ public sealed class MxcWireProtocolTests
 
         // Operators need the backend's own recovery step and native status,
         // not just the one-line summary.
-        Assert.Contains("No active session exists.", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("Start a session first", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("could not be started", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("interactive session", exception.Message, StringComparison.Ordinal);
         Assert.Contains("0x80070520", exception.Message, StringComparison.Ordinal);
 
         // The failing OS call is what distinguishes, say, a refused start from
         // a refused exec when only the log is available.
-        Assert.Equal("IsoSessionOps.RunProcessWithOptionsAsync", exception.Operation);
+        Assert.Equal("IsoSessionOps.StartSessionAsync", exception.Operation);
     }
 
     [Fact]

@@ -3,19 +3,9 @@ using System.Text.Json;
 
 namespace OpenClaw.Launcher.Mxc;
 
-/// <summary>
-/// Builds and interprets the pinned MXC state-aware wire protocol: a base64
-/// UTF-8 JSON request envelope on the command line, and a single JSON response
-/// envelope on standard output for every phase except execution.
-/// </summary>
 internal static class MxcWireProtocol
 {
-    /// <summary>
-    /// Schema version stamped on IsolationSession envelopes. This is the wire
-    /// schema, which is versioned separately from the npm package version
-    /// recorded in mxc-runtime.lock.json; both are pinned independently.
-    /// </summary>
-    public const string IsolationSessionSchemaVersion = "0.6.0-alpha";
+    public const string IsolationSessionSchemaVersion = "1.0.0";
 
     public const string IsolationSessionContainment = "isolation_session";
 
@@ -25,35 +15,35 @@ internal static class MxcWireProtocol
     public const string StopPhase = "stop";
     public const string DeprovisionPhase = "deprovision";
 
-    public static MxcRequestEnvelope BuildProvisionEnvelope(string appId) =>
-        new()
-        {
-            Phase = ProvisionPhase,
-            Containment = IsolationSessionContainment,
-            Network = new MxcNetworkAcknowledgement(),
-            Experimental = new MxcExperimentalSection
+    public static MxcCliRequest BuildProvisionRequest(string appId) =>
+        new(
+            ProvisionPhase,
+            ContainerId: null,
+            new MxcRequestEnvelope
             {
-                IsolationSession = new MxcIsolationSessionPhases
+                Containment = IsolationSessionContainment,
+                Network = new MxcNetworkAcknowledgement(),
+                IsolationSession = new MxcIsolationSessionSection
                 {
                     Provision = new MxcIsolationSessionProvisionFields
                     {
                         AppId = appId
                     }
                 }
-            }
-        };
+            });
 
-    /// <summary>
-    /// Builds a post-provision envelope. Network policy and application
-    /// identity are fixed at provision and are rejected on later phases, so
-    /// they are deliberately absent here.
-    /// </summary>
-    public static MxcRequestEnvelope BuildPhaseEnvelope(
+    public static MxcCliRequest BuildPhaseRequest(
         string phase,
         MxcSandboxId sandboxId,
-        string? correlationVector,
         string? commandLine = null)
     {
+        if (phase is not (StartPhase or ExecPhase or StopPhase or DeprovisionPhase))
+        {
+            throw new MxcException(
+                MxcErrorCode.PolicyValidation,
+                $"Unsupported post-provision operation '{phase}'.");
+        }
+
         if (!sandboxId.IsIsolationSession)
         {
             throw new MxcException(
@@ -62,15 +52,74 @@ internal static class MxcWireProtocol
                 "IsolationSession identity.");
         }
 
-        return new MxcRequestEnvelope
+        if (phase == ExecPhase && string.IsNullOrWhiteSpace(commandLine))
         {
-            Phase = phase,
-            SandboxId = sandboxId.Value,
-            CorrelationVector = correlationVector,
-            Process = commandLine is null
-                ? null
-                : new MxcProcessConfig { CommandLine = commandLine }
-        };
+            throw new MxcException(
+                MxcErrorCode.PolicyValidation,
+                "An exec operation requires a command line.");
+        }
+
+        if (phase != ExecPhase && commandLine is not null)
+        {
+            throw new MxcException(
+                MxcErrorCode.PolicyValidation,
+                $"The {phase} operation cannot carry a command line.");
+        }
+
+        return new MxcCliRequest(
+            phase,
+            sandboxId,
+            new MxcRequestEnvelope
+            {
+                Process = commandLine is null
+                    ? null
+                    : new MxcProcessConfig { CommandLine = commandLine }
+            });
+    }
+
+    public static IReadOnlyList<string> BuildArguments(MxcCliRequest request)
+    {
+        if (request.Operation is not (
+            ProvisionPhase or StartPhase or ExecPhase or StopPhase or DeprovisionPhase))
+        {
+            throw new MxcException(
+                MxcErrorCode.PolicyValidation,
+                $"Unsupported MXC operation '{request.Operation}'.");
+        }
+
+        bool isProvision = request.Operation == ProvisionPhase;
+        if (isProvision == request.ContainerId.HasValue)
+        {
+            throw new MxcException(
+                MxcErrorCode.PolicyValidation,
+                isProvision
+                    ? "Provision cannot specify a container id."
+                    : "A lifecycle operation requires a container id.");
+        }
+
+        List<string> arguments =
+        [
+            "--config-base64",
+            EncodeConfig(request.Config),
+            "--operation",
+            request.Operation
+        ];
+
+        if (request.ContainerId is MxcSandboxId containerId)
+        {
+            if (!containerId.IsIsolationSession)
+            {
+                throw new MxcException(
+                    MxcErrorCode.MalformedId,
+                    $"Sandbox id prefix '{containerId.BackendPrefix}' is not an " +
+                    "IsolationSession identity.");
+            }
+
+            arguments.Add("--container-id");
+            arguments.Add(containerId.Value);
+        }
+
+        return arguments;
     }
 
     public static string EncodeConfig(MxcRequestEnvelope envelope)
@@ -115,31 +164,6 @@ internal static class MxcWireProtocol
         return envelope.Result.Value;
     }
 
-    /// <summary>
-    /// Discriminates an MXC dispatch failure from ordinary command output.
-    /// </summary>
-    /// <remarks>
-    /// Execution forwards the guest command's raw output, so output that merely
-    /// happens to be JSON must not be reported as a dispatch error. Only a
-    /// complete <c>{error:{code}}</c> envelope qualifies.
-    /// </remarks>
-    public static MxcException? TryParseExecutionError(string standardOutput)
-    {
-        MxcResponseEnvelope envelope;
-        try
-        {
-            envelope = DeserializeResponse(standardOutput);
-        }
-        catch (MxcException)
-        {
-            return null;
-        }
-
-        return string.IsNullOrEmpty(envelope.Error?.Code)
-            ? null
-            : ToException(envelope.Error!);
-    }
-
     public static MxcProvisionResult ReadProvisionResult(JsonElement result)
     {
         MxcProvisionResultPayload? payload;
@@ -180,8 +204,7 @@ internal static class MxcWireProtocol
 
         return new MxcProvisionResult(
             MxcSandboxId.Parse(payload.SandboxId),
-            provisionMetadata,
-            payload.CorrelationVector);
+            provisionMetadata);
     }
 
     private static MxcResponseEnvelope DeserializeResponse(string standardOutput)

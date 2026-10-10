@@ -351,7 +351,6 @@ public sealed class DiagnosticsBundleTests : IDisposable
                 new MxcRuntimeLocation(
                     Path.Combine(_root, "mxc"),
                     Path.Combine(_root, "mxc", "wxc-exec.exe"),
-                    Path.Combine(_root, "mxc", "plm.exe"),
                     null),
                 executor));
         SessionRecord record = await session.Coordinator.EnsureStartedAsync(CancellationToken.None);
@@ -531,7 +530,7 @@ public sealed class DiagnosticsBundleTests : IDisposable
             MxcExecutorInvocation invocation,
             CancellationToken cancellationToken)
         {
-            string phase = MxcWireProtocol.DecodeConfig(invocation.Arguments[1]).Phase!;
+            string phase = invocation.Arguments[3];
             MxcExecutorOutcome outcome = phase switch
             {
                 MxcWireProtocol.ProvisionPhase => new MxcExecutorOutcome(

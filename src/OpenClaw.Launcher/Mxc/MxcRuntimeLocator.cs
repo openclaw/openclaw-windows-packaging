@@ -17,7 +17,6 @@ internal sealed record MxcRuntimeProvenance(
 internal sealed record MxcRuntimeLocation(
     string Directory,
     string ExecutorPath,
-    string PackageLifecyclePath,
     MxcRuntimeProvenance? Provenance);
 
 /// <summary>
@@ -36,7 +35,6 @@ internal static class MxcRuntimeLocator
     public const string RuntimeDirectoryName = "mxc";
 
     public const string ExecutorFileName = "wxc-exec.exe";
-    public const string PackageLifecycleFileName = "plm.exe";
     public const string ProvenanceFileName = "mxc-runtime.json";
 
     /// <summary>
@@ -69,20 +67,9 @@ internal static class MxcRuntimeLocator
                 $"The MXC runtime is not available: {executorPath} is missing.");
         }
 
-        string packageLifecyclePath =
-            Path.Combine(directory, PackageLifecycleFileName);
-        if (!File.Exists(packageLifecyclePath))
-        {
-            throw new MxcException(
-                MxcErrorCode.RuntimeUnavailable,
-                "The MXC runtime is incomplete: " +
-                $"{packageLifecyclePath} is missing.");
-        }
-
         return new MxcRuntimeLocation(
             directory,
             executorPath,
-            packageLifecyclePath,
             ReadProvenance(directory));
     }
 
