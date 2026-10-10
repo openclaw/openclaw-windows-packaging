@@ -179,6 +179,26 @@ Use the port reported by status as the observed endpoint. Do not assume the
 upstream default port (18789): an explicit OpenClaw `gateway.port` can differ,
 and multiple unclassified listeners intentionally do not identify an endpoint.
 
+## A terminal opens when signing in
+
+**Check.** Run `clawctl gateway-service status` and inspect the persistence
+result. Registrations from older packages use a CMD launcher and can open a
+terminal while recovering the gateway.
+
+**Fix.** After installing a package with background recovery, run:
+
+```powershell
+clawctl gateway-service install
+```
+
+This explicitly replaces the old logon action and removes generated legacy
+Startup-folder files. Future recovery runs without a terminal. If recovery
+fails, run `clawctl gateway-service start` interactively for the error and
+collect logs with `clawctl collect-logs`. For failures before `clawctl` starts,
+check the logon task's last-run result in Task Scheduler, the package's
+execution-alias registration, and whether Windows Script Host and JScript
+are enabled. Background recovery requires those Windows components.
+
 ## Automatic gateway start failed after `openclaw`
 
 **Check.** Read the standard-error warning and the following

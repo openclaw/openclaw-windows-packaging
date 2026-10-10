@@ -78,8 +78,8 @@ internal sealed record GatewayPersistenceRemovalResult(
 /// The directory the gateway is given, rather than the system directory a
 /// logon task would otherwise inherit.
 /// </param>
-/// <param name="CommandProcessorPath">
-/// The absolute path to the inbox command processor the task runs.
+/// <param name="ScriptHostPath">
+/// The absolute path to the windowless Windows Script Host the task runs.
 /// </param>
 /// <param name="DeleteFile">
 /// Optional file-delete seam used to make persistence failures observable in tests.
@@ -93,6 +93,6 @@ internal sealed record GatewayPersistenceOptions(
     string LauncherPath,
     string StartupFolderPath,
     string WorkingDirectory,
-    string CommandProcessorPath,
+    string ScriptHostPath,
     Action<string>? DeleteFile = null,
     string? LogonTriggerUserSid = null);
