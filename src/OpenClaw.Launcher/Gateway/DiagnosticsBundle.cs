@@ -284,7 +284,9 @@ internal sealed partial class GatewayRuntime
         Add("host/session.json", "the session record", _paths.SessionStatePath);
         Add("host/gateway-config.json", "the gateway configuration", _paths.GatewayConfigurationPath);
         Add("host/gateway-state.json", "the gateway record", _paths.GatewayStatePath);
-        Add("host/gateway-launcher.cmd", "the gateway recovery launcher", _paths.GatewayLauncherPath);
+        Add("host/gateway-launcher.js", "the gateway recovery launcher", _paths.GatewayLauncherPath);
+        Add("host/gateway-launcher.cmd", "the retained legacy recovery launcher",
+            Path.ChangeExtension(_paths.GatewayLauncherPath, ".cmd"));
         return files;
 
         void Add(string name, string description, string? path)

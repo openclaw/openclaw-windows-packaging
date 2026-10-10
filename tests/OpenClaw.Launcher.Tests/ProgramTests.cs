@@ -400,12 +400,9 @@ public sealed class ProgramTests : IDisposable
         string activationScriptPath =
             Path.ChangeExtension(runtime.Paths.GatewayLauncherPath, ".ps1");
         string legacyScript =
-            GatewayLauncherScript.CreateActivationScript(
-                runtime.Paths.PackageFamilyName!)
-            .Replace(
-                GatewayLauncherScript.ControlArguments,
-                "gateway-service start",
-                StringComparison.Ordinal);
+            GatewayLauncherScript.CreateLegacyActivationScript(
+                runtime.Paths.PackageFamilyName!,
+                "gateway-service start");
         await File.WriteAllTextAsync(
             activationScriptPath,
             legacyScript,
@@ -2620,10 +2617,10 @@ public sealed class ProgramTests : IDisposable
             new GatewayPersistenceOptions(
                 UserSid: "S-1-5-21-1",
                 PackageFamilyName: "OpenClaw.Gateway_test",
-                LauncherPath: Path.Combine(stateRoot, "gateway-launcher.cmd"),
+                LauncherPath: Path.Combine(stateRoot, "gateway-launcher.js"),
                 StartupFolderPath: Path.Combine(stateRoot, "startup"),
                 WorkingDirectory: stateRoot,
-                CommandProcessorPath: @"C:\Windows\System32\cmd.exe"),
+                ScriptHostPath: @"C:\Windows\System32\wscript.exe"),
             log);
         var controller = new GatewayController(
             runtime.Coordinator,

@@ -51,7 +51,7 @@ internal static class GatewayTaskDefinition
 
     public static GatewayTaskSnapshot CreateSnapshot(
         string userSid,
-        string commandProcessorPath,
+        string scriptHostPath,
         string launcherPath,
         string? logonTriggerUserSid = null) =>
         new(
@@ -73,8 +73,8 @@ internal static class GatewayTaskDefinition
             DisallowStartIfOnBatteries: false,
             StopIfGoingOnBatteries: false,
             ExecutionTimeLimit: NoExecutionTimeLimit,
-            Command: commandProcessorPath,
-            Arguments: $"/d /c \"\"{launcherPath}\"\"");
+            Command: scriptHostPath,
+            Arguments: $"//B //Nologo \"{launcherPath}\"");
 
     public static string CreateXml(GatewayTaskSnapshot snapshot, string taskName)
     {

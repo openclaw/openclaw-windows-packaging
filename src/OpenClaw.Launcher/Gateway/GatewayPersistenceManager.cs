@@ -58,7 +58,7 @@ internal sealed class GatewayPersistenceManager
     /// </summary>
     public string FallbackPath => ResolveOwnedFilePath(
         _options.StartupFolderPath,
-        $"{GatewayTaskIdentity.DisplayName} {_options.PackageFamilyName}.cmd");
+        $"{GatewayTaskIdentity.DisplayName} {_options.PackageFamilyName}.wsf");
 
     private string LauncherPath => ResolveOwnedFilePath(
         _options.WorkingDirectory,
@@ -90,6 +90,16 @@ internal sealed class GatewayPersistenceManager
 
         if (probe.Presence == GatewayTaskPresence.Missing)
         {
+            if (File.Exists(Path.ChangeExtension(FallbackPath, ".cmd")))
+            {
+                return new GatewayPersistenceStatus(
+                    GatewayPersistenceState.ActionRequired,
+                    GatewayPersistenceLane.StartupFolderFallback,
+                    "The Startup-folder recovery uses the previous console launcher.",
+                    "Reinstall logon recovery to run it in the background.",
+                    RepairCommand);
+            }
+
             return fallbackPresent
                 ? new GatewayPersistenceStatus(
                     GatewayPersistenceState.Ready,
@@ -184,12 +194,11 @@ internal sealed class GatewayPersistenceManager
 
         if (alreadyCorrect)
         {
-            _ = RemoveFallback();
-            return new GatewayPersistenceInstallResult(
+            return CompleteMigration(new GatewayPersistenceInstallResult(
                 GatewayPersistenceState.Ready,
                 GatewayPersistenceLane.TaskScheduler,
                 "Logon recovery is configured.",
-                changed);
+                changed));
         }
 
         GatewayTaskOperation registration = await _scheduler.RegisterAsync(
@@ -218,18 +227,17 @@ internal sealed class GatewayPersistenceManager
                     verified.Detail ?? verified.Message,
                     RepairCommand);
             }
-            _ = RemoveFallback();
-            return new GatewayPersistenceInstallResult(
+            return CompleteMigration(new GatewayPersistenceInstallResult(
                 GatewayPersistenceState.Ready,
                 GatewayPersistenceLane.TaskScheduler,
                 "Logon recovery is configured.",
-                Changed: true);
+                Changed: true));
         }
 
         _log(
             $"The logon task '{_identity.Name}' could not be registered; trying the " +
             $"Startup-folder fallback: {DiagnosticFailure.SingleLine(registration.Detail ?? "no detail was reported.")}");
-        return InstallFallback(registration.Detail);
+        return CompleteMigration(InstallFallback(registration.Detail));
     }
 
     public async Task<GatewayPersistenceRemovalResult> UninstallAsync(
@@ -242,30 +250,65 @@ internal sealed class GatewayPersistenceManager
         GatewayGeneratedFileRemoval fallback = RemoveFallback();
         GatewayGeneratedFileRemoval launcher = RemoveLauncher();
         GatewayGeneratedFileRemoval activationScript = RemoveActivationScript();
+        GatewayGeneratedFileRemoval legacy = RemoveLegacyFiles();
         string? detail = Combine(
             deletion.Detail,
-            Combine(fallback.Detail, launcher.Detail, activationScript.Detail));
+            Combine(fallback.Detail, launcher.Detail, Combine(activationScript.Detail, legacy.Detail)));
 
         if (!deletion.Succeeded || detail is not null)
         {
             _log($"Logon recovery could not be fully removed: {DiagnosticFailure.SingleLine(detail ?? "no detail was reported.")}");
             return new GatewayPersistenceRemovalResult(
                 Succeeded: false,
-                fallback.Changed || launcher.Changed || activationScript.Changed,
+                fallback.Changed || launcher.Changed || activationScript.Changed || legacy.Changed,
                 "Logon recovery could not be fully removed.",
                 detail);
         }
 
         return new GatewayPersistenceRemovalResult(
             Succeeded: true,
-            fallback.Changed || launcher.Changed || activationScript.Changed,
+            fallback.Changed || launcher.Changed || activationScript.Changed || legacy.Changed,
             "Logon recovery is removed.");
+    }
+
+    // Shipped CMD registrations remain recoverable until an explicit install
+    // switches the task or fallback. Remove only marked files after that succeeds.
+    private GatewayPersistenceInstallResult CompleteMigration(GatewayPersistenceInstallResult result)
+    {
+        if (result.State != GatewayPersistenceState.Ready)
+        {
+            return result;
+        }
+
+        GatewayGeneratedFileRemoval fallback = result.Lane == GatewayPersistenceLane.TaskScheduler
+            ? RemoveFallback()
+            : new GatewayGeneratedFileRemoval(false, null);
+        GatewayGeneratedFileRemoval legacy = RemoveLegacyFiles();
+        string? detail = Combine(fallback.Detail, legacy.Detail);
+        return result with
+        {
+            State = detail is null ? result.State : GatewayPersistenceState.ActionRequired,
+            Changed = result.Changed || fallback.Changed || legacy.Changed,
+            Detail = Combine(result.Detail, detail),
+            Remediation = detail is null ? result.Remediation : RepairCommand
+        };
+    }
+
+    private GatewayGeneratedFileRemoval RemoveLegacyFiles()
+    {
+        GatewayGeneratedFileRemoval launcher =
+            RemoveGeneratedFile(Path.ChangeExtension(LauncherPath, ".cmd"));
+        GatewayGeneratedFileRemoval fallback =
+            RemoveGeneratedFile(Path.ChangeExtension(FallbackPath, ".cmd"));
+        return new GatewayGeneratedFileRemoval(
+            launcher.Changed || fallback.Changed,
+            Combine(launcher.Detail, fallback.Detail));
     }
 
     private GatewayTaskSnapshot DesiredSnapshot() =>
         GatewayTaskDefinition.CreateSnapshot(
             _options.UserSid,
-            _options.CommandProcessorPath,
+            _options.ScriptHostPath,
             LauncherPath,
             _options.LogonTriggerUserSid);
 
@@ -414,7 +457,11 @@ internal sealed class GatewayPersistenceManager
             }
         }
 
-        File.WriteAllText(path, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        // WScript reads Unicode scripts with a UTF-16 BOM; UTF-8 paths would be
+        // decoded using the machine's ANSI code page and fail for other alphabets.
+        File.WriteAllText(path, content, Path.GetExtension(path) == ".js"
+            ? Encoding.Unicode
+            : new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         return true;
     }
 
