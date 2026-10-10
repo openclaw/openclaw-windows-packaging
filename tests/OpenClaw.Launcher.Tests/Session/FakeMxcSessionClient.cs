@@ -53,13 +53,11 @@ internal sealed class FakeMxcSessionClient : IMxcSessionClient
         _provisionCount++;
         return Task.FromResult(new MxcProvisionResult(
             MxcSandboxId.Parse($"{SandboxIdPrefix}{_provisionCount}"),
-            Metadata,
-            null));
+            Metadata));
     }
 
     public Task StartAsync(
         MxcSandboxId sandboxId,
-        string? correlationVector,
         CancellationToken cancellationToken)
     {
         Calls.Add($"start:{sandboxId.Value}");
@@ -72,7 +70,6 @@ internal sealed class FakeMxcSessionClient : IMxcSessionClient
     public Task<MxcExecutionResult> ExecuteAsync(
         MxcSandboxId sandboxId,
         MxcExecutionRequest request,
-        string? correlationVector,
         CancellationToken cancellationToken)
     {
         Calls.Add($"execute:{sandboxId.Value}");
@@ -91,7 +88,6 @@ internal sealed class FakeMxcSessionClient : IMxcSessionClient
     public Task<int> ExecuteAttachedAsync(
         MxcSandboxId sandboxId,
         MxcExecutionRequest request,
-        string? correlationVector,
         CancellationToken cancellationToken)
     {
         Calls.Add($"execute-attached:{sandboxId.Value}");
@@ -105,7 +101,6 @@ internal sealed class FakeMxcSessionClient : IMxcSessionClient
 
     public Task StopAsync(
         MxcSandboxId sandboxId,
-        string? correlationVector,
         CancellationToken cancellationToken)
     {
         Calls.Add($"stop:{sandboxId.Value}");
@@ -116,7 +111,6 @@ internal sealed class FakeMxcSessionClient : IMxcSessionClient
 
     public Task DeprovisionAsync(
         MxcSandboxId sandboxId,
-        string? correlationVector,
         CancellationToken cancellationToken)
     {
         Calls.Add($"deprovision:{sandboxId.Value}");

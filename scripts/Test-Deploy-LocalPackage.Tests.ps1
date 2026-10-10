@@ -192,7 +192,6 @@ function New-Fixture {
             $state.MxcStages++
             New-Item -Path $output -ItemType Directory -Force | Out-Null
             [IO.File]::WriteAllText((Join-Path $output 'wxc-exec.exe'), 'fixture executor')
-            [IO.File]::WriteAllText((Join-Path $output 'plm.exe'), 'fixture lifecycle')
             [IO.File]::WriteAllText((Join-Path $output 'mxc-runtime.json'), '{}')
             return $null
         }.GetNewClosure()
@@ -333,9 +332,6 @@ try {
     Assert-True (
         Test-Path (Join-Path $layout 'mxc\x64\wxc-exec.exe')
     ) 'Layout is missing the MXC executor.'
-    Assert-True (
-        Test-Path (Join-Path $layout 'mxc\x64\plm.exe')
-    ) 'Layout is missing the MXC lifecycle tool.'
     Assert-True (
         Test-Path (Join-Path $layout 'mxc\x64\mxc-runtime.json')
     ) 'Layout is missing MXC provenance.'

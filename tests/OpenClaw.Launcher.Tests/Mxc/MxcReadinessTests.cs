@@ -32,11 +32,6 @@ public sealed class MxcReadinessTests : IDisposable
             Path.Combine(runtimeDirectory, MxcRuntimeLocator.ExecutorFileName),
             string.Empty);
         File.WriteAllText(
-            Path.Combine(
-                runtimeDirectory,
-                MxcRuntimeLocator.PackageLifecycleFileName),
-            string.Empty);
-        File.WriteAllText(
             Path.Combine(runtimeDirectory, MxcRuntimeLocator.ProvenanceFileName),
             """
             {"package":"@microsoft/mxc-sdk","version":"0.8.0","architecture":"x64"}

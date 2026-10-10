@@ -1166,13 +1166,11 @@ internal static class SmokeProgram
                 _provisionCount++;
                 return Task.FromResult(new MxcProvisionResult(
                     MxcSandboxId.Parse($"iso:fixture{_provisionCount}"),
-                    Metadata,
-                    null));
+                    Metadata));
             }
 
             public Task StartAsync(
                 MxcSandboxId sandboxId,
-                string? correlationVector,
                 CancellationToken cancellationToken)
             {
                 Calls.Add("start");
@@ -1182,7 +1180,6 @@ internal static class SmokeProgram
             public Task<MxcExecutionResult> ExecuteAsync(
                 MxcSandboxId sandboxId,
                 MxcExecutionRequest request,
-                string? correlationVector,
                 CancellationToken cancellationToken)
             {
                 Calls.Add("execute");
@@ -1195,7 +1192,6 @@ internal static class SmokeProgram
             public Task<int> ExecuteAttachedAsync(
                 MxcSandboxId sandboxId,
                 MxcExecutionRequest request,
-                string? correlationVector,
                 CancellationToken cancellationToken) =>
                 ExecuteAttachedCoreAsync(request);
 
@@ -1213,12 +1209,10 @@ internal static class SmokeProgram
 
             public Task StopAsync(
                 MxcSandboxId sandboxId,
-                string? correlationVector,
                 CancellationToken cancellationToken) => Task.CompletedTask;
 
             public Task DeprovisionAsync(
                 MxcSandboxId sandboxId,
-                string? correlationVector,
                 CancellationToken cancellationToken) => Task.CompletedTask;
         }
 

@@ -357,7 +357,6 @@ public sealed class ProgramStartupTests : IDisposable
                 new MxcRuntimeLocation(
                     Path.Combine(baseDirectory, "mxc"),
                     Path.Combine(baseDirectory, "mxc", "wxc-exec.exe"),
-                    Path.Combine(baseDirectory, "mxc", "plm.exe"),
                     null),
                 executor));
         using var output = new StringWriter();
@@ -374,7 +373,7 @@ public sealed class ProgramStartupTests : IDisposable
             ReadEnvironment = _ => new HostEnvironment(
                 "10.0.26340.9212 (X64 OS, X64 process)",
                 "OpenClaw.Gateway_2026.9.4.1003_x64__fixture",
-                "@microsoft/mxc-sdk 0.8.0 x64, wire 0.6.0-alpha",
+                "@microsoft/mxc-sdk 1.0.0 x64, wire 1.0.0",
                 "24.20.0",
                 ".NET fixture")
         };
@@ -390,7 +389,7 @@ public sealed class ProgramStartupTests : IDisposable
             $"{ClawCtlBuildMetadata.PackageVersion} (commit {ClawCtlBuildMetadata.PackageCommit}); " +
             $"OpenClaw payload {ClawCtlBuildMetadata.PayloadVersion} " +
             $"(commit {ClawCtlBuildMetadata.PayloadCommit}); " +
-            "MXC @microsoft/mxc-sdk 0.8.0 x64, wire 0.6.0-alpha; Node.js 24.20.0; .NET fixture",
+            "MXC @microsoft/mxc-sdk 1.0.0 x64, wire 1.0.0; Node.js 24.20.0; .NET fixture",
             log,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -433,7 +432,7 @@ public sealed class ProgramStartupTests : IDisposable
             MxcExecutorInvocation invocation,
             CancellationToken cancellationToken)
         {
-            string phase = MxcWireProtocol.DecodeConfig(invocation.Arguments[1]).Phase!;
+            string phase = invocation.Arguments[3];
             Phases.Add(phase);
             return Task.FromResult(new MxcExecutorOutcome(
                 phase == MxcWireProtocol.StartPhase ? 1 : 0,

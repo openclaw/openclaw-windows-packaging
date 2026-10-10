@@ -1,18 +1,46 @@
 # MXC session runtime and operational evidence
 
 This document describes the packaged isolated-session implementation and the
-observable guarantees it makes. It does not describe an external MXC protocol
-as a stable public API.
+observable guarantees it makes. The transport uses the official MXC 1.0 stable
+CLI contract. Source review does not prove that the packaged executable works
+on a Windows host.
 
 ## Runtime boundary and MXC seam
 
 The launcher owns a small session contract in
 `OpenClaw.Launcher\Mxc\IMxcSessionClient`. `MxcCliSessionClient` is the current
-implementation: it invokes the pinned `@microsoft/mxc-sdk` CLI and confines
-its preview wire details to `MxcWireProtocol` and `MxcWireModels`. The rest of
-the launcher depends on the project-owned contract, so the CLI transport can
-be replaced by the official .NET SDK without changing lifecycle, routing, or
-gateway callers.
+implementation. It invokes the pinned `@microsoft/mxc-sdk` CLI and confines
+the stable v1 config and argument format to `MxcWireProtocol` and
+`MxcWireModels`. The rest of the launcher depends on the project-owned
+contract. It does not depend on a preview wire format or a .NET SDK adapter.
+
+## Stable MXC 1.0 CLI contract
+
+The authority for this adapter is the official [`v1.0.0` executor source](https://github.com/microsoft/mxc/blob/v1.0.0/src/tools/wxc/src/main.rs), the [stable 1.0 config schema](https://github.com/microsoft/mxc/blob/v1.0.0/schemas/stable/mxc-config.schema.1.0.0.json), and the [container lifecycle reference](https://github.com/microsoft/mxc/blob/v1.0.0/docs/development/architecture/container-lifecycle.md). The package pins the executor archive and schema versions separately in `mxc-runtime.lock.json`.
+
+Every config uses version `1.0.0`. The CLI receives it with
+`--config-base64` and selects lifecycle routing with `--operation`.
+Provision uses `--operation provision` and omits `--container-id`. Its config
+sets `containment` to `isolation_session`, puts the package identity at
+`isolationSession.provision.appId`, and acknowledges the required unrestricted
+network policy. That policy sets egress default, ingress default, and ingress
+host loopback to `allow`.
+
+Start, exec, stop, and deprovision pass their operation and opaque session id
+with `--operation` and `--container-id`. Their config omits `phase`,
+`sandboxId`, `correlationVector`, network policy, and provision-only identity.
+Exec adds only its process command line. Lifecycle tracing identifiers remain
+internal to MXC; this launcher accepts and persists no caller correlation vector.
+
+Non-exec lifecycle response and error envelopes use standard output. A failed
+exec dispatch writes its error envelope to standard error. The client returns
+raw exec output and exit status. `SessionExecutor` uses the request-matched
+guest helper control result to decide whether the command launched; guest
+output is not a substitute for that result.
+
+The transport's tests use an injected executor and do not launch the packaged
+MXC executable. Existing 0.8 runtime captures remain historical response
+fixtures. They do not prove v1 runtime behavior on this host.
 
 `OpenClaw.SessionProtocol` is separate from that backend seam. It is the
 versioned, launcher-to-guest request/result contract used for execution,

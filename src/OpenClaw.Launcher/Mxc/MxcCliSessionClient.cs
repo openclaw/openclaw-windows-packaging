@@ -40,16 +40,6 @@ internal interface IMxcAttachedExecutorInvoker
         CancellationToken cancellationToken);
 }
 
-/// <summary>
-/// Temporary <see cref="IMxcSessionClient"/> transport over the executor
-/// published in <c>@microsoft/mxc-sdk</c>.
-/// </summary>
-/// <remarks>
-/// This exists only until the official Microsoft.Mxc.Sdk .NET package ships.
-/// Every preview wire detail is confined to this adapter and
-/// <see cref="MxcWireProtocol"/>; the published SDK adapter must satisfy the
-/// same <see cref="IMxcSessionClient"/> behavior.
-/// </remarks>
 internal sealed class MxcCliSessionClient : IMxcSessionClient
 {
     private readonly MxcRuntimeLocation _runtime;
@@ -80,26 +70,24 @@ internal sealed class MxcCliSessionClient : IMxcSessionClient
         }
 
         MxcExecutorOutcome outcome = await InvokeAsync(
-            MxcWireProtocol.BuildProvisionEnvelope(request.AppId),
+            MxcWireProtocol.BuildProvisionRequest(request.AppId),
             cancellationToken).ConfigureAwait(false);
         return MxcWireProtocol.ReadProvisionResult(ReadResult(outcome));
     }
 
     public async Task StartAsync(
         MxcSandboxId sandboxId,
-        string? correlationVector,
         CancellationToken cancellationToken) =>
         ReadResult(await InvokeAsync(
-            MxcWireProtocol.BuildPhaseEnvelope(
+            MxcWireProtocol.BuildPhaseRequest(
                 MxcWireProtocol.StartPhase,
                 sandboxId,
-                correlationVector),
+                commandLine: null),
             cancellationToken).ConfigureAwait(false));
 
     public async Task<MxcExecutionResult> ExecuteAsync(
         MxcSandboxId sandboxId,
         MxcExecutionRequest request,
-        string? correlationVector,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.CommandLine))
@@ -110,26 +98,11 @@ internal sealed class MxcCliSessionClient : IMxcSessionClient
         }
 
         MxcExecutorOutcome outcome = await InvokeAsync(
-            MxcWireProtocol.BuildPhaseEnvelope(
+            MxcWireProtocol.BuildPhaseRequest(
                 MxcWireProtocol.ExecPhase,
                 sandboxId,
-                correlationVector,
                 request.CommandLine),
             cancellationToken).ConfigureAwait(false);
-
-        // Execution forwards the guest command's own output and exit code. A
-        // dispatch failure is only claimed when the executor also failed, so a
-        // command that legitimately prints an error-shaped JSON document is
-        // reported as command output rather than an MXC fault.
-        if (outcome.ExitCode != 0)
-        {
-            MxcException? dispatchFailure =
-                MxcWireProtocol.TryParseExecutionError(outcome.StandardOutput);
-            if (dispatchFailure is not null)
-            {
-                throw dispatchFailure;
-            }
-        }
 
         return new MxcExecutionResult(
             outcome.ExitCode,
@@ -150,36 +123,32 @@ internal sealed class MxcCliSessionClient : IMxcSessionClient
     public Task<int> ExecuteAttachedAsync(
         MxcSandboxId sandboxId,
         MxcExecutionRequest request,
-        string? correlationVector,
         CancellationToken cancellationToken) =>
         _attachedInvoker.InvokeAttachedAsync(
-            BuildInvocation(MxcWireProtocol.BuildPhaseEnvelope(
+            BuildInvocation(MxcWireProtocol.BuildPhaseRequest(
                 MxcWireProtocol.ExecPhase,
                 sandboxId,
-                correlationVector,
                 request.CommandLine)),
             cancellationToken);
 
     public async Task StopAsync(
         MxcSandboxId sandboxId,
-        string? correlationVector,
         CancellationToken cancellationToken) =>
         ReadResult(await InvokeAsync(
-            MxcWireProtocol.BuildPhaseEnvelope(
+            MxcWireProtocol.BuildPhaseRequest(
                 MxcWireProtocol.StopPhase,
                 sandboxId,
-                correlationVector),
+                commandLine: null),
             cancellationToken).ConfigureAwait(false));
 
     public async Task DeprovisionAsync(
         MxcSandboxId sandboxId,
-        string? correlationVector,
         CancellationToken cancellationToken) =>
         ReadResult(await InvokeAsync(
-            MxcWireProtocol.BuildPhaseEnvelope(
+            MxcWireProtocol.BuildPhaseRequest(
                 MxcWireProtocol.DeprovisionPhase,
                 sandboxId,
-                correlationVector),
+                commandLine: null),
             cancellationToken).ConfigureAwait(false));
 
     /// <summary>
@@ -208,22 +177,12 @@ internal sealed class MxcCliSessionClient : IMxcSessionClient
     }
 
     private Task<MxcExecutorOutcome> InvokeAsync(
-        MxcRequestEnvelope envelope,
+        MxcCliRequest request,
         CancellationToken cancellationToken) =>
-        _invoker.InvokeAsync(BuildInvocation(envelope), cancellationToken);
+        _invoker.InvokeAsync(BuildInvocation(request), cancellationToken);
 
-    private MxcExecutorInvocation BuildInvocation(MxcRequestEnvelope envelope) =>
-        new(
-            _runtime.ExecutorPath,
-            [
-                "--config-base64",
-                MxcWireProtocol.EncodeConfig(envelope),
-
-                // The state-aware lifecycle surface is gated behind this
-                // flag in the pinned runtime; without it the executor
-                // rejects the request before reading the envelope.
-                "--experimental"
-            ]);
+    private MxcExecutorInvocation BuildInvocation(MxcCliRequest request) =>
+        new(_runtime.ExecutorPath, MxcWireProtocol.BuildArguments(request));
 
     private static System.Text.Json.JsonElement ReadResult(
         MxcExecutorOutcome outcome)

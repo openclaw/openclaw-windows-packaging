@@ -157,9 +157,11 @@ The boundary with MXC has two responsibilities that should not be conflated:
 - MXC owns the containment implementation. [`MxcCliSessionClient`](../src/OpenClaw.Launcher/Mxc/MxcCliSessionClient.cs)
   is the host adapter to the pinned executor, while
   [`MxcWireProtocol`](../src/OpenClaw.Launcher/Mxc/MxcWireProtocol.cs)
-  confines the versioned preview request and response envelopes to one place.
-  Its isolation-session wire schema is independently versioned from the npm
-  package pin.
+  confines the official stable v1 config and lifecycle arguments to one place.
+  The adapter sends the operation with `--operation` and the opaque lifecycle
+  id with `--container-id`; it does not put either value in the config JSON.
+  The package records the npm package and config schema versions separately in
+  its runtime lock.
 
 The result is a narrow trust boundary: this repository decides exactly which
 runtime is packaged and verifies it, but does not reimplement MXC's process

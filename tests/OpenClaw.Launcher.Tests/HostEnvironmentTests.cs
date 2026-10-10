@@ -201,9 +201,6 @@ public sealed class HostEnvironmentTests : IDisposable
     {
         Directory.CreateDirectory(directory);
         File.WriteAllText(Path.Combine(directory, MxcRuntimeLocator.ExecutorFileName), "fixture");
-        File.WriteAllText(
-            Path.Combine(directory, MxcRuntimeLocator.PackageLifecycleFileName),
-            "fixture");
         if (provenance)
         {
             string architecture = MxcRuntimeLocator.CurrentArchitectureName();
