@@ -669,9 +669,10 @@ validation. Manual runs support four modes:
 
 - `unsigned` follows stable or an `openclaw_ref` override and publishes unsigned
   MSIX packages;
-- `test` uses the same source-selection rules and publishes MSIX packages signed with a
-  temporary self-signed certificate plus the public `.cer` needed for local
-  installation;
+- `test` uses the same source-selection rules, derives the release-candidate
+  version, and runs the installed-upgrade matrix without release authorization
+  or Azure credentials. It publishes MSIX packages signed with a temporary
+  self-signed certificate plus the public `.cer` needed for local installation;
 - `store` follows stable, an `openclaw_ref` override, or an older payload pinned
   with `gateway_version`,
   may run only from `main`, and retains an unsigned Partner Center submission bundle for 90 days;
@@ -682,6 +683,10 @@ validation. Manual runs support four modes:
 
 Following stable does not automatically sign or publish a new Gateway release;
 publication still requires a manual workflow dispatch.
+Manual `store` and `official` runs require their own successful installed-upgrade
+matrix before authorization. A new upstream stable release needs no throwaway
+pull request to obtain current-source proof; use `test` mode for an optional
+preflight. `unsigned` dispatches keep development versions and skip that matrix.
 
 Official signing uses the protected `release-signing` environment, Azure OIDC,
 and the existing OpenClaw Artifact Signing account and certificate profile.
@@ -749,8 +754,9 @@ The signed `v0.0.0.0` and `v0.0.0.1` proof releases and the latest signed
 sideload release retain the `OpenClaw.Gateway` identity and remain immutable
 upgrade baselines. Partner Center requires the reserved
 `OpenClawFoundation.OpenClawGateway` identity, so Windows cannot update those
-packages in place or retain their packaged LocalState. Pull requests that
-change release policy download the hash-pinned standalone x64 and recommended
+packages in place or retain their packaged LocalState. Versioning/source-selection
+pull requests and manual `test`, `store`, and `official` runs download the
+hash-pinned standalone x64 and recommended
 `.msixbundle` assets, install each one on a clean GitHub-hosted Windows runner,
 verify the legacy identity, remove it, install the Store candidate through the
 same delivery format, and prove that Windows registered the reserved package
