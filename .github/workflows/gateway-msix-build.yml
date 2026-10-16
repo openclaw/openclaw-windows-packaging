@@ -105,7 +105,7 @@ jobs:
           "OpenClaw $($source.packageVersion) ($($source.resolvedCommit)), selected by $($source.requestedRef)." >> $env:GITHUB_STEP_SUMMARY
 
       - name: Verify the reusable job cannot acquire cache-write authority
-        if: ${{ inputs.versioning == 'true' && !inputs.cache_write }}
+        if: ${{ !inputs.cache_write }}
         uses: actions/github-script@v8
         env:
           ACTIONS_CACHE_MODE: write

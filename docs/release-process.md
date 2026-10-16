@@ -207,8 +207,9 @@ then dispatch a new compliant run rather than publishing partial artifacts.
 Versioning PRs exercise the cache service in the PR's own ref: a write-scoped
 job persists synthetic bytes, a read-scoped job restores them and attempts a
 save with a forged client mode, and the reusable build job directly requests
-write authority with its inherited read token. The direct request must receive
-a service policy denial; an unrelated network failure is not passing proof.
+write authority with its inherited read token. Every read-only reusable build
+runs this direct probe, including manual source overrides from main. The request
+must receive a service policy denial; an unrelated network failure is not passing proof.
 These checks do not establish main's cold/warm cutover or fresh CodeQL results.
 Official/store bypass the explicit package and payload caches, but
 setup-dotnet and nested upstream actions may still use caches under the caller
