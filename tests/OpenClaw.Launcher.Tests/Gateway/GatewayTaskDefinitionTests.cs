@@ -42,8 +42,8 @@ public sealed class GatewayTaskDefinitionTests
     private static GatewayTaskSnapshot Desired() =>
         GatewayTaskDefinition.CreateSnapshot(
             "S-1-5-21-1",
-            @"C:\Windows\System32\cmd.exe",
-            @"C:\state\gateway-launcher.cmd");
+            @"C:\Windows\System32\wscript.exe",
+            @"C:\state\gateway-launcher.js");
 
     [Fact]
     public void TheGeneratedDefinitionRoundTrips()
@@ -64,8 +64,8 @@ public sealed class GatewayTaskDefinitionTests
     {
         GatewayTaskSnapshot snapshot = GatewayTaskDefinition.CreateSnapshot(
             "S-1-12-1-1-2-3-4",
-            @"C:\Windows\System32\cmd.exe",
-            @"C:\state\gateway-launcher.cmd",
+            @"C:\Windows\System32\wscript.exe",
+            @"C:\state\gateway-launcher.js",
             "S-1-5-21-1-2-3-4");
 
         Assert.Equal("S-1-12-1-1-2-3-4", snapshot.UserId);
@@ -100,12 +100,12 @@ public sealed class GatewayTaskDefinitionTests
     }
 
     [Fact]
-    public void TheActionRunsTheLauncherThroughTheCommandProcessor()
+    public void TheActionRunsTheLauncherThroughWindowlessScriptHost()
     {
         GatewayTaskSnapshot desired = Desired();
 
-        Assert.Equal(@"C:\Windows\System32\cmd.exe", desired.Command);
-        Assert.Contains(@"C:\state\gateway-launcher.cmd", desired.Arguments, StringComparison.Ordinal);
+        Assert.Equal(@"C:\Windows\System32\wscript.exe", desired.Command);
+        Assert.Equal("//B //Nologo \"C:\\state\\gateway-launcher.js\"", desired.Arguments);
     }
 
     [Fact]
