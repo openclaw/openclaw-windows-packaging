@@ -371,9 +371,10 @@ Package and payload metadata record the resolved source commit and version.
 For a one-time source override in any signing mode, provide an OpenClaw tag,
 branch, or full commit SHA in the manual `openclaw_ref` input. Empty means follow
 stable. The resolver records the ref's exact commit and package version once;
-retries use that immutable snapshot even if a branch later moves. Release modes
-also capture the unmodified stable selector as the MSIX and GitHub release
-identity source, so a hotfix payload does not create a second version owner.
+retries use that immutable snapshot even if a branch later moves.
+Release-candidate modes (`test`, `store`, and `official`) also capture the
+unmodified stable selector as the MSIX and GitHub release identity source, so a
+hotfix payload does not create a second version owner.
 The override payload version may equal or precede that stable identity, but may
 not be newer.
 For a one-run rollback of the bundled payload in any signing mode, set
@@ -381,8 +382,8 @@ For a one-run rollback of the bundled payload in any signing mode, set
 while the MSIX and GitHub release identity continue from the unmodified stable
 selector above so the package remains an upgrade. Both sources are verified and
 captured in the immutable snapshot. The workflow rejects an override that is not
-older than the release-identity source. Unsigned and test runs reject combining
-it with `openclaw_ref`; Store and official runs preserve a full-SHA
+older than the release-identity source. Unsigned runs reject combining it with
+`openclaw_ref`; test, Store, and official runs preserve a full-SHA
 `openclaw_ref` as an assertion that the version resolved to the intended commit.
 If compatibility requires an older known-good stable release, a reviewed
 `stableVersion` field in `release-policy.json` can pin its exact version, for
