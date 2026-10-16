@@ -20,14 +20,11 @@ try {
     $package = Join-Path $source 'package'
     $output = Join-Path $testRoot 'staged'
     $scripts = Join-Path $testRoot 'scripts'
-    $archive = Join-Path $testRoot 'mxc-fixture.tgz'
+    $archive = Join-Path $testRoot 'mxc-fixture.nupkg'
     New-Item -Path $package, $output, $scripts -ItemType Directory -Force | Out-Null
     $runtimeFile = Join-Path $package 'fixture.bin'
     [IO.File]::WriteAllText($runtimeFile, 'verified runtime')
-    & tar -czf $archive -C $source 'package/fixture.bin'
-    if ($LASTEXITCODE -ne 0) {
-        throw "Creating the fixture archive failed (exit $LASTEXITCODE)."
-    }
+    [IO.Compression.ZipFile]::CreateFromDirectory($source, $archive)
 
     $stream = [IO.File]::OpenRead($archive)
     try {
@@ -47,12 +44,11 @@ try {
 
     $hash = (Get-FileHash -LiteralPath $runtimeFile -Algorithm SHA256).Hash.ToLowerInvariant()
     $lock = [ordered]@{
-        package = '@microsoft/mxc-sdk'
+        package = 'Microsoft.Mxc.Sdk'
         version = 'fixture'
-        wireSchemaVersion = 'fixture'
         minimumWindowsBuild = '0'
-        tarballUrl = 'https://example.invalid/mxc-fixture.tgz'
-        tarballIntegrity = $integrity
+        archiveUrl = 'https://example.invalid/mxc-fixture.nupkg'
+        archiveIntegrity = $integrity
         architectures = @{
             x64 = @{
                 files = @(@{
@@ -70,22 +66,48 @@ try {
     $fixtureScript = Join-Path $scripts 'Get-MxcRuntime.ps1'
     Copy-Item -LiteralPath $scriptPath -Destination $fixtureScript
     & $fixtureScript -Architecture x64 -ArchivePath $archive -OutputDirectory $output
-    if ($LASTEXITCODE -ne 0) {
-        throw "Initial MXC staging failed (exit $LASTEXITCODE)."
-    }
 
     $unexpected = Join-Path $output 'unverified.bin'
     [IO.File]::WriteAllText($unexpected, 'must not be packaged')
     & $fixtureScript -Architecture x64 -ArchivePath $archive -OutputDirectory $output
-    if ($LASTEXITCODE -ne 0) {
-        throw "MXC restaging failed (exit $LASTEXITCODE)."
-    }
 
     Assert-True (-not (Test-Path -LiteralPath $unexpected)) (
         'MXC runtime reuse retained an unpinned file.'
     )
     Assert-True (Test-Path -LiteralPath (Join-Path $output 'fixture.bin')) (
         'MXC restaging did not preserve the pinned runtime file.'
+    )
+
+    $zip = [IO.Compression.ZipFile]::Open($archive, [IO.Compression.ZipArchiveMode]::Update)
+    try {
+        $duplicate = $zip.CreateEntry('package/fixture.bin')
+        $stream = $duplicate.Open()
+        try {
+            $bytes = [Text.Encoding]::UTF8.GetBytes('verified runtime')
+            $stream.Write($bytes)
+        }
+        finally { $stream.Dispose() }
+    }
+    finally { $zip.Dispose() }
+    $lockObject = $lock | ConvertFrom-Json
+    $stream = [IO.File]::OpenRead($archive)
+    try {
+        $lockObject.archiveIntegrity = 'sha512-' + [Convert]::ToBase64String(
+            [Security.Cryptography.SHA512]::HashData($stream))
+    }
+    finally { $stream.Dispose() }
+    [IO.File]::WriteAllText((Join-Path $testRoot 'mxc-runtime.lock.json'),
+        ($lockObject | ConvertTo-Json -Depth 8))
+    $rejected = $false
+    try {
+        & $fixtureScript -Architecture x64 -ArchivePath $archive -OutputDirectory $output -Force
+    }
+    catch {
+        $rejected = $_.Exception.Message -match 'exactly one matching'
+    }
+    Assert-True $rejected 'Duplicate NuGet archive entries were not rejected at extraction.'
+    Assert-True ([IO.File]::ReadAllText((Join-Path $output 'fixture.bin')) -ceq 'verified runtime') (
+        'Failed archive validation modified the previously qualified runtime.'
     )
     Write-Host 'MXC runtime staging tests passed.'
 }

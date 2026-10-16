@@ -168,8 +168,7 @@ internal sealed record MxcProvisionRequest(string AppId);
 
 internal sealed record MxcProvisionResult(
     MxcSandboxId SandboxId,
-    MxcProvisionMetadata? Metadata,
-    string? CorrelationVector);
+    MxcProvisionMetadata? Metadata);
 
 /// <summary>
 /// A command to run inside a started sandbox.
@@ -186,11 +185,6 @@ internal sealed record MxcExecutionResult(
     string StandardOutput,
     string StandardError);
 
-/// <summary>
-/// The MXC lifecycle operations this package requires, shaped after the
-/// upcoming <c>Microsoft.Mxc.Sdk</c> state-aware API so the published SDK can
-/// replace the transport without changing session or gateway behavior.
-/// </summary>
 internal interface IMxcSessionClient
 {
     Task<MxcProvisionResult> ProvisionAsync(
@@ -199,13 +193,11 @@ internal interface IMxcSessionClient
 
     Task StartAsync(
         MxcSandboxId sandboxId,
-        string? correlationVector,
         CancellationToken cancellationToken);
 
     Task<MxcExecutionResult> ExecuteAsync(
         MxcSandboxId sandboxId,
         MxcExecutionRequest request,
-        string? correlationVector,
         CancellationToken cancellationToken);
 
     /// <summary>
@@ -223,16 +215,13 @@ internal interface IMxcSessionClient
     Task<int> ExecuteAttachedAsync(
         MxcSandboxId sandboxId,
         MxcExecutionRequest request,
-        string? correlationVector,
         CancellationToken cancellationToken);
 
     Task StopAsync(
         MxcSandboxId sandboxId,
-        string? correlationVector,
         CancellationToken cancellationToken);
 
     Task DeprovisionAsync(
         MxcSandboxId sandboxId,
-        string? correlationVector,
         CancellationToken cancellationToken);
 }

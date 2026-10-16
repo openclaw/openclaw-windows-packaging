@@ -125,6 +125,10 @@ try {
     $clawctl = Join-Path $publishRoot 'clawctl.exe'
     Copy-Item -LiteralPath $driver -Destination $clawctl -Force
 
+    # The read-only SDK probe uses the same verified native layout as the package.
+    & (Join-Path $PSScriptRoot 'Get-MxcRuntime.ps1') -Architecture x64 `
+        -OutputDirectory (Join-Path $publishRoot 'mxc\x64')
+
     $output = Assert-Invocation `
         -Executable $clawctl `
         -Arguments @() `

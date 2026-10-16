@@ -1,10 +1,11 @@
 using System.Globalization;
 using System.IO.Compression;
 using System.Text;
-using System.Text.Json;
+using Microsoft.Mxc.Sdk.V1;
 using OpenClaw.Launcher.Gateway;
 using OpenClaw.Launcher.Mxc;
 using OpenClaw.Launcher.Session;
+using OpenClaw.Launcher.Tests.Mxc;
 using OpenClaw.Launcher.Tests.Session;
 using OpenClaw.SessionProtocol;
 
@@ -332,28 +333,39 @@ public sealed class DiagnosticsBundleTests : IDisposable
                 StringComparison.Ordinal));
     }
 
-    // A failure note quotes the failure's full detail. For a malformed MXC
-    // response, that detail includes the executor's raw output and
-    // diagnostics. Notes reach the manifest and the command's console and
-    // JSON result, so they must be redacted like collected file text.
+    // MXC messages can contain backend-provided detail. Notes reach the bundle
+    // manifest and command output, so they must be redacted like collected text.
     [Fact]
-    public async Task CredentialsInAFailureNoteAreRedactedEverywhereTheNoteGoes()
+    public async Task CredentialsInAnSdkFailureNoteAreRedactedEverywhereTheNoteGoes()
     {
         string workspace = Path.Combine(_root, "shared");
         Directory.CreateDirectory(workspace);
-        var executor = new MalformedStartExecutor(
-            workspace,
-            malformedOutput: "thread 'main' panicked: Authorization: Bearer ghu_verysecretvalue",
-            executorDiagnostics: "fatal: OPENAI_API_KEY=ghu_othersecretvalue");
+        var sdk = new FakeMxcSdkApi
+        {
+            StartsBeforeFailure = 1,
+            ProvisionResult = new ProvisionResult
+            {
+                ContainerId = new ContainerId("iso:minted"),
+                Metadata = new IsolationSessionProvisionMetadata
+                {
+                    AgentUserName = "agent_fixture",
+                    AgentUserSid = "S-1-5-21-0-0-0-1234",
+                    EphemeralWorkspacePath = workspace
+                }
+            }
+        };
+        sdk.StartFailures.Enqueue(new Microsoft.Mxc.Sdk.V1.MxcException(
+            ErrorCode.BackendError,
+            "Authorization: Bearer ghu_verysecretvalue; OPENAI_API_KEY=ghu_othersecretvalue"));
         (GatewayRuntime runtime, _, SessionRuntime session) = CreateRuntime(
             workspace,
-            new MxcCliSessionClient(
+            new MxcSdkSessionClient(
                 new MxcRuntimeLocation(
                     Path.Combine(_root, "mxc"),
-                    Path.Combine(_root, "mxc", "wxc-exec.exe"),
-                    Path.Combine(_root, "mxc", "plm.exe"),
+                    Path.Combine(_root, "mxc", "mxc_ffi.dll"),
                     null),
-                executor));
+                sdk,
+                new FakeMxcHostTerminal()));
         SessionRecord record = await session.Coordinator.EnsureStartedAsync(CancellationToken.None);
         session.StageHelper(record);
         string bundlePath = Path.Combine(_root, "malformed.zip");
@@ -369,15 +381,10 @@ public sealed class DiagnosticsBundleTests : IDisposable
             candidate => candidate.StartsWith(
                 "Agent-side logs could not be collected (MxcException:",
                 StringComparison.Ordinal));
-        Assert.Contains("[code ProtocolViolation]", note, StringComparison.Ordinal);
-        Assert.Contains(
-            $"Executor diagnostics: fatal: OPENAI_API_KEY={DiagnosticsRedactor.Placeholder}",
-            note,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            $"Executor output: thread 'main' panicked: Authorization: Bearer {DiagnosticsRedactor.Placeholder}",
-            note,
-            StringComparison.Ordinal);
+        Assert.Contains("[code BackendError; backend code BackendError]", note, StringComparison.Ordinal);
+        Assert.Contains($"Bearer {DiagnosticsRedactor.Placeholder}", note, StringComparison.Ordinal);
+        Assert.Contains($"OPENAI_API_KEY={DiagnosticsRedactor.Placeholder}", note, StringComparison.Ordinal);
+        Assert.DoesNotContain("verysecretvalue", note, StringComparison.Ordinal);
         using ZipArchive archive = ZipFile.OpenRead(bundlePath);
         string manifest = await ReadEntryAsync(archive, "manifest.txt");
         Assert.Contains(note, manifest, StringComparison.Ordinal);
@@ -548,38 +555,4 @@ public sealed class DiagnosticsBundleTests : IDisposable
         return (runtime, paths, session);
     }
 
-    /// <summary>
-    /// Answers MXC lifecycle phases with fixed envelopes, standing in for the
-    /// executor process so the real client and its wire parsing run. The
-    /// first start succeeds and every later one prints malformed output.
-    /// </summary>
-    private sealed class MalformedStartExecutor(
-        string workspace,
-        string malformedOutput,
-        string executorDiagnostics) : IMxcExecutorInvoker
-    {
-        private int _starts;
-
-        public Task<MxcExecutorOutcome> InvokeAsync(
-            MxcExecutorInvocation invocation,
-            CancellationToken cancellationToken)
-        {
-            string phase = MxcWireProtocol.DecodeConfig(invocation.Arguments[1]).Phase!;
-            MxcExecutorOutcome outcome = phase switch
-            {
-                MxcWireProtocol.ProvisionPhase => new MxcExecutorOutcome(
-                    0,
-                    "{\"result\":{\"sandboxId\":\"iso:fixture\",\"metadata\":{" +
-                    "\"agentUserName\":\"agent_1\",\"agentUserSid\":\"S-1-5-21-0-0-0-1001\"," +
-                    "\"ephemeralWorkspacePath\":" + JsonSerializer.Serialize(workspace) + "}}}",
-                    string.Empty),
-                MxcWireProtocol.StartPhase when Interlocked.Increment(ref _starts) == 1 =>
-                    new MxcExecutorOutcome(0, """{"result":{}}""", string.Empty),
-                MxcWireProtocol.StartPhase =>
-                    new MxcExecutorOutcome(1, malformedOutput, executorDiagnostics),
-                _ => throw new InvalidOperationException($"Unexpected MXC phase '{phase}'.")
-            };
-            return Task.FromResult(outcome);
-        }
-    }
 }

@@ -80,12 +80,7 @@ internal sealed record HostEnvironment(
         string runtime = location.Provenance is { } provenance
             ? $"{provenance.Package} {provenance.Version} {provenance.Architecture}"
             : "runtime of unknown provenance";
-        string source = string.IsNullOrWhiteSpace(
-            readEnvironmentVariable(MxcRuntimeLocator.RuntimeDirectoryVariable))
-                ? string.Empty
-                : $", overridden by {MxcRuntimeLocator.RuntimeDirectoryVariable} " +
-                  $"to {location.Directory}";
-        return $"{runtime}, wire {MxcWireProtocol.IsolationSessionSchemaVersion}{source}";
+        return runtime;
     }
 
     internal static string DescribeNodeJs(string? archivePath, Architecture architecture)

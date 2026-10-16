@@ -128,7 +128,7 @@ internal sealed class SessionRuntime
         string applicationId =
             PackageIdentity.ToApplicationId(paths.PackageFamilyName);
         IMxcSessionClient client = backend ?? new LazyMxcSessionClient(
-            () => new MxcCliSessionClient(locateRuntime()));
+            () => new MxcSdkSessionClient(locateRuntime()));
 
         var coordinator = new SessionCoordinator(
             client,

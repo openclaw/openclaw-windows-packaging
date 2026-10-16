@@ -33,6 +33,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Mxc.Sdk" ExcludeAssets="native" GeneratePathProperty="true" />
     <PackageReference Include="Spectre.Console" />
     <PackageReference Include="System.CommandLine" />
   </ItemGroup>
@@ -115,6 +116,17 @@
     </ItemGroup>
   </Target>
 
+  <Target Name="GenerateMxcRuntimeIdentity" BeforeTargets="BeforeCompile">
+    <PropertyGroup>
+      <_MxcRuntimeIdentityFile>$(IntermediateOutputPath)MxcRuntimeIdentity.g.cs</_MxcRuntimeIdentityFile>
+    </PropertyGroup>
+    <Exec Command="pwsh -NoProfile -File &quot;$(MSBuildThisFileDirectory)..\..\scripts\Generate-MxcRuntimeIdentity.ps1&quot; -OutputPath &quot;$(_MxcRuntimeIdentityFile)&quot; -SdkPackageDirectory &quot;$(PkgMicrosoft_Mxc_Sdk)&quot;" />
+    <ItemGroup>
+      <Compile Include="$(_MxcRuntimeIdentityFile)" />
+      <FileWrites Include="$(_MxcRuntimeIdentityFile)" />
+    </ItemGroup>
+  </Target>
+
   <Target Name="GenerateVersionedAppxManifest"
           BeforeTargets="_ValidatePresenceOfAppxManifestItems"
           Condition="'$(PackageIdentityVersion)' != '' or '$(PackageIdentityName)' != '' or '$(PackageIdentityPublisher)' != ''">
@@ -188,7 +200,7 @@
            Text="Missing architecture-specific bundled Node.js archive." />
     <Error Condition="'$(MxcRuntimeArchitecture)' == ''"
            Text="Packaging requires RuntimeIdentifier win-x64 or win-arm64 to select the MXC runtime." />
-    <Error Condition="!Exists('$(MxcRuntimeContentDirectory)wxc-exec.exe')"
+    <Error Condition="!Exists('$(MxcRuntimeContentDirectory)mxc_ffi.dll')"
            Text="Missing the staged MXC runtime. Run scripts\Get-MxcRuntime.ps1 -Architecture $(MxcRuntimeArchitecture)." />
     <Error Condition="!Exists('$(MxcRuntimeContentDirectory)mxc-runtime.json')"
            Text="Missing MXC runtime provenance. Run scripts\Get-MxcRuntime.ps1 -Architecture $(MxcRuntimeArchitecture)." />

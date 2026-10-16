@@ -191,8 +191,7 @@ function New-Fixture {
             param($repositoryRoot, $architecture, $output)
             $state.MxcStages++
             New-Item -Path $output -ItemType Directory -Force | Out-Null
-            [IO.File]::WriteAllText((Join-Path $output 'wxc-exec.exe'), 'fixture executor')
-            [IO.File]::WriteAllText((Join-Path $output 'plm.exe'), 'fixture lifecycle')
+            [IO.File]::WriteAllText((Join-Path $output 'mxc_ffi.dll'), 'fixture native library')
             [IO.File]::WriteAllText((Join-Path $output 'mxc-runtime.json'), '{}')
             return $null
         }.GetNewClosure()
@@ -331,11 +330,8 @@ try {
         Test-Path (Join-Path $layout 'session-host\x64\openclaw-session-host.exe')
     ) 'Layout is missing the session host.'
     Assert-True (
-        Test-Path (Join-Path $layout 'mxc\x64\wxc-exec.exe')
+        Test-Path (Join-Path $layout 'mxc\x64\mxc_ffi.dll')
     ) 'Layout is missing the MXC executor.'
-    Assert-True (
-        Test-Path (Join-Path $layout 'mxc\x64\plm.exe')
-    ) 'Layout is missing the MXC lifecycle tool.'
     Assert-True (
         Test-Path (Join-Path $layout 'mxc\x64\mxc-runtime.json')
     ) 'Layout is missing MXC provenance.'
@@ -1284,7 +1280,7 @@ try {
         $native.PreflightArchitectures.Count -eq 1 -and
         $native.PreflightArchitectures[0] -ceq 'arm64' -and
         $nativeManifest.Package.Identity.ProcessorArchitecture -eq 'arm64' -and
-        (Test-Path -LiteralPath (Join-Path $nativeLayout 'mxc\arm64\wxc-exec.exe'))
+        (Test-Path -LiteralPath (Join-Path $nativeLayout 'mxc\arm64\mxc_ffi.dll'))
     ) 'An omitted -Architecture did not deploy the native architecture.'
     Remove-LocalPackageRegistration -RepositoryRoot $native.Root -Operations $native.Operations
     Assert-True (

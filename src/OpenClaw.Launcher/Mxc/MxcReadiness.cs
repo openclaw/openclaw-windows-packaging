@@ -47,7 +47,8 @@ internal sealed record MxcReadinessReport(
     MxcHostBuild? HostBuild,
     MxcSupportEvidence SupportEvidence,
     MxcBackendProbe? BackendProbe = null,
-    string? BackendProbeFailureReason = null)
+    string? BackendProbeFailureReason = null,
+    MxcErrorCode? RuntimeFailureCode = null)
 {
     public bool RuntimeAvailable => RuntimeUnavailableReason is null;
 
@@ -109,7 +110,7 @@ internal static class MxcReadiness
             Environment.GetEnvironmentVariable,
             WindowsHostBuild.TryRead,
             static (location, token) =>
-                new MxcCliSessionClient(location).ProbeBackendAsync(token),
+                new MxcSdkSessionClient(location).ProbeBackendAsync(token),
             cancellationToken);
 
     [SuppressMessage(
@@ -132,6 +133,7 @@ internal static class MxcReadiness
         string? runtimeDirectory = null;
         MxcRuntimeProvenance? provenance = null;
         string? unavailableReason = null;
+        MxcErrorCode? runtimeFailureCode = null;
         MxcRuntimeLocation? location = null;
 
         try
@@ -145,6 +147,7 @@ internal static class MxcReadiness
         catch (MxcException exception)
         {
             unavailableReason = exception.Message;
+            runtimeFailureCode = exception.Code;
         }
 
         MxcHostBuild? hostBuild = readHostBuild();
@@ -195,7 +198,8 @@ internal static class MxcReadiness
             hostBuild,
             evidence,
             backendProbe,
-            probeFailure);
+            probeFailure,
+            runtimeFailureCode);
     }
 
     private static MxcHostSupport Classify(MxcHostBuild? hostBuild)

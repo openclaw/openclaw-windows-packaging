@@ -198,7 +198,6 @@ internal sealed class SessionExecutor
             int executorExitCode = await _backend.ExecuteAttachedAsync(
                 record.ToSandboxIdOrThrow(),
                 new MxcExecutionRequest(commandLine),
-                null,
                 cancellationToken).ConfigureAwait(false);
 
             operation.EnsureCurrent();
@@ -306,7 +305,6 @@ internal sealed class SessionExecutor
             execution = await _backend.ExecuteAsync(
                 sandboxId,
                 new MxcExecutionRequest(commandLine),
-                null,
                 cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception)

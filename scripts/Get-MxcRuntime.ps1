@@ -4,8 +4,8 @@
     Stages the pinned MXC native runtime for packaging.
 
 .DESCRIPTION
-    Acquires the exact npm archive named in mxc-runtime.lock.json, verifies its
-    registry integrity hash, extracts only the allowlisted runtime and licence
+    Acquires the exact NuGet archive named in mxc-runtime.lock.json, verifies its
+    pinned integrity hash, extracts only the allowlisted runtime and licence
     entries, and verifies each staged file's length, SHA-256, and PE machine
     type before it is written to the output directory.
 
@@ -55,7 +55,7 @@ function Get-Sha256Hex {
     (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
-function Get-NpmIntegrity {
+function Get-ArchiveIntegrity {
     param(
         [Parameter(Mandatory)]
         [string]$Path
@@ -123,11 +123,11 @@ function Resolve-VerifiedArchive {
             throw "The supplied MXC archive '$SuppliedPath' does not exist."
         }
 
-        $suppliedIntegrity = Get-NpmIntegrity -Path $SuppliedPath
-        if ($suppliedIntegrity -ne $Lock.tarballIntegrity) {
+        $suppliedIntegrity = Get-ArchiveIntegrity -Path $SuppliedPath
+        if ($suppliedIntegrity -ne $Lock.archiveIntegrity) {
             throw (
                 "The supplied MXC archive does not match the pinned " +
-                "integrity value. Expected '$($Lock.tarballIntegrity)'; " +
+                "integrity value. Expected '$($Lock.archiveIntegrity)'; " +
                 "computed '$suppliedIntegrity'."
             )
         }
@@ -137,8 +137,8 @@ function Resolve-VerifiedArchive {
     }
 
     if (Test-Path -LiteralPath $CachePath -PathType Leaf) {
-        $cachedIntegrity = Get-NpmIntegrity -Path $CachePath
-        if ($cachedIntegrity -eq $Lock.tarballIntegrity) {
+        $cachedIntegrity = Get-ArchiveIntegrity -Path $CachePath
+        if ($cachedIntegrity -eq $Lock.archiveIntegrity) {
             Write-Host "Using the verified cached MXC archive '$CachePath'."
             return $CachePath
         }
@@ -152,20 +152,20 @@ function Resolve-VerifiedArchive {
 
     New-Item -Path (Split-Path $CachePath -Parent) -ItemType Directory -Force |
         Out-Null
-    Write-Host "Downloading $($Lock.tarballUrl)."
+    Write-Host "Downloading $($Lock.archiveUrl)."
     $downloadPath = "$CachePath.$([guid]::NewGuid().ToString('N')).partial"
     try {
         Invoke-WebRequest `
-            -Uri $Lock.tarballUrl `
+            -Uri $Lock.archiveUrl `
             -OutFile $downloadPath `
             -MaximumRedirection 5 `
             -UseBasicParsing
 
-        $downloadedIntegrity = Get-NpmIntegrity -Path $downloadPath
-        if ($downloadedIntegrity -ne $Lock.tarballIntegrity) {
+        $downloadedIntegrity = Get-ArchiveIntegrity -Path $downloadPath
+        if ($downloadedIntegrity -ne $Lock.archiveIntegrity) {
             throw (
                 "The downloaded MXC archive does not match the pinned " +
-                "integrity value. Expected '$($Lock.tarballIntegrity)'; " +
+                "integrity value. Expected '$($Lock.archiveIntegrity)'; " +
                 "computed '$downloadedIntegrity'."
             )
         }
@@ -213,6 +213,16 @@ foreach ($entry in $stagedEntries) {
 # tampered staging directory must not silently become package content.
 if (-not $Force -and (Test-Path -LiteralPath $provenancePath -PathType Leaf)) {
     $upToDate = $true
+    try {
+        $provenance = Get-Content -LiteralPath $provenancePath -Raw | ConvertFrom-Json
+        $upToDate = $provenance.package -ceq $lock.package -and
+            $provenance.version -ceq $lock.version -and
+            $provenance.architecture -ceq $Architecture -and
+            $provenance.archiveIntegrity -ceq $lock.archiveIntegrity
+    }
+    catch {
+        $upToDate = $false
+    }
     foreach ($entry in $stagedEntries) {
         $candidate = Join-Path $OutputDirectory $entry.stagedPath
         if (
@@ -252,7 +262,7 @@ if (-not $Force -and (Test-Path -LiteralPath $provenancePath -PathType Leaf)) {
 
 $cachePath = Join-Path `
     $CacheDirectory `
-    "mxc-sdk-$($lock.version).tgz"
+    "microsoft.mxc.sdk.$($lock.version).nupkg"
 $verifiedArchive = Resolve-VerifiedArchive `
     -Lock $lock `
     -SuppliedPath $ArchivePath `
@@ -263,12 +273,27 @@ $extractRoot = Join-Path `
     "openclaw-mxc-extract-$([guid]::NewGuid().ToString('N'))"
 New-Item -Path $extractRoot -ItemType Directory -Force | Out-Null
 try {
-    # Name every member explicitly so nothing outside the allowlist is written,
-    # and so a large archive is not fully expanded.
-    $members = @($stagedEntries | ForEach-Object { $_.archivePath })
-    & tar -xzf $verifiedArchive -C $extractRoot @members
-    if ($LASTEXITCODE -ne 0) {
-        throw "Extracting the MXC archive failed with exit code $LASTEXITCODE."
+    $zip = [IO.Compression.ZipFile]::OpenRead($verifiedArchive)
+    try {
+        foreach ($entry in $stagedEntries) {
+            $member = [string]$entry.archivePath
+            if (
+                [IO.Path]::IsPathRooted($member) -or $member.Contains('\') -or
+                $member.Contains(':') -or @($member.Split('/')) -contains '..' -or
+                [IO.Path]::GetFileName([string]$entry.stagedPath) -cne $entry.stagedPath
+            ) {
+                throw 'The MXC lock contains an unsafe archive or staged path.'
+            }
+            $matches = @($zip.Entries | Where-Object FullName -CEQ $member)
+            if ($matches.Count -ne 1 -or $matches[0].Length -ne $entry.length) {
+                throw "The MXC archive must contain exactly one matching '$member'."
+            }
+            $destination = Join-Path $extractRoot $entry.stagedPath
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($matches[0], $destination, $false)
+        }
+    }
+    finally {
+        $zip.Dispose()
     }
 
     $stagingDirectory = Join-Path `
@@ -277,7 +302,7 @@ try {
     New-Item -Path $stagingDirectory -ItemType Directory -Force | Out-Null
 
     foreach ($entry in $stagedEntries) {
-        $extracted = Join-Path $extractRoot ($entry.archivePath -replace '/', '\')
+        $extracted = Join-Path $extractRoot $entry.stagedPath
         if (-not (Test-Path -LiteralPath $extracted -PathType Leaf)) {
             throw (
                 "The MXC archive does not contain '$($entry.archivePath)'. " +
@@ -321,9 +346,8 @@ try {
         package = $lock.package
         version = $lock.version
         architecture = $Architecture
-        wireSchemaVersion = $lock.wireSchemaVersion
         minimumWindowsBuild = $lock.minimumWindowsBuild
-        tarballIntegrity = $lock.tarballIntegrity
+        archiveIntegrity = $lock.archiveIntegrity
         files = @(
             $stagedEntries |
                 ForEach-Object {

@@ -531,7 +531,7 @@ $mxcRuntimeFiles = @(
 )
 if (
     $mxcRuntimeFiles.Count -eq 0 -or
-    -not ($mxcRuntimeFiles.path -contains 'wxc-exec.exe') -or
+    -not ($mxcRuntimeFiles.path -contains 'mxc_ffi.dll') -or
     -not ($mxcRuntimeFiles.path -contains 'mxc-runtime.json')
 ) {
     throw "The staged $Architecture MXC runtime is incomplete."

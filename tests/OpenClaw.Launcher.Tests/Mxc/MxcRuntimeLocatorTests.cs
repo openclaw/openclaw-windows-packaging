@@ -19,7 +19,7 @@ public sealed class MxcRuntimeLocatorTests : IDisposable
         File.WriteAllText(
             Path.Combine(runtimeDirectory, MxcRuntimeLocator.ProvenanceFileName),
             """
-            {"package":"@microsoft/mxc-sdk","version":"0.8.0","architecture":"x64"}
+            {"package":"Microsoft.Mxc.Sdk","version":"1.0.0","architecture":"x64"}
             """);
 
         MxcRuntimeLocation location = MxcRuntimeLocator.Locate(
@@ -28,59 +28,36 @@ public sealed class MxcRuntimeLocatorTests : IDisposable
 
         Assert.Equal(runtimeDirectory, location.Directory);
         Assert.Equal(
-            Path.Combine(runtimeDirectory, MxcRuntimeLocator.ExecutorFileName),
-            location.ExecutorPath);
-        Assert.Equal("@microsoft/mxc-sdk", location.Provenance?.Package);
-        Assert.Equal("0.8.0", location.Provenance?.Version);
+            Path.Combine(runtimeDirectory, MxcRuntimeLocator.NativeLibraryFileName),
+            location.LibraryPath);
+        Assert.Equal("Microsoft.Mxc.Sdk", location.Provenance?.Package);
+        Assert.Equal("1.0.0", location.Provenance?.Version);
     }
 
     [Fact]
-    public void AnExplicitRuntimeDirectoryOverridesThePackagedLayout()
+    public void AnAmbientRuntimeDirectoryCannotReplaceThePackagedSdk()
     {
         string runtimeDirectory = StageRuntime(
             Path.Combine(_testDirectory, "experiment"));
 
-        MxcRuntimeLocation location = MxcRuntimeLocator.Locate(
+        MxcException exception = Assert.Throws<MxcException>(() => MxcRuntimeLocator.Locate(
             _testDirectory,
             name => name == MxcRuntimeLocator.RuntimeDirectoryVariable
                 ? runtimeDirectory
-                : null);
+                : null));
 
-        Assert.Equal(runtimeDirectory, location.Directory);
+        Assert.Equal(MxcErrorCode.ConfigurationRejected, exception.Code);
     }
 
     [Fact]
-    public void AMissingRuntimeNamesTheExpectedExecutorPath()
+    public void AMissingRuntimeNamesTheExpectedNativeLibraryPath()
     {
         MxcException exception = Assert.Throws<MxcException>(
             () => MxcRuntimeLocator.Locate(_testDirectory, NoEnvironment));
 
         Assert.Equal(MxcErrorCode.RuntimeUnavailable, exception.Code);
         Assert.Contains(
-            MxcRuntimeLocator.ExecutorFileName,
-            exception.Message,
-            StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void AnIncompleteRuntimeIsRejectedRatherThanPartiallyUsed()
-    {
-        string runtimeDirectory = Path.Combine(_testDirectory, "experiment");
-        Directory.CreateDirectory(runtimeDirectory);
-        File.WriteAllText(
-            Path.Combine(runtimeDirectory, MxcRuntimeLocator.ExecutorFileName),
-            string.Empty);
-
-        MxcException exception = Assert.Throws<MxcException>(
-            () => MxcRuntimeLocator.Locate(
-                _testDirectory,
-                name => name == MxcRuntimeLocator.RuntimeDirectoryVariable
-                    ? runtimeDirectory
-                    : null));
-
-        Assert.Equal(MxcErrorCode.RuntimeUnavailable, exception.Code);
-        Assert.Contains(
-            MxcRuntimeLocator.PackageLifecycleFileName,
+            MxcRuntimeLocator.NativeLibraryFileName,
             exception.Message,
             StringComparison.Ordinal);
     }
@@ -88,22 +65,20 @@ public sealed class MxcRuntimeLocatorTests : IDisposable
     [Theory]
     [InlineData("not json")]
     [InlineData("{}")]
-    [InlineData("""{"package":"@microsoft/mxc-sdk"}""")]
-    public void DamagedProvenanceLeavesTheVerifiedRuntimeUsable(string provenance)
+    [InlineData("""{"package":"Microsoft.Mxc.Sdk"}""")]
+    public void DamagedProvenanceLeavesRuntimeDiscoveryAvailable(string provenance)
     {
-        // Provenance is descriptive. The binaries were verified at staging
-        // time, so an unreadable record must not disable isolated sessions.
+        // Discovery is diagnostic; initialization separately enforces the compiled native identity.
         string runtimeDirectory = StageRuntime(
-            Path.Combine(_testDirectory, "experiment"));
+            Path.Combine(_testDirectory, MxcRuntimeLocator.RuntimeDirectoryName,
+                MxcRuntimeLocator.CurrentArchitectureName()));
         File.WriteAllText(
             Path.Combine(runtimeDirectory, MxcRuntimeLocator.ProvenanceFileName),
             provenance);
 
         MxcRuntimeLocation location = MxcRuntimeLocator.Locate(
             _testDirectory,
-            name => name == MxcRuntimeLocator.RuntimeDirectoryVariable
-                ? runtimeDirectory
-                : null);
+            NoEnvironment);
 
         Assert.Null(location.Provenance);
     }
@@ -111,18 +86,23 @@ public sealed class MxcRuntimeLocatorTests : IDisposable
     private static string StageRuntime(string runtimeDirectory)
     {
         Directory.CreateDirectory(runtimeDirectory);
-        foreach (string fileName in new[]
-        {
-            MxcRuntimeLocator.ExecutorFileName,
-            MxcRuntimeLocator.PackageLifecycleFileName
-        })
-        {
-            File.WriteAllText(
-                Path.Combine(runtimeDirectory, fileName),
-                string.Empty);
-        }
+        File.WriteAllText(
+            Path.Combine(runtimeDirectory, MxcRuntimeLocator.NativeLibraryFileName),
+            string.Empty);
 
         return runtimeDirectory;
+    }
+
+    [Fact]
+    public void NativeInitializationRejectsTamperedBytesBeforeLoading()
+    {
+        StageRuntime(Path.Combine(_testDirectory, MxcRuntimeLocator.RuntimeDirectoryName,
+            MxcRuntimeLocator.CurrentArchitectureName()));
+        MxcRuntimeLocation location = MxcRuntimeLocator.Locate(_testDirectory, NoEnvironment);
+        MxcException exception = Assert.Throws<MxcException>(() =>
+            MxcRuntimeLocator.InitializeSdkRuntime(location));
+        Assert.Equal(MxcErrorCode.RuntimeUnavailable, exception.Code);
+        Assert.Contains("pinned identity", exception.Message, StringComparison.Ordinal);
     }
 
     public void Dispose()

@@ -340,7 +340,7 @@ foreach ($architecture in @('x64', 'arm64')) {
             [System.Collections.Generic.HashSet[string]]::new(
                 [System.StringComparer]::OrdinalIgnoreCase
             )
-        $hasMxcExecutor = $false
+        $hasMxcNativeLibrary = $false
         $hasMxcProvenance = $false
         foreach ($file in @($metadata.mxcRuntimeFiles)) {
             $relativePath = [string]$file.path
@@ -382,15 +382,15 @@ foreach ($architecture in @('x64', 'arm64')) {
                 )
             }
 
-            if ($relativePath -ieq 'wxc-exec.exe') {
-                $hasMxcExecutor = $true
+            if ($relativePath -ieq 'mxc_ffi.dll') {
+                $hasMxcNativeLibrary = $true
             }
             if ($relativePath -ieq 'mxc-runtime.json') {
                 $hasMxcProvenance = $true
             }
         }
 
-        if (-not $hasMxcExecutor -or -not $hasMxcProvenance) {
+        if (-not $hasMxcNativeLibrary -or -not $hasMxcProvenance) {
             throw "The embedded $architecture MXC runtime is incomplete."
         }
 

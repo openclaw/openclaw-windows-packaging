@@ -26,28 +26,19 @@ public sealed class MxcReadinessTests : IDisposable
 
     private string StageRuntime()
     {
-        string runtimeDirectory = Path.Combine(_testDirectory, "runtime");
+        string runtimeDirectory = Path.Combine(_testDirectory, MxcRuntimeLocator.RuntimeDirectoryName,
+            MxcRuntimeLocator.CurrentArchitectureName());
         Directory.CreateDirectory(runtimeDirectory);
         File.WriteAllText(
-            Path.Combine(runtimeDirectory, MxcRuntimeLocator.ExecutorFileName),
-            string.Empty);
-        File.WriteAllText(
-            Path.Combine(
-                runtimeDirectory,
-                MxcRuntimeLocator.PackageLifecycleFileName),
+            Path.Combine(runtimeDirectory, MxcRuntimeLocator.NativeLibraryFileName),
             string.Empty);
         File.WriteAllText(
             Path.Combine(runtimeDirectory, MxcRuntimeLocator.ProvenanceFileName),
             """
-            {"package":"@microsoft/mxc-sdk","version":"0.8.0","architecture":"x64"}
+            {"package":"Microsoft.Mxc.Sdk","version":"1.0.0","architecture":"x64"}
             """);
         return runtimeDirectory;
     }
-
-    private static Func<string, string?> RuntimeAt(string runtimeDirectory) =>
-        name => name == MxcRuntimeLocator.RuntimeDirectoryVariable
-            ? runtimeDirectory
-            : null;
 
     [Fact]
     public async Task ProbeReportsAMissingRuntimeWithoutFailing()
@@ -76,14 +67,14 @@ public sealed class MxcReadinessTests : IDisposable
 
         MxcReadinessReport report = await MxcReadiness.ProbeAsync(
             _testDirectory,
-            RuntimeAt(runtimeDirectory),
+            NoEnvironment,
             () => MxcReadiness.MinimumHostBuild,
             BackendReports(available: true),
             CancellationToken.None);
 
         Assert.True(report.RuntimeAvailable);
         Assert.Equal(runtimeDirectory, report.RuntimeDirectory);
-        Assert.Equal("0.8.0", report.Provenance?.Version);
+        Assert.Equal("1.0.0", report.Provenance?.Version);
     }
 
     [Fact]
@@ -92,11 +83,11 @@ public sealed class MxcReadinessTests : IDisposable
         // The decisive case: a new enough build whose backend is nonetheless
         // unusable. Trusting the build number alone would promise a capability
         // this host does not have.
-        string runtimeDirectory = StageRuntime();
+        StageRuntime();
 
         MxcReadinessReport report = await MxcReadiness.ProbeAsync(
             _testDirectory,
-            RuntimeAt(runtimeDirectory),
+            NoEnvironment,
             () => new MxcHostBuild(27000, 1),
             BackendReports(available: false),
             CancellationToken.None);
@@ -108,11 +99,11 @@ public sealed class MxcReadinessTests : IDisposable
     [Fact]
     public async Task BackendProbeOverridesAnOtherwiseUnsupportedBuild()
     {
-        string runtimeDirectory = StageRuntime();
+        StageRuntime();
 
         MxcReadinessReport report = await MxcReadiness.ProbeAsync(
             _testDirectory,
-            RuntimeAt(runtimeDirectory),
+            NoEnvironment,
             () => new MxcHostBuild(19045, 1),
             BackendReports(available: true),
             CancellationToken.None);
@@ -124,11 +115,11 @@ public sealed class MxcReadinessTests : IDisposable
     [Fact]
     public async Task AFailedBackendProbeDegradesToTheBuildCheckAndIsReported()
     {
-        string runtimeDirectory = StageRuntime();
+        StageRuntime();
 
         MxcReadinessReport report = await MxcReadiness.ProbeAsync(
             _testDirectory,
-            RuntimeAt(runtimeDirectory),
+            NoEnvironment,
             () => new MxcHostBuild(27000, 1),
             (_, _) => throw new InvalidOperationException("executor crashed"),
             CancellationToken.None);
@@ -215,7 +206,7 @@ public sealed class MxcReadinessTests : IDisposable
     {
         var report = new MxcReadinessReport(
             @"C:\package\mxc\x64",
-            new MxcRuntimeProvenance("@microsoft/mxc-sdk", "0.8.0", "x64"),
+            new MxcRuntimeProvenance("Microsoft.Mxc.Sdk", "1.0.0", "x64"),
             null,
             MxcHostSupport.Supported,
             null,
@@ -224,7 +215,7 @@ public sealed class MxcReadinessTests : IDisposable
 
         Assert.Equal(
             "Supported from BackendProbe evidence; host build unknown; " +
-            "runtime @microsoft/mxc-sdk 0.8.0 x64; backend probe isolation sessions " +
+            "runtime Microsoft.Mxc.Sdk 1.0.0 x64; backend probe isolation sessions " +
             "available, tier unreported, warnings none",
             report.Describe());
     }

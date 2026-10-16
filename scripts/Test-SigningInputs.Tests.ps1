@@ -232,15 +232,12 @@ function New-TestArtifact {
         Get-FileHash -LiteralPath $nodeRuntimePath -Algorithm SHA256
     ).Hash.ToLowerInvariant()
 
-    $mxcRuntimeVersion = '0.8.0'
+    $mxcRuntimeVersion = '1.0.0'
     $mxcRuntimeDirectory = Join-Path $staging "mxc\$Architecture"
     New-Item -Path $mxcRuntimeDirectory -ItemType Directory -Force | Out-Null
     [IO.File]::WriteAllText(
-        (Join-Path $mxcRuntimeDirectory 'wxc-exec.exe'),
-        "executor-$Architecture")
-    [IO.File]::WriteAllText(
-        (Join-Path $mxcRuntimeDirectory 'plm.exe'),
-        "plm-$Architecture")
+        (Join-Path $mxcRuntimeDirectory 'mxc_ffi.dll'),
+        "native-library-$Architecture")
     [IO.File]::WriteAllText(
         (Join-Path $mxcRuntimeDirectory 'LICENSE.md'),
         'fixture license')
@@ -838,7 +835,7 @@ try {
     Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
         param($Expanded)
         Set-Content `
-            -LiteralPath (Join-Path $Expanded 'mxc\x64\wxc-exec.exe') `
+            -LiteralPath (Join-Path $Expanded 'mxc\x64\mxc_ffi.dll') `
             -Value 'tampered' `
             -Encoding utf8
     }

@@ -158,7 +158,7 @@ public sealed class AgentImplicitSetupTests : IDisposable
                 _ => runtime,
                 probeReadiness: _ => Task.FromResult(new MxcReadinessReport(
                     "runtime",
-                    new MxcRuntimeProvenance("@microsoft/mxc-sdk", "0.8.0", "x64"),
+                    new MxcRuntimeProvenance("Microsoft.Mxc.Sdk", "1.0.0", "x64"),
                     null,
                     MxcHostSupport.Unsupported,
                     new MxcHostBuild(26100, 4000),
@@ -170,7 +170,7 @@ public sealed class AgentImplicitSetupTests : IDisposable
 
         Assert.Contains(
             "Isolated-session support: Unsupported from BackendProbe evidence; " +
-            "host build 26100.4000; runtime @microsoft/mxc-sdk 0.8.0 x64; " +
+            "host build 26100.4000; runtime Microsoft.Mxc.Sdk 1.0.0 x64; " +
             "backend probe isolation sessions unavailable, tier base-container, " +
             "warnings feature disabled",
             log);

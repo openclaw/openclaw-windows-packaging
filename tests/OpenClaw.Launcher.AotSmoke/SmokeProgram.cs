@@ -39,6 +39,7 @@ internal static class SmokeProgram
         (string Name, Func<Task> RunAsync)[] scenarios =
         [
             ("native alias resolves to clawctl", NativeAliasResolvesToControlAsync),
+            ("packaged MXC SDK probe survives NativeAOT", MxcSdkNativeProbeSurvivesAotAsync),
             ("bare clawctl prints help", BareInvocationPrintsHelpAsync),
             ("--help prints help", HelpOptionPrintsHelpAsync),
             ("setup --help prints command help", SetupHelpPrintsCommandHelpAsync),
@@ -185,6 +186,44 @@ internal static class SmokeProgram
             $"Expected the native alias to resolve to Control but got {resolved}. " +
             "This driver must run as clawctl.exe.");
         return Task.CompletedTask;
+    }
+
+    private static async Task MxcSdkNativeProbeSurvivesAotAsync()
+    {
+        string hostileDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "OpenClaw.MxcAotSmoke." + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(hostileDirectory);
+        File.WriteAllBytes(
+            Path.Combine(hostileDirectory, MxcRuntimeLocator.NativeLibraryFileName),
+            [0x4D, 0x5A, 0x00, 0x01]);
+
+        string? previousOverride = Environment.GetEnvironmentVariable("MXC_FFI_DIR");
+        try
+        {
+            Environment.SetEnvironmentVariable("MXC_FFI_DIR", hostileDirectory);
+            MxcRuntimeLocation runtime = MxcRuntimeLocator.Locate(
+                AppContext.BaseDirectory,
+                static _ => null);
+            var client = new MxcSdkSessionClient(runtime);
+            MxcBackendProbe probe = await client.ProbeBackendAsync(CancellationToken.None)
+                .ConfigureAwait(false);
+            string nativeVersion = Microsoft.Mxc.Sdk.V1.MxcPlatform.NativeVersion;
+            Microsoft.Mxc.Sdk.V1.PlatformSupport support =
+                Microsoft.Mxc.Sdk.V1.MxcPlatform.GetPlatformSupport();
+            bool sdkCanLaunchIsolationSession = support.AvailableMethods.Contains(
+                Microsoft.Mxc.Sdk.V1.ContainmentBackend.IsolationSession);
+
+            Assert(nativeVersion == "1.0.0", $"Unexpected MXC native version '{nativeVersion}'.");
+            Assert(
+                probe.IsolationSessionAvailable == sdkCanLaunchIsolationSession,
+                "The provider probe disagreed with the SDK's typed platform-support result.");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("MXC_FFI_DIR", previousOverride);
+            Directory.Delete(hostileDirectory, recursive: true);
+        }
     }
 
     private static async Task BareInvocationPrintsHelpAsync()
@@ -1196,13 +1235,11 @@ internal static class SmokeProgram
                 _provisionCount++;
                 return Task.FromResult(new MxcProvisionResult(
                     MxcSandboxId.Parse($"iso:fixture{_provisionCount}"),
-                    Metadata,
-                    null));
+                    Metadata));
             }
 
             public Task StartAsync(
                 MxcSandboxId sandboxId,
-                string? correlationVector,
                 CancellationToken cancellationToken)
             {
                 Calls.Add("start");
@@ -1212,7 +1249,6 @@ internal static class SmokeProgram
             public Task<MxcExecutionResult> ExecuteAsync(
                 MxcSandboxId sandboxId,
                 MxcExecutionRequest request,
-                string? correlationVector,
                 CancellationToken cancellationToken)
             {
                 Calls.Add("execute");
@@ -1225,7 +1261,6 @@ internal static class SmokeProgram
             public Task<int> ExecuteAttachedAsync(
                 MxcSandboxId sandboxId,
                 MxcExecutionRequest request,
-                string? correlationVector,
                 CancellationToken cancellationToken) =>
                 ExecuteAttachedCoreAsync(request);
 
@@ -1243,12 +1278,10 @@ internal static class SmokeProgram
 
             public Task StopAsync(
                 MxcSandboxId sandboxId,
-                string? correlationVector,
                 CancellationToken cancellationToken) => Task.CompletedTask;
 
             public Task DeprovisionAsync(
                 MxcSandboxId sandboxId,
-                string? correlationVector,
                 CancellationToken cancellationToken) => Task.CompletedTask;
         }
 

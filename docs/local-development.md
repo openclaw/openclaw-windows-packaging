@@ -46,8 +46,9 @@ runtime:
 
 `-Architecture` defaults to the device's native architecture; pass the same
 value to `-Unregister`. An x64 layout registers on an ARM64 device, but its
-`clawctl setup` fails there because the x64 MXC executor exits with
-`0xC000007B`.
+native MXC loading must match the launcher's process architecture. An x64
+launcher uses the verified x64 SDK library, even on an ARM64 host; this does
+not establish that every isolated-session backend supports emulated execution.
 
 The script resolves a payload, stages MXC and the bundled Node.js runtime,
 publishes both the NativeAOT `openclaw.exe` launcher and the NativeAOT session

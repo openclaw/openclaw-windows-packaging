@@ -50,11 +50,16 @@ internal static class SessionSupportPolicy
                 "no identity to provision an isolated session with.");
         }
 
-        if (!readiness.RuntimeAvailable)
+        if (readiness.RuntimeUnavailableReason is { } unavailableReason)
         {
+            if (readiness.RuntimeFailureCode == MxcErrorCode.ConfigurationRejected)
+            {
+                throw new SessionException(unavailableReason);
+            }
+
             throw Unsupported(
                 "The isolated-session runtime is unavailable: " +
-                (readiness.RuntimeUnavailableReason ?? "no reason was recorded."));
+                unavailableReason);
         }
 
         if (readiness.BackendProbe is { IsolationSessionAvailable: false })

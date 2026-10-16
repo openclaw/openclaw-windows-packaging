@@ -40,7 +40,10 @@ internal enum MxcErrorCode
     RuntimeUnavailable,
 
     /// <summary>The runtime produced output this package cannot interpret.</summary>
-    ProtocolViolation
+    ProtocolViolation,
+
+    /// <summary>A caller configuration conflicts with the package-bound runtime.</summary>
+    ConfigurationRejected
 }
 
 [SuppressMessage(
@@ -83,17 +86,4 @@ internal sealed class MxcException : Exception
     /// </summary>
     public string? Operation { get; }
 
-    // Codes observed from @microsoft/mxc-sdk 0.8.0 wxc-exec.exe against the
-    // Windows IsolationSession backend. Anything unlisted stays Unknown and
-    // keeps its verbatim text rather than being guessed into a recovery path.
-    internal static MxcErrorCode Classify(string? backendCode) => backendCode switch
-    {
-        "malformed_id" => MxcErrorCode.MalformedId,
-        "stale_id" => MxcErrorCode.StaleId,
-        "policy_validation" => MxcErrorCode.PolicyValidation,
-        "malformed_request" => MxcErrorCode.MalformedRequest,
-        "unsupported_containment" => MxcErrorCode.UnsupportedContainment,
-        "backend_error" => MxcErrorCode.BackendError,
-        _ => MxcErrorCode.Unknown
-    };
 }
