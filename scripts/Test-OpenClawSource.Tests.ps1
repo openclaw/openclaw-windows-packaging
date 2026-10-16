@@ -389,7 +389,7 @@ try {
         Assert-Throws { Assert-OpenClawSource $source $policy } 'repository'
         Assert-Equal $http.Calls.Count 0
     }
-    foreach ($mode in @('official', 'store')) {
+    foreach ($mode in @('test', 'official', 'store')) {
         Invoke-Test "$mode release follows stable and replays the captured release after latest advances" {
             Add-Release '2026.9.7' ('a' * 40) ('b' * 40)
             $http.Responses['Registry:latest'].version = '2026.9.7'

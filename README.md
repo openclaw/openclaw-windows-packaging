@@ -371,9 +371,10 @@ Package and payload metadata record the resolved source commit and version.
 For a one-time source override in any signing mode, provide an OpenClaw tag,
 branch, or full commit SHA in the manual `openclaw_ref` input. Empty means follow
 stable. The resolver records the ref's exact commit and package version once;
-retries use that immutable snapshot even if a branch later moves. Release modes
-also capture the unmodified stable selector as the MSIX and GitHub release
-identity source, so a hotfix payload does not create a second version owner.
+retries use that immutable snapshot even if a branch later moves.
+Release-candidate modes (`test`, `store`, and `official`) also capture the
+unmodified stable selector as the MSIX and GitHub release identity source, so a
+hotfix payload does not create a second version owner.
 The override payload version may equal or precede that stable identity, but may
 not be newer.
 For a one-run rollback of the bundled payload in any signing mode, set
@@ -381,8 +382,8 @@ For a one-run rollback of the bundled payload in any signing mode, set
 while the MSIX and GitHub release identity continue from the unmodified stable
 selector above so the package remains an upgrade. Both sources are verified and
 captured in the immutable snapshot. The workflow rejects an override that is not
-older than the release-identity source. Unsigned and test runs reject combining
-it with `openclaw_ref`; Store and official runs preserve a full-SHA
+older than the release-identity source. Unsigned runs reject combining it with
+`openclaw_ref`; test, Store, and official runs preserve a full-SHA
 `openclaw_ref` as an assertion that the version resolved to the intended commit.
 If compatibility requires an older known-good stable release, a reviewed
 `stableVersion` field in `release-policy.json` can pin its exact version, for
@@ -669,9 +670,10 @@ validation. Manual runs support four modes:
 
 - `unsigned` follows stable or an `openclaw_ref` override and publishes unsigned
   MSIX packages;
-- `test` uses the same source-selection rules and publishes MSIX packages signed with a
-  temporary self-signed certificate plus the public `.cer` needed for local
-  installation;
+- `test` uses the same source-selection rules, derives the release-candidate
+  version, and runs the installed-upgrade matrix without release authorization
+  or Azure credentials. It publishes MSIX packages signed with a temporary
+  self-signed certificate plus the public `.cer` needed for local installation;
 - `store` follows stable, an `openclaw_ref` override, or an older payload pinned
   with `gateway_version`,
   may run only from `main`, and retains an unsigned Partner Center submission bundle for 90 days;
@@ -682,6 +684,10 @@ validation. Manual runs support four modes:
 
 Following stable does not automatically sign or publish a new Gateway release;
 publication still requires a manual workflow dispatch.
+Manual `store` and `official` runs require their own successful installed-upgrade
+matrix before authorization. A new upstream stable release needs no throwaway
+pull request to obtain current-source proof; use `test` mode for an optional
+preflight. `unsigned` dispatches keep development versions and skip that matrix.
 
 Official signing uses the protected `release-signing` environment, Azure OIDC,
 and the existing OpenClaw Artifact Signing account and certificate profile.
@@ -749,8 +755,9 @@ The signed `v0.0.0.0` and `v0.0.0.1` proof releases and the latest signed
 sideload release retain the `OpenClaw.Gateway` identity and remain immutable
 upgrade baselines. Partner Center requires the reserved
 `OpenClawFoundation.OpenClawGateway` identity, so Windows cannot update those
-packages in place or retain their packaged LocalState. Pull requests that
-change release policy download the hash-pinned standalone x64 and recommended
+packages in place or retain their packaged LocalState. Versioning/source-selection
+pull requests and manual `test`, `store`, and `official` runs download the
+hash-pinned standalone x64 and recommended
 `.msixbundle` assets, install each one on a clean GitHub-hosted Windows runner,
 verify the legacy identity, remove it, install the Store candidate through the
 same delivery format, and prove that Windows registered the reserved package

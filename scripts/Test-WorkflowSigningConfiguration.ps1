@@ -13,7 +13,7 @@ $workflow = Get-Content -LiteralPath $workflowPath -Raw
 $requiredFragments = @(
     'group: gateway-msix-${{ github.event.pull_request.number || github.run_id }}'
     "cancel-in-progress: `${{ github.event_name == 'pull_request' }}"
-    'name: Classify pull request changes'
+    'name: Select Gateway MSIX validation'
     '.\scripts\Get-PackagingRelevance.ps1'
     'name: Test packaging relevance'
     'name: Test MSBuild property escaping'
@@ -329,5 +329,184 @@ foreach ($artifact in @(
 if ($workflow.Contains('publish-store-release:', [StringComparison]::Ordinal)) {
     throw 'Unsigned Store packages must not be published as GitHub Releases.'
 }
+
+function Get-WorkflowStepScript {
+    param([Parameter(Mandatory)][string]$Name)
+
+    $step = [regex]::Match(
+        $workflow,
+        '(?ms)^      - name: ' + [regex]::Escape($Name) + '\r?\n' +
+            '.*?^        run: \|\r?\n' +
+            '(?<script>(?:^ {10}[^\r\n]*\r?\n|^\r?\n)+)'
+    )
+    if (-not $step.Success) {
+        throw "Unable to locate the workflow script for '$Name'."
+    }
+    [scriptblock]::Create(
+        [regex]::Replace(
+            $step.Groups['script'].Value,
+            '(?m)^ {10}',
+            ''
+        ).Replace('${{ github.event.pull_request.number }}', '1')
+    )
+}
+
+# Execute the actual workflow steps with fixture inputs. The classifier must
+# emit a complete matrix without querying GitHub on a non-PR event; the final
+# gate must reject missing proof even if classification accidentally skips it.
+$classificationScript = Get-WorkflowStepScript -Name 'Detect packaging changes'
+$upgradeGateScript = Get-WorkflowStepScript -Name 'Confirm workflow success'
+
+function Assert-WorkflowClassification {
+    param(
+        [Parameter(Mandatory)]
+        [string]$EventName,
+
+        [Parameter(Mandatory)]
+        [string]$SigningMode,
+
+        [Parameter(Mandatory)]
+        [bool]$ExpectedVersioning
+    )
+
+    function gh {
+        throw 'Non-PR classification must not query pull-request files.'
+    }
+
+    $outputPath = Join-Path ([IO.Path]::GetTempPath()) (
+        "openclaw-workflow-classification-$([guid]::NewGuid().ToString('N'))"
+    )
+    $savedEnvironment = @{}
+    foreach ($name in @('GITHUB_EVENT_NAME', 'GITHUB_OUTPUT', 'SIGNING_MODE')) {
+        $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
+    }
+    $location = Get-Location
+    try {
+        Set-Location -LiteralPath $repositoryRoot
+        $env:GITHUB_EVENT_NAME = $EventName
+        $env:GITHUB_OUTPUT = $outputPath
+        $env:SIGNING_MODE = $SigningMode
+        & $classificationScript
+
+        $outputs = @{}
+        foreach ($line in [IO.File]::ReadAllLines($outputPath)) {
+            $entry = $line.Split('=', 2)
+            if ($entry.Count -ne 2 -or $outputs.ContainsKey($entry[0])) {
+                throw "Invalid or duplicate workflow output: $line"
+            }
+            $outputs[$entry[0]] = $entry[1]
+        }
+        foreach ($name in @('packaging', 'payload_artifact', 'bundle_build')) {
+            if ($outputs[$name] -cne 'true') {
+                throw "$EventName/$SigningMode did not select $name."
+            }
+        }
+        $expected = $ExpectedVersioning.ToString().ToLowerInvariant()
+        if ($outputs['versioning'] -cne $expected) {
+            throw (
+                "$EventName/$SigningMode expected versioning=$expected; " +
+                "received '$($outputs['versioning'])'."
+            )
+        }
+        if (-not $outputs.ContainsKey('upgrade_matrix')) {
+            throw "$EventName/$SigningMode did not emit the upgrade matrix."
+        }
+        $matrix = $outputs['upgrade_matrix'] | ConvertFrom-Json
+        if (@($matrix.include).Count -ne 13) {
+            throw "$EventName/$SigningMode did not select all upgrade scenarios."
+        }
+    }
+    finally {
+        Set-Location -LiteralPath $location.Path
+        foreach ($name in $savedEnvironment.Keys) {
+            [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name])
+        }
+        Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+foreach ($mode in @('test', 'store', 'official')) {
+    Assert-WorkflowClassification `
+        -EventName workflow_dispatch `
+        -SigningMode $mode `
+        -ExpectedVersioning $true
+}
+Assert-WorkflowClassification `
+    -EventName workflow_dispatch `
+    -SigningMode unsigned `
+    -ExpectedVersioning $false
+Assert-WorkflowClassification `
+    -EventName push `
+    -SigningMode unsigned `
+    -ExpectedVersioning $false
+
+function Assert-WorkflowUpgradeGate {
+    param(
+        [string]$EventName = 'workflow_dispatch',
+        [string]$SigningMode = 'unsigned',
+        [string]$VersioningChange = 'false',
+        [string]$UpgradeResult = 'skipped',
+        [switch]$ShouldFail
+    )
+
+    $environment = @{
+        WORKFLOW_EVENT = $EventName
+        SIGNING_MODE = $SigningMode
+        VERSIONING_CHANGE = $VersioningChange
+        UPGRADE_RESULT = $UpgradeResult
+    }
+    $savedEnvironment = @{}
+    foreach ($name in $environment.Keys) {
+        $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
+    }
+    $failed = $false
+    try {
+        foreach ($name in $environment.Keys) {
+            [Environment]::SetEnvironmentVariable($name, $environment[$name])
+        }
+        try {
+            & $upgradeGateScript 6>$null
+        }
+        catch {
+            if ($_.Exception.Message -notlike 'Required MSIX upgrade validation*') {
+                throw
+            }
+            $failed = $true
+        }
+        if ($failed -ne [bool]$ShouldFail) {
+            throw (
+                "$EventName/$SigningMode ($VersioningChange) with upgrade " +
+                "result '$UpgradeResult' expected rejection=$ShouldFail; " +
+                "received '$failed'."
+            )
+        }
+    }
+    finally {
+        foreach ($name in $savedEnvironment.Keys) {
+            [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name])
+        }
+    }
+}
+
+foreach ($mode in @('test', 'store', 'official')) {
+    Assert-WorkflowUpgradeGate -SigningMode $mode -UpgradeResult success
+    foreach ($result in @('skipped', 'failure', 'cancelled')) {
+        Assert-WorkflowUpgradeGate `
+            -SigningMode $mode `
+            -UpgradeResult $result `
+            -ShouldFail
+    }
+}
+Assert-WorkflowUpgradeGate
+Assert-WorkflowUpgradeGate -EventName push
+Assert-WorkflowUpgradeGate -EventName pull_request
+Assert-WorkflowUpgradeGate `
+    -EventName pull_request `
+    -VersioningChange true `
+    -UpgradeResult success
+Assert-WorkflowUpgradeGate `
+    -EventName pull_request `
+    -VersioningChange true `
+    -ShouldFail
 
 Write-Host 'Gateway MSIX signing workflow configuration passed.'
