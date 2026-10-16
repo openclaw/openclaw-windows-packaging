@@ -21,6 +21,10 @@ should describe that environment in terms an operator can act on, while
 - Begin status probes, diagnostics collection, teardown, Control UI handoff,
   and gateway lifecycle operations with narration before waiting on the
   isolated session or another process.
+- Narrate state-transfer previews, restore, recovery, and rollback before
+  waiting on the recorded session. Replacement commands that may prompt use
+  durable stage lines rather than a live status, so confirmation never nests
+  inside an active Spectre display. `--yes` and previews can use live status.
 - Do not add narration to `completion`, whose standard output is the completion
   script, or `pwsh`, which preserves the launched PowerShell process's streams
   and may remain attached for the lifetime of an interactive shell. Immediate
@@ -74,6 +78,26 @@ changes, while a native console handle still requires VT setup. Whole-command
 redirection, CI, and `NO_COLOR` remain plain; `FORCE_COLOR` remains authoritative.
 
 ## Failures and diagnostics
+
+State-transfer results report retained archive paths, verified length, asset
+mappings, activation phase, current-state protection (or explicit absence),
+file-only readiness when available, and whether the managed gateway was
+stopped. Paths and metadata are not archive contents: never print credentials,
+raw captured upstream stderr, or configuration/history text. An archive result
+warns that it contains credentials and is not encrypted.
+
+Dry-run output describes a preview, not activated readiness. On interrupted
+activation, both status commands report attention and
+`clawctl restore --rollback --yes`; neither may present partial data as startup
+eligible. Unavailable inspection reports that uncertainty rather than claiming
+a live writer block was observed. A finalized operation with incomplete
+temporary-data cleanup keeps its completed/rolled-back phase and reports the
+retained directory in a warning. Preserve retained archive
+and protection paths on failures so operators can recover without recapturing
+the original profile. Human replacement confirmation defaults to no; JSON
+and redirected execution require `--yes` and never prompt.
+State-transfer failures retain the selected `backup`, `restore`, or `recover`
+command name even when startup fails before command dispatch.
 
 Expected refusals should state the condition and the next usable action without
 asking the user to file an issue. Unexpected faults should explain how to

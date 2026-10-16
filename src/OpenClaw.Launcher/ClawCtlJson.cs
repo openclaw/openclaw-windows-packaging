@@ -21,7 +21,9 @@ internal sealed record ClawCtlJsonDocument(
     ClawCtlJsonWarning? Warning = null,
     ClawCtlJsonError? Error = null,
     ClawCtlJsonIntegration? Integration = null,
-    ClawCtlJsonCompanion? Companion = null);
+    ClawCtlJsonCompanion? Companion = null,
+    SessionStateTransferResult? StateTransfer = null,
+    IReadOnlyList<StateTransfer.StateArchiveEntry>? Archives = null);
 
 internal sealed record ClawCtlJsonIntegration(string Kind, int Version);
 internal sealed record ClawCtlJsonCompanion(int Port, string Token);
@@ -106,6 +108,15 @@ internal static class ClawCtlJson
                     completion.ProfilePath,
                     completion.CachePath)),
             GatewayCommandResult gateway => FromGateway(gateway),
+            StateArchiveCommandResult state => new ClawCtlJsonDocument(
+                state.ExitCode == 0,
+                SchemaVersion,
+                state.Command,
+                Error: state.Error is null
+                    ? null
+                    : new ClawCtlJsonError("cli_error", NormalizeMessage(state.Error)),
+                StateTransfer: state.Transfer,
+                Archives: state.Archives),
             CompanionPrepareResult companion => new ClawCtlJsonDocument(
                 companion.ExitCode == 0,
                 SchemaVersion,
@@ -220,6 +231,7 @@ internal static class ClawCtlJson
                     result.Gateway.AgentUserSid,
                     result.Gateway.OwnedListeners)),
             Recovery: new ClawCtlJsonRecovery(DescribeRecovery(result.Recovery.State)),
+            StateTransfer: result.StateTransfer,
             Error: result.ExitCode == 0
                 ? null
                 : new ClawCtlJsonError(
@@ -272,7 +284,8 @@ internal static class ClawCtlJson
                         result.Port,
                         result.SandboxId,
                         result.AgentUserSid,
-                        result.OwnedListeners)))
+                        result.OwnedListeners)),
+                StateTransfer: result.StateTransfer)
             : new ClawCtlJsonDocument(
                 false,
                 SchemaVersion,
@@ -280,7 +293,7 @@ internal static class ClawCtlJson
                 Session: result.SessionAvailability is { } failureAvailability
                     ? new ClawCtlJsonSession(DescribeSession(failureAvailability))
                     : null,
-                Gateway: result.Readiness is null
+                Gateway: result.Readiness is null && result.StateTransfer is null
                     ? null
                     : new ClawCtlJsonGateway(
                         DescribeGateway(result.State),
@@ -289,7 +302,11 @@ internal static class ClawCtlJson
                         FromReadiness(result.Readiness)),
                 Error: new ClawCtlJsonError(
                     "cli_error",
-                    NormalizeMessage(result.Detail ?? result.Message)));
+                    NormalizeMessage(result.StateTransfer?.Error ??
+                        (result.StateTransfer?.Pending == true
+                            ? "State activation is pending. Run `clawctl restore --rollback --yes`."
+                            : result.Detail ?? result.Message))),
+                StateTransfer: result.StateTransfer);
 
     private static ClawCtlJsonDocument FromOpen(OpenCommandResult result) =>
         new(

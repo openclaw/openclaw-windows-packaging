@@ -141,6 +141,8 @@ function New-Fixture {
         SetupFailure = $false
         Removals = @()
         PreserveFlags = @()
+        Profiles = @{}
+        ProfileSequence = 0
         PublishMetadata = $null
         LauncherPublishes = @()
         Commit = '1111111111111111111111111111111111111111'
@@ -276,6 +278,15 @@ function New-Fixture {
             param($packageFullName, $preserveData)
             $state.Removals += $packageFullName
             $state.PreserveFlags += [bool]$preserveData
+            $removed = @($state.Installed) |
+                Where-Object { $null -ne $_ -and $_.PackageFullName -eq $packageFullName } |
+                Select-Object -First 1
+            if ($null -ne $removed -and $state.Profiles.ContainsKey($removed.PackageFamilyName)) {
+                # MXC-owned profiles do not survive package removal's app-data flag.
+                $profile = $state.Profiles[$removed.PackageFamilyName]
+                Remove-Item -LiteralPath $profile.Path -Recurse -Force
+                $state.Profiles.Remove($removed.PackageFamilyName)
+            }
             $state.Installed = @(
                 @($state.Installed) |
                     Where-Object { $null -ne $_ -and $_.PackageFullName -ne $packageFullName }
@@ -289,6 +300,15 @@ function New-Fixture {
             $state.SetupPackageNames += $packageName
             $state.SetupPackageFamilyNames += $packageFamilyName
             if ($state.SetupFailure) { throw 'clawctl setup failed (exit 1).' }
+            if (-not $state.Profiles.ContainsKey($packageFamilyName)) {
+                $state.ProfileSequence++
+                $profile = Join-Path $state.Root "profiles\$packageFamilyName"
+                New-Item -Path $profile -ItemType Directory -Force | Out-Null
+                $state.Profiles[$packageFamilyName] = @{
+                    Identity = "fixture-agent-$($state.ProfileSequence)"
+                    Path = $profile
+                }
+            }
             return $null
         }.GetNewClosure()
     }
@@ -351,12 +371,36 @@ try {
     Assert-True (-not $second.Changed) 'A no-change re-run reported work.'
     Assert-True ($f.Registrations -eq 1 -and $f.Downloads -eq 1 -and $f.RuntimeDownloads -eq 1) 'A no-change re-run re-registered or re-downloaded.'
     Assert-True ($second.Version -eq $first.Version) 'A no-change re-run altered the version.'
+    $profileFamily = @($f.SetupPackageFamilyNames)[0]
+    $profileIdentity = $f.Profiles[$profileFamily].Identity
+    $profileCanary = Join-Path $f.Profiles[$profileFamily].Path 'workspace-data.txt'
+    [IO.File]::WriteAllText($profileCanary, 'authenticated workspace state')
     $forced = Invoke-Fixture $f @{ Force = $true }
     Assert-True ($forced.Changed -and $f.Registrations -eq 2) '-Force did not re-register.'
     Assert-True ([version]$forced.Version -gt [version]$first.Version) 'Re-registration did not advance the version.'
-    # Registering over a damaged development registration does not repair it, so
-    # the previous one must be removed first, preserving app data.
-    Assert-True (@($f.Removals).Count -eq 1 -and @($f.PreserveFlags)[0] -eq $true) 'Re-registration did not first remove the existing development registration.'
+    Assert-True (
+        $f.Profiles[$profileFamily].Identity -eq $profileIdentity -and
+        (Test-Path -LiteralPath $profileCanary -PathType Leaf) -and
+        [IO.File]::ReadAllText($profileCanary) -ceq 'authenticated workspace state'
+    ) 'Ordinary re-registration replaced the isolated account or erased its workspace.'
+    Assert-True (@($f.Removals).Count -eq 0) 'Ordinary re-registration unregistered the package.'
+
+    $replacement = New-Fixture
+    $replacementFirst = Invoke-Fixture $replacement
+    $replacementFamily = @($replacement.SetupPackageFamilyNames)[0]
+    $replacementIdentity = $replacement.Profiles[$replacementFamily].Identity
+    $replacementCanary = Join-Path $replacement.Profiles[$replacementFamily].Path 'discarded-data.txt'
+    [IO.File]::WriteAllText($replacementCanary, 'explicitly disposable')
+    $replaced = Invoke-Fixture $replacement @{ Force = $true; ReplaceExistingInstall = $true }
+    Assert-True (
+        $replaced.Changed -and
+        $replacement.Profiles[$replacementFamily].Identity -ne $replacementIdentity -and
+        -not (Test-Path -LiteralPath $replacementCanary)
+    ) 'Explicit replacement did not exercise removal of the old isolated profile.'
+    Assert-True (
+        @($replacement.Removals).Count -eq 1 -and
+        $replacement.Removals[0] -eq $replacementFirst.PackageFullName
+    ) 'Explicit replacement removed an unrelated registration.'
 
     # A changed launcher must reach the registered package even when it changed
     # through an input the deployment does not hash, such as an SDK update. The
@@ -506,8 +550,8 @@ try {
 
     # A checkout that deployed before build-input fingerprints existed has a
     # state record without one. Its first deployment must take the ordinary
-    # changed-deployment path, removing the registration with its app data
-    # preserved exactly as a source change does, and then settle.
+    # changed-deployment path, updating in place exactly as a source change does,
+    # and then settle.
     $delta = {
         param($state, $before)
         [pscustomobject]@{
@@ -552,14 +596,12 @@ try {
         ($upgradeDelta.LauncherPublishes -join ',') -eq $upgraded.Version
     ) 'A prior state record did not redeploy once with a new version.'
     Assert-True (
-        ($upgradeDelta.Removals -join ',') -eq $priorDeployment.PackageFullName -and
-        ($controlDelta.Removals -join ',') -eq $controlPrior.PackageFullName -and
-        ($upgradeDelta.PreserveFlags -join ',') -eq ($controlDelta.PreserveFlags -join ',') -and
-        ($upgradeDelta.PreserveFlags -join ',') -eq 'True' -and
+        @($upgradeDelta.Removals).Count -eq 0 -and
+        @($controlDelta.Removals).Count -eq 0 -and
         $upgradeDelta.Registrations -eq $controlDelta.Registrations -and $upgradeDelta.Registrations -eq 1 -and
         $upgradeDelta.Setups -eq $controlDelta.Setups -and $upgradeDelta.Setups -eq 1 -and
         $controlChanged.Changed
-    ) 'Upgrading a prior state record did not use the same registration, removal, and app-data path as a changed deployment.'
+    ) 'Upgrading a prior state record did not use the same non-removing registration path as a changed deployment.'
     Assert-True (
         (Get-Content -LiteralPath $priorStatePath -Raw | ConvertFrom-Json -AsHashtable).ContainsKey('inputFingerprint')
     ) 'The upgraded deployment did not record its build inputs.'

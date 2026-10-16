@@ -169,6 +169,50 @@ public sealed class ProgramStartupTests : IDisposable
     }
 
     [Theory]
+    [InlineData("backup", false)]
+    [InlineData("backup", true)]
+    [InlineData("restore", false)]
+    [InlineData("restore", true)]
+    [InlineData("recover", false)]
+    [InlineData("recover", true)]
+    public async Task StateCommandStartupFailurePreservesHumanAndJsonCommandNames(
+        string command,
+        bool json)
+    {
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        HostStartup startup = new()
+        {
+            Entrypoint = HostEntrypoint.Control,
+            CreateDiagnostics = () => HostDiagnosticLog.Create(
+                Path.Combine(_testDirectory, "logs", $"{Guid.NewGuid():N}.log")),
+            BaseDirectory = _testDirectory,
+            Output = output,
+            Error = error,
+            ReadEnvironment = _ => throw new InvalidOperationException("fixture startup failure")
+        };
+
+        int exitCode = await Program.RunAsync(json ? [command, "--json"] : [command], startup);
+
+        Assert.Equal(1, exitCode);
+        if (json)
+        {
+            using System.Text.Json.JsonDocument document =
+                System.Text.Json.JsonDocument.Parse(output.ToString());
+            Assert.Equal(command, document.RootElement.GetProperty("command").GetString());
+            Assert.Equal("fixture startup failure",
+                document.RootElement.GetProperty("error").GetProperty("message").GetString());
+            Assert.Empty(error.ToString());
+        }
+        else
+        {
+            Assert.Empty(output.ToString());
+            Assert.Contains($"clawctl {command}", error.ToString(), StringComparison.Ordinal);
+            Assert.Contains("fixture startup failure", error.ToString(), StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
     [InlineData("--json=true", true)]
     [InlineData("--json:true", true)]
     [InlineData("--json false", false)]

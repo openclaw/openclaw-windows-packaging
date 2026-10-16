@@ -8,6 +8,9 @@ the bundled Node.js and MXC runtimes, publishes the NativeAOT launcher and
 session host, assembles a Developer Mode layout, and registers it with
 Add-AppxPackage -Register.
 
+The command updates an owned development registration in place. It never
+unregisters it during an ordinary rebuild, including -Force, because Windows
+can remove the MXC-owned agent profile even when packaged app data is preserved.
 The command is idempotent. Re-running with nothing changed reports that the
 package is already up to date and does nothing; re-running after a source or
 payload change rebuilds only what changed and re-registers. Downloads are cached
@@ -33,10 +36,12 @@ matching cached payload is reused rather than downloaded again.
 Download the payload again instead of reusing the cache. The previous payload
 is kept until the new one is registered successfully.
 .PARAMETER ReplaceExistingInstall
-Take over an existing install this checkout does not own: an MSIX-installed
-OpenClaw.Gateway, or a local registration from another checkout. Windows cannot
-replace a packaged install with a local layout and cannot preserve its app data
-across that switch, so this is never done implicitly.
+Explicitly remove an existing install before registering: an MSIX-installed
+package, a local registration from another checkout, or an owned development
+registration needing a destructive repair. Removal can delete the isolated
+agent account and profile; app-data preservation does not protect them.
+Windows cannot preserve packaged app data across a loose/MSIX switch either,
+so removal is never done implicitly.
 .PARAMETER Force
 Re-register even when nothing changed.
 .PARAMETER SkipSetup
@@ -56,7 +61,9 @@ clawctl and openclaw; run the patched commands instead. When finished, run
 `clawctl-pwsh-exec teardown --force`, then -Unregister with the same -Patch.
 .PARAMETER Unregister
 Remove the local development registration and exit. Cached payloads and
-runtimes are kept, and the package's app data is preserved. Run this for a base
+runtimes are kept, and packaged app-data preservation is requested. Windows
+may still remove the isolated agent profile; finish teardown or retain a
+verified backup first. Run this for a base
 registration before installing a released package: Windows will not replace a
 loose registration with a packaged install, regardless of version.
 .EXAMPLE

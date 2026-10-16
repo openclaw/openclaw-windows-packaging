@@ -20,7 +20,8 @@ internal static class SessionSupervisor
     public static int Run(
         string requestPath,
         Func<string, string> readFile,
-        Action<string, string> writeFile)
+        Action<string, string> writeFile,
+        Func<IDisposable>? enterState = null)
     {
         SessionLaunchRequest request;
         try
@@ -41,6 +42,8 @@ internal static class SessionSupervisor
 
         try
         {
+            enterState ??= SessionStateAccess.ForAgent().EnterReader;
+            using IDisposable state = enterState();
             Directory.CreateDirectory(
                 Path.GetDirectoryName(logPath)
                 ?? throw new SessionLaunchException(
