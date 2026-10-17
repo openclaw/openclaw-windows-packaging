@@ -35,7 +35,8 @@ else { throw 'Expected exactly one successful build matching the validated sourc
 $outputs = Get-OpenClawSourceField $selected 'outputs'
 foreach ($field in @('source_sha', 'source_tag', 'release_identity_tag', 'package_version', 'node_version', 'package_sha256')) {
     $value = Get-OpenClawSourceField $outputs $field
-    Assert-OpenClawSourceText $value $field
+    Assert-OpenClawSourceText $value $field -AllowEmpty:(
+        $field -ceq 'release_identity_tag' -and $ExpectedRoute -ceq 'read-only')
 }
 Assert-OpenClawSourceText $outputs.source_sha 'source_sha' -Pattern '\A[0-9a-f]{40}\z'
 Assert-OpenClawSourceText $outputs.package_sha256 'package_sha256' -Pattern '\A[0-9a-f]{64}\z'
@@ -49,7 +50,8 @@ foreach ($field in @('source_sha', 'source_tag', 'package_version')) {
         throw "The selected build differs from the captured source: $field"
     }
 }
-if ($outputs.release_identity_tag -cne (Get-OpenClawSourceField $ExpectedSource 'release_identity_tag')) {
+$expectedReleaseIdentity = Get-OpenClawSourceField $ExpectedSource 'release_identity_tag' -Optional
+if ($outputs.release_identity_tag -cne ($expectedReleaseIdentity ?? '')) {
     throw 'The selected build release identity differs from the captured source.'
 }
 return $outputs

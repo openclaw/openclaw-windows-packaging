@@ -82,6 +82,40 @@ $selected = & $selector -PackagingExpected $true -ExpectedRoute trusted -Expecte
 if ($selected.release_identity_tag -cne 'v2026.9.8') { throw 'The selected release identity changed.' }
 $outputs.release_identity_tag = $savedIdentity
 $expectedSource.release_identity_tag = $savedIdentity
+# Arbitrary unsigned/test refs have no release identity. Actions can omit an
+# empty job output from needs while retaining it on the reusable workflow.
+$outputs.release_identity_tag = ''
+$expectedSource.release_identity_tag = ''
+foreach ($omitExpectedIdentity in @($false, $true)) {
+    if ($omitExpectedIdentity) { $expectedSource.PSObject.Properties.Remove('release_identity_tag') }
+    $selected = & $selector -PackagingExpected $true -ExpectedRoute read-only -ExpectedSource $expectedSource `
+        -Trusted $skipped -ReadOnly (New-Result success)
+    if ($selected.release_identity_tag -cne '') { throw 'An unsigned ref acquired a release identity.' }
+    Assert-Rejected {
+        & $selector -PackagingExpected $true -ExpectedRoute trusted -ExpectedSource $expectedSource `
+            -Trusted (New-Result success) -ReadOnly $skipped
+    } 'release_identity_tag'
+    $outputs.release_identity_tag = $savedIdentity
+    Assert-Rejected {
+        & $selector -PackagingExpected $true -ExpectedRoute read-only -ExpectedSource $expectedSource `
+            -Trusted $skipped -ReadOnly (New-Result success)
+    } 'release identity'
+    $outputs.release_identity_tag = ''
+}
+foreach ($invalidIdentity in @(' ', "`n", $null)) {
+    $outputs.release_identity_tag = $invalidIdentity
+    Assert-Rejected {
+        & $selector -PackagingExpected $true -ExpectedRoute read-only -ExpectedSource $expectedSource `
+            -Trusted $skipped -ReadOnly (New-Result success)
+    } 'release_identity_tag'
+}
+$outputs.release_identity_tag = ''
+$expectedSource | Add-Member -NotePropertyName release_identity_tag -NotePropertyValue $savedIdentity -Force
+Assert-Rejected {
+    & $selector -PackagingExpected $true -ExpectedRoute read-only -ExpectedSource $expectedSource `
+        -Trusted $skipped -ReadOnly (New-Result success)
+} 'release identity'
+$outputs.release_identity_tag = $savedIdentity
 Assert-Rejected {
     & $selector -PackagingExpected $true -ExpectedRoute trusted -ExpectedSource $expectedSource `
         -Trusted ([pscustomobject]@{ result = 'success'; outputs = [pscustomobject]@{} }) -ReadOnly $skipped
