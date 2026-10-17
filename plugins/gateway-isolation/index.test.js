@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
@@ -552,3 +553,59 @@ for (const mode of invalidModes) {
     assert.throws(() => renderGatewayIsolationPage(mode), TypeError);
   });
 }
+
+test("plugin identity matches the shipped manifest and its skills directory exists", () => {
+  const manifest = JSON.parse(
+    fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
+  );
+  const plugin = createGatewayIsolationPlugin({}, "win32");
+  assert.equal(plugin.id, manifest.id);
+  assert.equal(plugin.name, manifest.name);
+  assert.equal(plugin.description, manifest.description);
+  assert.equal(typeof plugin.register, "function");
+  for (const skills of manifest.skills) {
+    const directory = new URL(skills, import.meta.url);
+    assert.ok(fs.statSync(directory).isDirectory(), `${skills} must be a directory`);
+    assert.ok(fs.readdirSync(directory).length > 0, `${skills} must ship at least one skill`);
+  }
+});
+
+function loadDefaultExport(mode) {
+  const env = { ...process.env };
+  if (mode === undefined) {
+    delete env.CLAWCTL_GATEWAY_ISOLATION;
+  } else {
+    env.CLAWCTL_GATEWAY_ISOLATION = mode;
+  }
+  const script = `
+    const { default: plugin } = await import(${JSON.stringify(new URL("./index.js", import.meta.url).href)});
+    const hooks = [];
+    const routes = [];
+    plugin.register({
+      on(name) { hooks.push(name); },
+      session: { controls: { registerControlUiDescriptor() {} } },
+      registerHttpRoute(route) { routes.push(route); },
+    });
+    let statusCode = 0;
+    routes[0].handler({}, { writeHead(code) { statusCode = code; }, end() {} });
+    console.log(JSON.stringify({ id: plugin.id, hooks, statusCode }));
+  `;
+  const output = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+    encoding: "utf8",
+    env,
+  });
+  return JSON.parse(output);
+}
+
+test("default export reads the launcher report from the process environment", () => {
+  const enabled = loadDefaultExport("enabled");
+  assert.equal(enabled.id, "gateway-isolation");
+  assert.equal(enabled.statusCode, 200);
+  assert.deepEqual(enabled.hooks, process.platform === "win32" ? ["before_prompt_build"] : []);
+
+  for (const mode of [undefined, "disabled"]) {
+    const result = loadDefaultExport(mode);
+    assert.equal(result.statusCode, 503);
+    assert.deepEqual(result.hooks, []);
+  }
+});
