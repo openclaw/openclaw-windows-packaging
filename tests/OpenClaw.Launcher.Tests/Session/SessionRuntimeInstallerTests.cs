@@ -187,11 +187,23 @@ public sealed class SessionRuntimeInstallerTests : IDisposable
     }
 
     [Fact]
-    public void ProductionProbeRepairsAnUnlaunchableExistingNode()
+    public void ProductionProbeRepairsAnUnlaunchableExistingNode() =>
+        AssertProductionProbeRepairs(File.WriteAllText, "not an executable");
+
+    // A DOS-style "MZ" stub with no PE header is the image the Windows loader
+    // reports as an unsupported 16-bit application, with a desktop dialog on
+    // an interactive session. The probe must reject it without launching it.
+    [Fact]
+    public void ProductionProbeRepairsAnExistingNodeWithOnlyADosHeader() =>
+        AssertProductionProbeRepairs(
+            (path, _) => File.WriteAllBytes(path, [0x4D, 0x5A, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00]),
+            string.Empty);
+
+    private void AssertProductionProbeRepairs(Action<string, string> corrupt, string content)
     {
         string archivePath = CreateArchive("24.20.0");
         SessionRuntimeInstallResult first = Install(archivePath);
-        File.WriteAllText(first.ExecutablePath!, "not an executable");
+        corrupt(first.ExecutablePath!, content);
         File.WriteAllText(
             RequestPath,
             SessionRuntimeProtocol.SerializeRequest(new SessionRuntimeInstallRequest
