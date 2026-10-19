@@ -37,13 +37,22 @@
 .PARAMETER Configuration
     The MSBuild configuration to publish. Defaults to Release, which matches
     continuous integration.
+.PARAMETER Architecture
+    Runnable native architecture for the driver. Defaults to x64.
+.PARAMETER RuntimeImagePreflightOnly
+    Run only native alias identity and fixture-owned corrupt-runtime repair.
+    This focused lane performs no SDK discovery or backend calls and does not
+    replace the full NativeAOT gate.
 
 .EXAMPLE
     .\scripts\Test-NativeAotCli.Tests.ps1
 #>
 [CmdletBinding()]
 param(
-    [string]$Configuration = 'Release'
+    [string]$Configuration = 'Release',
+    [ValidateSet('x64', 'arm64')]
+    [string]$Architecture = 'x64',
+    [switch]$RuntimeImagePreflightOnly
 )
 
 Set-StrictMode -Version Latest
@@ -104,8 +113,8 @@ try {
     Write-Host "Publishing the NativeAOT scenario driver ($Configuration)..."
     dotnet publish $project `
         --configuration $Configuration `
-        --runtime win-x64 `
-        -p:Platform=x64 `
+        --runtime "win-$Architecture" `
+        "-p:Platform=$Architecture" `
         --self-contained `
         --output $publishRoot `
         --nologo `
@@ -125,9 +134,10 @@ try {
     $clawctl = Join-Path $publishRoot 'clawctl.exe'
     Copy-Item -LiteralPath $driver -Destination $clawctl -Force
 
+    $arguments = if ($RuntimeImagePreflightOnly) { @('--runtime-image-preflight-only') } else { @() }
     $output = Assert-Invocation `
         -Executable $clawctl `
-        -Arguments @() `
+        -Arguments $arguments `
         -ExpectedExitCode 0 `
         -ExpectedPatterns @('NativeAOT scenarios passed\.') `
         -Description 'NativeAOT scenario driver running as clawctl.exe'
@@ -139,7 +149,7 @@ try {
     Copy-Item -LiteralPath $driver -Destination $wrongName -Force
     Assert-Invocation `
         -Executable $wrongName `
-        -Arguments @() `
+        -Arguments $arguments `
         -ExpectedExitCode 1 `
         -ExpectedPatterns @('native alias resolves to clawctl') `
         -Description 'NativeAOT scenario driver running under the wrong name'

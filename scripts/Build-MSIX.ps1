@@ -507,39 +507,13 @@ $payloadInventoryPath = Join-Path $openClawContent 'payload-files.json'
     ConvertTo-Json -Depth 4 |
     Set-Content -LiteralPath $payloadInventoryPath -Encoding utf8
 
-& (Join-Path $PSScriptRoot 'Get-MxcRuntime.ps1') `
-    -Architecture $Architecture
-
 $mxcRuntimeDirectory = Join-Path $repositoryRoot "content\mxc\$Architecture"
-$mxcRuntimeFiles = @(
-    Get-ChildItem -LiteralPath $mxcRuntimeDirectory -File -Force -Recurse |
-        ForEach-Object {
-            [ordered]@{
-                path = (
-                    [IO.Path]::GetRelativePath(
-                        $mxcRuntimeDirectory,
-                        $_.FullName
-                    )
-                ).Replace('\', '/')
-                length = $_.Length
-                sha256 = (
-                    Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256
-                ).Hash.ToLowerInvariant()
-            }
-        } |
-        Sort-Object path
-)
-if (
-    $mxcRuntimeFiles.Count -eq 0 -or
-    -not ($mxcRuntimeFiles.path -contains 'wxc-exec.exe') -or
-    -not ($mxcRuntimeFiles.path -contains 'mxc-runtime.json')
-) {
-    throw "The staged $Architecture MXC runtime is incomplete."
-}
-$mxcProvenance = Get-Content `
-    -LiteralPath (Join-Path $mxcRuntimeDirectory 'mxc-runtime.json') `
-    -Raw |
-    ConvertFrom-Json
+$mxcRuntime = & (Join-Path $PSScriptRoot 'Get-MxcRuntime.ps1') `
+    -Architecture $Architecture `
+    -IncludePackagingContent `
+    -OutputDirectory $mxcRuntimeDirectory
+$mxcRuntimeFiles = @($mxcRuntime.Files | Select-Object path, length, sha256)
+$mxcProvenance = $mxcRuntime.Provenance
 
 $temporaryRoot = if ($env:RUNNER_TEMP) {
     $env:RUNNER_TEMP
@@ -695,7 +669,7 @@ try {
     )
     foreach ($mxcFile in $mxcRuntimeFiles) {
         $expectedPackageFiles.Add(
-            "mxc/$Architecture/$($mxcFile.path)",
+            $mxcFile.path,
             [pscustomobject]@{
                 Hash = $mxcFile.sha256
             }
@@ -828,6 +802,7 @@ try {
     }
     foreach ($managedHostArtifact in @(
         'openclaw.dll',
+        'Microsoft.Mxc.Sdk.dll',
         'openclaw.deps.json',
         'openclaw.runtimeconfig.json'
     )) {
@@ -864,6 +839,8 @@ try {
         nodeRuntimeArchive = $expectedNodeArchiveName
         nodeRuntimeSha256 = $nodeArchiveHash
         mxcRuntimeVersion = [string]$mxcProvenance.version
+        mxcRuntimePackage = [string]$mxcProvenance.package
+        mxcRuntimeArchiveSha512 = [string]$mxcProvenance.archiveSha512
         mxcRuntimeFiles = $mxcRuntimeFiles
         sessionHostFiles = $sessionHostFiles
         architecture = $Architecture

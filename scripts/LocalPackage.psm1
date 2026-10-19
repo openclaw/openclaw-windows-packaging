@@ -558,7 +558,7 @@ function New-LocalPackageLayout {
         [string]$RepositoryRoot,
         [string]$HostExecutable,
         [string]$SessionHostExecutable,
-        [string]$MxcRuntimeDirectory,
+        [object[]]$MxcRuntimeFiles,
         [string]$PayloadDirectory,
         [string]$RuntimeArchive,
         [string]$Architecture,
@@ -659,13 +659,13 @@ function New-LocalPackageLayout {
         -Destination (Join-Path $sessionHost 'openclaw-session-host.exe') `
         -Force
 
-    $mxc = Join-Path (Join-Path $LayoutDirectory 'mxc') $Architecture
-    if (Test-Path -LiteralPath $mxc) {
-        Remove-Item -LiteralPath $mxc -Recurse -Force
+    $retiredMxc = Join-Path $LayoutDirectory 'mxc'
+    if (Test-Path -LiteralPath $retiredMxc) {
+        Remove-Item -LiteralPath $retiredMxc -Recurse -Force
     }
-    New-Item -Path $mxc -ItemType Directory -Force | Out-Null
-    foreach ($item in Get-ChildItem -LiteralPath $MxcRuntimeDirectory -Force) {
-        Copy-Item -LiteralPath $item.FullName -Destination $mxc -Recurse -Force
+    foreach ($file in $MxcRuntimeFiles) {
+        Copy-Item -LiteralPath $file.sourcePath `
+            -Destination (Join-Path $LayoutDirectory $file.path) -Force
     }
 
     return $manifestPath
@@ -734,7 +734,7 @@ function Get-LocalPackageSourceInventory {
             }
         }
     }
-    $buildFiles = foreach ($name in @('Directory.Build.props', 'Directory.Packages.props', 'global.json')) {
+    $buildFiles =     foreach ($name in @('Directory.Build.props', 'Directory.Packages.props', 'global.json', 'mxc-runtime.lock.json')) {
         $path = Join-Path $RepositoryRoot $name
         if (Test-Path -LiteralPath $path -PathType Leaf) {
             "$name`:$((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash)"
@@ -742,6 +742,22 @@ function Get-LocalPackageSourceInventory {
         else { "$name`:absent" }
     }
     return @($projectFiles | Sort-Object) + @($buildFiles)
+}
+
+function Test-LocalPackageNativeUnit {
+    param([string]$LayoutDirectory, [object[]]$Files)
+
+    foreach ($file in $Files) {
+        $path = Join-Path $LayoutDirectory $file.path
+        if (
+            -not (Test-Path -LiteralPath $path -PathType Leaf) -or
+            (Get-Item -LiteralPath $path).Length -ne $file.length -or
+            (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ine $file.sha256
+        ) {
+            return $false
+        }
+    }
+    return -not (Test-Path -LiteralPath (Join-Path $LayoutDirectory 'mxc'))
 }
 
 function Test-LocalPackageLayout {
@@ -760,9 +776,12 @@ function Test-LocalPackageLayout {
         'openclaw.exe',
         "runtime\$RuntimeArchiveName",
         "session-host\$Architecture\openclaw-session-host.exe",
-        "mxc\$Architecture\wxc-exec.exe",
-        "mxc\$Architecture\plm.exe",
-        "mxc\$Architecture\mxc-runtime.json",
+        'mxc_ffi.dll',
+        'plm.exe',
+        'wslcsdk.dll',
+        'wxc-wslc-daemon.exe',
+        'mxc-runtime.json',
+        'mxc-LICENSE.md',
         'node\native-redirect.mjs'
     )) {
         if (-not (Test-Path -LiteralPath (Join-Path $LayoutDirectory $relative) -PathType Leaf)) {
@@ -883,12 +902,12 @@ function Get-LocalPackageOperations {
             finally { $archive.Dispose() }
             return $null
         }
-        StageMxcRuntime = {
-            param($repositoryRoot, $architecture, $output)
-            & (Join-Path $repositoryRoot 'scripts\Get-MxcRuntime.ps1') `
+        VerifyMxcRuntime = {
+            param($repositoryRoot, $architecture, $published)
+            return & (Join-Path $repositoryRoot 'scripts\Get-MxcRuntime.ps1') `
                 -Architecture $architecture `
-                -OutputDirectory $output
-            return $null
+                -RuntimeDirectory $published `
+                -OutputDirectory $published
         }
         CheckoutCommit = { Get-LocalPackageCheckoutCommit }
         Publish = {
@@ -1216,19 +1235,8 @@ function Invoke-LocalPackageDeployment {
             Resolve-LocalPackageRuntime -RuntimeDirectory (Join-Path $stateRoot 'runtime') `
                 -Architecture $Architecture -NodeVersion $payload.NodeVersion -Operations $services
         }
-        $mxcRuntimeDirectory = Join-Path $stateRoot 'mxc'
-        Invoke-LocalPackagePhase $progress 'Stage MXC runtime' {
-            & $services.StageMxcRuntime $root $Architecture $mxcRuntimeDirectory
-        } | Out-Null
         $manifestSource = Join-Path $root 'src\OpenClaw.Launcher\Package.appxmanifest'
         $manifestHash = (Get-FileHash -LiteralPath $manifestSource -Algorithm SHA256).Hash
-        $mxcHashes = @(
-            Get-ChildItem -LiteralPath $mxcRuntimeDirectory -File -Recurse |
-                Sort-Object FullName |
-                ForEach-Object {
-                    "$($_.Name):$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
-                }
-        )
         $imageHashes = @(
             Get-ChildItem -LiteralPath (Join-Path $root 'src\OpenClaw.Launcher\Images') -File -Recurse |
                 Sort-Object FullName |
@@ -1250,7 +1258,7 @@ function Invoke-LocalPackageDeployment {
             $publishMetadata.PayloadVersion
             $publishMetadata.PayloadCommit
             $manifestHash
-        ) + $imageHashes + $nodeScriptHashes + $mxcHashes +
+        ) + $imageHashes + $nodeScriptHashes +
             (Get-LocalPackageSourceInventory -RepositoryRoot $root))
         $setupSatisfied = $SkipSetup -or ($null -ne $previous -and $previous['setupComplete'] -eq $true)
         $registrationCurrent = -not $Force -and $null -ne $previous -and $null -ne $installed -and
@@ -1286,6 +1294,11 @@ function Invoke-LocalPackageDeployment {
         if (-not (& $services.TestPath $sessionHostExecutable)) {
             throw "The publish did not produce $sessionHostExecutable."
         }
+        $mxcRuntime = Invoke-LocalPackagePhase $progress 'Verify MXC SDK runtime' {
+            & $services.VerifyMxcRuntime $root $Architecture $hostDirectory
+        }
+        $mxcRuntimeFiles = @($mxcRuntime.Files)
+        $mxcHashes = @($mxcRuntimeFiles | ForEach-Object { "$($_.path):$($_.sha256)" })
 
         $sessionHostInfo = Get-Item -LiteralPath $sessionHostExecutable
         $sessionHostHash = (
@@ -1307,7 +1320,10 @@ function Invoke-LocalPackageDeployment {
             ) + $imageHashes + $nodeScriptHashes + $mxcHashes)
         }
         $fingerprint = & $outputFingerprint
-        if ($registrationCurrent -and $previous['fingerprint'] -eq $fingerprint) {
+        if (
+            $registrationCurrent -and $previous['fingerprint'] -eq $fingerprint -and
+            (Test-LocalPackageNativeUnit -LayoutDirectory $layoutDirectory -Files $mxcRuntimeFiles)
+        ) {
             $total.Stop()
             Write-Host "`nAlready up to date: $($installed.PackageFullName)"
             Write-Host ('Total {0:0.00}s. Use -Force to re-register anyway.' -f $total.Elapsed.TotalSeconds)
@@ -1337,7 +1353,7 @@ function Invoke-LocalPackageDeployment {
         $manifestPath = Invoke-LocalPackagePhase $progress 'Assemble layout' {
             New-LocalPackageLayout -LayoutDirectory $layoutDirectory -RepositoryRoot $root `
                 -HostExecutable $hostExecutable -SessionHostExecutable $sessionHostExecutable `
-                -MxcRuntimeDirectory $mxcRuntimeDirectory -PayloadDirectory $payload.Directory `
+                -MxcRuntimeFiles $mxcRuntimeFiles -PayloadDirectory $payload.Directory `
                 -RuntimeArchive $runtimeArchive -Architecture $Architecture -Version $version `
                 -Identity $identity
         }

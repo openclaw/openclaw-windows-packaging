@@ -127,8 +127,7 @@ internal static class Program
             HostOptions options = HostOptions.Parse(args, startup.BaseDirectory);
             string environment = (startup.ReadEnvironment ?? (parsed => HostEnvironment.Read(
                 startup.BaseDirectory,
-                parsed.PackagedNodeArchivePath,
-                startup.ReadEnvironmentVariable ?? Environment.GetEnvironmentVariable)))(options)
+                parsed.PackagedNodeArchivePath)))(options)
                 .Describe();
             WriteDiagnostic($"Environment: {environment}");
             return startup.Entrypoint == HostEntrypoint.Control

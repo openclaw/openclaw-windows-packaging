@@ -45,13 +45,13 @@ runtime:
 ```
 
 `-Architecture` defaults to the device's native architecture; pass the same
-value to `-Unregister`. An x64 layout registers on an ARM64 device, but its
-`clawctl setup` fails there because the x64 MXC executor exits with
-`0xC000007B`.
+value to `-Unregister`. Prefer the device's native architecture; x64
+emulation on ARM64 needs separate SDK/backend qualification.
 
-The script resolves a payload, stages MXC and the bundled Node.js runtime,
+The script resolves a payload and the bundled Node.js runtime,
 publishes both the NativeAOT `openclaw.exe` launcher and the NativeAOT session
-host, assembles the layout, registers it with `Add-AppxPackage -Register`, and
+host, verifies the NuGet SDK's complete native unit, assembles the layout,
+registers it with `Add-AppxPackage -Register`, and
 runs setup through that identity's control application. The patch registers
 beside the base package as `openclaw-pwsh-exec` and `clawctl-pwsh-exec`, so
 iteration never replaces the base `openclaw` and `clawctl` or their app data.
@@ -88,12 +88,14 @@ two content-hash fingerprints:
 - The build-input fingerprint covers the launcher, session-host, and protocol
   project files other than `bin` and `obj`, `Directory.Build.props`,
   `Directory.Packages.props`, `global.json`, the checkout commit, the payload
-  identity, and the manifest, images, Node.js scripts, and staged MXC runtime.
+  identity, the manifest, images, Node.js scripts, and SDK integrity manifest.
   The package version is compiled into the launcher, so this fingerprint picks
   the version before publishing: a changed deployment publishes the NativeAOT
   launcher once, with the version it registers.
 - The output fingerprint, which includes the SHA-256 hashes of the published
-  launcher and session host, alone decides that the package is current. A
+  launcher, session host, and verified SDK native unit/provenance, decides
+  that the package is current. Native layout bytes are also compared before
+  returning a no-change result. A
   publish can refresh timestamps without changing code, so timestamps would
   spuriously redeploy the layout. When the build inputs match but the binaries
   changed anyway, for example after an SDK update, the command rebuilds the
@@ -499,6 +501,14 @@ NativeAOT-sensitive code, also run:
 ```powershell
 .\scripts\Test-NativeAotCli.Tests.ps1
 ```
+
+Use `-Architecture arm64` on a host that can execute ARM64 output. The driver
+also loads the actual SDK native unit and dry-runs typed provision and
+legacy-ID lifecycle requests; it never creates an isolated account.
+
+`-RuntimeImagePreflightOnly` selects native alias identity and fixture-owned
+corrupt-runtime repair without SDK discovery or backend calls. It proves that
+focused repair path under NativeAOT, not the full native gate.
 
 JIT build and xUnit results are insufficient: the test host cannot expose the
 native `argv[0]` alias/root-command behavior, and a successful publish does not

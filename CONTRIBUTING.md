@@ -187,6 +187,13 @@ afterwards:
 .\scripts\Test-NativeAotCli.Tests.ps1
 ```
 
+The native driver also loads the official MXC SDK runtime and dry-runs its
+typed lifecycle requests without creating an account. Pass
+`-Architecture arm64` on a runnable ARM64 host for native architecture proof.
+The SDK integrity and local-layout gates are
+`.\scripts\Test-Get-MxcRuntime.Tests.ps1` and
+`.\scripts\Test-Deploy-LocalPackage.Tests.ps1`; they use offline fixtures.
+
 The driver calls the same `Program.RunAsync` that the shipped `Main` calls, so
 startup diagnostics, argument routing, the error boundary, and disposal are all
 covered. It must never call `Main` itself: `Main` resolves the diagnostic log

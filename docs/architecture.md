@@ -125,6 +125,11 @@ both identities. This is a required execution bridge, not a caching or startup
 optimization; staging verifies the packaged source and reports a staging
 failure rather than silently substituting another executable.
 
+Before starting an attached child, the helper initializes its own console's
+input and output to UTF-8. Host-side encoding does not set the isolated
+console's code page; without guest initialization, PowerShell can corrupt
+Unicode terminal and redirected text.
+
 ```mermaid
 sequenceDiagram
     participant Host as Package host
@@ -147,19 +152,30 @@ sequenceDiagram
 
 The boundary with MXC has two responsibilities that should not be conflated:
 
-- Packaging pins and verifies the native runtime. [`mxc-runtime.lock.json`](../mxc-runtime.lock.json)
-  records the selected package and integrity information. [`Get-MxcRuntime.ps1`](../scripts/Get-MxcRuntime.ps1)
-  obtains that exact archive, verifies registry integrity, and checks the
-  allowlisted extracted files' hashes, lengths, and machine architecture.
+- [`Directory.Packages.props`](../Directory.Packages.props) selects the
+  official `Microsoft.Mxc.Sdk` NuGet version.
+  [`mxc-runtime.lock.json`](../mxc-runtime.lock.json) asserts that identity and
+  pins archive, assembly, native-file, and license integrity.
+  [`Get-MxcRuntime.ps1`](../scripts/Get-MxcRuntime.ps1) verifies the restored
+  package and its complete RID-specific native unit, including hashes,
+  lengths, safe unique paths, and machine architecture. NuGet owns acquisition;
+  this verifier does not download or stage a second runtime.
   [`MxcRuntimeLocator`](../src/OpenClaw.Launcher/Mxc/MxcRuntimeLocator.cs)
-  resolves the packaged runtime rather than searching `PATH` or a
-  user-writable directory.
-- MXC owns the containment implementation. [`MxcCliSessionClient`](../src/OpenClaw.Launcher/Mxc/MxcCliSessionClient.cs)
-  is the host adapter to the pinned executor, while
-  [`MxcWireProtocol`](../src/OpenClaw.Launcher/Mxc/MxcWireProtocol.cs)
-  confines the versioned preview request and response envelopes to one place.
-  Its isolation-session wire schema is independently versioned from the npm
-  package pin.
+  resolves the normal root/RID assets, clears the SDK's developer override
+  before native entry, and preloads the exact module so failure cannot select
+  another binary through the SDK's fallback loader.
+- MXC owns containment and its wire contract.
+  [`MxcSdkSessionClient`](../src/OpenClaw.Launcher/Mxc/MxcSdkSessionClient.cs)
+  calls `Microsoft.Mxc.Sdk.V1.MxcLifecycle` in process and translates typed
+  results/errors into the package-owned lifecycle boundary. There is no
+  executor process or package-authored MXC JSON envelope.
+
+Interactive foreground commands use the SDK's public PTY API, with the host
+bridging input/output, terminal size, and console restoration. Redirected or
+mixed streams use separate pipes; helper capture closes unused stdin and
+drains both output streams concurrently. Cancellation terminates and waits
+for only that execution, then joins its relays. Dispatched lifecycle calls
+are not abandoned, so a provision's identity can always be recorded.
 
 The result is a narrow trust boundary: this repository decides exactly which
 runtime is packaged and verifies it, but does not reimplement MXC's process
@@ -336,7 +352,7 @@ Each host start records an `Environment:` entry from
 build and update revision, OS and process architecture, the package full name
 with the origin Windows recorded for the install (Developer Mode loose-layout
 registration, Store-signed, or developer-signed MSIX) and its install path, the
-compiled package and payload versions, the staged MXC runtime and wire schema,
+compiled package and payload versions, the MXC SDK provenance and owned contract,
 the packaged Node.js version, and the .NET runtime. Reading these facts starts
 no process; the MXC backend probe is logged where support is checked instead.
 The facts are descriptive only and never authorize an operation.
@@ -401,7 +417,7 @@ flowchart LR
 | Package applications, aliases, and launcher dispatch | [`Package.appxmanifest`](../src/OpenClaw.Launcher/Package.appxmanifest), [`HostEntrypoint.cs`](../src/OpenClaw.Launcher/HostEntrypoint.cs), [`HostStartup.cs`](../src/OpenClaw.Launcher/HostStartup.cs), [`Program.cs`](../src/OpenClaw.Launcher/Program.cs) |
 | Setup state and session lifecycle | [`SetupStateStore.cs`](../src/OpenClaw.Launcher/Session/SetupStateStore.cs), [`SessionRuntime.cs`](../src/OpenClaw.Launcher/Session/SessionRuntime.cs), [`SessionCoordinator.cs`](../src/OpenClaw.Launcher/Session/SessionCoordinator.cs), [`SessionExecutor.cs`](../src/OpenClaw.Launcher/Session/SessionExecutor.cs) |
 | Guest protocol and helper staging | [`OpenClaw.SessionHost/Program.cs`](../src/OpenClaw.SessionHost/Program.cs), [`SessionLaunchProtocol.cs`](../src/OpenClaw.SessionProtocol/SessionLaunchProtocol.cs), [`SessionHelperStager.cs`](../src/OpenClaw.Launcher/Session/SessionHelperStager.cs) |
-| MXC runtime and wire boundary | [`mxc-runtime.lock.json`](../mxc-runtime.lock.json), [`Get-MxcRuntime.ps1`](../scripts/Get-MxcRuntime.ps1), [`MxcRuntimeLocator.cs`](../src/OpenClaw.Launcher/Mxc/MxcRuntimeLocator.cs), [`MxcCliSessionClient.cs`](../src/OpenClaw.Launcher/Mxc/MxcCliSessionClient.cs), [`MxcWireProtocol.cs`](../src/OpenClaw.Launcher/Mxc/MxcWireProtocol.cs) |
+| MXC SDK and native trust boundary | [`Directory.Packages.props`](../Directory.Packages.props), [`mxc-runtime.lock.json`](../mxc-runtime.lock.json), [`Get-MxcRuntime.ps1`](../scripts/Get-MxcRuntime.ps1), [`MxcRuntimeLocator.cs`](../src/OpenClaw.Launcher/Mxc/MxcRuntimeLocator.cs), [`MxcSdkSessionClient.cs`](../src/OpenClaw.Launcher/Mxc/MxcSdkSessionClient.cs) |
 | Agent runtime installation | [`SessionRuntimeInstaller.cs`](../src/OpenClaw.SessionHost/SessionRuntimeInstaller.cs) |
 | Gateway lifecycle | [`SchTasksGatewayScheduler.cs`](../src/OpenClaw.Launcher/Gateway/SchTasksGatewayScheduler.cs), [`GatewayController.cs`](../src/OpenClaw.Launcher/Gateway/GatewayController.cs), [`GatewayConfigurationStore.cs`](../src/OpenClaw.Launcher/Gateway/GatewayConfigurationStore.cs) |
 | Diagnostics and payload integrity | [`HostDiagnosticLog.cs`](../src/OpenClaw.Launcher/HostDiagnosticLog.cs), [`HostEnvironment.cs`](../src/OpenClaw.Launcher/HostEnvironment.cs), [`DiagnosticFailure.cs`](../src/OpenClaw.Launcher/DiagnosticFailure.cs), [`DiagnosticsBundle.cs`](../src/OpenClaw.Launcher/Gateway/DiagnosticsBundle.cs), [`DiagnosticsRedactor.cs`](../src/OpenClaw.Launcher/Gateway/DiagnosticsRedactor.cs), [`Build-MSIX.ps1`](../scripts/Build-MSIX.ps1) |

@@ -7,18 +7,62 @@ as a stable public API.
 ## Runtime boundary and MXC seam
 
 The launcher owns a small session contract in
-`OpenClaw.Launcher\Mxc\IMxcSessionClient`. `MxcCliSessionClient` is the current
-implementation: it invokes the pinned `@microsoft/mxc-sdk` CLI and confines
-its preview wire details to `MxcWireProtocol` and `MxcWireModels`. The rest of
-the launcher depends on the project-owned contract, so the CLI transport can
-be replaced by the official .NET SDK without changing lifecycle, routing, or
-gateway callers.
+`OpenClaw.Launcher\Mxc\IMxcSessionClient`. `MxcSdkSessionClient` is the current
+implementation: it calls the official `Microsoft.Mxc.Sdk` 1.0.0 V1 lifecycle
+and translates typed results and errors. The SDK owns MXC serialization and
+containment; the launcher still owns package identity, recorded sessions,
+recovery, and its guest-helper protocol.
+
+NuGet supplies the complete Windows native unit beside the published
+launcher: `mxc_ffi.dll`, `plm.exe`, `wslcsdk.dll`, and
+`wxc-wslc-daemon.exe`. The integrity manifest and verifier check the restored
+archive and selected native bytes before either local or MSIX composition.
+The runtime locator preloads the exact module and clears `MXC_FFI_DIR` before
+native calls, without honoring an executor-directory override.
+
+Interactive execution uses the public SDK PTY API and a host console bridge;
+redirected or mixed streams use separate pipes. Every relay belongs to that
+invocation and is joined before disposal. The SDK's asynchronous cancellation
+alone is not a termination guarantee: the adapter owns kill-and-wait, while
+dispatched provision/lifecycle calls finish so their outcome is not lost.
+
+The earlier locally packed SDK spike's attached-console API is no longer
+public in V1. Its historical live results do not qualify this SDK version.
+The upstream IsolationSession EOF test remains marked as blocked on a
+platform-held stdin write handle. Closing the SDK writer is attempted, but
+does not establish that an EOF-reading workload will finish on a given OS.
+Real keyboard/Ctrl+C/resize, piped EOF, and legacy-provision upgrade proof
+require a separately authorized disposable Windows environment.
+
+### Local SDK 1.0 qualification
+
+A side-by-side x64 Developer Mode patch was exercised on Windows
+26703.1002. Setup, recorded-session reuse and explicit stale-session recovery,
+packaged OpenClaw execution, PowerShell command/file execution, separate
+streams, Unicode arguments and keyboard input, initial PTY size, Ctrl+C exit
+130, and host-and-session collection passed. A synthetic loopback gateway on
+an allocated port served HTTP health requests and survived helper disposal and
+foreground interruption; start, status, restart, stop, and teardown passed.
+The patch, its accounts/profiles, recovery task, and listener were removed,
+and the existing base registration was unchanged.
+
+This run found and fixed input-reader shutdown cancellation, helper quoting
+after the SDK's PTY startup gate, and guest console encoding. The guest helper
+now initializes attached children with UTF-8 rather than inheriting the
+isolated console's OEM code page.
+
+Piped input arrived, but closing host stdin did not deliver EOF to the reading
+guest; the bounded scenario timed out. The upstream/platform EOF limitation
+remains unqualified. This loose-layout run did not prove real resize events,
+installed MSIX/native redirection, legacy-runtime session replay, installed
+upgrades, or ARM64 execution.
 
 `OpenClaw.SessionProtocol` is separate from that backend seam. It is the
 versioned, launcher-to-guest request/result contract used for execution,
-inspection, runtime installation, and collection. A backend execution request
-uses a controlled `cmd.exe` command line only to start the staged helper; the
-requested executable and argument vector are JSON data rather than interpolated
+inspection, runtime installation, and collection. A backend execution request uses a controlled inner `cmd.exe /d /s /c`
+command line only to start the staged helper. Its explicit quoting works both
+under the SDK's pipe dispatch and after its PTY startup gate; the requested
+executable and argument vector remain JSON data rather than interpolated
 into that command line.
 
 ## Session ownership and routing
@@ -206,8 +250,8 @@ setup. The collector does not enumerate arbitrary agent-profile files.
 MXC failures reach the host log with the backend's own evidence: the error
 code, the failing IsolationSession operation (for example
 `IsoSessionOps.StartSessionAsync`), the native status, and any remediation
-text. When the executor produces no interpretable envelope, the failure keeps
-its exit code, executor diagnostics, and a bounded excerpt of its output.
+text. SDK failures retain their typed code, original cause, native status,
+operation, and remediation; workload output is not parsed as an MXC error.
 Both `clawctl setup` and `openclaw` log the evidence behind the support
 decision (host build, runtime provenance, and backend probe result) before
 acting on it, and `clawctl status` logs the MXC failure when the recorded

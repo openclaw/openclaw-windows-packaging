@@ -144,6 +144,29 @@ public sealed class WindowsHostConsoleTests
         Assert.False(console.IsInteractiveOutput(new StringWriter()));
     }
 
+    [Fact]
+    public void TerminalPreparationEnablesRawVtInputAndRestoresEveryMode()
+    {
+        var native = new FakeConsoleNativeApi { InputMode = 0x17, OutputMode = 0x20 };
+        var console = new WindowsHostConsole(native);
+        using (console.Capture(_ => { }))
+        {
+            console.PrepareTerminal();
+            Assert.Equal(0x210u, native.InputMode);
+            Assert.Equal(0x25u, native.OutputMode);
+            Assert.Equal(new Microsoft.Mxc.Sdk.V1.MxcPtySize(24, 80), console.ReadTerminalSize());
+        }
+        Assert.Equal(0x17u, native.InputMode);
+        Assert.Equal(0x20u, native.OutputMode);
+    }
+
+    [Fact]
+    public void RedirectedStderrPreventsMergedTerminalExecution()
+    {
+        var console = new WindowsHostConsole(new FakeConsoleNativeApi { ErrorIsConsole = false });
+        Assert.False(console.HasTerminalStreams);
+    }
+
     private sealed class FakeConsoleNativeApi : IConsoleNativeApi
     {
         public uint InputMode { get; set; }
@@ -211,6 +234,13 @@ public sealed class WindowsHostConsoleTests
         {
             Writes.Add(text);
             return true;
+        }
+
+        public bool GetSize(nint handle, out short rows, out short columns)
+        {
+            rows = 24;
+            columns = 80;
+            return OutputIsConsole;
         }
 
     }

@@ -1,4 +1,5 @@
 using OpenClaw.SessionProtocol;
+using System.Text;
 
 namespace OpenClaw.SessionHost;
 
@@ -14,7 +15,13 @@ namespace OpenClaw.SessionHost;
 internal static class Program
 {
     public static int Main(string[] args) =>
-        Run(args, new SessionProcessLauncher(), Console.Error, File.ReadAllText, WriteResult);
+        Run(args, new SessionProcessLauncher(InitializeUtf8), Console.Error, File.ReadAllText, WriteResult);
+
+    private static void InitializeUtf8()
+    {
+        Console.InputEncoding = Encoding.UTF8;
+        Console.OutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+    }
 
     internal static int Run(
         IReadOnlyList<string> args,

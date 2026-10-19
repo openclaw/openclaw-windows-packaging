@@ -52,6 +52,48 @@ $suiteRoot = Join-Path $env:TEMP (
 $canonicalRoot = Join-Path $suiteRoot 'canonical'
 $testRoot = Join-Path $suiteRoot 'case'
 $sourcePath = Join-Path $suiteRoot 'source-resolution.json'
+$validationRoot = Join-Path $suiteRoot 'validation-source'
+$validationScripts = Join-Path $validationRoot 'scripts'
+New-Item -Path $validationScripts -ItemType Directory -Force | Out-Null
+foreach ($name in @(
+    'Test-SigningInputs.ps1', 'Get-WorkflowSource.ps1',
+    'Get-MSIXReleaseIdentity.ps1', 'OpenClawSource.ps1'
+)) {
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) `
+        -Destination (Join-Path $validationScripts $name)
+}
+$sdkArchiveHash = [Convert]::ToBase64String([byte[]]::new(64))
+$sdkNativeNames = @('mxc_ffi.dll', 'plm.exe', 'wslcsdk.dll', 'wxc-wslc-daemon.exe')
+$sdkPin = [ordered]@{
+    package = 'Microsoft.Mxc.Sdk'
+    version = '1.0.0'
+    archiveSha512 = $sdkArchiveHash
+    architectures = @{}
+    licenseFiles = @(@{
+        stagedPath = 'mxc-LICENSE.md'
+        length = [Text.Encoding]::UTF8.GetByteCount('fixture license')
+        sha256 = [Convert]::ToHexString(
+            [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes('fixture license'))
+        ).ToLowerInvariant()
+    })
+}
+foreach ($architecture in @('x64', 'arm64')) {
+    $sdkPin.architectures[$architecture] = @{
+        files = @(foreach ($name in $sdkNativeNames) {
+            $bytes = [Text.Encoding]::UTF8.GetBytes("SDK-$architecture-$name")
+            @{
+                stagedPath = $name
+                length = [long]$bytes.Length
+                sha256 = [Convert]::ToHexString(
+                    [Security.Cryptography.SHA256]::HashData($bytes)
+                ).ToLowerInvariant()
+            }
+        })
+    }
+}
+[IO.File]::WriteAllText(
+    (Join-Path $validationRoot 'mxc-runtime.lock.json'),
+    ($sdkPin | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
 $source = [ordered]@{
     repository = $policy.repository
     requestedRef = 'stable'
@@ -235,28 +277,29 @@ function New-TestArtifact {
         Get-FileHash -LiteralPath $nodeRuntimePath -Algorithm SHA256
     ).Hash.ToLowerInvariant()
 
-    $mxcRuntimeVersion = '0.8.0'
-    $mxcRuntimeDirectory = Join-Path $staging "mxc\$Architecture"
-    New-Item -Path $mxcRuntimeDirectory -ItemType Directory -Force | Out-Null
+    $mxcRuntimeVersion = '1.0.0'
+    foreach ($name in $sdkNativeNames) {
+        [IO.File]::WriteAllText((Join-Path $staging $name), "SDK-$Architecture-$name")
+    }
     [IO.File]::WriteAllText(
-        (Join-Path $mxcRuntimeDirectory 'wxc-exec.exe'),
-        "executor-$Architecture")
-    [IO.File]::WriteAllText(
-        (Join-Path $mxcRuntimeDirectory 'plm.exe'),
-        "plm-$Architecture")
-    [IO.File]::WriteAllText(
-        (Join-Path $mxcRuntimeDirectory 'LICENSE.md'),
+        (Join-Path $staging 'mxc-LICENSE.md'),
         'fixture license')
     [IO.File]::WriteAllText(
-        (Join-Path $mxcRuntimeDirectory 'mxc-runtime.json'),
-        "{`"version`":`"$mxcRuntimeVersion`",`"architecture`":`"$Architecture`"}")
+        (Join-Path $staging 'mxc-runtime.json'),
+        (@{
+            package = 'Microsoft.Mxc.Sdk'
+            version = $mxcRuntimeVersion
+            architecture = $Architecture
+            archiveSha512 = $sdkArchiveHash
+        } | ConvertTo-Json))
     $mxcRuntimeFiles = @(
-        Get-ChildItem -LiteralPath $mxcRuntimeDirectory -File -Recurse |
+        Get-ChildItem -LiteralPath $staging -File |
+            Where-Object { $_.Name -in ($sdkNativeNames + @('mxc-LICENSE.md', 'mxc-runtime.json')) } |
             ForEach-Object {
                 [ordered]@{
                     path = (
                         [IO.Path]::GetRelativePath(
-                            $mxcRuntimeDirectory,
+                            $staging,
                             $_.FullName
                         )
                     ).Replace('\', '/')
@@ -319,6 +362,8 @@ function New-TestArtifact {
         nodeRuntimeArchive = $nodeRuntimeArchive
         nodeRuntimeSha256 = $nodeRuntimeHash
         mxcRuntimeVersion = $mxcRuntimeVersion
+        mxcRuntimePackage = 'Microsoft.Mxc.Sdk'
+        mxcRuntimeArchiveSha512 = $sdkArchiveHash
         mxcRuntimeFiles = $mxcRuntimeFiles
         sessionHostFiles = $sessionHostFiles
         architecture = $Architecture
@@ -377,7 +422,7 @@ function Invoke-PolicyValidation {
         }
     }
 
-    & (Join-Path $PSScriptRoot 'Test-SigningInputs.ps1') `
+    & (Join-Path $validationScripts 'Test-SigningInputs.ps1') `
         -ArtifactsDirectory $Root `
         -PolicyPath $policyPath `
         -BundlePath (Join-Path $Root 'bundle\OpenClawGateway.msixbundle') `
@@ -846,7 +891,7 @@ try {
     Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
         param($Expanded)
         Set-Content `
-            -LiteralPath (Join-Path $Expanded 'mxc\x64\wxc-exec.exe') `
+            -LiteralPath (Join-Path $Expanded 'mxc_ffi.dll') `
             -Value 'tampered' `
             -Encoding utf8
     }
@@ -858,11 +903,11 @@ try {
     Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
         param($Expanded)
         Remove-Item -LiteralPath (
-            Join-Path $Expanded 'mxc\x64\mxc-runtime.json'
+            Join-Path $Expanded 'mxc-runtime.json'
         )
     }
     Assert-Fails `
-        -MessagePattern "Expected one 'mxc/x64/mxc-runtime.json' entry; found 0" `
+        -MessagePattern "Expected one 'mxc-runtime.json' entry; found 0" `
         -Action { Invoke-PolicyValidation -Root $testRoot }
 
     Reset-TestArtifacts

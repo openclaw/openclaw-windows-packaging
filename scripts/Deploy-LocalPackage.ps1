@@ -4,8 +4,9 @@ Builds and registers a local development OpenClaw Gateway package, ready to run.
 .DESCRIPTION
 Takes a clean checkout to a registered, runnable OpenClaw.Gateway package without
 producing, signing, or installing an MSIX. It acquires the OpenClaw payload and
-the bundled Node.js and MXC runtimes, publishes the NativeAOT launcher and
-session host, assembles a Developer Mode layout, and registers it with
+the bundled Node.js runtime, publishes the NativeAOT launcher and
+session host, verifies the official MXC NuGet native unit, assembles a
+Developer Mode layout, and registers it with
 Add-AppxPackage -Register.
 
 The command is idempotent. Re-running with nothing changed reports that the
@@ -20,8 +21,8 @@ the command runs again. This is a development build and is not an
 official-signing input; use Build-LocalMSIX.ps1 for a verified unsigned MSIX.
 .PARAMETER Architecture
 Build and register x64 or arm64. Defaults to this device's native architecture.
-An x64 layout registers on an ARM64 device, but its `clawctl setup` fails there
-because the x64 MXC executor exits with 0xC000007B.
+Prefer the native architecture; x64 emulation on ARM64 requires separate
+SDK/backend qualification.
 .PARAMETER PayloadDirectory
 Use an existing payload root containing app and payload-metadata.json. The
 directory is read directly and never modified, and no GitHub access is needed.

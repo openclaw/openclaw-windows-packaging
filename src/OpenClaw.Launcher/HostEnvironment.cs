@@ -25,8 +25,7 @@ internal sealed record HostEnvironment(
 {
     public static HostEnvironment Read(
         string baseDirectory,
-        string? nodeArchivePath,
-        Func<string, string?> readEnvironmentVariable) =>
+        string? nodeArchivePath) =>
         new(
             DescribeWindows(
                 Environment.OSVersion.Version,
@@ -34,7 +33,7 @@ internal sealed record HostEnvironment(
                 RuntimeInformation.OSArchitecture,
                 RuntimeInformation.ProcessArchitecture),
             DescribeInstalledPackage(),
-            DescribeMxc(baseDirectory, readEnvironmentVariable),
+            DescribeMxc(baseDirectory),
             DescribeNodeJs(nodeArchivePath, RuntimeInformation.ProcessArchitecture),
             RuntimeInformation.FrameworkDescription);
 
@@ -63,14 +62,12 @@ internal sealed record HostEnvironment(
         return $"{version} ({osArchitecture} OS, {processArchitecture} process)";
     }
 
-    internal static string DescribeMxc(
-        string baseDirectory,
-        Func<string, string?> readEnvironmentVariable)
+    internal static string DescribeMxc(string baseDirectory)
     {
         MxcRuntimeLocation location;
         try
         {
-            location = MxcRuntimeLocator.Locate(baseDirectory, readEnvironmentVariable);
+            location = MxcRuntimeLocator.Locate(baseDirectory);
         }
         catch (MxcException exception)
         {
@@ -80,12 +77,8 @@ internal sealed record HostEnvironment(
         string runtime = location.Provenance is { } provenance
             ? $"{provenance.Package} {provenance.Version} {provenance.Architecture}"
             : "runtime of unknown provenance";
-        string source = string.IsNullOrWhiteSpace(
-            readEnvironmentVariable(MxcRuntimeLocator.RuntimeDirectoryVariable))
-                ? string.Empty
-                : $", overridden by {MxcRuntimeLocator.RuntimeDirectoryVariable} " +
-                  $"to {location.Directory}";
-        return $"{runtime}, wire {MxcWireProtocol.IsolationSessionSchemaVersion}{source}";
+        return $"{runtime}, SDK {ClawCtlBuildMetadata.MxcSdkPackageVersion}, " +
+            $"contract {Microsoft.Mxc.Sdk.V1.MxcLifecycle.SdkContractVersion}";
     }
 
     internal static string DescribeNodeJs(string? archivePath, Architecture architecture)

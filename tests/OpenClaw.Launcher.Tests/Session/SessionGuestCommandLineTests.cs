@@ -57,7 +57,8 @@ public sealed class SessionGuestCommandLineTests : IDisposable
     /// Dispatches exactly as the pinned runtime does: the command line is
     /// appended to <c>cmd.exe /c</c> verbatim, with no further quoting.
     /// </summary>
-    private static (int ExitCode, string Output, string Error) Dispatch(string commandLine)
+    private static (int ExitCode, string Output, string Error) Dispatch(
+        string commandLine, bool terminalGate = false)
     {
         ProcessStartInfo startInfo = new()
         {
@@ -67,14 +68,22 @@ public sealed class SessionGuestCommandLineTests : IDisposable
 
             // Arguments, not ArgumentList: the point is to reproduce a raw
             // command line rather than let .NET re-quote it.
-            Arguments = "/c " + commandLine,
+            Arguments = terminalGate
+                ? "/d /q /c set /p \"__mxc_pty_start_gate=\" & ver >nul & " + commandLine
+                : "/c " + commandLine,
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
-            RedirectStandardError = true
+            RedirectStandardError = true,
+            RedirectStandardInput = terminalGate
         };
 
         using Process process = Process.Start(startInfo)!;
+        if (terminalGate)
+        {
+            process.StandardInput.WriteLine();
+            process.StandardInput.Close();
+        }
         string output = process.StandardOutput.ReadToEnd();
         string error = process.StandardError.ReadToEnd();
         process.WaitForExit(TimeSpan.FromSeconds(30));
@@ -160,6 +169,25 @@ public sealed class SessionGuestCommandLineTests : IDisposable
             SessionExecutor.BuildGuestCommandLine(probe, request));
 
         Assert.Equal(0, exitCode);
+        Assert.Contains($"REQUEST={request}", output, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("plain")]
+    [InlineData("Program Files")]
+    public void TheHelperRunsAfterTheSdkPtyStartupGate(string directoryName)
+    {
+        string probe = CreateProbe(directoryName);
+        string request = Path.Combine(_root, directoryName, "launch request.json");
+        File.WriteAllText(request, "{}");
+
+        (int exitCode, string output, string error) = Dispatch(
+            SessionExecutor.BuildGuestCommandLine(probe, request), terminalGate: true);
+
+        Assert.Equal(0, exitCode);
+        Assert.Empty(error);
+        Assert.Contains("STARTED", output, StringComparison.Ordinal);
+        Assert.Contains("OPTION=--request", output, StringComparison.Ordinal);
         Assert.Contains($"REQUEST={request}", output, StringComparison.Ordinal);
     }
 

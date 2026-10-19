@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using Sdk = Microsoft.Mxc.Sdk.V1;
 
 namespace OpenClaw.Launcher.Mxc;
 
@@ -59,12 +60,16 @@ internal sealed class MxcException : Exception
         string message,
         string? backendCode = null,
         Exception? innerException = null,
-        string? operation = null)
+        string? operation = null,
+        string? nativeCode = null,
+        string? remediation = null)
         : base(message, innerException)
     {
         Code = code;
         BackendCode = backendCode;
         Operation = operation;
+        NativeCode = nativeCode;
+        Remediation = remediation;
     }
 
     public MxcErrorCode Code { get; }
@@ -83,17 +88,45 @@ internal sealed class MxcException : Exception
     /// </summary>
     public string? Operation { get; }
 
-    // Codes observed from @microsoft/mxc-sdk 0.8.0 wxc-exec.exe against the
-    // Windows IsolationSession backend. Anything unlisted stays Unknown and
-    // keeps its verbatim text rather than being guessed into a recovery path.
-    internal static MxcErrorCode Classify(string? backendCode) => backendCode switch
+    public string? NativeCode { get; }
+
+    public string? Remediation { get; }
+
+    internal static MxcException FromSdk(Sdk.MxcException exception)
     {
-        "malformed_id" => MxcErrorCode.MalformedId,
-        "stale_id" => MxcErrorCode.StaleId,
-        "policy_validation" => MxcErrorCode.PolicyValidation,
-        "malformed_request" => MxcErrorCode.MalformedRequest,
-        "unsupported_containment" => MxcErrorCode.UnsupportedContainment,
-        "backend_error" => MxcErrorCode.BackendError,
+        ArgumentNullException.ThrowIfNull(exception);
+        string message = exception.Message;
+        if (exception.Remediation is { Length: > 0 } remediation)
+        {
+            message = $"{message} {remediation}";
+        }
+
+        if (exception.NativeCode is { Length: > 0 } nativeCode)
+        {
+            message = $"{message} (native code {nativeCode})";
+        }
+
+        return new MxcException(
+            Classify(exception.Code),
+            message,
+            exception.Code.ToString(),
+            exception,
+            exception.Operation,
+            exception.NativeCode,
+            exception.Remediation);
+    }
+
+    internal static MxcErrorCode Classify(Sdk.ErrorCode backendCode) => backendCode switch
+    {
+        Sdk.ErrorCode.MalformedId => MxcErrorCode.MalformedId,
+        Sdk.ErrorCode.StaleId => MxcErrorCode.StaleId,
+        Sdk.ErrorCode.PolicyValidation => MxcErrorCode.PolicyValidation,
+        Sdk.ErrorCode.MalformedRequest or Sdk.ErrorCode.NullArgument or
+            Sdk.ErrorCode.InvalidUtf8 => MxcErrorCode.MalformedRequest,
+        Sdk.ErrorCode.UnsupportedContainment => MxcErrorCode.UnsupportedContainment,
+        Sdk.ErrorCode.BackendUnavailable => MxcErrorCode.RuntimeUnavailable,
+        Sdk.ErrorCode.BackendError or Sdk.ErrorCode.NotStarted or
+            Sdk.ErrorCode.NotProvisioned => MxcErrorCode.BackendError,
         _ => MxcErrorCode.Unknown
     };
 }

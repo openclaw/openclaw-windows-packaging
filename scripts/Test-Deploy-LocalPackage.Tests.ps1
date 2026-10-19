@@ -26,47 +26,6 @@ function Assert-Fails {
     throw "Expected failure matching '$Pattern'."
 }
 
-function Test-ProductionMxcStageAdapterIgnoresStaleNativeExitState {
-    $fixture = Join-Path $testRoot "mxc adapter $([guid]::NewGuid().ToString('N'))"
-    $scripts = Join-Path $fixture 'scripts'
-    $output = Join-Path $fixture 'staged'
-    New-Item -Path $scripts -ItemType Directory -Force | Out-Null
-    New-Item -Path $output -ItemType Directory -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Get-MxcRuntime.ps1') `
-        -Destination (Join-Path $scripts 'Get-MxcRuntime.ps1')
-
-    $runtimeFile = Join-Path $output 'fixture.bin'
-    [IO.File]::WriteAllText($runtimeFile, 'cached runtime')
-    [IO.File]::WriteAllText((Join-Path $output 'mxc-runtime.json'), '{}')
-    $sha = (Get-FileHash -LiteralPath $runtimeFile -Algorithm SHA256).Hash.ToLowerInvariant()
-    $length = (Get-Item -LiteralPath $runtimeFile).Length
-    $lock = @{
-        version = 'test'
-        architectures = @{
-            x64 = @{
-                files = @(@{
-                    stagedPath = 'fixture.bin'
-                    archivePath = 'package/fixture.bin'
-                    length = $length
-                    sha256 = $sha
-                })
-            }
-        }
-        licenseFiles = @()
-    } | ConvertTo-Json -Depth 8
-    [IO.File]::WriteAllText((Join-Path $fixture 'mxc-runtime.lock.json'), $lock)
-
-    $module = Get-Module LocalPackage
-    $adapter = & $module { (Get-LocalPackageOperations).StageMxcRuntime }
-    & $env:ComSpec /d /c 'exit 23'
-    Assert-True ($LASTEXITCODE -eq 23) 'The test must establish stale native failure state.'
-
-    & $adapter $fixture 'x64' $output
-    Assert-True ((Test-Path -LiteralPath $runtimeFile -PathType Leaf)) `
-        'Cached MXC staging should succeed regardless of prior native exit state.'
-    $global:LASTEXITCODE = 0
-}
-
 function New-Fixture {
     $root = Join-Path $testRoot "repo with spaces $([guid]::NewGuid().ToString('N'))"
     $project = Join-Path $root 'src\OpenClaw.Launcher'
@@ -187,14 +146,30 @@ function New-Fixture {
             return $null
         }.GetNewClosure()
         TestArchive = { param($path, $expectedRoot) return $null }
-        StageMxcRuntime = {
+        VerifyMxcRuntime = {
             param($repositoryRoot, $architecture, $output)
             $state.MxcStages++
-            New-Item -Path $output -ItemType Directory -Force | Out-Null
-            [IO.File]::WriteAllText((Join-Path $output 'wxc-exec.exe'), 'fixture executor')
-            [IO.File]::WriteAllText((Join-Path $output 'plm.exe'), 'fixture lifecycle')
+            foreach ($name in @('mxc_ffi.dll', 'plm.exe', 'wslcsdk.dll', 'wxc-wslc-daemon.exe')) {
+                if (-not (Test-Path -LiteralPath (Join-Path $output $name))) {
+                    throw "The publish omitted the SDK native file $name."
+                }
+            }
             [IO.File]::WriteAllText((Join-Path $output 'mxc-runtime.json'), '{}')
-            return $null
+            [IO.File]::WriteAllText((Join-Path $output 'mxc-LICENSE.md'), 'fixture SDK license')
+            return [pscustomobject]@{
+                Files = @(foreach ($name in @(
+                    'mxc_ffi.dll', 'plm.exe', 'wslcsdk.dll', 'wxc-wslc-daemon.exe',
+                    'mxc-runtime.json', 'mxc-LICENSE.md'
+                )) {
+                    $path = Join-Path $output $name
+                    [pscustomobject]@{
+                        path = $name
+                        length = (Get-Item -LiteralPath $path).Length
+                        sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+                        sourcePath = $path
+                    }
+                })
+            }
         }.GetNewClosure()
         CheckoutCommit = { $state.Commit }.GetNewClosure()
         Publish = {
@@ -240,6 +215,9 @@ function New-Fixture {
                 [IO.File]::WriteAllText(
                     (Join-Path $output 'openclaw.exe'),
                     "host $($state.HostVersion) [$sources] $identity")
+                foreach ($name in @('mxc_ffi.dll', 'plm.exe', 'wslcsdk.dll', 'wxc-wslc-daemon.exe')) {
+                    [IO.File]::WriteAllText((Join-Path $output $name), "SDK $architecture $name")
+                }
             }
             return $null
         }.GetNewClosure()
@@ -331,14 +309,20 @@ try {
         Test-Path (Join-Path $layout 'session-host\x64\openclaw-session-host.exe')
     ) 'Layout is missing the session host.'
     Assert-True (
-        Test-Path (Join-Path $layout 'mxc\x64\wxc-exec.exe')
-    ) 'Layout is missing the MXC executor.'
+        Test-Path (Join-Path $layout 'mxc_ffi.dll')
+    ) 'Layout is missing the MXC native library.'
     Assert-True (
-        Test-Path (Join-Path $layout 'mxc\x64\plm.exe')
+        Test-Path (Join-Path $layout 'plm.exe')
     ) 'Layout is missing the MXC lifecycle tool.'
     Assert-True (
-        Test-Path (Join-Path $layout 'mxc\x64\mxc-runtime.json')
+        Test-Path (Join-Path $layout 'mxc-runtime.json')
     ) 'Layout is missing MXC provenance.'
+    Assert-True (
+        (Test-Path (Join-Path $layout 'wslcsdk.dll')) -and
+        (Test-Path (Join-Path $layout 'wxc-wslc-daemon.exe')) -and
+        (Test-Path (Join-Path $layout 'mxc-LICENSE.md')) -and
+        -not (Test-Path (Join-Path $layout 'mxc'))
+    ) 'Layout did not retain the complete SDK unit or kept the retired executor directory.'
     Assert-True (Test-Path (Join-Path $layout 'Images\StoreLogo.png')) 'Layout is missing package images.'
     Assert-True (@(Get-ChildItem (Join-Path $layout 'runtime') -File).Name -eq 'node-v24.20.0-win-x64.zip') 'Layout is missing the bundled Node.js runtime.'
     [xml]$m = Get-Content (Join-Path $layout 'AppxManifest.xml') -Raw
@@ -1120,7 +1104,6 @@ try {
         [IO.Path]::GetFullPath($mine.LayoutDirectory).TrimEnd('\')
     ) 'The aliases still resolve to the other checkout after take-over.'
 
-    Test-ProductionMxcStageAdapterIgnoresStaleNativeExitState
 
     # A patched identity registers beside the base package under its own name,
     # aliases, display name, and state root. Base and legacy registrations that
@@ -1284,7 +1267,8 @@ try {
         $native.PreflightArchitectures.Count -eq 1 -and
         $native.PreflightArchitectures[0] -ceq 'arm64' -and
         $nativeManifest.Package.Identity.ProcessorArchitecture -eq 'arm64' -and
-        (Test-Path -LiteralPath (Join-Path $nativeLayout 'mxc\arm64\wxc-exec.exe'))
+        (Test-Path -LiteralPath (Join-Path $nativeLayout 'mxc_ffi.dll')) -and
+        (Get-Content -LiteralPath (Join-Path $nativeLayout 'mxc_ffi.dll') -Raw) -ceq 'SDK arm64 mxc_ffi.dll'
     ) 'An omitted -Architecture did not deploy the native architecture.'
     Remove-LocalPackageRegistration -RepositoryRoot $native.Root -Operations $native.Operations
     Assert-True (

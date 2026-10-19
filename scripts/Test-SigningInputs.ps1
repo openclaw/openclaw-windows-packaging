@@ -169,6 +169,9 @@ $resolvedArtifactsDirectory = (
 $resolvedPolicyPath = (Resolve-Path -LiteralPath $PolicyPath).Path
 $policy = Get-Content -LiteralPath $resolvedPolicyPath -Raw |
     ConvertFrom-Json
+$mxcPin = Get-Content -LiteralPath (
+    Join-Path (Split-Path $PSScriptRoot -Parent) 'mxc-runtime.lock.json'
+) -Raw | ConvertFrom-Json
 
 if (
     $policy.repository -ne 'https://github.com/openclaw/openclaw' -or
@@ -257,6 +260,9 @@ foreach ($architecture in @('x64', 'arm64')) {
             "node-v$($metadata.nodeRuntimeVersion)-win-$architecture.zip" -or
         $metadata.nodeRuntimeSha256 -notmatch '^[0-9a-fA-F]{64}$' -or
         [string]::IsNullOrWhiteSpace([string]$metadata.mxcRuntimeVersion) -or
+        $metadata.mxcRuntimePackage -cne $mxcPin.package -or
+        $metadata.mxcRuntimeVersion -cne $mxcPin.version -or
+        $metadata.mxcRuntimeArchiveSha512 -cne $mxcPin.archiveSha512 -or
         @($metadata.mxcRuntimeFiles).Count -eq 0 -or
         @($metadata.sessionHostFiles).Count -eq 0 -or
         $metadata.architecture -ne $architecture -or
@@ -345,8 +351,10 @@ foreach ($architecture in @('x64', 'arm64')) {
             [System.Collections.Generic.HashSet[string]]::new(
                 [System.StringComparer]::OrdinalIgnoreCase
             )
-        $hasMxcExecutor = $false
         $hasMxcProvenance = $false
+        $nativePins = @($mxcPin.architectures.$architecture.files)
+        $expectedNativeFiles = @($nativePins.stagedPath) +
+            @($mxcPin.licenseFiles.stagedPath) + @('mxc-runtime.json')
         foreach ($file in @($metadata.mxcRuntimeFiles)) {
             $relativePath = [string]$file.path
             $segments = @($relativePath.Split('/'))
@@ -366,7 +374,10 @@ foreach ($architecture in @('x64', 'arm64')) {
                 throw "The embedded $architecture MXC runtime inventory is invalid."
             }
 
-            $packagePath = "mxc/$architecture/$relativePath"
+            $packagePath = $relativePath
+            if ($packagePath -cnotin $expectedNativeFiles) {
+                throw "The embedded $architecture MXC runtime has an unexpected path: $packagePath"
+            }
             if (-not $expectedMxcPaths.Add($packagePath)) {
                 throw (
                     "The embedded $architecture MXC runtime inventory has " +
@@ -387,25 +398,41 @@ foreach ($architecture in @('x64', 'arm64')) {
                 )
             }
 
-            if ($relativePath -ieq 'wxc-exec.exe') {
-                $hasMxcExecutor = $true
+            $pin = @($nativePins + @($mxcPin.licenseFiles) |
+                Where-Object stagedPath -CEQ $relativePath)
+            if ($pin.Count -eq 1 -and (
+                $file.length -ne $pin[0].length -or $file.sha256 -cne $pin[0].sha256
+            )) {
+                throw "The embedded $architecture MXC runtime file is invalid: $relativePath"
             }
             if ($relativePath -ieq 'mxc-runtime.json') {
                 $hasMxcProvenance = $true
+                $provenance = Read-ZipEntryText -EntriesByPath $entriesByPath -Path $packagePath |
+                    ConvertFrom-Json
+                if (
+                    $provenance.package -cne $mxcPin.package -or
+                    $provenance.version -cne $mxcPin.version -or
+                    $provenance.architecture -cne $architecture -or
+                    $provenance.archiveSha512 -cne $mxcPin.archiveSha512
+                ) {
+                    throw "The embedded $architecture MXC provenance does not match its pin."
+                }
             }
         }
 
-        if (-not $hasMxcExecutor -or -not $hasMxcProvenance) {
+        if (
+            -not $hasMxcProvenance -or
+            $expectedMxcPaths.Count -ne $expectedNativeFiles.Count -or
+            @($expectedNativeFiles | Where-Object { -not $expectedMxcPaths.Contains($_) }).Count
+        ) {
             throw "The embedded $architecture MXC runtime is incomplete."
         }
 
         $actualMxcPaths = @(
             $entriesByPath.Keys |
                 Where-Object {
-                    $_.StartsWith(
-                        "mxc/$architecture/",
-                        [StringComparison]::OrdinalIgnoreCase
-                    )
+                    $_.StartsWith('mxc/', [StringComparison]::OrdinalIgnoreCase) -or
+                    $_ -match '^(?:mxc[_-]|plm[.]|wslcsdk[.]|wxc-)'
                 }
         )
         if (

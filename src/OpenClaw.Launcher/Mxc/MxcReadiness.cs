@@ -69,7 +69,9 @@ internal sealed record MxcReadinessReport(
                 ? $"failed ({failure})"
                 : "not run";
         return $"{HostSupport} from {SupportEvidence} evidence; host build " +
-            $"{HostBuild?.ToString() ?? "unknown"}; runtime {runtime}; backend probe {probe}";
+            $"{HostBuild?.ToString() ?? "unknown"}; runtime {runtime}; backend probe {probe}" +
+            (BackendProbe?.NativeVersion is { Length: > 0 } nativeVersion
+                ? $"; native version {nativeVersion}" : string.Empty);
     }
 }
 
@@ -105,11 +107,9 @@ internal static class MxcReadiness
     public static Task<MxcReadinessReport> ProbeAsync(
         CancellationToken cancellationToken) =>
         ProbeAsync(
-            AppContext.BaseDirectory,
-            Environment.GetEnvironmentVariable,
+            MxcRuntimeLocator.Locate,
             WindowsHostBuild.TryRead,
-            static (location, token) =>
-                new MxcCliSessionClient(location).ProbeBackendAsync(token),
+            MxcSdkSessionClient.ProbeBackendAsync,
             cancellationToken);
 
     [SuppressMessage(
@@ -123,8 +123,7 @@ internal static class MxcReadiness
             "this would instead make `clawctl setup` fail on a machine it was " +
             "only being asked to describe.")]
     internal static async Task<MxcReadinessReport> ProbeAsync(
-        string baseDirectory,
-        Func<string, string?> readEnvironmentVariable,
+        Func<MxcRuntimeLocation> locateRuntime,
         Func<MxcHostBuild?> readHostBuild,
         Func<MxcRuntimeLocation, CancellationToken, Task<MxcBackendProbe>> probeBackend,
         CancellationToken cancellationToken)
@@ -136,9 +135,7 @@ internal static class MxcReadiness
 
         try
         {
-            location = MxcRuntimeLocator.Locate(
-                baseDirectory,
-                readEnvironmentVariable);
+            location = locateRuntime();
             runtimeDirectory = location.Directory;
             provenance = location.Provenance;
         }

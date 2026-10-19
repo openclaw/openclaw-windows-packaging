@@ -198,7 +198,6 @@ internal sealed class SessionExecutor
             int executorExitCode = await _backend.ExecuteAttachedAsync(
                 record.ToSandboxIdOrThrow(),
                 new MxcExecutionRequest(commandLine),
-                null,
                 cancellationToken).ConfigureAwait(false);
 
             operation.EnsureCurrent();
@@ -306,7 +305,6 @@ internal sealed class SessionExecutor
             execution = await _backend.ExecuteAsync(
                 sandboxId,
                 new MxcExecutionRequest(commandLine),
-                null,
                 cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception)
@@ -770,13 +768,11 @@ internal sealed class SessionExecutor
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The pinned runtime dispatches this string through <c>cmd.exe /c</c>.
-    /// When that string contains more than two quote characters, the command
-    /// processor strips the first and the last one and keeps the rest, so a
-    /// naturally quoted <c>"exe" --request "path"</c> arrives with its
-    /// executable path unquoted and fails at the first space. An outer pair is
-    /// therefore added deliberately: it is the pair that gets sacrificed, and
-    /// the inner quoting survives intact.
+    /// The SDK's pipe path uses <c>cmd.exe /c</c>, while its PTY path appends
+    /// this command after a startup gate. An explicit inner
+    /// <c>cmd.exe /d /s /c</c> consumes the outer quote pair in both cases,
+    /// preserving the helper and request paths without relying on their
+    /// position in the SDK's command line.
     /// </para>
     /// <para>
     /// Both values are paths this package controls, but they are still verified
@@ -791,7 +787,7 @@ internal sealed class SessionExecutor
     {
         Verify(helperPath, nameof(helperPath));
         Verify(requestPath, nameof(requestPath));
-        return $"\"\"{helperPath}\" {option} \"{requestPath}\"\"";
+        return $"cmd.exe /d /s /c \"\"{helperPath}\" {option} \"{requestPath}\"\"";
 
         static void Verify(string value, string name)
         {

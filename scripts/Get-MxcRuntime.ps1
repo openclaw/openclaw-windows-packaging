@@ -1,31 +1,22 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-    Stages the pinned MXC native runtime for packaging.
-
+    Verifies the official MXC SDK package and returns its native inventory.
 .DESCRIPTION
-    Acquires the exact npm archive named in mxc-runtime.lock.json, verifies its
-    registry integrity hash, extracts only the allowlisted runtime and licence
-    entries, and verifies each staged file's length, SHA-256, and PE machine
-    type before it is written to the output directory.
-
-    The archive is treated as untrusted input until it is verified. This script
-    never runs 'npm install', never runs package lifecycle scripts, and never
-    executes any downloaded binary.
-
-.PARAMETER Architecture
-    Runtime architecture to stage. x64 and arm64 are staged separately.
-
-.PARAMETER ArchivePath
-    Optional path to an already-downloaded archive, for offline iteration. It
-    is subject to the same integrity, length, hash, and architecture checks as
-    a freshly downloaded archive.
-
+    NuGet restore owns acquisition. This operation checks the resolved package
+    against mxc-runtime.lock.json, including archive integrity, the managed
+    assembly, and the complete selected Windows native unit. It never downloads
+    or executes a runtime. Optional published output is checked against the same
+    pin. OutputDirectory receives only verified license/provenance content.
+.PARAMETER PackageDirectory
+    Resolved Microsoft.Mxc.Sdk package directory. When omitted, MSBuild's
+    generated package-path property is read from the restored launcher.
+.PARAMETER RuntimeDirectory
+    Optional publish/layout root whose native files must match the package.
 .PARAMETER OutputDirectory
-    Directory to stage into. Defaults to content\mxc\<architecture>.
-
-.PARAMETER CacheDirectory
-    Directory holding verified archives. Defaults to artifacts\mxc-cache.
+    Optional directory for mxc-runtime.json and mxc-LICENSE.md.
+.PARAMETER IncludePackagingContent
+    Read the package property from the isolated packaging restore.
 #>
 [CmdletBinding()]
 param(
@@ -33,333 +24,216 @@ param(
     [ValidateSet('x64', 'arm64')]
     [string]$Architecture,
 
-    [string]$ArchivePath,
-
+    [string]$PackageDirectory,
+    [string]$RuntimeDirectory,
     [string]$OutputDirectory,
-
-    [string]$CacheDirectory,
-
-    [switch]$Force
+    [switch]$IncludePackagingContent
 )
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path $PSScriptRoot -Parent
-$lockPath = Join-Path $repositoryRoot 'mxc-runtime.lock.json'
-
-function Get-Sha256Hex {
-    param(
-        [Parameter(Mandatory)]
-        [string]$Path
-    )
-
-    (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+$lock = Get-Content -LiteralPath (Join-Path $repositoryRoot 'mxc-runtime.lock.json') -Raw |
+    ConvertFrom-Json
+[xml]$central = Get-Content -LiteralPath (Join-Path $repositoryRoot 'Directory.Packages.props') -Raw
+$versions = @($central.SelectNodes('//PackageVersion[@Include="Microsoft.Mxc.Sdk"]'))
+if (
+    $versions.Count -ne 1 -or
+    [string]$versions[0].Version -cne [string]$lock.version -or
+    $lock.package -cne 'Microsoft.Mxc.Sdk'
+) {
+    throw 'The MXC integrity manifest does not match the central SDK package version.'
 }
 
-function Get-NpmIntegrity {
-    param(
-        [Parameter(Mandatory)]
-        [string]$Path
-    )
+function Assert-SafePath {
+    param([string]$Path, [switch]$Flat)
 
-    $stream = [IO.File]::OpenRead($Path)
-    try {
-        $sha512 = [Security.Cryptography.SHA512]::Create()
-        try {
-            'sha512-' + [Convert]::ToBase64String($sha512.ComputeHash($stream))
-        }
-        finally {
-            $sha512.Dispose()
-        }
-    }
-    finally {
-        $stream.Dispose()
+    if ([string]::IsNullOrWhiteSpace($Path)) { throw 'The MXC inventory contains an empty path.' }
+    $segments = @($Path.Split('/'))
+    if (
+        [string]::IsNullOrWhiteSpace($Path) -or
+        [IO.Path]::IsPathRooted($Path) -or $Path.Contains('\') -or $Path.Contains(':') -or
+        $segments -contains '' -or $segments -contains '.' -or $segments -contains '..' -or
+        ($Flat -and $segments.Count -ne 1)
+    ) {
+        throw "Unsafe MXC inventory path: '$Path'."
     }
 }
 
-function Get-PeMachine {
-    param(
-        [Parameter(Mandatory)]
-        [string]$Path
-    )
+function Assert-PinnedFile {
+    param([string]$Path, $Pin)
 
-    $stream = [IO.File]::OpenRead($Path)
-    try {
+    if (
+        -not (Test-Path -LiteralPath $Path -PathType Leaf) -or
+        $Pin.length -isnot [int64] -or $Pin.length -lt 0 -or
+        $Pin.sha256 -notmatch '^[0-9a-f]{64}$' -or
+        (Get-Item -LiteralPath $Path).Length -ne $Pin.length -or
+        (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash -ine $Pin.sha256
+    ) {
+        throw "The MXC file does not match its integrity pin: '$Path'."
+    }
+    if ($Pin.PSObject.Properties.Name -contains 'peMachine') {
+        $stream = [IO.File]::OpenRead($Path)
         $reader = [IO.BinaryReader]::new($stream)
         try {
-            if ($reader.ReadUInt16() -ne 0x5A4D) {
-                throw "'$Path' is not a PE image."
-            }
-
-            $stream.Position = 0x3C
-            $stream.Position = $reader.ReadUInt32()
-            if ($reader.ReadUInt32() -ne 0x00004550) {
-                throw "'$Path' has no PE signature."
-            }
-
-            '0x{0:x4}' -f $reader.ReadUInt16()
-        }
-        finally {
-            $reader.Dispose()
-        }
-    }
-    finally {
-        $stream.Dispose()
-    }
-}
-
-function Resolve-VerifiedArchive {
-    param(
-        [Parameter(Mandatory)]
-        [psobject]$Lock,
-
-        [string]$SuppliedPath,
-
-        [Parameter(Mandatory)]
-        [string]$CachePath
-    )
-
-    if ($SuppliedPath) {
-        if (-not (Test-Path -LiteralPath $SuppliedPath -PathType Leaf)) {
-            throw "The supplied MXC archive '$SuppliedPath' does not exist."
-        }
-
-        $suppliedIntegrity = Get-NpmIntegrity -Path $SuppliedPath
-        if ($suppliedIntegrity -ne $Lock.tarballIntegrity) {
-            throw (
-                "The supplied MXC archive does not match the pinned " +
-                "integrity value. Expected '$($Lock.tarballIntegrity)'; " +
-                "computed '$suppliedIntegrity'."
-            )
-        }
-
-        Write-Host "Using the verified local MXC archive '$SuppliedPath'."
-        return $SuppliedPath
-    }
-
-    if (Test-Path -LiteralPath $CachePath -PathType Leaf) {
-        $cachedIntegrity = Get-NpmIntegrity -Path $CachePath
-        if ($cachedIntegrity -eq $Lock.tarballIntegrity) {
-            Write-Host "Using the verified cached MXC archive '$CachePath'."
-            return $CachePath
-        }
-
-        Write-Warning (
-            "Discarding the cached MXC archive '$CachePath': it no longer " +
-            'matches the pinned integrity value.'
-        )
-        Remove-Item -LiteralPath $CachePath -Force
-    }
-
-    New-Item -Path (Split-Path $CachePath -Parent) -ItemType Directory -Force |
-        Out-Null
-    Write-Host "Downloading $($Lock.tarballUrl)."
-    $downloadPath = "$CachePath.$([guid]::NewGuid().ToString('N')).partial"
-    try {
-        Invoke-WebRequest `
-            -Uri $Lock.tarballUrl `
-            -OutFile $downloadPath `
-            -MaximumRedirection 5 `
-            -UseBasicParsing
-
-        $downloadedIntegrity = Get-NpmIntegrity -Path $downloadPath
-        if ($downloadedIntegrity -ne $Lock.tarballIntegrity) {
-            throw (
-                "The downloaded MXC archive does not match the pinned " +
-                "integrity value. Expected '$($Lock.tarballIntegrity)'; " +
-                "computed '$downloadedIntegrity'."
-            )
-        }
-
-        Move-Item -LiteralPath $downloadPath -Destination $CachePath -Force
-        return $CachePath
-    }
-    finally {
-        if (Test-Path -LiteralPath $downloadPath -PathType Leaf) {
-            Remove-Item -LiteralPath $downloadPath -Force
-        }
-    }
-}
-
-if (-not (Test-Path -LiteralPath $lockPath -PathType Leaf)) {
-    throw "Missing the pinned runtime lock file '$lockPath'."
-}
-
-$lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
-$architectureLock = $lock.architectures.$Architecture
-if (-not $architectureLock) {
-    throw "mxc-runtime.lock.json does not pin a runtime for '$Architecture'."
-}
-
-if (-not $OutputDirectory) {
-    $OutputDirectory = Join-Path $repositoryRoot "content\mxc\$Architecture"
-}
-if (-not $CacheDirectory) {
-    $CacheDirectory = Join-Path $repositoryRoot 'artifacts\mxc-cache'
-}
-
-$provenancePath = Join-Path $OutputDirectory 'mxc-runtime.json'
-$stagedEntries = @($architectureLock.files) + @($lock.licenseFiles)
-$expectedStagedPaths = [System.Collections.Generic.HashSet[string]]::new(
-    [System.StringComparer]::OrdinalIgnoreCase
-)
-foreach ($entry in $stagedEntries) {
-    [void]$expectedStagedPaths.Add(
-        $entry.stagedPath.Replace('/', [IO.Path]::DirectorySeparatorChar)
-    )
-}
-[void]$expectedStagedPaths.Add('mxc-runtime.json')
-
-# Re-verify rather than trusting the directory's existence: a stale or
-# tampered staging directory must not silently become package content.
-if (-not $Force -and (Test-Path -LiteralPath $provenancePath -PathType Leaf)) {
-    $upToDate = $true
-    foreach ($entry in $stagedEntries) {
-        $candidate = Join-Path $OutputDirectory $entry.stagedPath
-        if (
-            -not (Test-Path -LiteralPath $candidate -PathType Leaf) -or
-            (Get-Item -LiteralPath $candidate).Length -ne $entry.length -or
-            (Get-Sha256Hex -Path $candidate) -ne $entry.sha256
-        ) {
-            $upToDate = $false
-            break
-        }
-    }
-    if ($upToDate) {
-        foreach ($candidate in @(
-            Get-ChildItem -LiteralPath $OutputDirectory -File -Force -Recurse
-        )) {
-            $relativePath = [IO.Path]::GetRelativePath(
-                $OutputDirectory,
-                $candidate.FullName
-            )
-            if (-not $expectedStagedPaths.Contains($relativePath)) {
-                $upToDate = $false
-                break
+            if ($reader.ReadUInt16() -ne 0x5a4d) { throw "'$Path' is not a PE image." }
+            $stream.Position = 0x3c
+            $offset = $reader.ReadUInt32()
+            $stream.Position = $offset
+            if ($reader.ReadUInt32() -ne 0x00004550) { throw "'$Path' has no PE signature." }
+            $machine = '0x{0:x4}' -f $reader.ReadUInt16()
+            if ($machine -cne $Pin.peMachine) {
+                throw "The MXC file '$Path' has PE machine $machine, not $($Pin.peMachine)."
             }
         }
+        finally { $reader.Dispose(); $stream.Dispose() }
     }
-
-    if ($upToDate) {
-        Write-Host (
-            "MXC runtime $($lock.version) ($Architecture) is already staged " +
-            "in '$OutputDirectory'."
-        )
-        return
-    }
-
-    Write-Host 'Restaging the MXC runtime: the staged files no longer verify.'
 }
 
-$cachePath = Join-Path `
-    $CacheDirectory `
-    "mxc-sdk-$($lock.version).tgz"
-$verifiedArchive = Resolve-VerifiedArchive `
-    -Lock $lock `
-    -SuppliedPath $ArchivePath `
-    -CachePath $cachePath
+if (-not $PackageDirectory) {
+    $project = Join-Path $repositoryRoot 'src\OpenClaw.Launcher\OpenClaw.Launcher.csproj'
+    $packaging = if ($IncludePackagingContent) { 'true' } else { 'false' }
+    $lines = @(& dotnet msbuild $project -nologo -getProperty:PkgMicrosoft_Mxc_Sdk `
+        "-p:IncludePackagingContent=$packaging" "-p:RuntimeIdentifier=win-$Architecture" `
+        "-p:Platform=$Architecture")
+    if ($LASTEXITCODE -ne 0) { throw "Resolving the MXC NuGet package failed (exit $LASTEXITCODE)." }
+    $PackageDirectory = [string]::Join("`n", [string[]]$lines).Trim()
+}
+if ([string]::IsNullOrWhiteSpace($PackageDirectory)) {
+    throw 'The MXC SDK has not been restored. Restore the launcher for the selected build lane.'
+}
+$PackageDirectory = (Resolve-Path -LiteralPath $PackageDirectory).Path
+$archivePath = Join-Path $PackageDirectory "microsoft.mxc.sdk.$($lock.version).nupkg"
+$archiveHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA512).Hash
+if ([Convert]::ToBase64String([Convert]::FromHexString($archiveHash)) -cne $lock.archiveSha512) {
+    throw 'The restored MXC NuGet archive does not match its integrity pin.'
+}
 
-$extractRoot = Join-Path `
-    ([IO.Path]::GetTempPath()) `
-    "openclaw-mxc-extract-$([guid]::NewGuid().ToString('N'))"
-New-Item -Path $extractRoot -ItemType Directory -Force | Out-Null
+$pins = @($lock.architectures.$Architecture.files)
+$names = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach ($pin in $pins) {
+    Assert-SafePath -Path $pin.archivePath
+    Assert-SafePath -Path $pin.stagedPath -Flat
+    if (
+        $pin.archivePath -cne "runtimes/win-$Architecture/native/$($pin.stagedPath)" -or
+        -not $names.Add([string]$pin.stagedPath)
+    ) {
+        throw 'The MXC native inventory contains duplicate or incorrectly routed paths.'
+    }
+}
+$required = @('mxc_ffi.dll', 'plm.exe', 'wslcsdk.dll', 'wxc-wslc-daemon.exe')
+if ($names.Count -ne $required.Count -or @($required | Where-Object { -not $names.Contains($_) }).Count) {
+    throw 'The MXC integrity manifest must name the complete Windows SDK native unit.'
+}
+$expectedMachine = if ($Architecture -eq 'x64') { '0x8664' } else { '0xaa64' }
+if (@($pins | Where-Object { $_.peMachine -cne $expectedMachine }).Count) {
+    throw 'The MXC native integrity pins do not match the selected architecture.'
+}
+$allPins = @($lock.managedAssembly) + $pins + @($lock.licenseFiles)
+$archive = [IO.Compression.ZipFile]::OpenRead($archivePath)
 try {
-    # Name every member explicitly so nothing outside the allowlist is written,
-    # and so a large archive is not fully expanded.
-    $members = @($stagedEntries | ForEach-Object { $_.archivePath })
-    & tar -xzf $verifiedArchive -C $extractRoot @members
-    if ($LASTEXITCODE -ne 0) {
-        throw "Extracting the MXC archive failed with exit code $LASTEXITCODE."
+    $entries = [Collections.Generic.Dictionary[string, IO.Compression.ZipArchiveEntry]]::new(
+        [StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in $archive.Entries) {
+        if (-not $entry.Name) { continue }
+        Assert-SafePath -Path $entry.FullName
+        if (-not $entries.TryAdd($entry.FullName, $entry)) {
+            throw "The MXC NuGet archive contains a duplicate path: $($entry.FullName)."
+        }
     }
-
-    $stagingDirectory = Join-Path `
-        $extractRoot `
-        "staged-$([guid]::NewGuid().ToString('N'))"
-    New-Item -Path $stagingDirectory -ItemType Directory -Force | Out-Null
-
-    foreach ($entry in $stagedEntries) {
-        $extracted = Join-Path $extractRoot ($entry.archivePath -replace '/', '\')
-        if (-not (Test-Path -LiteralPath $extracted -PathType Leaf)) {
-            throw (
-                "The MXC archive does not contain '$($entry.archivePath)'. " +
-                'Update mxc-runtime.lock.json before changing the pin.'
-            )
-        }
-
-        $length = (Get-Item -LiteralPath $extracted).Length
-        if ($length -ne $entry.length) {
-            throw (
-                "'$($entry.archivePath)' is $length bytes; the pin expects " +
-                "$($entry.length)."
-            )
-        }
-
-        $sha256 = Get-Sha256Hex -Path $extracted
-        if ($sha256 -ne $entry.sha256) {
-            throw (
-                "'$($entry.archivePath)' hashes to $sha256; the pin expects " +
-                "$($entry.sha256)."
-            )
-        }
-
-        if ($entry.PSObject.Properties.Name -contains 'peMachine') {
-            $machine = Get-PeMachine -Path $extracted
-            if ($machine -ne $entry.peMachine) {
-                throw (
-                    "'$($entry.archivePath)' targets machine $machine; the " +
-                    "pin expects $($entry.peMachine) for $Architecture."
-                )
-            }
-        }
-
-        Copy-Item `
-            -LiteralPath $extracted `
-            -Destination (Join-Path $stagingDirectory $entry.stagedPath) `
-            -Force
+    $nativePrefix = "runtimes/win-$Architecture/native/"
+    $nativeEntries = @($entries.Keys | Where-Object { $_.StartsWith($nativePrefix, [StringComparison]::Ordinal) })
+    if (
+        $nativeEntries.Count -ne $pins.Count -or
+        @($nativeEntries | Where-Object { $_ -cnotin $pins.archivePath }).Count
+    ) {
+        throw 'The MXC NuGet archive contains an unexpected native file set.'
     }
-
-    [ordered]@{
-        package = $lock.package
-        version = $lock.version
-        architecture = $Architecture
-        wireSchemaVersion = $lock.wireSchemaVersion
-        minimumWindowsBuild = $lock.minimumWindowsBuild
-        tarballIntegrity = $lock.tarballIntegrity
-        files = @(
-            $stagedEntries |
-                ForEach-Object {
-                    [ordered]@{
-                        path = $_.stagedPath
-                        length = $_.length
-                        sha256 = $_.sha256
-                    }
-                } |
-                Sort-Object { $_.path }
-        )
-    } |
-        # Keep the nested file records intact.
-        ConvertTo-Json -Depth 4 |
-        Set-Content `
-            -LiteralPath (Join-Path $stagingDirectory 'mxc-runtime.json') `
-            -Encoding utf8
-
-    # Publish only after every file verified, so a failed run cannot leave a
-    # partially staged runtime behind for the packaging build to pick up.
-    if (Test-Path -LiteralPath $OutputDirectory -PathType Container) {
-        Remove-Item -LiteralPath $OutputDirectory -Recurse -Force
-    }
-    New-Item -Path (Split-Path $OutputDirectory -Parent) `
-        -ItemType Directory `
-        -Force |
-        Out-Null
-    Move-Item -LiteralPath $stagingDirectory -Destination $OutputDirectory
-}
-finally {
-    if (Test-Path -LiteralPath $extractRoot -PathType Container) {
-        Remove-Item -LiteralPath $extractRoot -Recurse -Force
+    foreach ($pin in $allPins) {
+        Assert-SafePath -Path $pin.archivePath
+        if (-not $entries.ContainsKey([string]$pin.archivePath)) {
+            throw "The MXC NuGet archive lacks '$($pin.archivePath)'."
+        }
+        $entry = $entries[[string]$pin.archivePath]
+        $stream = $entry.Open()
+        try { $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stream)).ToLowerInvariant() }
+        finally { $stream.Dispose() }
+        if ($entry.Length -ne $pin.length -or $hash -cne $pin.sha256) {
+            throw "The archived MXC file does not match its integrity pin: '$($pin.archivePath)'."
+        }
+        Assert-PinnedFile -Path (Join-Path $PackageDirectory $pin.archivePath.Replace('/', '\')) -Pin $pin
     }
 }
+finally { $archive.Dispose() }
 
-Write-Host (
-    "Staged MXC runtime $($lock.package) $($lock.version) ($Architecture) " +
-    "in '$OutputDirectory'."
+[xml]$nuspec = Get-Content -LiteralPath (Join-Path $PackageDirectory 'microsoft.mxc.sdk.nuspec') -Raw
+$metadata = $nuspec.SelectSingleNode('//*[local-name()="metadata"]')
+if (
+    $metadata.SelectSingleNode('*[local-name()="id"]').InnerText -cne $lock.package -or
+    $metadata.SelectSingleNode('*[local-name()="version"]').InnerText -cne $lock.version
+) {
+    throw 'The restored MXC package metadata has a different identity.'
+}
+
+$files = @(
+    foreach ($pin in $pins) {
+        $source = Join-Path $PackageDirectory $pin.archivePath.Replace('/', '\')
+        if ($RuntimeDirectory) {
+            Assert-PinnedFile -Path (Join-Path $RuntimeDirectory $pin.stagedPath) -Pin $pin
+            $source = Join-Path $RuntimeDirectory $pin.stagedPath
+        }
+        [pscustomobject]@{
+            path = [string]$pin.stagedPath
+            length = [long]$pin.length
+            sha256 = [string]$pin.sha256
+            sourcePath = $source
+        }
+    }
 )
+if ($RuntimeDirectory) {
+    $allowed = @($required) + @('mxc-runtime.json', 'mxc-LICENSE.md')
+    $unexpected = @(Get-ChildItem -LiteralPath $RuntimeDirectory -File | Where-Object {
+        $_.Name -match '^(?:mxc[_-]|plm[.]|wslcsdk[.]|wxc-)' -and $_.Name -notin $allowed
+    })
+    if ($unexpected.Count -or (Test-Path -LiteralPath (Join-Path $RuntimeDirectory 'mxc'))) {
+        throw 'The published MXC unit contains unexpected or retired runtime content.'
+    }
+}
+
+$provenance = [ordered]@{
+    package = $lock.package
+    version = $lock.version
+    architecture = $Architecture
+    archiveSha512 = $lock.archiveSha512
+    files = @($files | Select-Object path, length, sha256)
+}
+if ($OutputDirectory) {
+    New-Item -Path $OutputDirectory -ItemType Directory -Force | Out-Null
+    foreach ($pin in @($lock.licenseFiles)) {
+        Assert-SafePath -Path $pin.stagedPath -Flat
+        $destination = Join-Path $OutputDirectory $pin.stagedPath
+        Copy-Item -LiteralPath (Join-Path $PackageDirectory $pin.archivePath.Replace('/', '\')) -Destination $destination -Force
+        Assert-PinnedFile -Path $destination -Pin $pin
+        $files += [pscustomobject]@{
+            path = [string]$pin.stagedPath
+            length = [long]$pin.length
+            sha256 = [string]$pin.sha256
+            sourcePath = $destination
+        }
+    }
+    $provenancePath = Join-Path $OutputDirectory 'mxc-runtime.json'
+    $json = ($provenance | ConvertTo-Json -Depth 5).Replace("`r`n", "`n") + "`n"
+    [IO.File]::WriteAllText($provenancePath, $json, [Text.UTF8Encoding]::new($false))
+    $files += [pscustomobject]@{
+        path = 'mxc-runtime.json'
+        length = (Get-Item -LiteralPath $provenancePath).Length
+        sha256 = (Get-FileHash -LiteralPath $provenancePath -Algorithm SHA256).Hash.ToLowerInvariant()
+        sourcePath = $provenancePath
+    }
+}
+
+[pscustomobject]@{
+    PackageDirectory = $PackageDirectory
+    Provenance = [pscustomobject]$provenance
+    Files = @($files | Sort-Object path)
+}
