@@ -134,7 +134,10 @@ try {
     $clawctl = Join-Path $publishRoot 'clawctl.exe'
     Copy-Item -LiteralPath $driver -Destination $clawctl -Force
 
-    $arguments = if ($RuntimeImagePreflightOnly) { @('--runtime-image-preflight-only') } else { @() }
+    [string[]]$arguments = @()
+    if ($RuntimeImagePreflightOnly) {
+        $arguments = @('--runtime-image-preflight-only')
+    }
     $output = Assert-Invocation `
         -Executable $clawctl `
         -Arguments $arguments `

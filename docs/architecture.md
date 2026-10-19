@@ -161,9 +161,11 @@ The boundary with MXC has two responsibilities that should not be conflated:
   lengths, safe unique paths, and machine architecture. NuGet owns acquisition;
   this verifier does not download or stage a second runtime.
   [`MxcRuntimeLocator`](../src/OpenClaw.Launcher/Mxc/MxcRuntimeLocator.cs)
-  resolves the normal root/RID assets, clears the SDK's developer override
-  before native entry, and preloads the exact module so failure cannot select
-  another binary through the SDK's fallback loader.
+  resolves the normal root/RID assets, clears the SDK's developer override,
+  and binds SDK imports to the exact module with system-library dependency
+  search. These are predictable-loading rules, not per-launch content
+  authorization. Build/release checks verify shipped bytes; development
+  layouts remain user-controlled, without runtime hash or reparse refusal.
 - MXC owns containment and its wire contract.
   [`MxcSdkSessionClient`](../src/OpenClaw.Launcher/Mxc/MxcSdkSessionClient.cs)
   calls `Microsoft.Mxc.Sdk.V1.MxcLifecycle` in process and translates typed
@@ -173,8 +175,10 @@ The boundary with MXC has two responsibilities that should not be conflated:
 Interactive foreground commands use the SDK's public PTY API, with the host
 bridging input/output, terminal size, and console restoration. Redirected or
 mixed streams use separate pipes; helper capture closes unused stdin and
-drains both output streams concurrently. Cancellation terminates and waits
-for only that execution, then joins its relays. Dispatched lifecycle calls
+drains both output streams concurrently. Cancellation requests SDK termination and waits for the foreground process,
+then joins its relays. The tagged IsolationSession backend does not establish
+that the guest helper and backgrounded descendants have exited; per-invocation
+descendant termination remains an unresolved qualification blocker. Dispatched lifecycle calls
 are not abandoned, so a provision's identity can always be recorded.
 
 The result is a narrow trust boundary: this repository decides exactly which

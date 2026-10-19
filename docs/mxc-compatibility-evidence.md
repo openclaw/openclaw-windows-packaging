@@ -17,14 +17,25 @@ NuGet supplies the complete Windows native unit beside the published
 launcher: `mxc_ffi.dll`, `plm.exe`, `wslcsdk.dll`, and
 `wxc-wslc-daemon.exe`. The integrity manifest and verifier check the restored
 archive and selected native bytes before either local or MSIX composition.
-The runtime locator preloads the exact module and clears `MXC_FFI_DIR` before
-native calls, without honoring an executor-directory override.
+The runtime locator binds SDK imports to the exact module, restricts dependency
+search to system libraries and clears `MXC_FFI_DIR` before native calls, without
+honoring an executor-directory override. Shipped bytes are checked at
+build/release time; development layouts remain user-controlled. There is no
+per-launch native content hash or reparse-point refusal.
 
 Interactive execution uses the public SDK PTY API and a host console bridge;
 redirected or mixed streams use separate pipes. Every relay belongs to that
 invocation and is joined before disposal. The SDK's asynchronous cancellation
-alone is not a termination guarantee: the adapter owns kill-and-wait, while
+alone is not a termination guarantee: the adapter requests SDK kill-and-wait, while
 dispatched provision/lifecycle calls finish so their outcome is not lost.
+
+The tagged IsolationSession termination primitive reaches the foreground
+process, not a confirmed invocation tree. The helper's Node.js or PowerShell
+child and backgrounded descendants are not proven stopped by SDK `Kill()`.
+Fixture cancellation flags and a cooperative Ctrl+C exit do not establish that
+stronger guarantee. Supported invocation-owned descendant termination and
+no-late-effect proof remain release blockers; stopping the persistent session
+is not a substitute because it would disrupt unrelated work.
 
 The earlier locally packed SDK spike's attached-console API is no longer
 public in V1. Its historical live results do not qualify this SDK version.

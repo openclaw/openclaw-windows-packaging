@@ -71,12 +71,28 @@ internal static class MxcRuntimeLocator
                 return;
             }
 
-            // The SDK tries this developer override before package assets.
-            // Preload the exact module so a load failure cannot trigger its
-            // source-build or default-loader fallback. Keep it for the process
-            // lifetime: SDK processes and cached imports can still reference it.
+            // Bind SDK imports to this exact image and constrain dependency
+            // search for predictable loading. Keep the mapping for the process
+            // lifetime because SDK handles can outlive an invocation.
             Environment.SetEnvironmentVariable(NativeDirectoryOverrideVariable, null);
-            _module = NativeLibrary.Load(location.NativeLibraryPath);
+            nint module = NativeLibrary.Load(
+                location.NativeLibraryPath,
+                typeof(MxcRuntimeLocator).Assembly,
+                DllImportSearchPath.System32);
+            try
+            {
+                NativeLibrary.SetDllImportResolver(
+                    typeof(Microsoft.Mxc.Sdk.V1.MxcProcess).Assembly,
+                    (name, _, _) => name == "mxc_ffi" ? module : nint.Zero);
+                _module = module;
+            }
+            finally
+            {
+                if (_module == 0)
+                {
+                    NativeLibrary.Free(module);
+                }
+            }
             _loadedPath = location.NativeLibraryPath;
         }
     }
