@@ -354,9 +354,10 @@ update does not remove a running process's runtime.
 `.github\workflows\gateway-msix.yml` selects **stable** whenever a new packaging
 run starts: the exact `stableVersion` when `release-policy.json` pins one,
 otherwise public npm `openclaw@latest`. The resolver checks the exact
-published version, its annotated upstream tag and target commit, and the source
-package version before building. Git tag and commit signatures are not required;
-official publication uses the same stable selection and validates its recorded
+published version, its GitHub-verified signed annotated upstream tag and target
+commit, and the source package version before building. A missing or invalid tag
+signature stops source selection; commit signatures are not required.
+Official publication uses the same stable selection and validates its recorded
 commit and version before signing. There is no automatic fallback to another
 version or channel; extended-stable and named prereleases are rejected.
 Source selection also checks the MSIX release-version rules before building:
@@ -393,7 +394,9 @@ it is not automatic fallback.
 For `store` and `official`, `openclaw_ref` selects the payload source while the
 reviewed stable policy still owns release identity. Before authorization, the
 workflow restores the same run's payload and release-identity snapshot and
-checks its requested ref, workflow run ID, packaging commit, and signing mode.
+checks its requested ref, workflow run ID, packaging commit, signing mode,
+workflow ref, event, and Git ref. Missing or incompatible snapshot context
+requires a new run.
 When `gateway_version` selects the payload instead, `openclaw_ref` may only be a
 full SHA and must match that release. The workflow does not resolve the moving
 branch or stable channel again.
@@ -415,13 +418,31 @@ the launcher derives its runtime version and LocalState path from the bundled
 archive name. There is no separate packaging-side Node.js version pin or
 runtime-support policy.
 
-Non-official workflows cache the packed OpenClaw tarball by its resolved
+Unsigned/test builds restore the packed OpenClaw tarball cache by its resolved
 upstream commit. They also cache each architecture's Windows dependency tree by
 the resolved commit, tarball SHA-256, Node.js version, and payload-build script.
 A tarball cache hit still verifies the recorded version, commit and SHA-256; a
 dependency-tree hit still runs every payload validation and smoke test.
-Official-signing workflows bypass
+Store and official workflows bypass
 both caches and always rebuild upstream source and Windows dependencies.
+
+Source preflight selects one of two callers of
+`.github\workflows\gateway-msix-build.yml`. For payload builds, only validated stable selection
+from the packaging workflow on `main` grants `cache-mode: write`.
+Unsigned/test overrides (including overrides dispatched from `main`),
+non-main dispatches, and pull requests use `cache-mode: read`. They can
+restore eligible caches but cannot save them. This caller-scoped token cap
+also covers setup-dotnet's NuGet cache and caches nested in upstream actions
+or build scripts; changing an environment variable cannot increase it.
+Signing and publication jobs use `cache-mode: none`.
+
+Package and payload caches use a new namespace that excludes pre-boundary
+entries. Versioning PRs exercise write/restore with synthetic bytes and attempt
+read-token writes after overriding the client's mode, including a direct
+service request from the reusable build job. The cache-boundary cutover still requires coordinated legacy main-cache
+invalidation and cold/warm CI proof before trusting existing cache contents.
+Local policy tests do not prove GitHub's token enforcement or fresh CodeQL
+results; see [release process](docs/release-process.md#cache-boundary-cutover).
 
 The payload artifact records the requested ref and resolved upstream commit in
 `payload-metadata.json`. That build-only file is not embedded in the MSIX.

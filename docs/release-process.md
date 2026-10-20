@@ -109,7 +109,17 @@ development versions and skip installed-upgrade validation.
 
 ## Watch the release workflow
 
-The workflow first builds the validated upstream package, then builds the
+The workflow first captures one immutable source snapshot in `source-preflight`.
+It selects exactly one caller: `build-trusted` for main/stable with cache-write
+access, or `build-read-only` for overrides, non-main, and pull requests.
+Both call `.github\workflows\gateway-msix-build.yml`, which inherits the
+caller's service-enforced cache cap without requesting a stronger mode.
+No signing secrets or OIDC capability enter upstream execution.
+The `build` job normalizes outputs and rejects missing, failed, cancelled,
+double, or wrong-route builds, and source identity mismatches.
+Documentation-only pull requests intentionally skip both callers.
+
+The shared workflow builds the validated upstream package, then builds the
 expanded payload and unsigned MSIX separately for both x64 and ARM64. It
 creates Store-identity and sideload-identity packages for each architecture and
 composes a multi-architecture bundle for each channel with
@@ -119,7 +129,8 @@ and derived package version.
 After every `test-msix-upgrades` scenario succeeds, and before publication or
 Azure credentials, `authorize-signing` runs
 `scripts\Test-SigningInputs.ps1`. It restores the same run's source snapshot
-and validates its workflow run ID, packaging commit, and signing mode without
+and validates its workflow run ID, packaging commit, signing mode, workflow
+ref, Git ref, and event without
 resolving latest again. That recorded source supplies the expected upstream
 commit, payload version, and derived release identity. The check validates
 policy-controlled publishers and every Store and sideload package and bundle
@@ -132,6 +143,7 @@ and bundle artifacts; the Store bundle remains unsigned for Partner Center.
 
 Observe these workflow outcomes:
 
+- Exactly one build caller and the normalized `build` job succeed.
 - `build-msix` succeeds for **both** x64 and ARM64.
 - `test-host`, `build-msix-bundle`, and all 13 `test-msix-upgrades` scenarios
   succeed before `authorize-signing`. Missing or skipped required upgrade
@@ -201,3 +213,38 @@ remove it and reset `msixRevision` to `0` before publishing a new Gateway tag. A
 signing-authorization or upgrade-validation
 failure is a stop condition: correct the reviewed inputs or packaging defect,
 then dispatch a new compliant run rather than publishing partial artifacts.
+
+## Cache-boundary cutover
+
+Versioning PRs exercise the cache service in the PR's own ref: a write-scoped
+job persists synthetic bytes, a read-scoped job restores them and attempts a
+save with a forged client mode, and the reusable build job directly requests
+write authority with its inherited read token. Every read-only reusable build
+runs this direct probe, including manual source overrides from main. The request
+must receive a service policy denial; an unrelated network failure is not passing proof.
+These checks do not establish main's cold/warm cutover or fresh CodeQL results.
+Official/store bypass the explicit package and payload caches, but
+setup-dotnet and nested upstream actions may still use caches under the caller
+cap. Unsigned/test arbitrary-source dispatches remain read-only even on main.
+The `cache_write` input merely avoids explicit save attempts; it is not the
+authorization boundary and cannot grant writes to a read-capped caller.
+
+Package and payload keys use format 2 to exclude their pre-boundary entries.
+Implicit NuGet, upstream, and CodeQL caches still need the coordinated reset.
+Before trusting main caches under the hardened workflow, coordinate an
+authorized activation window: let legacy writers finish, prevent racing
+legacy restores/writes, re-enumerate main-scoped cache IDs, and invalidate only
+the approved IDs (including CodeQL caches). Do not release against legacy
+cache contents during this transition. A cold build costs a full rebuild;
+then verify a warm trusted build reuses caches and an arbitrary-source run
+cannot save, including attempts from upstream subprocesses with altered
+environment. Verify GitHub accepts the workflow keys and propagates the
+caller cap to reusable jobs, including implicit NuGet and upstream caches.
+If it rejects the configuration or enforcement cannot be shown, stop; an
+environment flag or a different cache key is not a substitute boundary.
+
+Run fresh changed-revision CodeQL analysis before deciding alert outcomes.
+Cache alerts remain open unless the fresh scan closes them or separately
+authorized disposition is backed by actual platform denial evidence.
+Cache deletion, dispatch, alert disposition, signing, and publication are
+separate authorized operations, not part of local implementation validation.

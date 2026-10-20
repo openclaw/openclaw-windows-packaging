@@ -65,7 +65,7 @@ internal sealed partial class GatewayRuntime
                 paths.GatewayLauncherPath,
                 GetStartupFolderPath(),
                 paths.StateRoot,
-                Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+                Path.Combine(Environment.SystemDirectory, "wscript.exe"),
                 LogonTriggerUserSid: logonUserSid),
             log,
             ResolveUserSid);

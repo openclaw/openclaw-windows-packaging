@@ -146,26 +146,16 @@ internal sealed partial class GatewayRuntime
                 return new DiagnosticsBundleResult(null, sessionReached, Shareable(notes));
             }
 
-            try
-            {
-                WriteBundle(
-                    bundlePath,
-                    hostFiles,
-                    gatewayFiles,
-                    gatewayOperation,
-                    staged,
-                    stagingOperation,
-                    environment,
-                    notes,
-                    progress);
-            }
-            catch (IOException exception) when (File.Exists(bundlePath))
-            {
-                throw new IOException(
-                    $"The diagnostics bundle already exists: {bundlePath}. " +
-                    "Choose another path with --output.",
-                    exception);
-            }
+            WriteBundle(
+                bundlePath,
+                hostFiles,
+                gatewayFiles,
+                gatewayOperation,
+                staged,
+                stagingOperation,
+                environment,
+                notes,
+                progress);
             return new DiagnosticsBundleResult(bundlePath, sessionReached, Shareable(notes));
         }
         finally
@@ -253,6 +243,20 @@ internal sealed partial class GatewayRuntime
         }
     }
 
+    /// <summary>
+    /// Staged agent logs use the same tail cap as gateway launch logs.
+    /// </summary>
+    /// <remarks>
+    /// The guest workspace copy is unbounded. Reading a log to the end keeps
+    /// the whole file in memory, so a large agent log fails the bundle
+    /// instead of producing one. Configuration files stay complete.
+    /// </remarks>
+    private static int? AgentLogByteLimit(string entryName) =>
+        entryName.StartsWith("agent/", StringComparison.OrdinalIgnoreCase) &&
+        entryName.EndsWith(".log", StringComparison.OrdinalIgnoreCase)
+            ? MaximumGatewayFileBytes
+            : null;
+
     private static string? GatewayLaunchStem(string fileName) =>
         fileName.EndsWith(GatewayStatusSuffix, StringComparison.OrdinalIgnoreCase)
             ? fileName[..^GatewayStatusSuffix.Length]
@@ -284,7 +288,9 @@ internal sealed partial class GatewayRuntime
         Add("host/session.json", "the session record", _paths.SessionStatePath);
         Add("host/gateway-config.json", "the gateway configuration", _paths.GatewayConfigurationPath);
         Add("host/gateway-state.json", "the gateway record", _paths.GatewayStatePath);
-        Add("host/gateway-launcher.cmd", "the gateway recovery launcher", _paths.GatewayLauncherPath);
+        Add("host/gateway-launcher.js", "the gateway recovery launcher", _paths.GatewayLauncherPath);
+        Add("host/gateway-launcher.cmd", "the retained legacy recovery launcher",
+            Path.ChangeExtension(_paths.GatewayLauncherPath, ".cmd"));
         return files;
 
         void Add(string name, string description, string? path)
@@ -401,8 +407,7 @@ internal sealed partial class GatewayRuntime
     {
         Directory.CreateDirectory(Path.GetDirectoryName(bundlePath)!);
 
-        using FileStream stream = new(
-            bundlePath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        using FileStream stream = CreateBundleStream(bundlePath);
         using ZipArchive archive = new(stream, ZipArchiveMode.Create);
 
         foreach (HostSource source in hostFiles)
@@ -462,6 +467,24 @@ internal sealed partial class GatewayRuntime
         foreach (string note in Shareable(notes))
         {
             writer.WriteLine(note);
+        }
+    }
+
+    private static FileStream CreateBundleStream(string bundlePath)
+    {
+        try
+        {
+            return new FileStream(
+                bundlePath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        }
+        catch (IOException exception) when (File.Exists(bundlePath))
+        {
+            // Only opening the new file can establish a create collision.
+            // Once it exists, later archive failures must keep their own cause.
+            throw new IOException(
+                $"The diagnostics bundle already exists: {bundlePath}. " +
+                "Choose another path with --output.",
+                exception);
         }
     }
 
@@ -530,6 +553,7 @@ internal sealed partial class GatewayRuntime
         SessionWorkspaceOperation? operation = null,
         int? maximumBytes = null)
     {
+        maximumBytes ??= AgentLogByteLimit(name);
         string fileName = Path.GetFileName(path);
 
         // The guest already refused these. Re-checking here covers host-side

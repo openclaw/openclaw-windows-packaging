@@ -275,7 +275,7 @@ internal sealed class HostPaths
     /// can drift.
     /// </remarks>
     public string GatewayLauncherPath =>
-        Path.Combine(StateRoot, "gateway-launcher.cmd");
+        Path.Combine(StateRoot, "gateway-launcher.js");
 
     /// <summary>
     /// Where the recorded gateway process and its persistence choices live.

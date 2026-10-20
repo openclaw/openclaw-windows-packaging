@@ -196,6 +196,23 @@ expected and observed identities; an unreadable result remains unknown. The
 owning token SID and the interactive logon SID remain separate for account
 compatibility, rather than silently redirecting recovery to another user.
 
+Logon recovery runs the generated `gateway-launcher.js` through the windowless
+Windows Script Host. Both the task and the Startup-folder fallback invoke the
+same launcher, which runs Windows PowerShell hidden and waits for its exit code.
+The Startup-folder `.wsf` selects JScript explicitly and references that launcher,
+so a user's `.js` editor association does not intercept recovery.
+The PowerShell script resolves the owning package's Control execution alias from
+its manifest, invokes the package-qualified alias with `CreateNoWindow`, and
+waits for `clawctl gateway-service start --recovery`. Interactive CLI commands
+keep their normal terminal output. The background command retains normal host
+diagnostics and the task receives its exit code. Existing CMD registrations
+migrate through an explicit `clawctl setup` without `--fresh`, reusing the recorded
+session and keeping its data and gateway settings. Successful setup and teardown
+remove only marked legacy files. If an existing task cannot be replaced,
+fallback setup retains its previous recovery files and
+reports that migration still requires action. Windows Script Host
+and its JScript engine must be available for this recovery lane.
+
 The real control command is `gateway-service`, not `gateway`. The configured
 port is distinct from the upstream default. The launcher does not force the
 default into the child command line, and status never uses it as a fallback
