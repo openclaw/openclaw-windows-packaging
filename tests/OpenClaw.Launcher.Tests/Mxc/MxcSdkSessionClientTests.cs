@@ -271,6 +271,60 @@ public sealed class MxcSdkSessionClientTests
         Assert.True(stdio.InputJoined);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedInvocationDrainClosesBlockedReadersBeforeReportingFailure(bool captured)
+    {
+        using var stdout = new BlockedReader();
+        using var stderr = new BlockedReader();
+        var process = new FakeProcess(string.Empty, string.Empty, 0)
+        {
+            OutputGate = stdout,
+            ErrorGate = stderr
+        };
+        var expected = new OpenClaw.Launcher.Session.SessionException("Fixture exit drain is unconfirmed.");
+        var request = new MxcExecutionRequest("fixture coordinator")
+        {
+            CancelInvocation = () => { },
+            ForegroundExited = () => throw expected
+        };
+        MxcSdkSessionClient client = Create(new FakeLifecycle { Process = process });
+
+        OpenClaw.Launcher.Session.SessionException failure =
+            await Assert.ThrowsAsync<OpenClaw.Launcher.Session.SessionException>(() =>
+            captured ? (Task)client.ExecuteAsync(Id, request, CancellationToken.None) :
+                client.ExecuteAttachedAsync(Id, request, CancellationToken.None));
+
+        Assert.Same(expected, failure);
+        Assert.Contains("exit drain is unconfirmed", failure.Message, StringComparison.Ordinal);
+        Assert.True(stdout.ReadCompleted);
+        Assert.True(stderr.ReadCompleted);
+        Assert.True(process.WaitCompleted);
+        Assert.True(process.Disposed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StreamReadFailureRetainsTheRepositoryMxcExceptionContract(bool captured)
+    {
+        var sdkFailure = new Sdk.MxcException(Sdk.ErrorCode.BackendError, "Fixture native stream read failed.");
+        var process = new FakeProcess(string.Empty, string.Empty, 0);
+        process.Output.ReadFailure = sdkFailure;
+        MxcSdkSessionClient client = Create(new FakeLifecycle { Process = process });
+        var request = new MxcExecutionRequest("fixture helper");
+
+        MxcException failure = await Assert.ThrowsAsync<MxcException>(() =>
+            captured ? (Task)client.ExecuteAsync(Id, request, CancellationToken.None) :
+                client.ExecuteAttachedAsync(Id, request, CancellationToken.None));
+
+        Assert.Equal(MxcErrorCode.BackendError, failure.Code);
+        Assert.Equal(nameof(Sdk.ErrorCode.BackendError), failure.BackendCode);
+        Assert.Same(sdkFailure, failure.InnerException);
+        Assert.True(process.Disposed);
+    }
+
     [Fact]
     public async Task DiscoveryUsesIsolationSessionNotAnotherAvailableBackend()
     {
@@ -362,11 +416,16 @@ public sealed class MxcSdkSessionClientTests
         private readonly TaskCompletionSource _killed = Signal();
         public RecordingInput Input { get; } = new();
         public RecordingOutput Output { get; } = new(Encoding.UTF8.GetBytes(stdout));
-        public Stream? StandardError { get; } = new MemoryStream(Encoding.UTF8.GetBytes(stderr));
+        private readonly MemoryStream _error = new(Encoding.UTF8.GetBytes(stderr));
+        public BlockedReader? OutputGate { get; init; }
+        public BlockedReader? ErrorGate { get; init; }
+        public Stream? StandardError => ErrorGate ?? (Stream)_error;
         public Stream? StandardInput => Input;
-        public Stream? StandardOutput => Output;
-        public Sdk.IMxcStreamCloser? StandardOutputCloser => null;
-        public Sdk.IMxcStreamCloser? StandardErrorCloser => null;
+        public Stream? StandardOutput => OutputGate ?? (Stream)Output;
+        public Sdk.IMxcStreamCloser? StandardOutputCloser =>
+            OutputGate is { } gate ? new ReaderCloser(gate) : null;
+        public Sdk.IMxcStreamCloser? StandardErrorCloser =>
+            ErrorGate is { } gate ? new ReaderCloser(gate) : null;
         public IReadOnlyList<string> Warnings => [];
         public Sdk.ExecutionMetadata? OutputMetadata => null;
         public uint Id => 0;
@@ -413,8 +472,33 @@ public sealed class MxcSdkSessionClientTests
             Disposed = true;
             Input.Dispose();
             Output.Dispose();
-            StandardError?.Dispose();
+            _error.Dispose();
         }
+    }
+
+    private sealed class BlockedReader : MemoryStream
+    {
+        private readonly TaskCompletionSource _closed = Signal();
+        public bool ReadCompleted { get; private set; }
+        public void CloseRead() => _closed.TrySetResult();
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await _closed.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            ReadCompleted = true;
+            return 0;
+        }
+        protected override void Dispose(bool disposing)
+        {
+            _closed.TrySetResult();
+            base.Dispose(disposing);
+        }
+    }
+
+    private sealed class ReaderCloser(BlockedReader reader) : Sdk.IMxcStreamCloser
+    {
+        public void Close() => reader.CloseRead();
+        public void Dispose() { }
     }
 
     private sealed class RecordingInput : MemoryStream
@@ -431,9 +515,14 @@ public sealed class MxcSdkSessionClientTests
     private sealed class RecordingOutput(byte[] bytes) : MemoryStream(bytes)
     {
         public int BytesRead { get; private set; }
+        public Exception? ReadFailure { get; set; }
         public override ValueTask<int> ReadAsync(
             Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
+            if (ReadFailure is { } failure)
+            {
+                return ValueTask.FromException<int>(failure);
+            }
             int read = Read(buffer.Span);
             BytesRead += read;
             return ValueTask.FromResult(read);

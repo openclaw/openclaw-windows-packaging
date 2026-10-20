@@ -15,7 +15,12 @@ namespace OpenClaw.SessionHost;
 internal static class Program
 {
     public static int Main(string[] args) =>
-        Run(args, new SessionProcessLauncher(InitializeUtf8), Console.Error, File.ReadAllText, WriteResult);
+        args.Length == 2 && WindowsInvocationJob.IsCoordinatorMode(args[0])
+            ? SessionInvocationCoordinator.Run(args[0], args[1])
+            : Run(args, new SessionProcessLauncher(
+            InitializeUtf8,
+            args.Length == 2 && WindowsInvocationJob.IsMode(args[0]) ? args[0] : null),
+            Console.Error, File.ReadAllText, WriteResult);
 
     private static void InitializeUtf8()
     {
@@ -78,6 +83,10 @@ internal static class Program
             SessionLaunchRequest request =
                 SessionLaunchProtocol.ReadRequest(readFile(requestPath));
             requestId = request.RequestId;
+            if (WindowsInvocationJob.IsMode(mode) && request.Mode != SessionLaunchMode.Attached)
+            {
+                throw new SessionLaunchException("Invocation jobs support attached requests only.");
+            }
             if (request.Mode is not SessionLaunchMode.Attached and
                 not SessionLaunchMode.Detached)
             {
@@ -144,7 +153,7 @@ internal static class Program
 
         if (args[0] is not ("--request" or "--supervise" or "--inspect" or "--stop" or
             "--collect" or "--install-runtime" or "--install-tools" or "--check-config" or
-            "--companion-config"))
+            "--companion-config") && !WindowsInvocationJob.IsMode(args[0]))
         {
             return false;
         }
@@ -154,7 +163,7 @@ internal static class Program
         return true;
     }
 
-    private static void TryWriteFailure(
+    internal static void TryWriteFailure(
         Action<string, SessionLaunchResult> writeResult,
         string resultPath,
         string? requestId,
@@ -180,6 +189,6 @@ internal static class Program
         }
     }
 
-    private static void WriteResult(string path, SessionLaunchResult result) =>
+    internal static void WriteResult(string path, SessionLaunchResult result) =>
         File.WriteAllText(path, SessionLaunchProtocol.SerializeResult(result));
 }

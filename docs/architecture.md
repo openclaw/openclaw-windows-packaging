@@ -175,11 +175,48 @@ The boundary with MXC has two responsibilities that should not be conflated:
 Interactive foreground commands use the SDK's public PTY API, with the host
 bridging input/output, terminal size, and console restoration. Redirected or
 mixed streams use separate pipes; helper capture closes unused stdin and
-drains both output streams concurrently. Cancellation requests SDK termination and waits for the foreground process,
-then joins its relays. The tagged IsolationSession backend does not establish
-that the guest helper and backgrounded descendants have exited; per-invocation
-descendant termination remains an unresolved qualification blocker. Dispatched lifecycle calls
-are not abandoned, so a provision's identity can always be recorded.
+drains both output streams concurrently. The tagged IsolationSession SDK kill
+reaches only its foreground command processor, not the guest helper's tree.
+
+This branch prototypes per-invocation cleanup with
+[`WindowsInvocationJob`](../src/OpenClaw.Launcher/WindowsInvocationJob.cs).
+The host creates a job and per-invocation lifecycle events. The helper's internal
+`--request-in-job=<id>` mode joins the job before starting any workload, then
+checks the event so a delayed, already-cancelled spawn cannot start late work.
+An outside-job helper coordinator uses query-only job access and its agent
+identity to pin member process handles. Cancellation and normal completion
+close process admission before that snapshot by lowering the active-process
+limit to one; existing members remain available to pin, but new child creation
+is refused. The host explicitly terminates only after pinning is acknowledged.
+The coordinator waits the pinned handles, including its worker helper, before
+acknowledging drain and exiting. Only then does the SDK adapter join output
+EOF and release invocation files. Detached gateway supervision is unchanged.
+
+The earlier zero-member/completion-packet candidate failed strict process-handle
+exit proof. The coordinator replaces that discovery path rather than treating
+job accounting as completed process exit. A positive member PID from that
+post-admission snapshot is opened with the fixed query-limited/synchronization
+mask. Only `ERROR_INVALID_PARAMETER` (87) identifies an already-expired PID in
+this context, following the same .NET process-lifetime handling. Access denial,
+other native errors, invalid snapshot IDs, and valid handles that no longer
+belong to the exact job remain explicit failures. Every retained handle still
+requires a signaled wait; no exit-code or job-count shortcut replaces it.
+Failed drain closes supported SDK output readers before joining them; closing
+readers does not count as process exit. The agent receives no host-process
+duplication or job-termination access.
+
+This is ordinary process-leak control, not an authorization boundary against
+hostile same-identity code. Explicit termination does not depend on the last
+job handle closing; kill-on-close remains only a host-death fallback and is not
+guaranteed against retained handles. Older helpers reject the new
+`--coordinate-invocation=<id>` mode without starting a workload. The JSON
+protocol version is unchanged; the branch-local modes and events require a
+matching host/helper. Local regressions, managed quality, the full Release
+suite, and the observed cross-identity NativeAOT scenarios pass; the remaining
+limits and unrun lanes are recorded in the
+[operational evidence](mxc-compatibility-evidence.md#branch-local-descendant-cancellation-prototype).
+Dispatched lifecycle calls are not abandoned, so a provision's identity can
+always be recorded.
 
 The result is a narrow trust boundary: this repository decides exactly which
 runtime is packaged and verifies it, but does not reimplement MXC's process

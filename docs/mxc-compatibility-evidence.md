@@ -33,9 +33,117 @@ The tagged IsolationSession termination primitive reaches the foreground
 process, not a confirmed invocation tree. The helper's Node.js or PowerShell
 child and backgrounded descendants are not proven stopped by SDK `Kill()`.
 Fixture cancellation flags and a cooperative Ctrl+C exit do not establish that
-stronger guarantee. Supported invocation-owned descendant termination and
-no-late-effect proof remain release blockers; stopping the persistent session
-is not a substitute because it would disrupt unrelated work.
+stronger guarantee. The branch-local invocation-job prototype below supplies
+additional lifecycle control; SDK cancellation alone remains insufficient.
+Stopping the persistent session is not a substitute because it would disrupt
+unrelated work.
+
+### Branch-local descendant-cancellation prototype
+
+On Windows 26713 with SDK/native runtime 1.0.0, a medium-integrity unpackaged
+host provisioned a disposable IsolationSession without an application ID.
+A standalone x64 NativeAOT helper ran synthetic PowerShell trees under the
+minted agent account in a separate Windows session. No package was registered.
+The legacy `--request` baseline reproduced the defect: SDK `Kill()` followed
+by `WaitAsync()` returned while the helper, workload, child, and grandchild
+remained alive. Releasing the fixture removed those baseline processes.
+
+The prototype's host-owned named job accepted the agent's assignment-only
+handle across that actual token/session boundary. Initial attached/captured
+cancellation and normal-exit observations found no enumerated survivors or
+late sentinel, with an unrelated workload in the same agent session surviving.
+An expanded run then hit `AccessDenied` when the medium host tried to inspect
+guest process exit. That run is inconclusive, not passed. Both runs performed
+exact-ID stop and deprovision; before/after local-account and `Win32_UserProfile`
+snapshots independently verified removal of their minted accounts, profiles,
+temporary directories, and shared workspaces.
+
+The stronger observation fixture grants only query-limited-information and
+synchronization access to the host SID on its synthetic process objects,
+including its helper, and pins those exact handles before cancellation.
+It changes no groups, policy, token privileges, or real-profile objects;
+`AccessDenied` never counts as exit. The local injected-deadline regression
+then failed: the helper handle was signaled, but three workload/child/descendant
+handles were not signaled when execution returned, despite zero job members.
+This exposed an exit-drain gap rather than complete cancellation proof.
+It was not hidden with sleeps, retries, or weaker assertions. A subsequent
+local run confirmed all four processes belonged to their exact invocation job
+before cancellation and that the three failed waits returned `WAIT_TIMEOUT`,
+not `WAIT_FAILED`.
+
+A bounded local admission probe then lowered that job's active-process limit
+to one while its four existing members remained alive. A synchronized new
+child creation failed with Win32 error 1816 and produced no sentinel, while
+the original members and unrelated sibling survived.
+
+The updated candidate keeps a query-only guest coordinator outside the job.
+After the host closes admission, it pins the workload members under the agent
+identity, asks the host to terminate, and waits those exact handles before
+acknowledging drain. Targeted local tests now pass strict exit checks for the
+worker helper, workload, child, descendant, and outside coordinator, plus
+sibling survival. An injected native-spawn delay proves cancellation cannot
+start late work. Deterministic blocked-reader tests prove failed drain is
+reported after both readers are interrupted and joined.
+
+A fresh Windows 26713.1000 run used the standalone x64 NativeAOT helper with
+SDK/native runtime 1.0.0 in one disposable IsolationSession. It disabled all
+host-observer process DACL grants. An independent same-agent witness pinned
+the helper, workload, child, descendant, and outside coordinator for each of
+two concurrent invocations before cancellation. Across attached cancellation,
+captured cancellation, normal completion, an injected deadline, and a
+completion/cancellation race, the first invocation's five handles were signaled
+at return while the sibling's five remained running. Releasing the sibling
+then signaled all five. All five scenarios passed without a late sentinel;
+their 15 raw matrices contain 150 wait observations and no native wait errors.
+Exact-ID stop and deprovision completed, and independent account/profile/path
+snapshots verified the minted account, profile, temporary directories, and
+workspace were gone while pre-existing accounts/profiles remained.
+
+The regression suite also holds an extra job handle through termination,
+rejects cancelled-before-admission launches, and races normal completion
+against cancellation. It uses real helper/workload processes and never
+provisions an account.
+The separately invoked `CancellationPrototypeProbe.RunDisposableAsync` test
+probe requires explicit disposable-session authorization and independent
+before/after account/profile snapshots; it is not an automatic test lane.
+
+This remains a branch-local ordinary-leak prototype, not a hostile-agent
+security boundary or a shipping release. The coordinator's managed quality
+gate passed without warnings or errors, and all 1,318 Release tests passed.
+The full x64 NativeAOT driver passed 33 scenarios and its expected wrong-alias
+negative. Real keyboard/PTY
+cancellation, abrupt host death with a retained handle, installed-package
+execution, and ARM64 execution are not established by this run.
+
+An additional deterministic natural-exit fixture closes admission, takes a real
+exact-job snapshot, then proves a member's natural exit with an independent
+signaled handle before closing the creator/test references and reopening once.
+The OS returned a valid, same-identity, same-job, signaled handle; real error
+87 was not observed. The expiration branch is covered separately through an
+injected native-open seam using that real positive snapshot PID and the fixed
+`PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE` mask.
+
+The coordinator accepts only error 87 in that narrowly controlled context,
+following [.NET 10's matching nonzero-PID handling](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Diagnostics.Process/src/System/Diagnostics/ProcessManager.Windows.cs#L34-L50)
+and the documented [PID lifetime](https://learn.microsoft.com/en-us/windows/win32/procthread/process-handles-and-identifiers).
+Synthetic access-denied, invalid-handle, other-error, reused/nonmember, and
+invalid-PID cases remain failures. This is synthetic failure-path coverage,
+not a claim that the OS expiration error occurred in the real scenarios.
+Every retained process handle still requires signaled exit; the strict
+ten-handle scenarios are unchanged. No inverse NTSTATUS inference or Native
+System Services calls are used. Full PID-reuse stress, hostile same-identity
+manipulation, and the unrun deployment/interactive lanes remain outside the
+observed-flow proof; no universal shipping guarantee is claimed.
+
+After that narrow classification change, the new source again passed the
+managed quality gate, all 1,318 Release tests, the standalone x64 NativeAOT
+publish, and the full 33-scenario native driver with its expected negative.
+A separate fresh natural-rights IsolationSession repeated all five flows with
+the unchanged strict witness: 15 matrices, 150 process-handle waits, no errors,
+no late effects, and sibling survival. Independent exact-ID account/profile/
+temporary-directory/workspace cleanup verification passed. This repeats the
+ordinary-flow proof on the changed source; it does not turn injected error-87
+coverage into an observed native expiration.
 
 The earlier locally packed SDK spike's attached-console API is no longer
 public in V1. Its historical live results do not qualify this SDK version.

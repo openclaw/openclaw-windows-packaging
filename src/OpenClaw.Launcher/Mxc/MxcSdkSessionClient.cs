@@ -126,27 +126,100 @@ internal sealed class MxcSdkSessionClient : IMxcSessionClient
         ReportWarnings((await InvokeAsync(
             () => _lifecycle.Deprovision(ToSdkId(sandboxId)), cancellationToken).ConfigureAwait(false)).Warnings);
 
-    public async Task<MxcExecutionResult> ExecuteAsync(
+    public Task<MxcExecutionResult> ExecuteAsync(
+        MxcSandboxId sandboxId, MxcExecutionRequest request, CancellationToken cancellationToken) =>
+        TranslateAsync(() => ExecuteCoreAsync(sandboxId, request, cancellationToken));
+
+    private async Task<MxcExecutionResult> ExecuteCoreAsync(
         MxcSandboxId sandboxId, MxcExecutionRequest request, CancellationToken cancellationToken)
     {
         Sdk.ExecutionRequest execution = RequireExecution(request);
         using Sdk.IMxcProcess process = await InvokeAsync(
             () => _lifecycle.Spawn(ToSdkId(sandboxId), execution),
             cancellationToken).ConfigureAwait(false);
+        request.ProcessCreated?.Invoke();
         if (process.StandardInput is { } input)
         {
             await input.DisposeAsync().ConfigureAwait(false);
         }
-        using CancellationTokenRegistration cancellation = RegisterKill(process, cancellationToken);
-        (Sdk.WaitResult result, byte[] stdout, byte[] stderr) = await TranslateAsync(
-            () => process.WaitForExitWithOutputAsync(CancellationToken.None)).ConfigureAwait(false);
+        using CancellationTokenRegistration cancellation = RegisterCancellation(process, request, cancellationToken);
+        using Sdk.IMxcStreamCloser? outputCloser = RequireReaderCloser(process, request, stdout: true);
+        using Sdk.IMxcStreamCloser? errorCloser = RequireReaderCloser(process, request, stdout: false);
+        Task<byte[]> output = CaptureOutputAsync(process.StandardOutput);
+        Task<byte[]> error = CaptureOutputAsync(process.StandardError);
+        Sdk.WaitResult result;
+        try
+        {
+            result = await TranslateAsync(() => process.WaitAsync(CancellationToken.None)).ConfigureAwait(false);
+        }
+        finally
+        {
+            try
+            {
+                NotifyForegroundExited(request, outputCloser, errorCloser);
+            }
+            finally
+            {
+                await Task.WhenAll(output, error).ConfigureAwait(false);
+            }
+        }
         ReportWarnings(process.Warnings);
         cancellationToken.ThrowIfCancellationRequested();
         return new MxcExecutionResult(
-            result.ExitCode, Encoding.UTF8.GetString(stdout), Encoding.UTF8.GetString(stderr));
+            result.ExitCode, Encoding.UTF8.GetString(await output.ConfigureAwait(false)),
+            Encoding.UTF8.GetString(await error.ConfigureAwait(false)));
     }
 
-    public async Task<int> ExecuteAttachedAsync(
+    private async Task<byte[]> CaptureOutputAsync(Stream? source)
+    {
+        using var output = new MemoryStream();
+        await RelayOutputAsync(source, output).ConfigureAwait(false);
+        return output.ToArray();
+    }
+
+    private static Sdk.IMxcStreamCloser? RequireReaderCloser(
+        Sdk.IMxcProcess process, MxcExecutionRequest request, bool stdout)
+    {
+        Stream? source = stdout ? process.StandardOutput : process.StandardError;
+        if (source is null || request.CancelInvocation is null)
+        {
+            return null;
+        }
+        return (stdout ? process.StandardOutputCloser : process.StandardErrorCloser)
+            ?? throw new MxcException(MxcErrorCode.BackendError,
+                "MXC did not provide the output reader cancellation required for invocation-owned cleanup.");
+    }
+
+    private static void NotifyForegroundExited(
+        MxcExecutionRequest request, Sdk.IMxcStreamCloser? outputCloser, Sdk.IMxcStreamCloser? errorCloser)
+    {
+        try
+        {
+            request.ForegroundExited?.Invoke();
+        }
+        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or
+            InvalidOperationException or TimeoutException or IOException or MxcException or Sdk.MxcException or
+            Session.SessionException)
+        {
+            // A failed drain must remain a failure, but its pipe joins must not
+            // wait forever for an unconfirmed writer to disappear.
+            try
+            {
+                outputCloser?.Close();
+            }
+            finally
+            {
+                errorCloser?.Close();
+            }
+            throw;
+        }
+    }
+
+    public Task<int> ExecuteAttachedAsync(
+        MxcSandboxId sandboxId, MxcExecutionRequest request, CancellationToken cancellationToken) =>
+        TranslateAsync(() => ExecuteAttachedCoreAsync(sandboxId, request, cancellationToken));
+
+    private async Task<int> ExecuteAttachedCoreAsync(
         MxcSandboxId sandboxId, MxcExecutionRequest request, CancellationToken cancellationToken)
     {
         Sdk.ExecutionRequest execution = RequireExecution(request);
@@ -167,10 +240,11 @@ internal sealed class MxcSdkSessionClient : IMxcSessionClient
         using Sdk.IMxcProcess process = terminalProcess?.Process ?? await InvokeAsync(
             () => _lifecycle.Spawn(ToSdkId(sandboxId), execution),
             cancellationToken).ConfigureAwait(false);
+        request.ProcessCreated?.Invoke();
         using Stream output = _stdio.OpenOutput();
         using Stream error = _stdio.OpenError();
         return await RelayForegroundAsync(
-            process, terminalProcess, output, error, cancellationToken).ConfigureAwait(false);
+            process, terminalProcess, output, error, request, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<int> RelayForegroundAsync(
@@ -178,6 +252,7 @@ internal sealed class MxcSdkSessionClient : IMxcSessionClient
         MxcTerminalProcess? terminalProcess,
         Stream output,
         Stream error,
+        MxcExecutionRequest request,
         CancellationToken cancellationToken)
     {
         bool terminal = terminalProcess is not null;
@@ -187,7 +262,20 @@ internal sealed class MxcSdkSessionClient : IMxcSessionClient
         Task input = Task.CompletedTask;
         Task resize = Task.CompletedTask;
         Task<Sdk.WaitResult>? wait = null;
-        using CancellationTokenRegistration cancellation = RegisterKill(process, cancellationToken);
+        bool foregroundNotified = false;
+        using CancellationTokenRegistration cancellation = RegisterCancellation(process, request, cancellationToken);
+        using Sdk.IMxcStreamCloser? outputCloser = RequireReaderCloser(process, request, stdout: true);
+        using Sdk.IMxcStreamCloser? errorCloser = terminal ? null :
+            RequireReaderCloser(process, request, stdout: false);
+
+        void NotifyOnce()
+        {
+            if (!foregroundNotified)
+            {
+                foregroundNotified = true;
+                NotifyForegroundExited(request, outputCloser, errorCloser);
+            }
+        }
 
         try
         {
@@ -207,6 +295,7 @@ internal sealed class MxcSdkSessionClient : IMxcSessionClient
                 pending.Remove(completed);
             }
             Sdk.WaitResult result = await wait.ConfigureAwait(false);
+            NotifyOnce();
             await relays.CancelAsync().ConfigureAwait(false);
             await Task.WhenAll(stdout, stderr, input, resize).ConfigureAwait(false);
             ReportWarnings(process.Warnings);
@@ -221,22 +310,36 @@ internal sealed class MxcSdkSessionClient : IMxcSessionClient
         {
             if (wait is null || !wait.IsCompletedSuccessfully)
             {
-                Kill(process);
+                if (request.CancelInvocation is { } cancel)
+                {
+                    cancel();
+                }
+                else
+                {
+                    Kill(process);
+                }
             }
             wait ??= TranslateAsync(() => process.WaitAsync(CancellationToken.None));
             await ObserveCleanupAsync(wait).ConfigureAwait(false);
-            await relays.CancelAsync().ConfigureAwait(false);
             try
             {
-                await Task.WhenAll(stdout, stderr, input, resize).ConfigureAwait(false);
+                NotifyOnce();
             }
-            catch (Exception exception) when (
-                exception is IOException or OperationCanceledException or ObjectDisposedException or
-                    Sdk.MxcException or MxcException or System.ComponentModel.Win32Exception)
+            finally
             {
-                if (exception is not OperationCanceledException)
+                await relays.CancelAsync().ConfigureAwait(false);
+                try
                 {
-                    _log($"MXC execution cleanup failed: {DiagnosticFailure.Describe(exception)}");
+                    await Task.WhenAll(stdout, stderr, input, resize).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (
+                    exception is IOException or OperationCanceledException or ObjectDisposedException or
+                        Sdk.MxcException or MxcException or System.ComponentModel.Win32Exception)
+                {
+                    if (exception is not OperationCanceledException)
+                    {
+                        _log($"MXC execution cleanup failed: {DiagnosticFailure.Describe(exception)}");
+                    }
                 }
             }
         }
@@ -354,9 +457,9 @@ internal sealed class MxcSdkSessionClient : IMxcSessionClient
         }
     }
 
-    private CancellationTokenRegistration RegisterKill(
-        Sdk.IMxcProcess process, CancellationToken cancellationToken) =>
-        cancellationToken.Register(() => Kill(process));
+    private CancellationTokenRegistration RegisterCancellation(
+        Sdk.IMxcProcess process, MxcExecutionRequest request, CancellationToken cancellationToken) =>
+        cancellationToken.Register(request.CancelInvocation ?? (() => Kill(process)));
 
     private void Kill(Sdk.IMxcProcess process)
     {

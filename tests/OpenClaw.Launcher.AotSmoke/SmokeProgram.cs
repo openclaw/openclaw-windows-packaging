@@ -66,6 +66,7 @@ internal static class SmokeProgram
             ("pending gateway JSON survives NativeAOT", PendingGatewayJsonIsStructured),
             ("Windows logon identity survives NativeAOT", WindowsLogonIdentityWorks),
             ("Windows process identity survives NativeAOT", WindowsProcessIdentityWorks),
+            ("invocation job interop survives NativeAOT", InvocationJobWorks),
             (RuntimeImageScenario, RuntimeImagePreflightWorks),
             ("MXC SDK loads and validates requests under NativeAOT", MxcSdkWorksAsync),
             ("package provenance reads survive NativeAOT", PackageProvenanceReadsBind),
@@ -120,6 +121,15 @@ internal static class SmokeProgram
 
         WriteLine($"{scenarios.Length} NativeAOT scenarios passed.");
         return 0;
+    }
+
+    private static Task InvocationJobWorks()
+    {
+        using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+        using OpenClaw.Launcher.WindowsInvocationJob job =
+            OpenClaw.Launcher.WindowsInvocationJob.Create(identity.User!.Value);
+        job.Stop();
+        return Task.CompletedTask;
     }
 
     private static Task RuntimeImagePreflightWorks()

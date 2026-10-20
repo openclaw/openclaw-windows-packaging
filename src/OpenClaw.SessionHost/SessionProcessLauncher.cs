@@ -33,7 +33,8 @@ internal sealed record SessionDetachedProcess(int ProcessId, DateTimeOffset Star
 /// Launches the requested executable shell-free, so no quoting, metacharacter,
 /// or <c>%VAR%</c> interpretation can alter the arguments.
 /// </summary>
-internal sealed class SessionProcessLauncher(Action? initializeConsole = null) : ISessionProcessLauncher
+internal sealed class SessionProcessLauncher(
+    Action? initializeConsole = null, string? invocationMode = null) : ISessionProcessLauncher
 {
     private const string NodeOptionsVariable = "NODE_OPTIONS";
 
@@ -80,6 +81,10 @@ internal sealed class SessionProcessLauncher(Action? initializeConsole = null) :
         Process? process = null;
         try
         {
+            if (invocationMode is not null)
+            {
+                WindowsInvocationJob.Join(invocationMode);
+            }
             initializeConsole?.Invoke();
             process = Process.Start(startInfo) ??
                 throw new SessionLaunchException(

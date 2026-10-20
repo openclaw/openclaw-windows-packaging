@@ -179,7 +179,13 @@ internal sealed record MxcProvisionResult(
 /// arbitrary OpenClaw arguments must never be interpolated here. Callers launch
 /// a controlled guest helper and pass real arguments as request data.
 /// </remarks>
-internal sealed record MxcExecutionRequest(string CommandLine);
+internal sealed record MxcExecutionRequest(string CommandLine)
+{
+    public Action? ProcessCreated { get; init; }
+    // Release invocation-owned descendants before joining inherited output EOF.
+    public Action? ForegroundExited { get; init; }
+    public Action? CancelInvocation { get; init; }
+}
 
 internal sealed record MxcExecutionResult(
     int ExitCode,

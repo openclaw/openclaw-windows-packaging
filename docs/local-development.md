@@ -453,6 +453,13 @@ For ordinary managed-code changes, use the contributor quality and test lanes:
 dotnet test .\OpenClaw.Gateway.MSIX.slnx --configuration Release --no-restore
 ```
 
+The branch-local invocation-job prototype's `InvocationCancellationTests`
+exercise real helper/process trees only in temporary fixtures, including
+retained job handles, cancellation, deadlines, and sibling survival.
+They never provision an isolated account. The separately callable disposable
+MXC probe is not part of this lane; running it requires explicit authorization
+and exact-ID cleanup with independent account/profile/workspace verification.
+
 For CodeQL configuration changes, use the
 [CodeQL analysis suite](../CONTRIBUTING.md#codeql-analysis). It requires a CodeQL
 bundle and checks actual source selection; managed and NativeAOT tests do not

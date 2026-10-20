@@ -28,7 +28,14 @@ public sealed class SessionExecutorTests : IDisposable
         ApplicationId = "PFN:OpenClaw.Gateway_abc123",
         WorkspacePath = workspace ?? Workspace,
         Generation = "test-generation",
+        AgentUserSid = CurrentSid(),
     };
+
+    private static string CurrentSid()
+    {
+        using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+        return identity.User!.Value;
+    }
 
     private SessionExecutionRequest Request(params string[] arguments) =>
         new(
@@ -46,7 +53,65 @@ public sealed class SessionExecutorTests : IDisposable
             @"C:\work");
 
     private SessionExecutor Create(Func<string>? createRequestId = null) =>
-        new(_backend, _log.Add, createRequestId: createRequestId, clock: _clock);
+        new(_backend, _log.Add, createRequestId: createRequestId, clock: _clock,
+            createInvocationLifetime: _ => new FakeInvocationLifetime());
+
+    private sealed class FakeInvocationLifetime(Exception? stopFailure = null) : IInvocationLifetime
+    {
+        public string Mode => "--request";
+        public void MarkDispatched() { }
+        public void RequestStop() { }
+        public void ForegroundExited() { }
+        public void Stop()
+        {
+            if (stopFailure is not null)
+            { throw stopFailure; }
+        }
+        public void Dispose() { }
+    }
+
+    [Theory]
+    [InlineData(false, "native")]
+    [InlineData(true, "native")]
+    [InlineData(false, "timeout")]
+    [InlineData(true, "timeout")]
+    [InlineData(false, "unconfirmed")]
+    [InlineData(true, "unconfirmed")]
+    public async Task InvocationCleanupFailureUsesTheSessionOperationalContract(bool captured, string failureKind)
+    {
+        Exception cause = failureKind switch
+        {
+            "native" => new System.ComponentModel.Win32Exception(5, "Fixture job access denied."),
+            "timeout" => new TimeoutException("Fixture drain timed out."),
+            "unconfirmed" => new InvalidOperationException("Fixture drain was not acknowledged."),
+            _ => throw new ArgumentException("Unknown fixture failure.", nameof(failureKind))
+        };
+        if (captured)
+        {
+            RespondAsCapturedHelper(request => new SessionLaunchResult
+            {
+                RequestId = request.RequestId,
+                Launched = true,
+                ExitCode = 0
+            });
+        }
+        else
+        {
+            RespondLaunched(0);
+        }
+        var executor = new SessionExecutor(_backend, _log.Add,
+            createInvocationLifetime: _ => new FakeInvocationLifetime(cause));
+
+        SessionException failure = await Assert.ThrowsAsync<SessionException>(() =>
+            captured ? (Task)executor.ExecuteCommandCaptureAsync(
+                Record(), CaptureRequest(), "Fixture", "Fixture", CancellationToken.None) :
+                executor.ExecuteCommandAsync(
+                    Record(), CaptureRequest(), "Fixture", "Fixture", CancellationToken.None));
+
+        Assert.Same(cause, failure.InnerException);
+        Assert.Contains("could not confirm process exit", failure.Message, StringComparison.Ordinal);
+        Assert.Contains(cause.Message, failure.Message, StringComparison.Ordinal);
+    }
 
     [Fact]
     public async Task IsolatedLaunchRetainsTheHostInteractiveEnvironment()
