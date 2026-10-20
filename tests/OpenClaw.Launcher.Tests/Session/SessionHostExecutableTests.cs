@@ -43,7 +43,15 @@ public sealed class SessionHostExecutableTests : IDisposable
         return path;
     }
 
-    private static int RunHelper(
+    private string StateDirectory => Path.Combine(_testDirectory, "state-transfer");
+
+    // Windows resolves the profile's local application data from the registry,
+    // so the helper's state gate is redirected through its own override instead
+    // of writing lock files into the developer's real profile.
+    private void IsolateState(ProcessStartInfo startInfo) =>
+        startInfo.Environment["OPENCLAW_SESSION_STATE_DIRECTORY"] = StateDirectory;
+
+    private int RunHelper(
         string requestPath,
         string workingDirectory,
         string mode = "--request")
@@ -55,6 +63,7 @@ public sealed class SessionHostExecutableTests : IDisposable
             RedirectStandardError = true,
             WorkingDirectory = workingDirectory
         };
+        IsolateState(startInfo);
         startInfo.ArgumentList.Add(mode);
         startInfo.ArgumentList.Add(requestPath);
 
@@ -190,6 +199,10 @@ public sealed class SessionHostExecutableTests : IDisposable
 
         Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode, exitCode);
 
+        // The launch went through the state gate, and only through the
+        // fixture's redirected directory.
+        Assert.True(File.Exists(Path.Combine(StateDirectory, "access.lock")));
+
         SessionLaunchResult outer = ReadResult(outerRequestPath);
         Assert.Equal("outer", outer.RequestId);
         Assert.True(outer.Launched);
@@ -279,6 +292,7 @@ public sealed class SessionHostExecutableTests : IDisposable
             RedirectStandardError = true,
             WorkingDirectory = AppContext.BaseDirectory
         };
+        IsolateState(startInfo);
         startInfo.ArgumentList.Add("--request");
         startInfo.ArgumentList.Add(requestPath);
 

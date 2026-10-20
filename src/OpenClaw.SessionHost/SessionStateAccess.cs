@@ -7,9 +7,35 @@ internal sealed class SessionStateAccess(string directory)
     public string DirectoryPath { get; } = Path.GetFullPath(directory);
     public string JournalPath => Path.Combine(DirectoryPath, "activation.json");
 
-    public static SessionStateAccess ForAgent() => new(Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "OpenClawGatewayMSIX", "state-transfer"));
+    /// <summary>
+    /// Names an absolute directory that replaces the agent profile's state
+    /// directory for this process.
+    /// </summary>
+    /// <remarks>
+    /// Windows resolves the profile's local application data from the registry,
+    /// not from <c>LOCALAPPDATA</c>, so a test that starts the real helper
+    /// executable has no other way to keep its lock files out of the
+    /// developer's real profile. The launcher never sets this.
+    /// </remarks>
+    internal const string DirectoryVariable = "OPENCLAW_SESSION_STATE_DIRECTORY";
+
+    public static SessionStateAccess ForAgent()
+    {
+        string? overridden = Environment.GetEnvironmentVariable(DirectoryVariable);
+        if (string.IsNullOrEmpty(overridden))
+        {
+            return new(Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "OpenClawGatewayMSIX", "state-transfer"));
+        }
+
+        // Falling back would silently put the locks where the override was
+        // meant to keep them out.
+        return Path.IsPathFullyQualified(overridden)
+            ? new(overridden)
+            : throw new SessionLaunchException(
+                $"{DirectoryVariable} must name an absolute directory.");
+    }
 
     public IDisposable EnterReader()
     {
