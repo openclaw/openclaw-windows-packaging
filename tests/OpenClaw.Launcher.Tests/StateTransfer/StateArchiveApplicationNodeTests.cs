@@ -149,8 +149,14 @@ public sealed class StateArchiveApplicationNodeTests : IDisposable
 
         string scratch = File.ReadAllText(Path.Combine(Staged, "scratch-path.txt"));
         Assert.StartsWith(Exchange + Path.DirectorySeparatorChar, scratch, StringComparison.Ordinal);
-        Assert.Equal("synthetic scratch", File.ReadAllText(Path.Combine(scratch, "scratch.txt")));
-        StateArchiveStoreTests.AssertPrivateFile(Path.Combine(scratch, "scratch.txt"), protectedAcl: false);
+
+        // Locate the file by enumeration so the reported path is only compared,
+        // never reused as a file-system argument.
+        string scratchFile = Assert.Single(
+            Directory.EnumerateFiles(Exchange, "scratch.txt", SearchOption.AllDirectories));
+        Assert.Equal(scratch, Path.GetDirectoryName(scratchFile));
+        Assert.Equal("synthetic scratch", File.ReadAllText(scratchFile));
+        StateArchiveStoreTests.AssertPrivateFile(scratchFile, protectedAcl: false);
     }
 
     private void WriteConfiguration(string workspace)
