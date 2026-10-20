@@ -181,21 +181,22 @@ and multiple unclassified listeners intentionally do not identify an endpoint.
 
 ## A terminal opens when signing in
 
-**Check.** Run `clawctl gateway-service status` and inspect the persistence
+**Check.** Run `clawctl status` and inspect the recovery
 result. Registrations from older packages use a CMD launcher and can open a
 terminal while recovering the gateway.
 
 **Fix.** After installing a package with background recovery, run:
 
 ```powershell
-clawctl gateway-service install
+clawctl setup
 ```
 
-This explicitly replaces the old logon action and removes generated legacy
+Without `--fresh`, setup reuses the recorded session and keeps its data and
+gateway settings. It replaces the old logon action and removes generated legacy
 Startup-folder files. If Windows refuses to replace an existing task, setup
 retains that task's previous recovery files and reports that further action is
 required, even when it creates a new Startup-folder fallback. Resolve the
-reported permission failure and rerun the install command to finish migration.
+reported permission failure and rerun `clawctl setup` to finish migration.
 After a successful migration, future recovery runs without a terminal. If recovery
 fails, run `clawctl gateway-service start` interactively for the error and
 collect logs with `clawctl collect-logs`. For failures before `clawctl` starts,

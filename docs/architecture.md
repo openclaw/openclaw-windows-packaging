@@ -206,9 +206,10 @@ its manifest, invokes the package-qualified alias with `CreateNoWindow`, and
 waits for `clawctl gateway-service start --recovery`. Interactive CLI commands
 keep their normal terminal output. The background command retains normal host
 diagnostics and the task receives its exit code. Existing CMD registrations
-migrate only through an explicit `clawctl gateway-service install`; successful
-installation and teardown remove only marked legacy files. If an existing task
-cannot be replaced, fallback setup retains its previous recovery files and
+migrate through an explicit `clawctl setup` without `--fresh`, reusing the recorded
+session and keeping its data and gateway settings. Successful setup and teardown
+remove only marked legacy files. If an existing task cannot be replaced,
+fallback setup retains its previous recovery files and
 reports that migration still requires action. Windows Script Host
 and its JScript engine must be available for this recovery lane.
 

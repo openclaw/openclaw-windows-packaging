@@ -69,7 +69,8 @@ internal static class GatewayLauncherScript
             "$alias = [string]$aliases[0].Alias",
             "if ($alias -notmatch '^clawctl(?:-[a-z0-9-]{1,15})?\\.exe$') { throw \"Package '$packageFamilyName' has an unexpected control alias.\" }",
             "$aliasPath = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) ('Microsoft\\WindowsApps\\' + $packageFamilyName + '\\' + $alias)",
-            "if (-not (Test-Path -LiteralPath $aliasPath -PathType Leaf)) { throw \"Package-qualified control alias '$aliasPath' is unavailable. Run clawctl gateway-service install after repairing the package registration.\" }",
+            "if (-not (Test-Path -LiteralPath $aliasPath -PathType Leaf)) { throw \"Package-qualified control alias '$aliasPath' is unavailable. Run " +
+            GatewayPersistenceManager.RepairCommand + " after repairing the package registration.\" }",
             "$start = New-Object System.Diagnostics.ProcessStartInfo",
             "$start.FileName = $aliasPath",
             $"$start.Arguments = '{ControlArguments}'",

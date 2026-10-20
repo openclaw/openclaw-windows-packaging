@@ -21,7 +21,7 @@ namespace OpenClaw.Launcher.Gateway;
 internal sealed class GatewayPersistenceManager
 {
     /// <summary>The command a reported problem tells the user to run.</summary>
-    public const string RepairCommand = "clawctl gateway-service install";
+    public const string RepairCommand = "clawctl setup";
 
     private readonly IGatewayTaskScheduler _scheduler;
     private readonly GatewayPersistenceOptions _options;
