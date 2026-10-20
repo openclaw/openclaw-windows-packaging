@@ -68,10 +68,15 @@ support.
 The post-OpenClaw gateway hint is a package-owned status surface even though it
 is written after upstream output. On an interactive invocation it uses the crab
 mark, warning-colored `Hint:`, and an accent-colored unquoted command. Resolve
-foreground eligibility separately from the selected stderr handle: an
-app-execution-alias proxy can carry ANSI without supporting console-mode
-changes, while a native console handle still requires VT setup. Whole-command
-redirection, CI, and `NO_COLOR` remain plain; `FORCE_COLOR` remains authoritative.
+foreground eligibility separately from the selected stderr writer. UTF-8
+initialization can replace managed console writers, so preserve the process
+stderr capability captured at composition time rather than re-identifying an
+earlier writer. Rendering capability does not establish native terminal
+capability: PTY selection independently requires character-device stdin,
+stdout, and stderr handles that support `GetConsoleMode`. Files and pipes
+retain separate streams. A native console handle still requires VT setup.
+Whole-command redirection, CI, and `NO_COLOR` remain plain; `FORCE_COLOR`
+remains authoritative.
 
 ## Failures and diagnostics
 

@@ -17,6 +17,7 @@ internal interface IHostConsole
 internal interface IConsoleNativeApi
 {
     nint GetStdHandle(uint standardHandle);
+    uint GetFileType(nint handle);
     bool GetConsoleMode(nint handle, out uint mode);
     bool SetConsoleMode(nint handle, uint mode);
     uint GetConsoleCP();
@@ -39,6 +40,7 @@ internal sealed class WindowsHostConsole : IHostConsole
     private const uint StdInput = unchecked(0xFFFFFFF6);
     private const uint StdOutput = unchecked(0xFFFFFFF5);
     private const uint StdError = unchecked(0xFFFFFFF4);
+    private const uint FileTypeCharacter = 0x0002;
     private const uint EnableProcessedInput = 0x0001;
     private const uint EnableLineInput = 0x0002;
     private const uint EnableEchoInput = 0x0004;
@@ -64,11 +66,18 @@ internal sealed class WindowsHostConsole : IHostConsole
         _encoding = encoding ?? new ConsoleEncoding();
     }
 
-    public bool IsInteractive => IsInteractiveOutput(Console.Out);
+    public bool IsInteractive => IsConsoleStream(StdOutput);
 
     internal bool HasTerminalStreams =>
-        new[] { StdInput, StdOutput, StdError }.All(
-            standard => _native.GetConsoleMode(_native.GetStdHandle(standard), out _));
+        new[] { StdInput, StdOutput, StdError }.All(IsConsoleStream);
+
+    private bool IsConsoleStream(uint standard)
+    {
+        nint handle = _native.GetStdHandle(standard);
+        return handle != 0 && handle != InvalidHandle &&
+            _native.GetFileType(handle) == FileTypeCharacter &&
+            _native.GetConsoleMode(handle, out _);
+    }
 
     internal Sdk.MxcPtySize ReadTerminalSize()
     {
@@ -114,9 +123,7 @@ internal sealed class WindowsHostConsole : IHostConsole
             return false;
         }
 
-        nint handle = _native.GetStdHandle(standardHandle);
-        return handle != 0 && handle != InvalidHandle &&
-            _native.GetConsoleMode(handle, out _);
+        return IsConsoleStream(standardHandle);
     }
 
     public void InitializeUtf8()
@@ -378,6 +385,7 @@ internal sealed class WindowsHostConsole : IHostConsole
     private sealed class ConsoleNativeApi : IConsoleNativeApi
     {
         public nint GetStdHandle(uint standardHandle) => Native.GetStdHandle(standardHandle);
+        public uint GetFileType(nint handle) => Native.GetFileType(handle);
         public bool GetConsoleMode(nint handle, out uint mode) =>
             Native.GetConsoleMode(handle, out mode);
         public bool SetConsoleMode(nint handle, uint mode) =>
@@ -443,6 +451,8 @@ internal sealed class WindowsHostConsole : IHostConsole
 
         [DllImport("kernel32.dll", SetLastError = true)]
         internal static extern nint GetStdHandle(uint standardHandle);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        internal static extern uint GetFileType(nint handle);
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool GetConsoleMode(nint handle, out uint mode);

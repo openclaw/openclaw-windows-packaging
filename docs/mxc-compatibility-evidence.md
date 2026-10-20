@@ -222,10 +222,12 @@ previous start hint instead of automatically starting the gateway.
 
 Agent entrypoint startup captures and restores console state and initializes
 UTF-8 just as the control entrypoint does. Postflight rendering treats
-foreground interactivity and stderr's native console capability separately:
-the app-alias stderr proxy can receive ANSI and the crab glyph without
-supporting `GetConsoleMode`, while a native console still requires successful
-VT enablement.
+foreground interactivity and the selected process stderr writer separately.
+UTF-8 initialization can replace managed console writers; a previously captured
+writer failing a later identity check is not evidence that its native handle
+rejects `GetConsoleMode`. PTY selection uses the raw handle type and console
+mode for all three streams, preserving separate file and pipe output. A native
+console still requires successful VT enablement.
 
 ## Diagnostics and safe collection
 
