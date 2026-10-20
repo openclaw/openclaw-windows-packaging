@@ -88,6 +88,11 @@ otherwise enter the database even when they are not compiled into the product.
 The configuration leaves query selection and the configured threat model alone;
 it does not declare profile paths or executable discovery safe.
 
+The exclusion includes `tests\OpenClaw.Launcher.AotSmoke`: a fixture's temporary
+path can flow into production helpers without becoming a production input.
+The configuration tests exercise that nested smoke-driver layout as well as
+root-level fixtures, while preserving independently reachable production flows.
+
 Committing the file does not activate it. After merge, a maintainer must create
 the organization's `github-codeql-config-file` repository property if necessary
 and set this repository's value to `.github/codeql/codeql-config.yml`.

@@ -1,4 +1,6 @@
 name: OpenClaw production sources
 
 paths-ignore:
+  # Includes the NativeAOT smoke driver and its fixture-origin production calls.
+  # Default setup must activate this file through github-codeql-config-file.
   - tests/**

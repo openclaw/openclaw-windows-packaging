@@ -200,6 +200,12 @@ internal static class $($case.Key)
     }
     [IO.File]::WriteAllText((Join-Path $sourceRoot 'src\SharedProcess.cs'), $sharedProcess, $encoding)
     [IO.File]::WriteAllText((Join-Path $sourceRoot 'tests\FixtureEntry.cs'), $fixtureEntry, $encoding)
+    $nativeSmokeDirectory = Join-Path $sourceRoot 'tests\OpenClaw.Launcher.AotSmoke'
+    New-Item -Path $nativeSmokeDirectory -ItemType Directory | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $nativeSmokeDirectory 'SmokeProgram.cs'),
+        $fixtureEntry.Replace('FixtureEntry', 'NativeSmokeEntry'),
+        $encoding)
 
     foreach ($variant in @('baseline', 'configured')) {
         $database = Join-Path $testRoot "$variant-db"
@@ -228,12 +234,14 @@ internal static class $($case.Key)
             throw "Baseline analysis did not report the $($control.Key) control."
         }
     }
-    foreach ($rule in @('cs/path-injection', 'cs/command-line-injection')) {
-        $fixtures = @($baseline | Where-Object {
-            $_.Rule -eq $rule -and ($_.Sink -like 'tests/*' -or $_.Source -like 'tests/*')
-        })
-        if ($fixtures.Count -eq 0) {
-            throw "Baseline analysis did not report the $rule fixture control."
+    foreach ($fixture in @('tests/FixtureEntry.cs', 'tests/OpenClaw.Launcher.AotSmoke/SmokeProgram.cs')) {
+        foreach ($rule in @('cs/path-injection', 'cs/command-line-injection')) {
+            $fixtures = @($baseline | Where-Object {
+                $_.Rule -eq $rule -and ($_.Sink -eq $fixture -or $_.Source -eq $fixture)
+            })
+            if ($fixtures.Count -eq 0) {
+                throw "Baseline analysis did not report the $rule fixture control in $fixture."
+            }
         }
     }
     if (@($baseline + $configured | Where-Object { $_.Sink -eq 'src/ConstantPath.cs' }).Count -ne 0) {
