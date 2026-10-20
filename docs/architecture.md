@@ -184,7 +184,11 @@ The host creates a job and per-invocation lifecycle events. The helper's interna
 `--request-in-job=<id>` mode joins the job before starting any workload, then
 checks the event so a delayed, already-cancelled spawn cannot start late work.
 An outside-job helper coordinator uses query-only job access and its agent
-identity to pin member process handles. Cancellation and normal completion
+identity to pin member process handles.
+Console Ctrl+C and Ctrl+Break leave that coordinator alive to finish pinning
+and drain acknowledgement; its process-local handler is not inherited by the
+worker, which retains normal console interruption behavior.
+Cancellation and normal completion
 close process admission before that snapshot by lowering the active-process
 limit to one; existing members remain available to pin, but new child creation
 is refused. The host explicitly terminates only after pinning is acknowledged.

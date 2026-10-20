@@ -12,6 +12,9 @@ internal static class SessionInvocationCoordinator
     public static int Run(string mode, string requestPath)
     {
         string? requestId = null;
+        // Console controls reach the waiter too; only the workload should stop before pin/drain.
+        ConsoleCancelEventHandler preserveWaiter = static (_, args) => args.Cancel = true;
+        Console.CancelKeyPress += preserveWaiter;
         try
         {
             SessionLaunchRequest request = SessionLaunchProtocol.ReadRequest(File.ReadAllText(requestPath));
@@ -33,6 +36,10 @@ internal static class SessionInvocationCoordinator
             Program.TryWriteFailure(Program.WriteResult, SessionLaunchProtocol.ResultPathFor(requestPath),
                 requestId, $"Invocation drain failed: {detail}", Console.Error);
             return SessionLaunchProtocol.HelperFailureExitCode;
+        }
+        finally
+        {
+            Console.CancelKeyPress -= preserveWaiter;
         }
     }
 
