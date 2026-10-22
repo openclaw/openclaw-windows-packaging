@@ -236,7 +236,9 @@ try {
         [string](Get-RequiredProperty $application 'PublisherName') -cne $Publisher) {
         throw 'Microsoft Store product does not match the approved package identity.'
     }
-    if ($null -ne (Get-RequiredProperty $application 'PendingApplicationSubmission')) {
+    # Partner Center omits this pointer when no submission is pending.
+    $pendingSubmission = $application.PSObject.Properties['PendingApplicationSubmission']
+    if ($null -ne $pendingSubmission -and $null -ne $pendingSubmission.Value) {
         throw 'Partner Center already has a pending submission; automation will not replace it.'
     }
     $publishedInfo = Get-RequiredProperty $application 'LastPublishedApplicationSubmission'

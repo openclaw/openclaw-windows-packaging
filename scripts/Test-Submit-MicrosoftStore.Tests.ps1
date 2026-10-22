@@ -74,6 +74,8 @@ function Reset-Fixture {
     $global:OpenClawStoreTest_published = New-Submission 'published-1'
     $global:OpenClawStoreTest_draft = $null
     $global:OpenClawStoreTest_pendingId = $null
+    $global:OpenClawStoreTest_omitEmptyPendingSubmission = $false
+    $global:OpenClawStoreTest_omitOwnedPendingSubmission = $false
     $global:OpenClawStoreTest_tokenLifetime = 3600
     $global:OpenClawStoreTest_commitStatus = 'CommitStarted'
     $global:OpenClawStoreTest_commitThrows = $false
@@ -104,13 +106,18 @@ $httpInvoker = {
 
     $applicationPath = "$apiBase/v1.0/my/applications/$applicationId"
     if ($Method -eq 'Get' -and $Uri -ceq $applicationPath) {
-        return [pscustomobject]@{
+        $application = [pscustomobject]@{
             Id = $applicationId
             PackageIdentityName = if ($global:OpenClawStoreTest_wrongIdentity) { 'Other.Product' } else { 'Test.OpenClaw' }
             PublisherName = 'CN=Test'
             PendingApplicationSubmission = if ($null -eq $global:OpenClawStoreTest_pendingId) { $null } else { [pscustomobject]@{ Id = $global:OpenClawStoreTest_pendingId } }
             LastPublishedApplicationSubmission = [pscustomobject]@{ Id = 'published-1' }
         }
+        if (($global:OpenClawStoreTest_omitEmptyPendingSubmission -and $null -eq $global:OpenClawStoreTest_pendingId) -or
+            ($global:OpenClawStoreTest_omitOwnedPendingSubmission -and $null -ne $global:OpenClawStoreTest_pendingId)) {
+            $application.PSObject.Properties.Remove('PendingApplicationSubmission')
+        }
+        return $application
     }
     if ($Method -eq 'Get' -and $Uri -ceq "$applicationPath/submissions/published-1") {
         return Copy-Object $global:OpenClawStoreTest_published
@@ -242,6 +249,22 @@ try {
         [string]$evidence.publishedMetadataSha256 -cne [string]$evidence.draftMetadataSha256 -or
         [string]$evidence.preparedMutationSha256 -cne [string]$evidence.verifiedMutationSha256) {
         throw 'Store evidence did not bind the verified and committed draft.'
+    }
+
+    Reset-Fixture
+    $global:OpenClawStoreTest_omitEmptyPendingSubmission = $true
+    Invoke-Submission
+    if ($null -ne $global:OpenClawStoreTest_pendingId -or
+        @($global:OpenClawStoreTest_calls | Where-Object { $_ -match '/submissions/draft-2/Commit$' }).Count -ne 1) {
+        throw 'An omitted empty pending-submission pointer did not complete the owned submission.'
+    }
+
+    Reset-Fixture
+    $global:OpenClawStoreTest_omitOwnedPendingSubmission = $true
+    Assert-Fails -MessagePattern "missing 'PendingApplicationSubmission'" -Action { Invoke-Submission }
+    if ($null -ne $global:OpenClawStoreTest_pendingId -or
+        $global:OpenClawStoreTest_calls -match '^Put |/Commit$') {
+        throw 'A missing owned-draft pointer allowed an update or commit, or left the created draft behind.'
     }
 
     Reset-Fixture
