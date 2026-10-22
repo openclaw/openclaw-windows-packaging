@@ -347,48 +347,30 @@ public sealed class StateArchiveApplicationNodeTests : IDisposable
         Assert.Contains("No source or live state was changed", failure.Message, StringComparison.Ordinal);
     }
 
-    private static string FindNode() => (Environment.GetEnvironmentVariable("PATH") ?? "")
-        .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-        .Select(directory => Path.Combine(directory.Trim('"'), "node.exe"))
-        .First(File.Exists);
-
-    private static string RunNode(string script, params string[] arguments)
+    private string RunNode(string script, params string[] arguments)
     {
-        System.Diagnostics.ProcessStartInfo start = new(FindNode())
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false
-        };
-        start.ArgumentList.Add("--input-type=module");
-        start.ArgumentList.Add("--eval");
-        start.ArgumentList.Add(script);
-        foreach (string argument in arguments)
-        {
-            start.ArgumentList.Add(argument);
-        }
-        using System.Diagnostics.Process process = System.Diagnostics.Process.Start(start)!;
+        using System.Diagnostics.Process process = StateTransferProcessFixture.StartNode(
+            StateTransferProcessFixture.Request(_root, script, arguments));
         Task<string> error = process.StandardError.ReadToEndAsync();
         string output = process.StandardOutput.ReadToEnd();
         Assert.True(process.WaitForExit(TimeSpan.FromSeconds(30)), "node did not exit");
         Assert.True(process.ExitCode == 0, error.GetAwaiter().GetResult());
         return output.TrimEnd();
     }
-
-    private static void RunSqlite(string database, string sql) => RunNode("""
+    private void RunSqlite(string database, string sql) => RunNode("""
         import { DatabaseSync } from "node:sqlite";
         const database = new DatabaseSync(process.argv[1]);
         database.exec(process.argv[2]);
         database.close();
         """, database, sql);
 
-    private static string ReadSingle(string database, string query) => RunNode("""
+    private string ReadSingle(string database, string query) => RunNode("""
         import { DatabaseSync } from "node:sqlite";
         const database = new DatabaseSync(process.argv[1], { readOnly: true });
         console.log(Object.values(database.prepare(process.argv[2]).get())[0]);
         """, database, query);
 
-    private static string[] ReadRegistry(string registry) => RunNode("""
+    private string[] ReadRegistry(string registry) => RunNode("""
         import { DatabaseSync } from "node:sqlite";
         const database = new DatabaseSync(process.argv[1], { readOnly: true });
         for (const row of database.prepare("SELECT agent_id, path FROM agent_databases ORDER BY agent_id").all())
