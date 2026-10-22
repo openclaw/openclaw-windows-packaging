@@ -81,6 +81,7 @@ function Reset-Fixture {
     $global:OpenClawStoreTest_commitThrows = $false
     $global:OpenClawStoreTest_replaceAfterUpload = $false
     $global:OpenClawStoreTest_driftAfterUpload = $false
+    $global:OpenClawStoreTest_metadataMutationAfterUpload = $null
     $global:OpenClawStoreTest_mutatePackagesAfterUpload = $false
     $global:OpenClawStoreTest_wrongIdentity = $false
     $global:OpenClawStoreTest_serverFields = $false
@@ -181,6 +182,9 @@ $uploadInvoker = {
     }
     if ($global:OpenClawStoreTest_driftAfterUpload) {
         $global:OpenClawStoreTest_draft.Listings.'en-us'.description = 'Unexpected replacement'
+    }
+    if ($null -ne $global:OpenClawStoreTest_metadataMutationAfterUpload) {
+        & $global:OpenClawStoreTest_metadataMutationAfterUpload $global:OpenClawStoreTest_draft
     }
     if ($global:OpenClawStoreTest_mutatePackagesAfterUpload) {
         $global:OpenClawStoreTest_draft.ApplicationPackages += [pscustomobject]@{
@@ -304,9 +308,32 @@ try {
 
     Reset-Fixture
     $global:OpenClawStoreTest_driftAfterUpload = $true
-    Assert-Fails -MessagePattern 'did not preserve published product metadata' -Action { Invoke-Submission }
+    Assert-Fails -MessagePattern '^The Store draft did not preserve published product metadata\. Changed fields: Listings\.en-us\.description\.$' -Action { Invoke-Submission }
     if ($null -ne $global:OpenClawStoreTest_pendingId -or $global:OpenClawStoreTest_calls -match '/Commit$') {
         throw 'Metadata drift did not delete only the automation-owned draft.'
+    }
+
+    Reset-Fixture
+    $global:OpenClawStoreTest_published.Listings.'en-us' | Add-Member Images @(
+        [pscustomobject]@{ FileName = 'private-screenshot.png'; Id = 'published-image-id' }
+    )
+    $global:OpenClawStoreTest_metadataMutationAfterUpload = {
+        param($Draft)
+        $Draft.Listings.'en-us'.Images[0].Id = 'private-replacement-image-id'
+    }
+    Assert-Fails -MessagePattern '^The Store draft did not preserve published product metadata\. Changed fields: Listings\.en-us\.Images\[0\]\.Id\.$' -Action { Invoke-Submission }
+    if ($null -ne $global:OpenClawStoreTest_pendingId -or $global:OpenClawStoreTest_calls -match '/Commit$') {
+        throw 'Nested metadata drift allowed a commit or left the owned draft behind.'
+    }
+
+    Reset-Fixture
+    $global:OpenClawStoreTest_metadataMutationAfterUpload = {
+        param($Draft)
+        $Draft.Listings.'en-us'.PSObject.Properties.Remove('description')
+    }
+    Assert-Fails -MessagePattern '^The Store draft did not preserve published product metadata\. Changed fields: Listings\.en-us\.description\.$' -Action { Invoke-Submission }
+    if ($null -ne $global:OpenClawStoreTest_pendingId -or $global:OpenClawStoreTest_calls -match '/Commit$') {
+        throw 'Missing metadata allowed a commit or left the owned draft behind.'
     }
 
     Reset-Fixture

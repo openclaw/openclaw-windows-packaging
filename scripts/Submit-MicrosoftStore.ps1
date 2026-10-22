@@ -49,7 +49,7 @@ function ConvertTo-CanonicalValue {
     return $properties
 }
 
-function Get-SubmissionMetadataHash {
+function Get-SubmissionMetadata {
     param([Parameter(Mandatory)][psobject]$Submission)
     $metadata = [ordered]@{}
     foreach ($name in @(
@@ -71,9 +71,44 @@ function Get-SubmissionMetadataHash {
             $metadata[$name] = if ($null -eq $property) { $null } else { ConvertTo-CanonicalValue $property.Value }
         }
     }
-    $json = $metadata | ConvertTo-Json -Depth 100 -Compress
+    return $metadata
+}
+
+function Get-SubmissionMetadataHash {
+    param([Parameter(Mandatory)][psobject]$Submission)
+    $json = Get-SubmissionMetadata $Submission | ConvertTo-Json -Depth 100 -Compress
     $hash = [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($json))
     return [Convert]::ToHexString($hash).ToLowerInvariant()
+}
+
+function Get-ChangedMetadataPaths {
+    param([AllowNull()][object]$Expected, [AllowNull()][object]$Actual, [string]$Path = '')
+    if ($Expected -is [Collections.IDictionary] -and $Actual -is [Collections.IDictionary]) {
+        $keys = @(@($Expected.Keys) + @($Actual.Keys) | Sort-Object -Unique -CaseSensitive)
+        foreach ($key in $keys) {
+            $childPath = if ($Path) { "$Path.$key" } else { [string]$key }
+            if (@($Expected.Keys) -cnotcontains $key -or @($Actual.Keys) -cnotcontains $key) {
+                $childPath
+            } else {
+                Get-ChangedMetadataPaths $Expected[$key] $Actual[$key] $childPath
+            }
+        }
+        return
+    }
+    if ($Expected -is [Array] -and $Actual -is [Array]) {
+        for ($index = 0; $index -lt [Math]::Max($Expected.Count, $Actual.Count); $index++) {
+            $childPath = "${Path}[$index]"
+            if ($index -ge $Expected.Count -or $index -ge $Actual.Count) {
+                $childPath
+            } else {
+                Get-ChangedMetadataPaths $Expected[$index] $Actual[$index] $childPath
+            }
+        }
+        return
+    }
+    $expectedJson = ConvertTo-Json -InputObject $Expected -Depth 100 -Compress
+    $actualJson = ConvertTo-Json -InputObject $Actual -Depth 100 -Compress
+    if ($expectedJson -cne $actualJson) { $Path }
 }
 
 function Get-SubmissionMutationHash {
@@ -309,7 +344,11 @@ try {
     }
     $draftMetadataHash = Get-SubmissionMetadataHash $verifiedDraft
     if ($draftMetadataHash -cne $publishedMetadataHash) {
-        throw 'The Store draft did not preserve published product metadata.'
+        $changedPaths = @(Get-ChangedMetadataPaths (Get-SubmissionMetadata $published) (Get-SubmissionMetadata $verifiedDraft))
+        # Paths identify the rejected fields without exposing metadata values.
+        $fields = @($changedPaths | Select-Object -First 20) -join ', '
+        $more = if ($changedPaths.Count -gt 20) { " (+$($changedPaths.Count - 20) more)" } else { '' }
+        throw "The Store draft did not preserve published product metadata. Changed fields: $fields$more."
     }
     $verifiedMutationHash = Get-SubmissionMutationHash $verifiedDraft
     if ($verifiedMutationHash -cne $draftMutationHash) {
