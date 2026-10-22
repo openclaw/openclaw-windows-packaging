@@ -378,6 +378,50 @@ public sealed class StateArchiveApplicationNodeTests : IDisposable
         """, registry).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     [Fact]
+    public void KeyedAgentEntriesAreRelocatedWithTheProfile()
+    {
+        foreach (string directory in new[] { ".openclaw\\workspace", "CustomWork", "CustomAgent" })
+        {
+            Directory.CreateDirectory(Path.Combine(Staged, directory));
+        }
+        File.WriteAllText(Config, new JsonObject
+        {
+            ["gateway"] = new JsonObject { ["mode"] = "local" },
+            ["agents"] = new JsonObject
+            {
+                ["entries"] = new JsonObject
+                {
+                    ["main"] = new JsonObject
+                    {
+                        ["workspace"] = Path.Combine(Original, ".openclaw", "workspace")
+                    },
+                    ["custom"] = new JsonObject
+                    {
+                        ["name"] = "custom",
+                        ["workspace"] = Path.Combine(Original, "CustomWork"),
+                        ["agentDir"] = Path.Combine(Original, "CustomAgent"),
+                        ["identity"] = new JsonObject { ["name"] = Original + "\\not-a-config-path" }
+                    }
+                }
+            }
+        }.ToJsonString());
+        StateArchiveApplication application = Create();
+
+        IReadOnlyList<string> sources = application.RequiredSources(Staged, Original);
+        application.RebaseConfiguration(Staged, Original, Staged);
+        application.RebaseConfiguration(Staged, Staged, Target);
+
+        Assert.Contains(Path.Combine(Original, "CustomWork"), sources);
+        Assert.Contains(Path.Combine(Original, "CustomAgent"), sources);
+        Assert.Contains(Path.Combine(Original, ".openclaw", "workspace"), sources);
+        JsonNode entries = JsonNode.Parse(File.ReadAllText(Config))!["agents"]!["entries"]!;
+        Assert.Equal(Path.Combine(Target, ".openclaw", "workspace"), entries["main"]!["workspace"]!.GetValue<string>());
+        Assert.Equal(Path.Combine(Target, "CustomWork"), entries["custom"]!["workspace"]!.GetValue<string>());
+        Assert.Equal(Path.Combine(Target, "CustomAgent"), entries["custom"]!["agentDir"]!.GetValue<string>());
+        Assert.Equal(Original + "\\not-a-config-path", entries["custom"]!["identity"]!["name"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void EffectiveSdkConfigurationAlsoContributesRequiredDependencies()
     {
         WriteConfiguration(Path.Combine(Original, "Work"));

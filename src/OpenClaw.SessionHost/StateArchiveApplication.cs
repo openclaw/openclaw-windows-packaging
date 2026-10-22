@@ -148,8 +148,11 @@ internal sealed class StateArchiveApplication : IStateArchiveApplication
             };
             const scalarPaths = new Set([
               "agents.defaults.workspace", "agents.list.*.workspace", "agents.list.*.agentDir",
+              "agents.entries.*.workspace", "agents.entries.*.agentDir",
               "plugins.installs.*.installPath", "plugins.installs.*.sourcePath",
             ]);
+            // Keyed maps whose entries are named by the user: the key is not part of the schema path.
+            const mapScopes = new Set(["plugins.installs", "agents.entries"]);
             const arrayPaths = new Set(["skills.load.extraDirs", "plugins.load.paths"]);
             const visit = async (draft, base, scope = "") => {
               if (!draft || typeof draft !== "object") return;
@@ -161,7 +164,7 @@ internal sealed class StateArchiveApplication : IStateArchiveApplication
               }
               for (const [key, value] of Object.entries(draft)) {
                 if (key === "$include") continue;
-                const childScope = scope === "plugins.installs" ? `${scope}.*` :
+                const childScope = mapScopes.has(scope) ? `${scope}.*` :
                   scope ? `${scope}.${key}` : key;
                 if (scalarPaths.has(childScope)) property(draft, key);
                 if (arrayPaths.has(childScope)) paths(draft, key);
