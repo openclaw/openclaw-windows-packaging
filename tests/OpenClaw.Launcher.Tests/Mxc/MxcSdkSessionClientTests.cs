@@ -7,7 +7,7 @@ namespace OpenClaw.Launcher.Tests.Mxc;
 public sealed class MxcSdkSessionClientTests
 {
     private static readonly MxcRuntimeLocation Runtime = new(
-        @"C:\Package", @"C:\Package\mxc_ffi.dll", @"C:\Package\plm.exe", null);
+        @"C:\Package", null);
     private static readonly MxcSandboxId Id = MxcSandboxId.Parse("iso:recorded-value");
 
     [Fact]
@@ -85,19 +85,18 @@ public sealed class MxcSdkSessionClientTests
     }
 
     [Fact]
-    public async Task NativeLoadFailureNamesTheExactRuntimeWithoutDispatch()
+    public async Task SdkLoadFailureIsReportedAsRuntimeUnavailable()
     {
-        var sdk = new FakeLifecycle();
-        var client = new MxcSdkSessionClient(
-            Runtime, sdk, new FakeConsole([]), new FakeStdio(),
-            prepareRuntime: _ => throw new BadImageFormatException("wrong native architecture"));
+        var failure = new BadImageFormatException("SDK runtime could not load");
+        var sdk = new FakeLifecycle { StartFailure = failure };
+        MxcSdkSessionClient client = Create(sdk);
 
         MxcException error = await Assert.ThrowsAsync<MxcException>(
             () => client.StartAsync(Id, CancellationToken.None));
 
         Assert.Equal(MxcErrorCode.RuntimeUnavailable, error.Code);
-        Assert.Contains(Runtime.NativeLibraryPath, error.Message, StringComparison.Ordinal);
-        Assert.Empty(sdk.Calls);
+        Assert.Contains("Microsoft.Mxc.Sdk", error.Message, StringComparison.Ordinal);
+        Assert.Same(failure, error.InnerException);
     }
 
     [Fact]
@@ -156,7 +155,7 @@ public sealed class MxcSdkSessionClientTests
         var stdio = new FakeStdio { IsTerminal = true, WaitForCancellation = true };
         var events = new List<string>();
         var client = new MxcSdkSessionClient(
-            Runtime, sdk, new FakeConsole(events), stdio, prepareRuntime: _ => { });
+            Runtime, sdk, new FakeConsole(events), stdio);
 
         Task<int> execution = client.ExecuteAttachedAsync(
             Id, new MxcExecutionRequest("helper.exe"), CancellationToken.None);
@@ -331,15 +330,14 @@ public sealed class MxcSdkSessionClientTests
         MxcBackendProbe probe = await MxcSdkSessionClient.ProbeBackendAsync(
             Runtime,
             () => [new Sdk.AvailableBackend { Backend = Sdk.ContainmentBackend.ProcessContainer }],
-            () => "native-fixture", _ => { }, CancellationToken.None);
+            () => "native-fixture", CancellationToken.None);
         Assert.False(probe.IsolationSessionAvailable);
         Assert.Equal("native-fixture", probe.NativeVersion);
     }
 
     private static MxcSdkSessionClient Create(
         FakeLifecycle sdk, FakeStdio? stdio = null, Action<string>? log = null) =>
-        new(Runtime, sdk, new FakeConsole([]), stdio ?? new FakeStdio(),
-            log, prepareRuntime: _ => { });
+        new(Runtime, sdk, new FakeConsole([]), stdio ?? new FakeStdio(), log);
 
     private static TaskCompletionSource Signal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -190,11 +190,11 @@
     <Error Condition="'$(NodeRuntimeArchiveFileName)' == '' Or !Exists('$(MSBuildThisFileDirectory)..\..\content\openclaw\runtime\$(NodeRuntimeArchiveFileName)')"
            Text="Missing architecture-specific bundled Node.js archive." />
     <Error Condition="'$(MxcRuntimeArchitecture)' == ''"
-           Text="Packaging requires RuntimeIdentifier win-x64 or win-arm64 to select the MXC runtime." />
+           Text="Packaging requires RuntimeIdentifier win-x64 or win-arm64 to select the session host." />
     <Error Condition="!Exists('$(MxcRuntimeContentDirectory)mxc-runtime.json')"
-           Text="Missing verified SDK provenance. Run scripts\Get-MxcRuntime.ps1 -Architecture $(MxcRuntimeArchitecture) -IncludePackagingContent -OutputDirectory $(MxcRuntimeContentDirectory)." />
+           Text="Missing SDK package metadata. Run scripts\Get-MxcSdkMetadata.ps1 -Architecture $(MxcRuntimeArchitecture) -IncludePackagingContent -OutputDirectory $(MxcRuntimeContentDirectory)." />
     <Error Condition="!Exists('$(MxcRuntimeContentDirectory)mxc-LICENSE.md')"
-           Text="Missing the verified MXC SDK license." />
+           Text="Missing the MXC SDK redistribution license." />
     <Error Condition="!Exists('$(SessionHostContentDirectory)openclaw-session-host.exe')"
            Text="Missing the published isolated-session guest helper. scripts\Build-MSIX.ps1 stages it for $(MxcRuntimeArchitecture)." />
   </Target>

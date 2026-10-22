@@ -64,16 +64,7 @@ internal sealed record HostEnvironment(
 
     internal static string DescribeMxc(string baseDirectory)
     {
-        MxcRuntimeLocation location;
-        try
-        {
-            location = MxcRuntimeLocator.Locate(baseDirectory);
-        }
-        catch (MxcException exception)
-        {
-            return $"unavailable ({exception.Message})";
-        }
-
+        MxcRuntimeLocation location = MxcRuntimeLocator.Locate(baseDirectory);
         string runtime = location.Provenance is { } provenance
             ? $"{provenance.Package} {provenance.Version} {provenance.Architecture}"
             : "runtime of unknown provenance";

@@ -68,7 +68,7 @@ internal static class SmokeProgram
             ("Windows process identity survives NativeAOT", WindowsProcessIdentityWorks),
             ("invocation job interop survives NativeAOT", InvocationJobWorks),
             (RuntimeImageScenario, RuntimeImagePreflightWorks),
-            ("MXC SDK loads and validates requests under NativeAOT", MxcSdkWorksAsync),
+            ("MXC SDK loads and validates requests under NativeAOT", MxcSdkWorksInFreshProcessAsync),
             ("package provenance reads survive NativeAOT", PackageProvenanceReadsBind),
             ("diagnostics redaction survives NativeAOT", DiagnosticsRedactionWorks),
             ("missing application reports diagnostics", MissingApplicationReportsAsync),
@@ -83,6 +83,13 @@ internal static class SmokeProgram
         {
             scenarios = [.. scenarios.Where(scenario =>
                 scenario.Name is "native alias resolves to clawctl" or RuntimeImageScenario)];
+        }
+        else if (args is ["--sdk-native-only"])
+        {
+            scenarios =
+            [
+                ("MXC SDK loads and validates requests under NativeAOT", MxcSdkWorksAsync)
+            ];
         }
         else if (args.Length != 0)
         {
@@ -207,6 +214,29 @@ internal static class SmokeProgram
             id.Where(character => character != ':').All(Uri.IsHexDigit),
             $"Unexpected Windows logon identity '{id}'.");
         return Task.CompletedTask;
+    }
+
+    private static async Task MxcSdkWorksInFreshProcessAsync()
+    {
+        var start = new ProcessStartInfo(
+            Environment.ProcessPath ?? throw new InvalidOperationException("Native driver path is unavailable."))
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        start.ArgumentList.Add("--sdk-native-only");
+        using Process child = Process.Start(start)
+            ?? throw new InvalidOperationException("Native SDK child did not start.");
+        Task<string> output = child.StandardOutput.ReadToEndAsync();
+        Task<string> error = child.StandardError.ReadToEndAsync();
+        await child.WaitForExitAsync().ConfigureAwait(false);
+        string stdout = await output.ConfigureAwait(false);
+        string stderr = await error.ConfigureAwait(false);
+        Assert(child.ExitCode == 0, $"Native SDK child failed: {stdout}{stderr}");
+        Assert(!stderr.Contains("could not register the native library resolver", StringComparison.Ordinal),
+            $"SDK initialization polluted stderr: {stderr}");
     }
 
     private static async Task MxcSdkWorksAsync()

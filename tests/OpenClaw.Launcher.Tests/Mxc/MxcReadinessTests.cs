@@ -27,19 +27,9 @@ public sealed class MxcReadinessTests : IDisposable
         string runtimeDirectory = Path.Combine(_testDirectory, "runtime");
         Directory.CreateDirectory(runtimeDirectory);
         File.WriteAllText(
-            Path.Combine(runtimeDirectory, MxcRuntimeLocator.NativeLibraryFileName),
-            string.Empty);
-        File.WriteAllText(Path.Combine(runtimeDirectory, "wslcsdk.dll"), string.Empty);
-        File.WriteAllText(Path.Combine(runtimeDirectory, "wxc-wslc-daemon.exe"), string.Empty);
-        File.WriteAllText(
-            Path.Combine(
-                runtimeDirectory,
-                MxcRuntimeLocator.PackageLifecycleFileName),
-            string.Empty);
-        File.WriteAllText(
             Path.Combine(runtimeDirectory, MxcRuntimeLocator.ProvenanceFileName),
             """
-            {"package":"Microsoft.Mxc.Sdk","version":"1.0.0","architecture":"x64"}
+            {"package":"Microsoft.Mxc.Sdk","version":"1.0.1","architecture":"x64"}
             """);
         return runtimeDirectory;
     }
@@ -58,10 +48,9 @@ public sealed class MxcReadinessTests : IDisposable
 
         Assert.False(report.RuntimeAvailable);
         Assert.NotNull(report.RuntimeUnavailableReason);
-        Assert.Null(report.RuntimeDirectory);
+        Assert.Equal(_testDirectory, report.RuntimeDirectory);
 
-        // Without the runtime the backend cannot be asked, so support falls
-        // back to the documented build minimum and says so.
+        // SDK API failure leaves only host-build evidence.
         Assert.Equal(MxcHostSupport.Supported, report.HostSupport);
         Assert.Equal(MxcSupportEvidence.HostBuild, report.SupportEvidence);
     }
@@ -79,7 +68,7 @@ public sealed class MxcReadinessTests : IDisposable
 
         Assert.True(report.RuntimeAvailable);
         Assert.Equal(runtimeDirectory, report.RuntimeDirectory);
-        Assert.Equal("1.0.0", report.Provenance?.Version);
+        Assert.Equal("1.0.1", report.Provenance?.Version);
     }
 
     [Fact]

@@ -50,7 +50,7 @@ emulation on ARM64 needs separate SDK/backend qualification.
 
 The script resolves a payload and the bundled Node.js runtime,
 publishes both the NativeAOT `openclaw.exe` launcher and the NativeAOT session
-host, verifies the NuGet SDK's complete native unit, assembles the layout,
+host, copies normal publish assets and the SDK redistribution notice, assembles the layout,
 registers it with `Add-AppxPackage -Register`, and
 runs setup through that identity's control application. The patch registers
 beside the base package as `openclaw-pwsh-exec` and `clawctl-pwsh-exec`, so
@@ -88,14 +88,13 @@ two content-hash fingerprints:
 - The build-input fingerprint covers the launcher, session-host, and protocol
   project files other than `bin` and `obj`, `Directory.Build.props`,
   `Directory.Packages.props`, `global.json`, the checkout commit, the payload
-  identity, the manifest, images, Node.js scripts, and SDK integrity manifest.
+  identity, the manifest, images, and Node.js scripts.
   The package version is compiled into the launcher, so this fingerprint picks
   the version before publishing: a changed deployment publishes the NativeAOT
   launcher once, with the version it registers.
 - The output fingerprint, which includes the SHA-256 hashes of the published
-  launcher, session host, and verified SDK native unit/provenance, decides
-  that the package is current. Native layout bytes are also compared before
-  returning a no-change result. A
+  launcher and session host, decides that the package is current. SDK runtime
+  assets are opaque publish output, not a separate inspected inventory. A
   publish can refresh timestamps without changing code, so timestamps would
   spuriously redeploy the layout. When the build inputs match but the binaries
   changed anyway, for example after an SDK update, the command rebuilds the

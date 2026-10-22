@@ -76,8 +76,8 @@ internal sealed record MxcReadinessReport(
 }
 
 /// <summary>
-/// Read-only MXC prerequisite probe. It inspects the staged runtime, asks the
-/// runtime's own capability detector about the host, and falls back to the
+/// Read-only MXC prerequisite probe. It asks the SDK's capability detector
+/// about the host and falls back to the
 /// documented minimum build when that detector cannot run. It never provisions,
 /// starts, or otherwise mutates state.
 /// </summary>
@@ -158,6 +158,10 @@ internal static class MxcReadiness
             catch (MxcException exception)
             {
                 probeFailure = exception.Message;
+                if (exception.Code == MxcErrorCode.RuntimeUnavailable)
+                {
+                    unavailableReason = exception.Message;
+                }
             }
             catch (OperationCanceledException)
             {

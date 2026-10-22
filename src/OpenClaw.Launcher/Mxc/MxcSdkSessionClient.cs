@@ -58,15 +58,13 @@ internal sealed class MxcSdkSessionClient : IMxcSessionClient
     private readonly IHostConsole _console;
     private readonly IMxcHostStdio _stdio;
     private readonly Action<string> _log;
-    private readonly Action<MxcRuntimeLocation> _prepareRuntime;
 
     public MxcSdkSessionClient(
         MxcRuntimeLocation runtime,
         IMxcSdkLifecycle? lifecycle = null,
         IHostConsole? console = null,
         IMxcHostStdio? stdio = null,
-        Action<string>? log = null,
-        Action<MxcRuntimeLocation>? prepareRuntime = null)
+        Action<string>? log = null)
     {
         ArgumentNullException.ThrowIfNull(runtime);
         _runtime = runtime;
@@ -74,7 +72,6 @@ internal sealed class MxcSdkSessionClient : IMxcSessionClient
         _console = console ?? WindowsHostConsole.Instance;
         _stdio = stdio ?? WindowsMxcHostStdio.Instance;
         _log = log ?? (_ => { });
-        _prepareRuntime = prepareRuntime ?? MxcRuntimeLocator.EnsureLoaded;
     }
 
     internal static Sdk.IsolationSessionProvisionRequest CreateProvisionRequest(string appId) =>
@@ -349,19 +346,17 @@ internal sealed class MxcSdkSessionClient : IMxcSessionClient
         MxcRuntimeLocation runtime, CancellationToken cancellationToken) =>
         ProbeBackendAsync(
             runtime, Sdk.MxcPlatform.GetAvailableBackends,
-            () => Sdk.MxcPlatform.NativeVersion, MxcRuntimeLocator.EnsureLoaded, cancellationToken);
+            () => Sdk.MxcPlatform.NativeVersion, cancellationToken);
 
     internal static async Task<MxcBackendProbe> ProbeBackendAsync(
         MxcRuntimeLocation runtime,
         Func<IReadOnlyList<Sdk.AvailableBackend>> discover,
         Func<string> readNativeVersion,
-        Action<MxcRuntimeLocation> prepareRuntime,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         return await Task.Run(() => Translate(runtime, () =>
         {
-            prepareRuntime(runtime);
             Sdk.AvailableBackend? backend = discover().FirstOrDefault(
                 item => item.Backend == Sdk.ContainmentBackend.IsolationSession);
             return new MxcBackendProbe(
@@ -377,7 +372,6 @@ internal sealed class MxcSdkSessionClient : IMxcSessionClient
         // so their newly created handle/identity is never lost to cancellation.
         return Task.Run(() => Translate(_runtime, () =>
         {
-            _prepareRuntime(_runtime);
             return operation();
         }), CancellationToken.None);
     }
@@ -429,7 +423,7 @@ internal sealed class MxcSdkSessionClient : IMxcSessionClient
             DllNotFoundException or EntryPointNotFoundException or
                 BadImageFormatException or TypeInitializationException => new MxcException(
                     MxcErrorCode.RuntimeUnavailable,
-                    $"The MXC runtime at {runtime.NativeLibraryPath} could not be loaded: " +
+                    $"The {runtime.Provenance?.Package ?? "Microsoft.Mxc.Sdk"} runtime could not be loaded: " +
                     (exception.InnerException ?? exception).Message,
                     innerException: exception),
             _ => null

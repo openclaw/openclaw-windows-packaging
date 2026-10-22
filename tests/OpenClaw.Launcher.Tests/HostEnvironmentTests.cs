@@ -59,7 +59,7 @@ public sealed class HostEnvironmentTests : IDisposable
         StageMxcRuntime(_root, provenance: true);
 
         Assert.Equal(
-            $"Microsoft.Mxc.Sdk 1.0.0 {MxcRuntimeLocator.CurrentArchitectureName()}, " +
+            $"Microsoft.Mxc.Sdk 1.0.1 {MxcRuntimeLocator.CurrentArchitectureName()}, " +
             $"SDK {ClawCtlBuildMetadata.MxcSdkPackageVersion}, contract 1.0.0",
             HostEnvironment.DescribeMxc(_root));
     }
@@ -77,12 +77,11 @@ public sealed class HostEnvironmentTests : IDisposable
     }
 
     [Fact]
-    public void AMissingMxcRuntimeIsReportedWithoutFailing()
+    public void MetadataDoesNotInferNativeAvailabilityFromFilePresence()
     {
-        Assert.StartsWith(
-            "unavailable (The MXC runtime is incomplete: ",
-            HostEnvironment.DescribeMxc(_root),
-            StringComparison.Ordinal);
+        Assert.Equal(
+            $"runtime of unknown provenance, SDK {ClawCtlBuildMetadata.MxcSdkPackageVersion}, contract 1.0.0",
+            HostEnvironment.DescribeMxc(_root));
     }
 
     [Fact]
@@ -191,17 +190,13 @@ public sealed class HostEnvironmentTests : IDisposable
     private static void StageMxcRuntime(string directory, bool provenance)
     {
         Directory.CreateDirectory(directory);
-        foreach (string name in new[] { "mxc_ffi.dll", "plm.exe", "wslcsdk.dll", "wxc-wslc-daemon.exe" })
-        {
-            File.WriteAllText(Path.Combine(directory, name), "fixture");
-        }
         if (provenance)
         {
             string architecture = MxcRuntimeLocator.CurrentArchitectureName();
             File.WriteAllText(
                 Path.Combine(directory, MxcRuntimeLocator.ProvenanceFileName),
                 $$"""
-                {"package":"Microsoft.Mxc.Sdk","version":"1.0.0","architecture":"{{architecture}}"}
+                {"package":"Microsoft.Mxc.Sdk","version":"1.0.1","architecture":"{{architecture}}"}
                 """);
         }
     }

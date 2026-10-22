@@ -8,20 +8,16 @@ as a stable public API.
 
 The launcher owns a small session contract in
 `OpenClaw.Launcher\Mxc\IMxcSessionClient`. `MxcSdkSessionClient` is the current
-implementation: it calls the official `Microsoft.Mxc.Sdk` 1.0.0 V1 lifecycle
+implementation: it calls the official `Microsoft.Mxc.Sdk` 1.0.1 V1 lifecycle
 and translates typed results and errors. The SDK owns MXC serialization and
 containment; the launcher still owns package identity, recorded sessions,
 recovery, and its guest-helper protocol.
 
-NuGet supplies the complete Windows native unit beside the published
-launcher: `mxc_ffi.dll`, `plm.exe`, `wslcsdk.dll`, and
-`wxc-wslc-daemon.exe`. The integrity manifest and verifier check the restored
-archive and selected native bytes before either local or MSIX composition.
-The runtime locator binds SDK imports to the exact module, restricts dependency
-search to system libraries and clears `MXC_FFI_DIR` before native calls, without
-honoring an executor-directory override. Shipped bytes are checked at
-build/release time; development layouts remain user-controlled. There is no
-per-launch native content hash or reparse-point refusal.
+PackageReference and the normal .NET publish pipeline supply runtime assets;
+the SDK owns their loading. Packaging has no custom resolver, native file-set
+preflight, or per-binary integrity manifest. It retains SDK API package/version
+metadata for diagnostics and the MIT redistribution notice. SDK load/entry-point
+failures remain explicit runtime-unavailable errors, not file-presence guesses.
 
 Interactive execution uses the public SDK PTY API and a host console bridge;
 redirected or mixed streams use separate pipes. Every relay belongs to that

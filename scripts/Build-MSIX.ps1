@@ -508,11 +508,11 @@ $payloadInventoryPath = Join-Path $openClawContent 'payload-files.json'
     Set-Content -LiteralPath $payloadInventoryPath -Encoding utf8
 
 $mxcRuntimeDirectory = Join-Path $repositoryRoot "content\mxc\$Architecture"
-$mxcRuntime = & (Join-Path $PSScriptRoot 'Get-MxcRuntime.ps1') `
+$mxcRuntime = & (Join-Path $PSScriptRoot 'Get-MxcSdkMetadata.ps1') `
     -Architecture $Architecture `
     -IncludePackagingContent `
     -OutputDirectory $mxcRuntimeDirectory
-$mxcRuntimeFiles = @($mxcRuntime.Files | Select-Object path, length, sha256)
+$mxcMetadataFiles = @($mxcRuntime.Files)
 $mxcProvenance = $mxcRuntime.Provenance
 
 $temporaryRoot = if ($env:RUNNER_TEMP) {
@@ -667,11 +667,11 @@ try {
             Hash = $nodeArchiveHash
         }
     )
-    foreach ($mxcFile in $mxcRuntimeFiles) {
+    foreach ($mxcFile in $mxcMetadataFiles) {
         $expectedPackageFiles.Add(
-            $mxcFile.path,
+            [IO.Path]::GetFileName($mxcFile),
             [pscustomobject]@{
-                Hash = $mxcFile.sha256
+                Hash = (Get-FileHash -LiteralPath $mxcFile -Algorithm SHA256).Hash.ToLowerInvariant()
             }
         )
     }
@@ -802,7 +802,6 @@ try {
     }
     foreach ($managedHostArtifact in @(
         'openclaw.dll',
-        'Microsoft.Mxc.Sdk.dll',
         'openclaw.deps.json',
         'openclaw.runtimeconfig.json'
     )) {
@@ -840,8 +839,6 @@ try {
         nodeRuntimeSha256 = $nodeArchiveHash
         mxcRuntimeVersion = [string]$mxcProvenance.version
         mxcRuntimePackage = [string]$mxcProvenance.package
-        mxcRuntimeArchiveSha512 = [string]$mxcProvenance.archiveSha512
-        mxcRuntimeFiles = $mxcRuntimeFiles
         sessionHostFiles = $sessionHostFiles
         architecture = $Architecture
         archive = $msixName

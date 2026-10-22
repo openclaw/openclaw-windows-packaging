@@ -96,7 +96,7 @@ public static class CancellationPrototypeProbe
         try
         {
             var client = new MxcSdkSessionClient(
-                new MxcRuntimeLocation(root, "unused", "unused", null),
+                new MxcRuntimeLocation(root, null),
                 new LocalLifecycle(completedBeforeReturn ? null : () =>
                 {
                     entered.SetResult();
@@ -109,7 +109,7 @@ public static class CancellationPrototypeProbe
                     Assert.True(completed.WaitOne(TimeSpan.FromSeconds(60)),
                         "The fixture root did not exit before the native spawn return was released.");
                 }
-            : null), new QuietConsole(), new QuietStdio(), prepareRuntime: _ => { });
+            : null), new QuietConsole(), new QuietStdio());
             var executor = new SessionExecutor(client, Console.WriteLine);
             string marker = Path.Combine(root, "late-work.txt");
             execution = executor.ExecuteCommandAsync(new SessionRecord
@@ -174,7 +174,6 @@ public static class CancellationPrototypeProbe
         }
         Action<string> report = Report;
         MxcRuntimeLocation runtime = MxcRuntimeLocator.Locate(nativeDirectory);
-        MxcRuntimeLocator.EnsureLoaded(runtime);
         var client = new MxcSdkSessionClient(
             runtime, console: new QuietConsole(), stdio: new QuietStdio(), log: report);
         // Unpackaged probe: no fabricated PFN or production application identity.
@@ -326,9 +325,8 @@ public static class CancellationPrototypeProbe
         try
         {
             var client = new MxcSdkSessionClient(
-                new MxcRuntimeLocation(root, "unused", "unused", null),
-                new LocalLifecycle(), new QuietConsole(), new QuietStdio(),
-                prepareRuntime: _ => { });
+                new MxcRuntimeLocation(root, null),
+                new LocalLifecycle(), new QuietConsole(), new QuietStdio());
             await RunScenarioAsync(
                 client, "iso:local-fixture", identity.User!.Value, root,
                 Path.Combine(AppContext.BaseDirectory, "openclaw-session-host.exe"),

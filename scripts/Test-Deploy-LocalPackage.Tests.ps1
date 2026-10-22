@@ -146,30 +146,11 @@ function New-Fixture {
             return $null
         }.GetNewClosure()
         TestArchive = { param($path, $expectedRoot) return $null }
-        VerifyMxcRuntime = {
+        StageMxcMetadata = {
             param($repositoryRoot, $architecture, $output)
             $state.MxcStages++
-            foreach ($name in @('mxc_ffi.dll', 'plm.exe', 'wslcsdk.dll', 'wxc-wslc-daemon.exe')) {
-                if (-not (Test-Path -LiteralPath (Join-Path $output $name))) {
-                    throw "The publish omitted the SDK native file $name."
-                }
-            }
             [IO.File]::WriteAllText((Join-Path $output 'mxc-runtime.json'), '{}')
             [IO.File]::WriteAllText((Join-Path $output 'mxc-LICENSE.md'), 'fixture SDK license')
-            return [pscustomobject]@{
-                Files = @(foreach ($name in @(
-                    'mxc_ffi.dll', 'plm.exe', 'wslcsdk.dll', 'wxc-wslc-daemon.exe',
-                    'mxc-runtime.json', 'mxc-LICENSE.md'
-                )) {
-                    $path = Join-Path $output $name
-                    [pscustomobject]@{
-                        path = $name
-                        length = (Get-Item -LiteralPath $path).Length
-                        sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
-                        sourcePath = $path
-                    }
-                })
-            }
         }.GetNewClosure()
         CheckoutCommit = { $state.Commit }.GetNewClosure()
         Publish = {
@@ -215,9 +196,8 @@ function New-Fixture {
                 [IO.File]::WriteAllText(
                     (Join-Path $output 'openclaw.exe'),
                     "host $($state.HostVersion) [$sources] $identity")
-                foreach ($name in @('mxc_ffi.dll', 'plm.exe', 'wslcsdk.dll', 'wxc-wslc-daemon.exe')) {
-                    [IO.File]::WriteAllText((Join-Path $output $name), "SDK $architecture $name")
-                }
+                [IO.File]::WriteAllText(
+                    (Join-Path $output 'dependency-owned-asset.bin'), "dependency asset $architecture")
             }
             return $null
         }.GetNewClosure()
@@ -309,20 +289,12 @@ try {
         Test-Path (Join-Path $layout 'session-host\x64\openclaw-session-host.exe')
     ) 'Layout is missing the session host.'
     Assert-True (
-        Test-Path (Join-Path $layout 'mxc_ffi.dll')
-    ) 'Layout is missing the MXC native library.'
+        (Get-Content (Join-Path $layout 'dependency-owned-asset.bin') -Raw) -ceq 'dependency asset x64'
+    ) 'Layout did not copy an opaque normal publish asset.'
     Assert-True (
-        Test-Path (Join-Path $layout 'plm.exe')
-    ) 'Layout is missing the MXC lifecycle tool.'
-    Assert-True (
-        Test-Path (Join-Path $layout 'mxc-runtime.json')
-    ) 'Layout is missing MXC provenance.'
-    Assert-True (
-        (Test-Path (Join-Path $layout 'wslcsdk.dll')) -and
-        (Test-Path (Join-Path $layout 'wxc-wslc-daemon.exe')) -and
-        (Test-Path (Join-Path $layout 'mxc-LICENSE.md')) -and
-        -not (Test-Path (Join-Path $layout 'mxc'))
-    ) 'Layout did not retain the complete SDK unit or kept the retired executor directory.'
+        (Test-Path (Join-Path $layout 'mxc-runtime.json')) -and
+        (Test-Path (Join-Path $layout 'mxc-LICENSE.md'))
+    ) 'Layout omitted SDK API metadata or the redistribution notice.'
     Assert-True (Test-Path (Join-Path $layout 'Images\StoreLogo.png')) 'Layout is missing package images.'
     Assert-True (@(Get-ChildItem (Join-Path $layout 'runtime') -File).Name -eq 'node-v24.20.0-win-x64.zip') 'Layout is missing the bundled Node.js runtime.'
     [xml]$m = Get-Content (Join-Path $layout 'AppxManifest.xml') -Raw
@@ -1267,8 +1239,7 @@ try {
         $native.PreflightArchitectures.Count -eq 1 -and
         $native.PreflightArchitectures[0] -ceq 'arm64' -and
         $nativeManifest.Package.Identity.ProcessorArchitecture -eq 'arm64' -and
-        (Test-Path -LiteralPath (Join-Path $nativeLayout 'mxc_ffi.dll')) -and
-        (Get-Content -LiteralPath (Join-Path $nativeLayout 'mxc_ffi.dll') -Raw) -ceq 'SDK arm64 mxc_ffi.dll'
+        (Get-Content -LiteralPath (Join-Path $nativeLayout 'dependency-owned-asset.bin') -Raw) -ceq 'dependency asset arm64'
     ) 'An omitted -Architecture did not deploy the native architecture.'
     Remove-LocalPackageRegistration -RepositoryRoot $native.Root -Operations $native.Operations
     Assert-True (
