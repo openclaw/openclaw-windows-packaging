@@ -15,6 +15,9 @@ namespace OpenClaw.Launcher;
 internal interface IInvocationLifetime : IDisposable
 {
     string Mode { get; }
+
+    /// <summary>The coordinator mode for a state-transfer helper request.</summary>
+    string StateTransferMode { get; }
     void MarkDispatched();
     void RequestStop();
     void ForegroundExited();
@@ -25,6 +28,8 @@ internal sealed class WindowsInvocationJob : IInvocationLifetime
 {
     internal const string ModePrefix = "--request-in-job=";
     internal const string CoordinatorModePrefix = "--coordinate-invocation=";
+    internal const string StateTransferModePrefix = "--state-transfer-in-job=";
+    internal const string StateTransferCoordinatorModePrefix = "--coordinate-state-transfer=";
     private const string NamePrefix = @"Global\OpenClaw.Invocation.";
     private readonly SafeFileHandle _job;
     private readonly EventWaitHandle _stopping;
@@ -43,12 +48,15 @@ internal sealed class WindowsInvocationJob : IInvocationLifetime
 
     public string Mode { get; }
 
+    public string StateTransferMode { get; }
+
     private WindowsInvocationJob(
         string id, SafeFileHandle job, EventWaitHandle stopping,
         EventWaitHandle completed, EventWaitHandle pinned,
         EventWaitHandle terminated, EventWaitHandle drained)
     {
         Mode = CoordinatorModePrefix + id;
+        StateTransferMode = StateTransferCoordinatorModePrefix + id;
         _job = job;
         _stopping = stopping;
         _completed = completed;
@@ -121,6 +129,22 @@ internal sealed class WindowsInvocationJob : IInvocationLifetime
         mode.StartsWith(CoordinatorModePrefix, StringComparison.Ordinal) &&
         Guid.TryParseExact(mode.AsSpan(CoordinatorModePrefix.Length), "N", out _);
 
+    internal static bool IsStateTransferMode(string mode) =>
+        mode.StartsWith(StateTransferModePrefix, StringComparison.Ordinal) &&
+        Guid.TryParseExact(mode.AsSpan(StateTransferModePrefix.Length), "N", out _);
+
+    internal static bool IsStateTransferCoordinatorMode(string mode) =>
+        mode.StartsWith(StateTransferCoordinatorModePrefix, StringComparison.Ordinal) &&
+        Guid.TryParseExact(mode.AsSpan(StateTransferCoordinatorModePrefix.Length), "N", out _);
+
+    // The invocation identifier a coordinator or worker mode carries.
+    internal static string InvocationId(string mode) =>
+        IsCoordinatorMode(mode) ? mode[CoordinatorModePrefix.Length..] :
+        IsStateTransferCoordinatorMode(mode) ? mode[StateTransferCoordinatorModePrefix.Length..] :
+        IsMode(mode) ? mode[ModePrefix.Length..] :
+        IsStateTransferMode(mode) ? mode[StateTransferModePrefix.Length..] :
+        throw new InvalidOperationException("Invalid invocation job mode.");
+
     public void MarkDispatched()
     {
         lock (_gate)
@@ -145,11 +169,11 @@ internal sealed class WindowsInvocationJob : IInvocationLifetime
     // The outside coordinator separately opens QUERY, never TERMINATE.
     internal static void Join(string mode)
     {
-        if (!IsMode(mode))
+        if (!IsMode(mode) && !IsStateTransferMode(mode))
         {
             throw new InvalidOperationException("Invalid invocation job mode.");
         }
-        string name = NamePrefix + mode[ModePrefix.Length..];
+        string name = NamePrefix + InvocationId(mode);
         using SafeFileHandle job = OpenJobObjectW(0x0001, false, name);
         if (job.IsInvalid)
         {

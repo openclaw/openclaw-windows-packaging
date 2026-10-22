@@ -71,6 +71,56 @@ public sealed class StateTransferProcessTests : IDisposable
     }
 
     [Fact]
+    public async Task CaptureHasStoppedADescendantWithIndependentStreamsWhenItReturns()
+    {
+        string name = "openclaw-capture-" + Guid.NewGuid().ToString("N");
+        using var pipe = new NamedPipeServerStream(
+            name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+        using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        // The descendant holds none of the capture pipes, so draining them cannot reveal it.
+        const string script = """
+            import { spawn } from "node:child_process";
+            const childProgram = `
+              import { connect } from "node:net";
+              const socket = connect("\\\\\\\\.\\\\pipe\\\\" + process.env.STATE_TEST_PIPE);
+              socket.once("connect", () => socket.write(JSON.stringify({ pid: process.pid }) + "\\n"));
+              socket.once("data", () => process.send("ready"));
+            `;
+            const child = spawn(process.execPath, ["--input-type=module", "-e", childProgram],
+              { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+            child.once("message", () => process.exit(0));
+            """;
+        Task<SessionProcessOutput> capture = Task.Run(() => SessionProcessLauncher.Capture(
+            StateTransferProcessFixture.Request(_root, script) with
+            {
+                Environment = new Dictionary<string, string>
+                {
+                    ["NODE_OPTIONS"] = "",
+                    ["STATE_TEST_PIPE"] = name
+                }
+            }, TimeSpan.FromSeconds(15)));
+        await pipe.WaitForConnectionAsync(budget.Token);
+        using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
+        using var writer = new StreamWriter(pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
+        using JsonDocument metadata = JsonDocument.Parse((await reader.ReadLineAsync(budget.Token))!);
+        using Process descendant = Process.GetProcessById(metadata.RootElement.GetProperty("pid").GetInt32());
+        try
+        {
+            await writer.WriteLineAsync("continue".AsMemory(), budget.Token);
+
+            SessionProcessOutput result = await capture.WaitAsync(budget.Token);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.True(descendant.HasExited);
+        }
+        finally
+        {
+            StateTransferProcessFixture.Stop(descendant);
+            await capture.ConfigureAwait(true);
+        }
+    }
+
+    [Fact]
     public async Task InterruptedWorkerReleasesItsKernelLeaseWithoutRemovingTheLockFile()
     {
         string profile = Path.Combine(_root, "profile");

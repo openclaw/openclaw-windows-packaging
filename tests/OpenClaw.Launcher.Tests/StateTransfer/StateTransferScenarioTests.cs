@@ -24,6 +24,7 @@ public sealed class StateTransferScenarioTests : IDisposable
     private SessionRuntime? _runtime;
     private HostOptions? _options;
     private bool _interruptNextActivation;
+    private SessionStateTransferAction? _cancelAfter;
     private bool _rejectGatewayStop;
     private bool _changeSnapshot;
     private bool _changePreparedState;
@@ -88,6 +89,12 @@ public sealed class StateTransferScenarioTests : IDisposable
             int exit = SessionStateTransfer.Run(
                 requestPath, File.ReadAllText, File.WriteAllText,
                 _ => new SessionStateTransfer(Current, TransferDirectory, _application, Move));
+            if (_cancelAfter == request.Action)
+            {
+                // The worker finished its step; the cancellation arrives before the host reads the result.
+                _cancelAfter = null;
+                throw new OperationCanceledException();
+            }
             return Task.FromResult(new MxcExecutionResult(exit, "secret stdout", "secret stderr"));
         };
         return new StateTransferCoordinator(_options, () => _runtime, Store, _log.Add,
@@ -267,6 +274,53 @@ public sealed class StateTransferScenarioTests : IDisposable
         Assert.Equal("running", File.ReadAllText(GatewayMarker));
         Assert.Empty(Store.List());
         using IDisposable read = Access.EnterReader();
+    }
+
+    [Fact]
+    public async Task CancelledPrepareThatAlreadyRecordedItsActivationIsRolledBackAutomatically()
+    {
+        StateTransferCoordinator coordinator = await PrepareAsync();
+        WriteProfile(Current, "current");
+        WriteProfile(Old, "old");
+        Dictionary<string, string> before = Data(Current);
+        _cancelAfter = SessionStateTransferAction.Prepare;
+
+        StateArchiveCommandResult result = await coordinator.RestoreAsync(
+            new RestoreOptions(CreateArchive(), false, true, false), CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("State transfer was cancelled.", result.Error);
+        Assert.Equal(before, Data(Current));
+        SessionStateTransferResult inspected = await StateTransferCoordinator.InspectAsync(
+            _runtime!, _runtime!.RequireSetup(), CancellationToken.None);
+        Assert.False(inspected.Pending);
+        using IDisposable read = Access.EnterReader();
+        Assert.Equal("running", File.ReadAllText(GatewayMarker));
+    }
+
+    [Fact]
+    public async Task CancelledPrepareThatNeverRecordedAnythingNeedsNoRollback()
+    {
+        StateTransferCoordinator coordinator = await PrepareAsync();
+        WriteProfile(Current, "current");
+        WriteProfile(Old, "old");
+        Dictionary<string, string> before = Data(Current);
+        _beforeTransfer = request =>
+        {
+            if (request.Action == SessionStateTransferAction.Prepare)
+            {
+                throw new OperationCanceledException();
+            }
+        };
+
+        StateArchiveCommandResult result = await coordinator.RestoreAsync(
+            new RestoreOptions(CreateArchive(), false, true, false), CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("State transfer was cancelled.", result.Error);
+        Assert.Equal(before, Data(Current));
+        Assert.False((await StateTransferCoordinator.InspectAsync(
+            _runtime!, _runtime!.RequireSetup(), CancellationToken.None)).Pending);
     }
 
     [Fact]

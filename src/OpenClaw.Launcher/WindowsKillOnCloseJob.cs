@@ -18,6 +18,7 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
     private const uint JobObjectLimitKillOnJobClose = 0x00002000;
     private const uint StartfUseStdHandles = 0x00000100;
     private const int JobObjectExtendedLimitInformationClass = 9;
+    private const int JobObjectBasicAccountingInformationClass = 1;
     private const int StandardInputHandle = -10;
     private const int StandardOutputHandle = -11;
     private const int StandardErrorHandle = -12;
@@ -194,7 +195,77 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
         }
     }
 
-    public void Dispose() => _handle.Dispose();
+    private static readonly TimeSpan DisposeExitBudget = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Whether disposal observed the job empty. False only if a member outlived termination.
+    /// </summary>
+    public bool ExitConfirmed { get; private set; } = true;
+
+    /// <summary>
+    /// Terminates every process in the job and releases it only once none remain.
+    /// </summary>
+    /// <remarks>
+    /// Closing a kill-on-close job requests termination but does not wait for it, and a descendant that
+    /// closed or redirected its streams is invisible to pipe draining. Callers that release a lease the
+    /// processes depended on must check <see cref="ExitConfirmed"/> after disposal.
+    /// </remarks>
+    public void Dispose()
+    {
+        if (_handle.IsClosed)
+        {
+            return;
+        }
+        try
+        {
+            TerminateAndWait(DisposeExitBudget);
+        }
+        catch (Exception exception) when (exception is TimeoutException or Win32Exception)
+        {
+            ExitConfirmed = false;
+        }
+        finally
+        {
+            _handle.Dispose();
+        }
+    }
+
+    /// <summary>The number of processes still alive in the job, descendants included.</summary>
+    public int ActiveProcessCount
+    {
+        get
+        {
+            if (!QueryInformationJobObject(
+                    _handle, JobObjectBasicAccountingInformationClass, out JobObjectBasicAccountingInformation information,
+                    (uint)Marshal.SizeOf<JobObjectBasicAccountingInformation>(), IntPtr.Zero))
+            {
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(), "Unable to query the OpenClaw process job.");
+            }
+            return checked((int)information.ActiveProcesses);
+        }
+    }
+
+    /// <summary>
+    /// Terminates every process in the job and returns only once none remain.
+    /// </summary>
+    public void TerminateAndWait(TimeSpan timeout)
+    {
+        if (!TerminateJobObject(_handle, 1))
+        {
+            throw new Win32Exception(
+                Marshal.GetLastWin32Error(), "Unable to terminate the OpenClaw process job.");
+        }
+        Stopwatch elapsed = Stopwatch.StartNew();
+        while (ActiveProcessCount != 0)
+        {
+            if (elapsed.Elapsed >= timeout)
+            {
+                throw new TimeoutException("The OpenClaw process job did not empty after termination.");
+            }
+            Thread.Sleep(5);
+        }
+    }
 
     private static SafeFileHandle? DuplicateForChild(SafeHandle? handle, int standardHandle)
     {
@@ -383,6 +454,32 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
         int informationClass,
         IntPtr information,
         uint informationLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryInformationJobObject(
+        SafeJobHandle job,
+        int informationClass,
+        out JobObjectBasicAccountingInformation information,
+        uint informationLength,
+        IntPtr returnLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool TerminateJobObject(SafeJobHandle job, uint exitCode);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JobObjectBasicAccountingInformation
+    {
+        public long TotalUserTime;
+        public long TotalKernelTime;
+        public long ThisPeriodTotalUserTime;
+        public long ThisPeriodTotalKernelTime;
+        public uint TotalPageFaultCount;
+        public uint TotalProcesses;
+        public uint ActiveProcesses;
+        public uint TotalTerminatedProcesses;
+    }
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

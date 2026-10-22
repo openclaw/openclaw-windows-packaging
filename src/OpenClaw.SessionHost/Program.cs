@@ -15,8 +15,11 @@ namespace OpenClaw.SessionHost;
 internal static class Program
 {
     public static int Main(string[] args) =>
-        args.Length == 2 && WindowsInvocationJob.IsCoordinatorMode(args[0])
+        args.Length == 2 && (WindowsInvocationJob.IsCoordinatorMode(args[0]) ||
+            WindowsInvocationJob.IsStateTransferCoordinatorMode(args[0]))
             ? SessionInvocationCoordinator.Run(args[0], args[1])
+            : args.Length == 2 && WindowsInvocationJob.IsStateTransferMode(args[0])
+            ? SessionStateTransfer.Run(args[1], File.ReadAllText, File.WriteAllText, invocationMode: args[0])
             : Run(args, new SessionProcessLauncher(
             InitializeUtf8,
             args.Length == 2 && WindowsInvocationJob.IsMode(args[0]) ? args[0] : null),

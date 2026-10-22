@@ -17,6 +17,8 @@ internal sealed partial class SessionExecutor
         string requestId = request.RequestId ?? _createRequestId();
         string requestPath = operation.FilePath("state-transfer", requestId);
         string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
+        using IInvocationLifetime job = CreateInvocationLifetime(record);
+        CancellationTokenRegistration cancellation = cancellationToken.Register(job.RequestStop);
         try
         {
             await operation.WriteTextNewAsync(
@@ -29,9 +31,12 @@ internal sealed partial class SessionExecutor
                 cancellationToken).ConfigureAwait(false);
             Mxc.MxcExecutionResult execution = await ExecuteTimedAsync(
                 record.ToSandboxIdOrThrow(),
-                BuildGuestCommandLine(helperPath, requestPath, "--state-transfer"),
+                BuildGuestCommandLine(helperPath, requestPath, job.StateTransferMode),
                 "State transfer",
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                () => ConfirmInvocation(job.MarkDispatched),
+                () => ConfirmInvocation(job.ForegroundExited),
+                job.RequestStop).ConfigureAwait(false);
             string text;
             try
             {
@@ -58,6 +63,9 @@ internal sealed partial class SessionExecutor
         }
         finally
         {
+            // The worker tree must be gone before its exchange files are released.
+            await cancellation.DisposeAsync().ConfigureAwait(false);
+            ConfirmInvocation(job.Stop);
             operation.Delete(requestPath);
             operation.Delete(resultPath);
         }

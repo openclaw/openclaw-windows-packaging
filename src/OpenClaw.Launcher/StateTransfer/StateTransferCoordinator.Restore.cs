@@ -69,11 +69,12 @@ internal sealed partial class StateTransferCoordinator
         StateTransferArchive? protection = null;
         bool activationStarted = false;
         bool gatewayStopped = false;
+        string transaction = Guid.NewGuid().ToString("N");
+        bool prepareDispatched = false;
         try
         {
             StateTransferArchive input = await StageArchiveAsync(
                 selected, staged, operation, cancellationToken).ConfigureAwait(false);
-            string transaction = Guid.NewGuid().ToString("N");
             SessionStateTransferRequest request = CreateRequest(
                 runtime, dryRun ? SessionStateTransferAction.Preview : SessionStateTransferAction.Prepare) with
             {
@@ -82,6 +83,7 @@ internal sealed partial class StateTransferCoordinator
                 TransactionId = transaction,
                 DryRun = dryRun
             };
+            prepareDispatched = !dryRun;
             prepared = await TransferAsync(
                 runtime, record, operation, request, cancellationToken).ConfigureAwait(false);
             input = input with { Verified = true };
@@ -150,18 +152,23 @@ internal sealed partial class StateTransferCoordinator
         catch (Exception exception) when (IsOperationalFailure(exception) || exception is OperationCanceledException)
         {
             string? cleanupError = null;
-            if (prepared?.Pending == true && !activationStarted)
+            if (!activationStarted && (prepared?.Pending == true || (prepared is null && prepareDispatched)))
             {
                 try
                 {
-                    _ = await TransferAsync(
-                        runtime, record, operation,
-                        new SessionStateTransferRequest
-                        {
-                            RequestId = Guid.NewGuid().ToString("N"),
-                            Action = SessionStateTransferAction.Rollback
-                        },
-                        CancellationToken.None).ConfigureAwait(false);
+                    // A cancelled Prepare may have recorded its activation before its result was read.
+                    if (prepared?.Pending == true ||
+                        await HasPendingTransactionAsync(runtime, record, operation, transaction).ConfigureAwait(false))
+                    {
+                        _ = await TransferAsync(
+                            runtime, record, operation,
+                            new SessionStateTransferRequest
+                            {
+                                RequestId = Guid.NewGuid().ToString("N"),
+                                Action = SessionStateTransferAction.Rollback
+                            },
+                            CancellationToken.None).ConfigureAwait(false);
+                    }
                 }
                 catch (Exception cleanup) when (IsOperationalFailure(cleanup))
                 {
@@ -192,6 +199,23 @@ internal sealed partial class StateTransferCoordinator
         {
             operation.Delete(staged);
         }
+    }
+
+    private static async Task<bool> HasPendingTransactionAsync(
+        SessionRuntime runtime,
+        SessionRecord record,
+        SessionWorkspaceOperation operation,
+        string transaction)
+    {
+        SessionStateTransferResult inspected = await TransferAsync(
+            runtime, record, operation,
+            new SessionStateTransferRequest
+            {
+                RequestId = Guid.NewGuid().ToString("N"),
+                Action = SessionStateTransferAction.Inspect
+            },
+            CancellationToken.None).ConfigureAwait(false);
+        return inspected.Pending && inspected.TransactionId == transaction;
     }
 
     internal static async Task<SessionStateTransferResult> InspectAsync(

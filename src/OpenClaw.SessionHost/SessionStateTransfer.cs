@@ -45,7 +45,8 @@ internal sealed class SessionStateTransfer
         string requestPath,
         Func<string, string> readFile,
         Action<string, string> writeFile,
-        Func<SessionStateTransferRequest, SessionStateTransfer>? createTransfer = null)
+        Func<SessionStateTransferRequest, SessionStateTransfer>? createTransfer = null,
+        string? invocationMode = null)
     {
         string? requestId = null;
         try
@@ -57,6 +58,10 @@ internal sealed class SessionStateTransfer
             if (!string.Equals(workspace, request.WorkspaceDirectory, StringComparison.OrdinalIgnoreCase))
             {
                 throw new SessionLaunchException("The state-transfer workspace does not match its request.");
+            }
+            if (invocationMode is not null)
+            {
+                JoinInvocation(invocationMode);
             }
             SessionStateTransfer transfer = createTransfer?.Invoke(request) ??
                 new SessionStateTransfer(
@@ -81,6 +86,20 @@ internal sealed class SessionStateTransfer
                     Error = exception.Message
                 }));
             return SessionLaunchProtocol.HelperFailureExitCode;
+        }
+    }
+
+    // Joined before any work so cancellation can stop this worker and every descendant it starts.
+    private static void JoinInvocation(string invocationMode)
+    {
+        try
+        {
+            WindowsInvocationJob.Join(invocationMode);
+        }
+        catch (Exception exception) when (
+            exception is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            throw new SessionLaunchException($"Unable to join the invocation lifetime: {exception.Message}");
         }
     }
 

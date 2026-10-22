@@ -12,11 +12,17 @@ internal static class SessionInvocationCoordinator
     public static int Run(string mode, string requestPath)
     {
         string? requestId = null;
+        bool stateTransfer = WindowsInvocationJob.IsStateTransferCoordinatorMode(mode);
         // Console controls reach the waiter too; only the workload should stop before pin/drain.
         ConsoleCancelEventHandler preserveWaiter = static (_, args) => args.Cancel = true;
         Console.CancelKeyPress += preserveWaiter;
         try
         {
+            if (stateTransfer)
+            {
+                requestId = SessionStateTransferProtocol.ReadRequest(File.ReadAllText(requestPath)).RequestId;
+                return Coordinate(mode, requestPath);
+            }
             SessionLaunchRequest request = SessionLaunchProtocol.ReadRequest(File.ReadAllText(requestPath));
             requestId = request.RequestId;
             if (request.Mode != SessionLaunchMode.Attached)
@@ -27,14 +33,22 @@ internal static class SessionInvocationCoordinator
             return Coordinate(mode, requestPath);
         }
         catch (Exception exception) when (exception is Win32Exception or InvalidOperationException or
-            TimeoutException or IOException or UnauthorizedAccessException or SessionLaunchException)
+            TimeoutException or IOException or UnauthorizedAccessException or SessionLaunchException or
+            System.Text.Json.JsonException or ArgumentException)
         {
             string detail = exception is Win32Exception native
                 ? $"{exception.Message} (Win32 error {native.NativeErrorCode})"
                 : exception.Message;
             Console.Error.WriteLine($"openclaw-session-host: invocation drain failed: {detail}");
-            Program.TryWriteFailure(Program.WriteResult, SessionLaunchProtocol.ResultPathFor(requestPath),
-                requestId, $"Invocation drain failed: {detail}", Console.Error);
+            if (stateTransfer)
+            {
+                WriteStateTransferFailure(requestPath, requestId, $"Invocation drain failed: {detail}");
+            }
+            else
+            {
+                Program.TryWriteFailure(Program.WriteResult, SessionLaunchProtocol.ResultPathFor(requestPath),
+                    requestId, $"Invocation drain failed: {detail}", Console.Error);
+            }
             return SessionLaunchProtocol.HelperFailureExitCode;
         }
         finally
@@ -43,9 +57,30 @@ internal static class SessionInvocationCoordinator
         }
     }
 
+    private static void WriteStateTransferFailure(string requestPath, string? requestId, string error)
+    {
+        try
+        {
+            File.WriteAllText(
+                SessionLaunchProtocol.ResultPathFor(requestPath),
+                SessionStateTransferProtocol.SerializeResult(new SessionStateTransferResult
+                {
+                    RequestId = requestId,
+                    Error = error
+                }));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine($"openclaw-session-host: unable to write the failure result: {exception.Message}");
+        }
+    }
+
     private static int Coordinate(string mode, string requestPath)
     {
-        string id = mode[WindowsInvocationJob.CoordinatorModePrefix.Length..];
+        string id = WindowsInvocationJob.InvocationId(mode);
+        string workerMode = (WindowsInvocationJob.IsStateTransferCoordinatorMode(mode)
+            ? WindowsInvocationJob.StateTransferModePrefix
+            : WindowsInvocationJob.ModePrefix) + id;
         string name = @"Global\OpenClaw.Invocation." + id;
         using SafeFileHandle job = OpenJobObjectW(0x0004, false, name);
         if (job.IsInvalid)
@@ -61,7 +96,7 @@ internal static class SessionInvocationCoordinator
         {
             FileName = Environment.ProcessPath
                 ?? throw new InvalidOperationException("The invocation coordinator cannot locate its own helper."),
-            ArgumentList = { WindowsInvocationJob.ModePrefix + id, requestPath },
+            ArgumentList = { workerMode, requestPath },
             UseShellExecute = false,
             WorkingDirectory = Environment.CurrentDirectory
         }) ?? throw new InvalidOperationException("Unable to start the invocation worker.");

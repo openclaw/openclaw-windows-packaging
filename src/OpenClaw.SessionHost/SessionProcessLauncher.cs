@@ -119,7 +119,10 @@ internal sealed class SessionProcessLauncher(
             using WindowsKillOnCloseJob job = WindowsKillOnCloseJob.Create();
             using Process process = job.StartProcess(startInfo);
             process.WaitForExit();
-            return new SessionProcessOutput(process.ExitCode, string.Empty, string.Empty);
+            int exitCode = process.ExitCode;
+            job.Dispose();
+            ThrowIfUnconfirmed(job);
+            return new SessionProcessOutput(exitCode, string.Empty, string.Empty);
         }
         catch (Exception exception) when (
             exception is System.ComponentModel.Win32Exception or
@@ -166,8 +169,9 @@ internal sealed class SessionProcessLauncher(
         }
         finally
         {
-            // The state lease cannot end while descendants still have access
-            // to the profile. Drain both pipes before disposing their readers.
+            // The state lease cannot end while descendants still have access to the
+            // profile. Disposal terminates the job and waits for every member, which pipe
+            // draining cannot do for a descendant with its own streams; then drain both pipes.
             job.Dispose();
             try
             {
@@ -185,12 +189,22 @@ internal sealed class SessionProcessLauncher(
                 }
             }
         }
+        ThrowIfUnconfirmed(job);
         if (timedOut)
         {
             throw new SessionLaunchException("The packaged state operation did not finish within its execution budget.");
         }
         return new SessionProcessOutput(
             process.ExitCode, capturedOutput, capturedError);
+    }
+
+    private static void ThrowIfUnconfirmed(WindowsKillOnCloseJob job)
+    {
+        if (!job.ExitConfirmed)
+        {
+            throw new SessionLaunchException(
+                "The launched process tree did not exit, so its state access was not released.");
+        }
     }
 
     private static async Task<string> ReadCaptureAsync(StreamReader reader)

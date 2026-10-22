@@ -59,6 +59,7 @@ public sealed class SessionExecutorTests : IDisposable
     private sealed class FakeInvocationLifetime(Exception? stopFailure = null) : IInvocationLifetime
     {
         public string Mode => "--request";
+        public string StateTransferMode => "--state-transfer";
         public void MarkDispatched() { }
         public void RequestStop() { }
         public void ForegroundExited() { }

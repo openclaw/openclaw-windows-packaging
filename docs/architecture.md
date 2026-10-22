@@ -210,7 +210,13 @@ This is ordinary process-leak control, not an authorization boundary against
 hostile same-identity code. Explicit termination does not depend on the last
 job handle closing; kill-on-close remains only a host-death fallback and is not
 guaranteed against retained handles. Older helpers reject the new
-`--coordinate-invocation=<id>` mode without starting a workload. The JSON
+`--coordinate-invocation=<id>` mode without starting a workload. State-transfer
+workers (backup, restore, recovery) use the same lifetime through the paired
+`--coordinate-state-transfer=<id>` and `--state-transfer-in-job=<id>` modes, so
+Ctrl+C stops the exact worker tree before the exchange files are released; a
+cancelled restore whose prepare step already recorded its activation is rolled
+back automatically. The other helper modes (runtime/tool installation,
+inspection, collection, configuration checks) still run as plain executions. The JSON
 protocol version is unchanged; the branch-local modes and events require a
 matching host/helper. Local regressions, managed quality, the full Release
 suite, and the observed cross-identity NativeAOT scenarios pass; the remaining
@@ -423,7 +429,9 @@ existing readers must finish before maintenance can obtain exclusive access.
 A separate worker lease prevents rollback while an activation worker remains
 alive. Kernel-released leases provide liveness without trusting a reusable PID.
 The helpers own child process trees in kill-on-close jobs so a lease cannot end
-while their descendants keep writing. Inspection and diagnostics remain
+while their descendants keep writing; disposing such a job terminates it and
+waits until no member remains, and a member that outlives termination fails the
+operation instead of releasing the lease. Inspection and diagnostics remain
 available when activation is pending. Successful activation or explicit
 rollback clears intent; an unreadable journal fails closed. Finalized state
 remains finalized if deleting disposable transaction data or a private recovery
