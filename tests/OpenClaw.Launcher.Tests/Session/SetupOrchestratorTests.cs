@@ -361,7 +361,9 @@ public sealed class SetupOrchestratorTests : IDisposable
         public SessionRuntime CreateRuntime(Action<string> log) =>
             throw new NotSupportedException();
 
-        public Task EnsureSessionSupportedAsync(CancellationToken cancellationToken) =>
+        public Task EnsureSessionSupportedAsync(
+            Action<string> log,
+            CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
         public PackageRuntimeMetadata ValidatePackageRuntime(

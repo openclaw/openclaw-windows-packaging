@@ -1,3 +1,4 @@
+using System.Globalization;
 using OpenClaw.Launcher.Session;
 using OpenClaw.SessionProtocol;
 
@@ -31,6 +32,8 @@ internal enum GatewayState
     /// beside a healthy one.
     /// </summary>
     Unknown,
+
+    /// <summary>An owned supervised launch was accepted but has no listener yet.</summary>
     Starting,
 }
 
@@ -38,7 +41,10 @@ internal sealed record GatewayStatusReport(
     GatewayState State,
     GatewayRecord? Record,
     string Message,
-    string? Detail = null);
+    string? Detail = null,
+    string? SandboxId = null,
+    string? AgentUserSid = null,
+    IReadOnlyList<SessionOwnedListener>? OwnedListeners = null);
 
 internal sealed record GatewayStartResult(
     GatewayState State,
@@ -112,8 +118,14 @@ internal sealed class GatewayController
 
     /// <summary>
     /// Reports the gateway without starting one, provisioning a session, or
-    /// writing anything.
+    /// writing any state.
     /// </summary>
+    /// <remarks>
+    /// An inspection that runs records only its duration and resulting state in
+    /// the diagnostic log, or, when it throws, including on cancellation, its
+    /// duration and exception type before the exception propagates unchanged.
+    /// A report decided without inspecting records nothing.
+    /// </remarks>
     public async Task<GatewayStatusReport> GetStatusAsync(
         string helperPath,
         CancellationToken cancellationToken)
@@ -159,10 +171,44 @@ internal sealed class GatewayController
                 "Run `clawctl teardown` to reconcile the owned installation.");
         }
 
-        return Describe(
-            state.Record,
-            await InspectAsync(session.Record, state.Record, helperPath, cancellationToken)
-                .ConfigureAwait(false));
+        long inspectionStarted = _clock.GetTimestamp();
+        SessionInspectResult inspection;
+        try
+        {
+            inspection = await InspectAsync(
+                session.Record,
+                state.Record,
+                helperPath,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            // InspectAsync reports the failures it can classify as Unknown, so
+            // only cancellation and unexpected failures reach here. The type
+            // alone is recorded; a message can carry guest detail.
+            _log(string.Create(
+                CultureInfo.InvariantCulture,
+                $"Gateway inspection failed after {ElapsedMilliseconds()} ms ({exception.GetType().Name})."));
+            throw;
+        }
+
+        GatewayStatusReport report = Describe(state.Record, inspection);
+        if (report.State == GatewayState.Running)
+        {
+            report = report with
+            {
+                SandboxId = session.Record.SandboxId,
+                AgentUserSid = session.Record.AgentUserSid,
+                OwnedListeners = inspection.OwnedListeners
+            };
+        }
+        _log(string.Create(
+            CultureInfo.InvariantCulture,
+            $"Gateway inspection finished in {ElapsedMilliseconds()} ms: {report.State}."));
+        return report;
+
+        long ElapsedMilliseconds() =>
+            (long)_clock.GetElapsedTime(inspectionStarted).TotalMilliseconds;
     }
 
     /// <summary>
@@ -331,10 +377,12 @@ internal sealed class GatewayController
 
         SessionInspectResult observed = await WaitForListenerAsync(
             session, record, helperPath, progress, cancellationToken).ConfigureAwait(false);
-        GatewayState resultState = observed.IsOwnedAndHealthy ? GatewayState.Running
-            : observed.Error is not null ? GatewayState.Unknown
-            : observed.ProcessFound && observed.StartTimeMatches ? GatewayState.Starting
-            : GatewayState.Stopped;
+        GatewayState resultState = observed.Error is not null ? GatewayState.Unknown
+            : observed.SupervisorState == SessionSupervisorStatus.ExitedState ? GatewayState.Stopped
+            : observed.IsOwnedAndHealthy ? GatewayState.Running
+            : !(observed.ProcessFound && observed.StartTimeMatches) ? GatewayState.Stopped
+            : observed.PortListening || observed.ListeningPorts is { Count: > 0 } ? GatewayState.Unhealthy
+            : GatewayState.Starting;
 
         if (observed.ListeningPorts is { Count: > 0 })
         {
@@ -354,7 +402,7 @@ internal sealed class GatewayController
                 ? $"The gateway is listening on {DescribePorts(record)}."
                 : "The gateway is not listening yet.");
 
-        return new GatewayStartResult(
+        var result = new GatewayStartResult(
             resultState,
             record,
             AlreadyRunning: false,
@@ -362,11 +410,19 @@ internal sealed class GatewayController
             {
                 GatewayState.Running => $"The gateway is running on {DescribePorts(record)}.",
                 GatewayState.Starting =>
-                    "The gateway process started but is not listening yet. It may still be " +
-                    "coming up; run `clawctl gateway-service status` to check again.",
+                    "The supervised gateway launch was accepted, but the gateway is not listening yet. " +
+                    "Run `clawctl gateway-service status` to check again.",
                 GatewayState.Unknown => $"The gateway launch could not be verified: {observed.Error}",
+                GatewayState.Unhealthy => DescribeUnhealthy(record, observed),
                 _ => DescribeExitedDuringStartup(record, observed)
             });
+
+        // Every start path funnels through here: `gateway-service start` and
+        // `restart`, and the automatic start after `openclaw`. Logging the
+        // outcome once lets a bundle show what the user was told, including
+        // the supervisor's reason when the gateway exited during startup.
+        _log($"Gateway start finished: {result.State}. {DiagnosticFailure.SingleLine(result.Message)}");
+        return result;
     }
 
     /// <summary>
@@ -426,6 +482,7 @@ internal sealed class GatewayController
 
             if (observed.IsOwnedAndHealthy ||
                 observed.Error is not null ||
+                observed.SupervisorState == SessionSupervisorStatus.ExitedState ||
                 !(observed.ProcessFound && observed.StartTimeMatches) ||
                 _clock.GetUtcNow() >= deadline)
             {
@@ -602,6 +659,7 @@ internal sealed class GatewayController
         catch (Exception exception) when (
             exception is SessionException or Mxc.MxcException or IOException or UnauthorizedAccessException)
         {
+            _log($"Gateway inspection failed: {DiagnosticFailure.Describe(exception)}");
             return new SessionInspectResult { Error = exception.Message };
         }
     }
@@ -651,10 +709,10 @@ internal sealed class GatewayController
     /// Explains a gateway that is no longer running, in the supervisor's words.
     /// </summary>
     /// <remarks>
-    /// The log lives on a path inside the session that the user cannot open
-    /// from the host, so the bundle is named instead. `clawctl collect-logs`
-    /// collects that same log along with everything needed to read it in
-    /// context.
+    /// The log sits in the shared workspace, which the guest can write, so the
+    /// message names the bundle rather than a path to open. `clawctl
+    /// collect-logs` gathers the launch log and supervisor status of this and
+    /// earlier launches, with reparse-point checks and redaction.
     /// </remarks>
     private static string? DescribeStoppedGateway(
         GatewayRecord record,

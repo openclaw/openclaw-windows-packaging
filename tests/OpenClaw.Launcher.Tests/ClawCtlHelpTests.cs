@@ -92,11 +92,8 @@ public sealed class ClawCtlHelpTests
         Assert.Equal("clawctl gateway-service start [options]", model.Usage);
     }
 
-    // --json and --no-color are declared once on the root as recursive options.
-    // They are part of the command line a user can type for a subcommand, so
-    // subcommand help has to report them.
     [Fact]
-    public void SubcommandHelpReportsInheritedRecursiveOptions()
+    public void SubcommandHelpReportsOwnAndInheritedOptions()
     {
         ClawCtlHelpModel model = Describe("setup");
         string[] terms = [.. model.Options.Select(o => o.Term)];
@@ -104,6 +101,38 @@ public sealed class ClawCtlHelpTests
         Assert.Contains(terms, t => t.StartsWith("--fresh", StringComparison.Ordinal));
         Assert.Contains(terms, t => t.StartsWith("--json", StringComparison.Ordinal));
         Assert.Contains(terms, t => t.StartsWith("--no-color", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("setup")]
+    [InlineData("status")]
+    [InlineData("collect-logs")]
+    [InlineData("teardown")]
+    [InlineData("open")]
+    [InlineData("completion")]
+    [InlineData("gateway-service")]
+    [InlineData("gateway-service start")]
+    [InlineData("gateway-service status")]
+    [InlineData("gateway-service stop")]
+    [InlineData("gateway-service restart")]
+    public void JsonIsAdvertisedForCommandsThatSupportIt(string commandPath)
+    {
+        ClawCtlHelpModel model = Describe(commandPath);
+
+        Assert.Contains(
+            model.Options,
+            option => option.Term.StartsWith("--json", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void PowerShellHelpDoesNotAdvertiseUnsupportedJson()
+    {
+        ClawCtlHelpModel model = Describe("pwsh");
+
+        Assert.DoesNotContain(
+            model.Options,
+            option => option.Term.StartsWith("--json", StringComparison.Ordinal));
     }
 
     // --version is deliberately not recursive; reporting it on a subcommand

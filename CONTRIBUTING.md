@@ -17,8 +17,25 @@ summary below:
 
 - PowerShell 7
 - The .NET SDK feature band pinned in `global.json`
+- Node.js on `PATH` for the Companion configuration adapter tests. They run
+  the production Node.js expression against fixture SDK modules, not an
+  installed OpenClaw application or user profile.
 - Visual Studio Build Tools with the **Desktop development with C++** workload
   and the Windows SDK, for NativeAOT publish and MSIX composition
+
+### JavaScript language server
+
+The Copilot CLI configuration in `.github\lsp.json` enables JavaScript code
+intelligence for `plugins\gateway-isolation` alongside the existing C# server.
+Install its optional editor tooling once:
+
+```powershell
+npm install --global typescript typescript-language-server
+```
+
+The server uses `npx --no-install`, so it does not download dependencies when
+Copilot starts it. In an existing Copilot session, run `/lsp reload`, then
+`/lsp test typescript-language-server` to check startup.
 
 ## Build, analyze, and test
 
@@ -54,14 +71,90 @@ or package version logic:
 .\scripts\Test-PackagingRelevance.Tests.ps1
 .\scripts\Test-OpenClawCacheKey.Tests.ps1
 .\scripts\Test-OpenClawPackage.Tests.ps1
+.\scripts\Test-Measure-Coverage.Tests.ps1
 .\scripts\Test-MSIXReleaseIdentity.Tests.ps1
 .\scripts\Test-OpenClawSource.Tests.ps1
+.\scripts\Test-WorkflowSigningConfiguration.ps1
+.\scripts\Test-MSIXUpgradeMatrix.Tests.ps1
 .\scripts\Test-WorkflowPackageVersion.Tests.ps1
 .\scripts\Test-Submit-MicrosoftStore.Tests.ps1
 .\scripts\Test-GitHooks.Tests.ps1
 ```
 
-The source-selection tests use offline npm and GitHub fixtures.
+### CodeQL analysis
+
+[The CodeQL configuration](.github/codeql/codeql-config.yml) excludes the root
+`tests` tree from analysis. C# default setup uses `build-mode: none`, so tests
+otherwise enter the database even when they are not compiled into the product.
+The configuration leaves query selection and the configured threat model alone;
+it does not declare profile paths or executable discovery safe.
+
+Committing the file does not activate it. After merge, a maintainer must create
+the organization's `github-codeql-config-file` repository property if necessary
+and set this repository's value to `.github/codeql/codeql-config.yml`.
+[GitHub documents this default-setup customization](https://docs.github.com/en/code-security/concepts/code-scanning/repository-properties#custom-configuration-files).
+Confirm the next analysis's augmented configuration contains the exclusion.
+No repository or organization settings are changed by the local test.
+
+When changing this configuration, use a CodeQL bundle with C# queries and its
+executable on `PATH`, then run:
+
+```powershell
+.\scripts\Test-CodeQLConfiguration.Tests.ps1
+```
+
+Use `-CodeQlPath` to select a bundle outside `PATH`. The suite analyzes generated,
+dependency-free C# fixtures in temporary directories without executing them. It
+checks that test-only sinks and test-origin flows into production sinks disappear,
+while attacker-controlled paths, canonicalized paths, executables, working
+directories, and command arguments still report. Profile-folder controls must
+also keep reporting: their ownership modeling is a separate unresolved issue.
+
+### Measure coverage
+
+Use coverage as a diagnostic to find gaps in meaningful behavior tests, not as
+a threshold or a reason by itself to add tests. From the repository root:
+
+```powershell
+.\scripts\Measure-Coverage.ps1
+```
+
+The command writes each local report to its own
+`artifacts\coverage\<timestamp>-<unique-id>` directory, so runs started in
+the same second do not overwrite each other's test results.
+Use `-Path 'src\OpenClaw.Launcher\*'` to narrow reported files, `-Uncovered`
+to show uncovered lines, `-BaselinePath <coverage-file-or-directory>` to
+compare a prior result, and `-Filter '<dotnet-test-filter>'` to select tests.
+To report an existing result without running tests, use
+`-CoberturaPath <coverage.cobertura.xml-or-directory>`.
+
+When the CI `test-host` job runs, it publishes its Release TRX test results and
+available Debug coverage outputs (raw Cobertura data, TRX, and readable
+`summary.md`) as the `gateway-msix-test-results` workflow artifact. Successful
+coverage collection also adds the summary to the GitHub Actions run summary.
+The workflow attempts the upload even when tests fail; coverage runs only
+after the Release tests pass. Coverage, summary, or artifact-service failure
+remains visible in its step logs and emits a warning, but does not fail the
+required host-test job. An upload failure may leave no artifact; inspect the
+upload step logs before relying on the results.
+
+The source-selection tests use offline npm and GitHub fixtures to exercise
+snapshot capture/replay, bound workflow context, and trusted versus read-only
+routes. `Test-WorkflowSigningConfiguration.ps1` executes the workflow classifier
+and selected-build owner: release-candidate dispatches select the full upgrade
+matrix, exactly one build route must succeed, and its outputs must match preflight.
+`Test-WorkflowJobResults.Tests.ps1` checks the final upgrade-proof requirement.
+The signing-input suite validates
+the actual synthetic packages and bundles against the captured source.
+
+The shared build workflow inherits the caller's explicit cache token cap;
+never request write access inside it or pass signing secrets to upstream
+execution. Local checks cannot establish GitHub platform enforcement or
+CodeQL alert closure. Versioning PR CI tests synthetic cache persistence,
+forged-client write denial, and the reusable job's inherited service cap.
+Main cold/warm checks and legacy cache reset require separately
+authorized CI/cutover work described in the
+[release process](docs/release-process.md#cache-boundary-cutover).
 
 The Node.js input suite requires Node.js and npm. It builds a dependency-free
 local fixture, including its install script, for the running Node.js
@@ -169,12 +262,34 @@ CI. The hook is opt in and local to your clone:
 ```
 
 That writes the tracked `hooks\pre-push` into the hooks directory Git consults
-for your working tree. It runs `Test-DotNetQuality.ps1` and nothing else, so it
-reports exactly what CI reports. To remove it:
+for your working tree. When the hook does not skip a push as described below,
+it runs `Test-DotNetQuality.ps1` and nothing else, so it reports exactly what
+CI reports. Rerun the installer after pulling a hook change to refresh it. To
+remove it:
 
 ```powershell
 .\scripts\Install-GitHooks.ps1 -Remove
 ```
+
+The hook skips the quality script when every file the push changes is
+documentation, using the same rule CI uses to skip packaging
+(`scripts\Get-PackagingRelevance.ps1`: `*.md`, `docs/`, and `LICENSE`). The
+changed files are the files each new commit changes against its first parent.
+A new commit is one that no branch or tag on the destination contains; the
+hook asks the destination for its current branches and tags with
+`git ls-remote` during the push, which adds one round trip (about 0.5 s to
+GitHub here). A push that only deletes remote refs, or whose new commits
+change no files, checks nothing. A push that introduces a root commit, input
+the hook does not recognize, a failed query of the destination, and any
+failure to determine or classify the changed files run the quality script. The
+hook prints one line saying whether it skipped or ran the quality script and
+why.
+
+The hook does not trust your local remote-tracking refs, so a ref left behind
+after its remote branch was deleted cannot hide a commit the destination does
+not have. Commits that exist on the destination only outside its branches and
+tags count as new, which can cause an extra run. The hook is a latency
+shortcut; CI remains authoritative.
 
 A clone has one hooks directory, shared by every linked worktree
 (`git worktree add`). Installing or removing from any worktree therefore
@@ -227,9 +342,10 @@ bypassable, and required CI checks remain authoritative.
 - Metadata files are part of the release trust chain. Coordinate changes across
   payload creation, MSIX creation, signing validation, workflow artifacts, and
   tests.
-- Keep official release identity derived from `gatewayTag` and `msixRevision`.
-  The unsuffixed Gateway tag owns revision block `1000-1999`; correction tags
-  `-2` through `-64` own their corresponding 1,000-number blocks. Use revision
+- Keep official release identity derived from the run's resolved Gateway tag
+  and the policy's `msixRevision`, using `scripts\Get-MSIXReleaseIdentity.ps1`.
+  The MSIX identity uses `year.month.VVPN.0`: Gateway release sequence `VV`,
+  correction digit `P`, and rebuild digit `N`. Use revision
   `0` for the first MSIX of a Gateway tag and increment only for packaging-only
   rebuilds of that exact tag. Do not assign package versions or release tags by
   hand.
@@ -282,7 +398,12 @@ resolves paths through `git ls-files` rather than the filesystem, because a
 stale untracked build directory can make a renamed project path look valid.
 Findings exit nonzero locally. Continuous integration runs the same script with
 `-Advisory`, which annotates the pull request without failing the build, so a
-documentation change is never blocked by it.
+documentation change is never blocked by it. When every changed path in a pull
+request is Markdown, under `docs\`, or `LICENSE`, as classified by
+`scripts\Get-PackagingRelevance.ps1`, CI skips the host test and packaging
+jobs, so this advisory check is the pull request's only documentation
+validation. Every other run executes the checker's own suite,
+`scripts\Test-DocReferences.Tests.ps1`, in the host test job.
 
 Three project skills in `.github\skills\` support this work:
 

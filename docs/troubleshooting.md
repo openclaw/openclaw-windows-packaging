@@ -27,6 +27,60 @@ clawctl setup
 
 For another stated prerequisite, correct that prerequisite and rerun setup.
 
+## Companion reports that the agent Gateway config is absent
+
+**Check.** `clawctl gateway-service status --json` may report
+`gateway.readiness.state: "absent"` even though `clawctl setup` succeeded.
+The latter installs the session and Node.js runtime; it does not choose
+Gateway authentication or port settings. A host-side `openclaw.json` written
+under Companion's account is not the isolated agent's configuration.
+
+**Fix.** Retry **Install a local native gateway** in Companion. It calls the
+package-qualified `clawctl companion prepare --port <port> --json` to apply a
+local configuration inside the agent session. It reads the upstream effective
+configuration, including JSON5 or `$include` values, and preserves the agent
+configuration bytes when its local Gateway port and token are already valid.
+An absent Gateway section can be initialized without replacing unrelated
+settings. A partial Gateway section without `mode: "local"` cannot: resolve
+its intended mode explicitly in the agent session.
+If Companion says the installed MSIX lacks the
+versioned integration contract, update the Gateway MSIX rather than copying
+a configuration file between profiles. If preparation reports an incompatible
+mode, bind address, authentication method, or agent profile override,
+inspect that configuration through `clawctl pwsh` and resolve the reported
+conflict deliberately. Password authentication is incompatible even if its
+mode is implicit or a token is also present. Check agent environment and
+dotenv settings for profile, path, port, token, or password overrides. If the
+configuration changed during preparation, finish that edit and retry rather
+than overwriting it. Do not run `clawctl setup --fresh` as a first repair:
+it removes the owned session.
+
+Before pairing or publishing, Companion also runs
+`clawctl companion prepare --check --json` to detect port or token changes.
+The check uses the upstream observation-free snapshot reader. It does not
+restore backups, patch configuration, or record config-health observations.
+An incomplete or incompatible configuration fails and requires explicit
+recovery. Never copy
+configuration into the human user's profile. The JSON response contains a
+token and must be kept private.
+
+## Companion cannot verify the isolated Gateway listener
+
+**Check.** Run `clawctl gateway-service status --json` through the installed
+package. Companion requires the `gateway.ownership.listeners` evidence,
+including a process ID and `sequenceNumber`, before it sends credentials. When
+the Windows process-sequence API is unavailable, that field is omitted from the
+status response and Companion reports that it cannot verify the isolated
+listener. An unrelated listener on the selected port is not sufficient.
+
+**Fix.** If Companion reports that it cannot verify the isolated listener and
+the status response has no `gateway.ownership.listeners`, update Windows to a
+build that supports `SystemBasicProcessInformation`
+(Windows 11 build 26100.4770 or later), then retry Companion. Re-running
+`clawctl setup` cannot add this operating-system API. If the report instead
+identifies a listener conflict, free the selected port before retrying. Do not
+disable ownership checks or copy a host-side config into the agent profile.
+
 ## Automatic setup failed during `openclaw`
 
 **Check.** Preserve the complete automatic-setup error from standard error. It
@@ -98,9 +152,10 @@ clawctl gateway-service status
 
 `gateway-service` is the command name. Its status command does not start a
 gateway; when needed, it may start/probe the already-recorded session only to
-report file-only configuration readiness. Check the reported gateway state,
-the scheduled-task recovery state, and the log tail emitted for stopped or
-unhealthy gateways.
+report file-only configuration readiness. Check the reported gateway state and
+detail, which carries the supervisor's reason when the gateway exited, and the
+scheduled-task recovery state. The gateway's own output is not printed; run
+`clawctl collect-logs` and read the `gateway/` launch logs in the ZIP.
 
 **Likely cause.** `not started` means this installation has not started a
 gateway. `stopped` can be an ordinary consequence of stopping the isolated
@@ -115,14 +170,39 @@ then run:
 clawctl gateway-service start
 ```
 
-For an unhealthy gateway, inspect the emitted log tail, then run
-`clawctl gateway-service restart` to stop the verified gateway and start its
+For an unhealthy gateway, read its launch log from `clawctl collect-logs`, then
+run `clawctl gateway-service restart` to stop the verified gateway and start its
 replacement. If the stop cannot be verified, restart retains the gateway
 record and aborts rather than risk starting a second process. Use
 `clawctl gateway-service stop` instead when the gateway should remain stopped.
 Use the port reported by status as the observed endpoint. Do not assume the
 upstream default port (18789): an explicit OpenClaw `gateway.port` can differ,
 and multiple unclassified listeners intentionally do not identify an endpoint.
+
+## A terminal opens when signing in
+
+**Check.** Run `clawctl status` and inspect the recovery
+result. Registrations from older packages use a CMD launcher and can open a
+terminal while recovering the gateway.
+
+**Fix.** After installing a package with background recovery, run:
+
+```powershell
+clawctl setup
+```
+
+Without `--fresh`, setup reuses the recorded session and keeps its data and
+gateway settings. It replaces the old logon action and removes generated legacy
+Startup-folder files. If Windows refuses to replace an existing task, setup
+retains that task's previous recovery files and reports that further action is
+required, even when it creates a new Startup-folder fallback. Resolve the
+reported permission failure and rerun `clawctl setup` to finish migration.
+After a successful migration, future recovery runs without a terminal. If recovery
+fails, run `clawctl gateway-service start` interactively for the error and
+collect logs with `clawctl collect-logs`. For failures before `clawctl` starts,
+check the logon task's last-run result in Task Scheduler, the package's
+execution-alias registration, and whether Windows Script Host and JScript
+are enabled. Background recovery requires those Windows components.
 
 ## Automatic gateway start failed after `openclaw`
 
@@ -249,29 +329,142 @@ that policy; use the organization's managed-policy process.
 clawctl collect-logs [--output <path>]
 ```
 
-The command prints the resulting ZIP path on its own line. Without `--output`,
-it creates the ZIP in package state. It is best effort: if the agent session
-cannot be reached, the ZIP still contains host diagnostics and records that
-agent-side collection failed.
+The command narrates each source on standard error as it gathers it: the
+isolated session, the OpenClaw logs and configuration collected inside it, each
+host record, and the gateway launch logs. An interactive terminal shows one
+updating status line, redirected standard error keeps one line per source, and
+`--json` narrates nothing. Standard output carries only the result, which ends
+with the ZIP path on its own line. Without `--output`, it creates the ZIP in
+package state. It is best effort: if the agent session cannot be reached, the
+ZIP still contains host diagnostics and records that agent-side collection
+failed, with the underlying cause.
+
+The ZIP's `manifest.txt` names the collecting build's environment: the Windows
+build and update revision, how the package was installed (a Developer Mode
+loose-layout registration, a Store-signed install, or a developer-signed MSIX,
+with its install path), and the package, OpenClaw payload, MXC runtime, and
+Node.js versions. `host/openclaw.log` records the same `Environment:` line at
+every host start, and records each failure with its type, message, MXC error
+code and failing operation, Windows error code, and inner causes. A failure
+that no handler anticipated also records its stack trace. Every gateway start
+records its outcome: the state and the message the command reported, including
+the supervisor's reason when the gateway exited during startup.
+
+`gateway/` holds each gateway launch's own output log and supervisor status
+from the shared workspace. These are the files that a failed or stopped
+gateway's message points to when it says to run `clawctl collect-logs`. Earlier
+launches are kept too, because a later start replaces the gateway record but
+not the earlier launch's files. The newest 10 launches are collected, each
+file cut to its last 1 MiB, and the manifest notes anything that was left out.
+The workspace does not need a running session to be read.
 
 **Likely cause.** Partial setup, session reachability problems, and gateway
 failures can prevent collection of some agent files without preventing
 collection of the host evidence needed to diagnose them.
 
 **Fix.** Review the ZIP before sharing it. The collector includes selected
-OpenClaw logs and `.openclaw\openclaw.json*` candidates, applies
-credential-shaped-value redaction to JSON, and intentionally excludes SQLite
-databases and authentication-profile files. Redaction is not a substitute for
-review, and the collector does not enumerate arbitrary agent-profile files.
+OpenClaw logs, `.openclaw\openclaw.json*` candidates, and the gateway launch
+files. It redacts credential-shaped JSON members, URL query or fragment
+parameters (such as a Control UI link's `#token=`), environment-style
+assignments such as `OPENAI_API_KEY=`, and HTTP authorization header
+credentials. The redaction applies to every collected file, to `manifest.txt`,
+and to the notes the command prints, because a note can quote a failure's raw
+detail. The collector intentionally excludes SQLite databases and
+authentication-profile files. Redaction is not a substitute for review, and the
+collector does not enumerate arbitrary agent-profile files. The host log and
+manifest also name local paths, such as the install location of a loose-layout
+registration, and the agent account.
+
+## Investigating a bundle with Copilot CLI
+
+The repository includes a
+[`collect-logs-investigator` agent](../.github/agents/collect-logs-investigator.agent.md)
+for evidence-based investigation. In GitHub Copilot CLI, select the agent and
+provide a file or folder accessible to that session. For example, with a ZIP
+in your current directory:
+
+```text
+/agent collect-logs-investigator
+Investigate @.\openclaw-diagnostics.zip
+```
+
+You can instead specify a folder containing a ZIP, an extracted bundle, or
+diagnostic logs, or supply a single log file. With several bundles, give a
+timeframe or name the one to investigate; the agent will ask rather than
+silently choose the newest or combine unrelated incidents. No fixed drive or
+logs directory is required.
+
+To collect and investigate on the machine where the agent runs, explicitly
+request it, for example: "Run `clawctl collect-logs` on this machine and
+investigate the result." The agent uses `clawctl collect-logs --json`, validates
+the returned ZIP, and preserves it. Collection can start the recorded session
+and write/stage diagnostics; it is not a passive operation. The agent will not
+collect merely because no input was provided, install missing tools, or run
+other package lifecycle commands.
+
+You can add guidance, such as the failing command, expected result, approximate
+failure time and timezone, or whether the run happened on a VM. Guidance is
+optional. A GitHub-hosted agent can investigate evidence made accessible in
+its workspace, but cannot read a path on your computer or collect from that
+computer through an unrelated runner. If the target is elsewhere, supply its
+diagnostics or collect there; this machine's state is not a substitute.
+
+The report leads with findings and next steps, including verified recovery or
+workaround commands when available and their prerequisites, effects, and
+success checks. Supporting versions, evidence, and related issue/fix/release
+links follow at the bottom. Once the evidence conclusively identifies the
+issue and a useful next action, the agent stops rather than collecting
+unnecessary context. A known issue whose fix is not yet available needs a
+clear answer, not another bundle or a complete version inventory.
+
+When further investigation is needed, the agent provides copy/pastable,
+targeted steps near the top of the report and offers to save a handoff Markdown
+file at a new path you choose. Unresolved reports use an explicit order:
+finding, next steps, a fenced incident-specific investigation prompt, the
+handoff-file offer, then supporting context. A recovery/workaround command
+does not replace that prompt when the cause still needs investigation.
+Knowing the rejected operation or error code is not a conclusive causal
+explanation; unknown credential or pairing history still requires this flow.
+The handoff includes the incident facts,
+remaining questions, essential Windows packaging context, full source links,
+and a starter prompt for another Copilot session. It does not require that
+session to know this conversation, have this agent installed, or have a source
+checkout or GitHub access. Supply the referenced evidence files with it.
+
+The handoff guides that session toward a supported resolution or, if the
+problem remains unresolved, a reviewed evidence package with findings,
+relevant original/new diagnostics, collection warnings, and precise remaining
+gaps. Collection, state-changing reproduction/recovery, and evidence-package
+creation require explicit authorization; neither documents nor packages are
+written or uploaded automatically.
+
+The agent checks public GitHub issues, fixes, and releases separately.
+It distinguishes an upstream fix from its adoption into a Windows package,
+and a GitHub sideload release from unverified Store availability. Missing
+evidence results in targeted requests for source-machine context or specific
+`collect-logs`/logging improvement recommendations, not a guessed diagnosis.
+If evidence is missing or unreadable, provide an accessible file/folder or
+explicitly request collection on the correct machine; if public
+GitHub access is unavailable, release and issue status remains unverified.
+
+Review the ZIP before supplying it: best-effort redaction can leave private
+information. Copilot processes the supplied content; "local" describes where
+the CLI reads the file, not offline model processing. The agent does not upload
+the ZIP to issue trackers or execute its contents. Except for explicitly
+requested collection, it does not run package commands or change package/session
+state. It uses sanitized signatures for public GitHub searches
+and does not treat this computer's installed state as evidence of another
+machine's failure.
 
 ## Bug report collection checklist
 
 Attach the reviewed diagnostics ZIP, the exact command and complete output,
 the `clawctl status` (or `status --json`) result with machine-specific IDs,
-the agent account, and the shared folder path removed, Windows version/build,
-package version, and the observed session, gateway, readiness, recovery, and
-scheduled-task states. For a special-profile registration failure, include the
-policy error.
+the agent account, and the shared folder path removed, and the observed
+session, gateway, readiness, recovery, and scheduled-task states. The ZIP
+already records the Windows build, package provenance, and component versions,
+so they do not need to be copied by hand. For a special-profile registration
+failure, include the policy error.
 
 ## Source authorities
 
@@ -288,4 +481,7 @@ The behavior above is verified against:
 - gateway status, address, persistence, and diagnostics implementations and
   tests under `src\OpenClaw.Launcher\Gateway` and
   `tests\OpenClaw.Launcher.Tests\Gateway`
+- `src\OpenClaw.Launcher\HostEnvironment.cs`, `DiagnosticFailure.cs`, and
+  `tests\OpenClaw.Launcher.Tests\HostEnvironmentTests.cs`,
+  `DiagnosticFailureTests.cs`, and `ProgramStartupTests.cs`
 - [`mxc-compatibility-evidence.md`](mxc-compatibility-evidence.md)

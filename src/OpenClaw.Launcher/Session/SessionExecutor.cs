@@ -105,11 +105,13 @@ internal sealed class SessionExecutor
     private readonly Func<IReadOnlyDictionary<string, string>> _buildEnvironment;
     private readonly Func<string> _createRequestId;
     private readonly Func<SessionRecord, bool> _isCurrentRecord;
+    private readonly TimeProvider _clock;
 
     public SessionExecutor(IMxcSessionClient backend, Action<string> log,
         Func<IReadOnlyDictionary<string, string>>? buildEnvironment = null,
         Func<string>? createRequestId = null,
-        Func<SessionRecord, bool>? isCurrentRecord = null)
+        Func<SessionRecord, bool>? isCurrentRecord = null,
+        TimeProvider? clock = null)
     {
         ArgumentNullException.ThrowIfNull(backend);
         ArgumentNullException.ThrowIfNull(log);
@@ -118,6 +120,7 @@ internal sealed class SessionExecutor
         _buildEnvironment = buildEnvironment ?? (() => OpenClawRuntimeEnvironment.Build());
         _createRequestId = createRequestId ?? (() => Guid.NewGuid().ToString("N"));
         _isCurrentRecord = isCurrentRecord ?? (_ => true);
+        _clock = clock ?? TimeProvider.System;
     }
 
     internal SessionWorkspaceOperation CreateWorkspaceOperation(SessionRecord record) =>
@@ -199,7 +202,13 @@ internal sealed class SessionExecutor
                 cancellationToken).ConfigureAwait(false);
 
             operation.EnsureCurrent();
-            return ReadOutcome(operation, resultPath, executorExitCode, requestId, subject);
+            int exitCode = ReadOutcome(operation, resultPath, executorExitCode, requestId, subject);
+
+            // The matching end of the starting message. Its absence means the
+            // host itself was terminated while the command ran, which is what
+            // attributes a lingering guest process to this invocation.
+            _log($"{subject} exited with code {exitCode}.");
+            return exitCode;
         }
         finally
         {
@@ -241,10 +250,10 @@ internal sealed class SessionExecutor
                 cancellationToken).ConfigureAwait(false);
 
             _log(startingMessage);
-            MxcExecutionResult execution = await _backend.ExecuteAsync(
+            MxcExecutionResult execution = await ExecuteTimedAsync(
                 record.ToSandboxIdOrThrow(),
-                new MxcExecutionRequest(BuildGuestCommandLine(request.HelperPath, requestPath)),
-                null,
+                BuildGuestCommandLine(request.HelperPath, requestPath),
+                subject,
                 cancellationToken).ConfigureAwait(false);
 
             operation.EnsureCurrent();
@@ -272,6 +281,53 @@ internal sealed class SessionExecutor
             NodeOptionsSuffix = request.NodeOptionsSuffix,
             NativeRootPath = request.NativeRootPath,
         };
+
+    /// <summary>
+    /// Runs one buffered helper exchange and records how long the backend took.
+    /// </summary>
+    /// <remarks>
+    /// Every way the exchange ends is recorded. A returned result is logged as
+    /// soon as the backend returns, before it is validated, and a thrown
+    /// failure, including cancellation, is logged before it is rethrown
+    /// unchanged. Only the subject, the duration, and the executor exit code or
+    /// exception type are recorded: the captured streams can carry
+    /// authenticated data, and MXC failure messages can carry executor stderr.
+    /// </remarks>
+    private async Task<MxcExecutionResult> ExecuteTimedAsync(
+        MxcSandboxId sandboxId,
+        string commandLine,
+        string subject,
+        CancellationToken cancellationToken)
+    {
+        long started = _clock.GetTimestamp();
+        MxcExecutionResult execution;
+        try
+        {
+            execution = await _backend.ExecuteAsync(
+                sandboxId,
+                new MxcExecutionRequest(commandLine),
+                null,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            string failure = exception is MxcException mxc
+                ? $"{nameof(MxcException)} {mxc.Code}"
+                : exception.GetType().Name;
+            _log(string.Create(
+                CultureInfo.InvariantCulture,
+                $"{subject} failed after {ElapsedMilliseconds()} ms ({failure})."));
+            throw;
+        }
+
+        _log(string.Create(
+            CultureInfo.InvariantCulture,
+            $"{subject} finished in {ElapsedMilliseconds()} ms (executor exit {execution.ExitCode})."));
+        return execution;
+
+        long ElapsedMilliseconds() =>
+            (long)_clock.GetElapsedTime(started).TotalMilliseconds;
+    }
 
     /// <summary>
     /// Asks the guest to stage diagnostic files into the shared workspace.
@@ -311,11 +367,10 @@ internal sealed class SessionExecutor
 
             _log("Collecting agent-side diagnostics from the isolated session.");
 
-            MxcExecutionResult execution = await _backend.ExecuteAsync(
+            MxcExecutionResult execution = await ExecuteTimedAsync(
                 record.ToSandboxIdOrThrow(),
-                new MxcExecutionRequest(
-                    BuildGuestCommandLine(helperPath, requestPath, "--collect")),
-                null,
+                BuildGuestCommandLine(helperPath, requestPath, "--collect"),
+                "Diagnostic collection",
                 cancellationToken).ConfigureAwait(false);
 
             string resultText;
@@ -329,7 +384,8 @@ internal sealed class SessionExecutor
             {
                 throw new SessionException(
                     "The isolated session did not report a collection result " +
-                    DescribeMissingResult(execution));
+                    DescribeMissingResult(execution),
+                    exception);
             }
 
             SessionCollectResult result = SessionCollectProtocol.ReadResult(resultText);
@@ -377,11 +433,10 @@ internal sealed class SessionExecutor
                 cancellationToken).ConfigureAwait(false);
 
             _log("Checking agent-side OpenClaw config readiness.");
-            MxcExecutionResult execution = await _backend.ExecuteAsync(
+            MxcExecutionResult execution = await ExecuteTimedAsync(
                 record.ToSandboxIdOrThrow(),
-                new MxcExecutionRequest(
-                    BuildGuestCommandLine(helperPath, requestPath, "--check-config")),
-                null,
+                BuildGuestCommandLine(helperPath, requestPath, "--check-config"),
+                "Config readiness check",
                 cancellationToken).ConfigureAwait(false);
 
             string resultText;
@@ -395,7 +450,8 @@ internal sealed class SessionExecutor
             {
                 throw new SessionException(
                     "The isolated session did not report config readiness " +
-                    DescribeMissingResult(execution));
+                    DescribeMissingResult(execution),
+                    exception);
             }
 
             SessionConfigReadinessResult result =
@@ -407,6 +463,102 @@ internal sealed class SessionExecutor
             }
 
             return result;
+        }
+        finally
+        {
+            operation.Delete(requestPath);
+            operation.Delete(resultPath);
+        }
+    }
+
+    public async Task<SessionCompanionConfigResult> ConfigureCompanionAsync(
+        SessionRecord record,
+        string helperPath,
+        string nodePath,
+        string applicationDirectory,
+        int port,
+        string? nativeRootPath,
+        string? preloadPath,
+        IReadOnlyDictionary<string, string> environment,
+        bool checkOnly,
+        string? token,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        var request = new SessionCompanionConfigRequest
+        {
+            RequestId = _createRequestId(),
+            Port = port,
+            NodePath = nodePath,
+            ApplicationDirectory = applicationDirectory,
+            NativeRootPath = nativeRootPath,
+            PreloadPath = preloadPath,
+            Environment = environment,
+            CheckOnly = checkOnly,
+            Token = token
+        };
+        (string resultText, int exitCode) = await RunCompanionOperationAsync(
+            record, helperPath, request, "--companion-config",
+            "Companion Gateway configuration", cancellationToken).ConfigureAwait(false);
+        SessionCompanionConfigResult result;
+        try
+        {
+            result = SessionCompanionConfigProtocol.ReadResult(resultText, request.RequestId!);
+        }
+        catch (SessionLaunchException exception)
+        {
+            throw new SessionException(
+                $"The isolated session reported an invalid Companion configuration result: {exception.Message}",
+                exception);
+        }
+        if (result.Error is { Length: > 0 } error)
+        {
+            throw new SessionException($"The isolated session could not configure the Gateway: {error}");
+        }
+        if (exitCode != 0)
+        {
+            throw new SessionException(
+                $"The isolated session failed to configure the Gateway (executor exit code {exitCode}).");
+        }
+        return result;
+    }
+
+    private async Task<(string Text, int ExitCode)> RunCompanionOperationAsync(
+        SessionRecord record,
+        string helperPath,
+        SessionCompanionConfigRequest request,
+        string mode,
+        string subject,
+        CancellationToken cancellationToken)
+    {
+        using var operation = new SessionWorkspaceOperation(record, _isCurrentRecord);
+        string requestPath = operation.FilePath(mode[2..], request.RequestId!);
+        string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
+        try
+        {
+            await operation.WriteTextNewAsync(
+                requestPath,
+                SessionCompanionConfigProtocol.SerializeRequest(request),
+                cancellationToken).ConfigureAwait(false);
+
+            _log($"Running {subject} inside the isolated session.");
+            MxcExecutionResult execution = await ExecuteTimedAsync(
+                record.ToSandboxIdOrThrow(),
+                BuildGuestCommandLine(helperPath, requestPath, mode),
+                subject,
+                cancellationToken).ConfigureAwait(false);
+            operation.EnsureCurrent();
+            try
+            {
+                string resultText = await operation.ReadTextAsync(resultPath, cancellationToken)
+                    .ConfigureAwait(false);
+                return (resultText, execution.ExitCode);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                throw new SessionException(
+                    $"The isolated session did not report a {subject} result.", exception);
+            }
         }
         finally
         {
@@ -453,11 +605,10 @@ internal sealed class SessionExecutor
 
             _log("Installing the packaged Node.js runtime in the isolated session.");
 
-            MxcExecutionResult execution = await _backend.ExecuteAsync(
+            MxcExecutionResult execution = await ExecuteTimedAsync(
                 record.ToSandboxIdOrThrow(),
-                new MxcExecutionRequest(
-                    BuildGuestCommandLine(helperPath, requestPath, "--install-runtime")),
-                null,
+                BuildGuestCommandLine(helperPath, requestPath, "--install-runtime"),
+                "Node.js runtime installation",
                 cancellationToken).ConfigureAwait(false);
 
             string resultText;
@@ -471,7 +622,8 @@ internal sealed class SessionExecutor
             {
                 throw new SessionException(
                     "The isolated session did not report a runtime install " +
-                    DescribeMissingResult(execution));
+                    DescribeMissingResult(execution),
+                    exception);
             }
 
             SessionRuntimeInstallResult result =
@@ -551,11 +703,10 @@ internal sealed class SessionExecutor
                 cancellationToken).ConfigureAwait(false);
 
             _log("Installing OpenClaw agent tools in the isolated session.");
-            MxcExecutionResult execution = await _backend.ExecuteAsync(
+            MxcExecutionResult execution = await ExecuteTimedAsync(
                 record.ToSandboxIdOrThrow(),
-                new MxcExecutionRequest(
-                    BuildGuestCommandLine(helperPath, requestPath, "--install-tools")),
-                null,
+                BuildGuestCommandLine(helperPath, requestPath, "--install-tools"),
+                "Agent tool installation",
                 cancellationToken).ConfigureAwait(false);
             string resultText;
             try
@@ -568,7 +719,8 @@ internal sealed class SessionExecutor
             {
                 throw new SessionException(
                     "The isolated session did not report a tool install " +
-                    DescribeMissingResult(execution));
+                    DescribeMissingResult(execution),
+                    exception);
             }
 
             SessionToolInstallResult result =
@@ -686,7 +838,8 @@ internal sealed class SessionExecutor
         {
             throw new SessionException(
                 "The isolated session did not report a launch result " +
-                $"(executor exit code {execution.ExitCode}). {subject} may not have started.");
+                $"(executor exit code {execution.ExitCode}). {subject} may not have started.",
+                exception);
         }
 
         SessionLaunchResult result;
@@ -759,7 +912,8 @@ internal sealed class SessionExecutor
             throw new SessionException(
                 "The isolated session did not report a launch result " +
                 $"(executor exit code {executorExitCode}). {subject} may not " +
-                "have started.");
+                "have started.",
+                exception);
         }
 
         SessionLaunchResult result;

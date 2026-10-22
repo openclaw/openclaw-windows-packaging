@@ -189,7 +189,29 @@ persists launch choices because the later logon task has no interactive caller
 from which to recover them. [`SchTasksGatewayScheduler`](../src/OpenClaw.Launcher/Gateway/SchTasksGatewayScheduler.cs)
 uses the inbox `schtasks.exe` and a task registered for the signed-in user's
 logon, avoiding NativeAOT-incompatible Task Scheduler COM interop and avoiding
-elevation that would make the task user-unmanageable.
+elevation that would make the task user-unmanageable. After registration, the
+persistence manager reads the task back before reporting recovery ready or
+removing a Startup-folder fallback. Trigger or principal drift reports the
+expected and observed identities; an unreadable result remains unknown. The
+owning token SID and the interactive logon SID remain separate for account
+compatibility, rather than silently redirecting recovery to another user.
+
+Logon recovery runs the generated `gateway-launcher.js` through the windowless
+Windows Script Host. Both the task and the Startup-folder fallback invoke the
+same launcher, which runs Windows PowerShell hidden and waits for its exit code.
+The Startup-folder `.wsf` selects JScript explicitly and references that launcher,
+so a user's `.js` editor association does not intercept recovery.
+The PowerShell script resolves the owning package's Control execution alias from
+its manifest, invokes the package-qualified alias with `CreateNoWindow`, and
+waits for `clawctl gateway-service start --recovery`. Interactive CLI commands
+keep their normal terminal output. The background command retains normal host
+diagnostics and the task receives its exit code. Existing CMD registrations
+migrate through an explicit `clawctl setup` without `--fresh`, reusing the recorded
+session and keeping its data and gateway settings. Successful setup and teardown
+remove only marked legacy files. If an existing task cannot be replaced,
+fallback setup retains its previous recovery files and
+reports that migration still requires action. Windows Script Host
+and its JScript engine must be available for this recovery lane.
 
 The real control command is `gateway-service`, not `gateway`. The configured
 port is distinct from the upstream default. The launcher does not force the
@@ -204,6 +226,94 @@ under one lifecycle lock. A missing or already-exited gateway makes the stop a
 no-op and the start continues. If the gateway cannot be confirmed stopped, the
 operation retains its ownership record and does not launch a replacement.
 
+Start and restart wait up to 90 seconds for an owned listener. A verified live
+supervisor with no listener can then return successful acceptance with
+`gateway.state: "starting"`; this is not a running or credential-handoff claim.
+The record remains available for inspection and stop, and clients keep their
+own bounded readiness wait. Inspection failures, terminal supervisor failures,
+and listener conflicts remain unsuccessful starts.
+
+Process access denial is not evidence that a recorded PID belongs to another
+process. Inspection uses query rights instead of requesting a full-access
+handle. If Windows denies inspection or termination, the session helper reads
+the OS process creation-time snapshot without opening the target. Only an
+observed missing PID or creation-time mismatch permits stale-record recovery.
+A matching identity or unavailable snapshot remains unknown: its record stays
+intact and no replacement is launched. Stop still pins and verifies its handle
+before termination, and never kills a PID selected only by a snapshot.
+
+## Companion uses the package's isolated session
+
+The Windows Companion app selects the current-user Gateway MSIX by its exact
+package registration and qualified `clawctl.exe` alias. It probes
+`clawctl status --json` for the versioned `isolated-session` integration
+contract. Operational exception responses retain this capability metadata with
+`ok: false`, the selected command, and the original error. Capability does not
+assert session readiness or authorize credential handoff: Companion can reach
+its existing explicit package setup step, whose successful ready-session
+response is still required. Status itself never provisions or repairs a session.
+After setup, `clawctl companion prepare --port <port> --json`
+instructs [`SessionCompanionConfig`](../src/OpenClaw.SessionHost/SessionCompanionConfig.cs)
+to read the agent's effective Gateway configuration through upstream-owned
+runtime code. The packaged `plugin-sdk/health` snapshot reader runs with
+observation and suspicious-config recovery disabled, using core-only validation
+to avoid plugin-state and migration reads. The public
+`openclaw config get` display command is redacted and
+is not a credential-delivery path. A successful existing configuration must
+have `gateway.mode: "local"` and a loopback bind when specified; otherwise
+Companion requires explicit recovery rather than starting a Gateway with an
+incompatible mode. A wholly absent or empty Gateway can be initialized; a
+partially configured Gateway without local mode requires explicit recovery.
+Implicit password authentication is incompatible even when a token is also
+present. When an effective local loopback token configuration already exists,
+prepare returns it without rewriting the configuration file. Otherwise the
+agent uses packaged upstream `plugin-sdk/config-mutation` to create missing
+values under the upstream mutation lock. The original config path, root hash,
+and effective Gateway must still match, including values read from `$include`
+files; a concurrent edit fails rather than being overwritten.
+Before pairing and publishing Companion's record, the package-qualified
+`clawctl companion prepare --check --json` returns the agent's effective port
+and token so Companion can compare them with its setup record. This check
+neither patches configuration, restores backups, nor records config-health
+observations. The response contains a credential and must be kept private.
+The host does not write a second profile, inherit the invoking user's profile
+overrides, or select device-installed Node.js. The agent rejects profile and
+Gateway overrides both before and after upstream environment loading, and
+requires the upstream-selected config path to match the agent's default
+profile. Incompatible configuration
+requires explicit recovery rather than overwriting credentials.
+
+[`GatewayController`](../src/OpenClaw.Launcher/Gateway/GatewayController.cs)
+starts, stops, and inspects the Gateway on Companion's behalf.
+When listener attribution is available, `clawctl gateway-service status --json`
+reports the recorded sandbox and agent SID alongside guest-observed listener
+process IDs, creation times, sequence numbers, and ports.
+Guest process-sequence snapshots bracket the listener and ancestry
+observations. Each listener and every ancestor used in attribution must have
+the same nonzero sequence in both snapshots; creation times come from that
+same tree observation.
+Those fields are evidence from the trusted package-qualified invocation, not
+a bearer credential or sufficient proof when copied out of context. Companion
+compares them with two fresh host-side listener and OS process-sequence
+snapshots before any credential handoff. The agent's process DACL denies
+cross-account process handles to Companion, so a host process-start-time or
+token-SID query cannot be the ownership check. Windows 11 builds with
+`SystemBasicProcessInformation` expose an OS-owned per-process sequence
+without opening that handle. Gateway health and lifecycle still use the
+isolated process-tree and observed listener checks when process sequences are
+unavailable; in that case the package omits `gateway.ownership` and Companion
+fails closed before sending credentials. Unknown, incomplete, or replaced
+listeners fail closed instead of accepting a reused PID.
+
+Pairing uses package-qualified `openclaw devices list --json` and
+`openclaw devices approve <request-id> --json` in the isolated session.
+`openclaw` runs transparently as the agent user and reads that account's
+configuration; Companion does not write a host-profile config or pass a token
+through command-line arguments or environment overrides. Before each command,
+Companion verifies the live listener and checks that the agent's port and token
+still match its setup record. It matches the pending request to its own device
+ID and public key, then approves only that exact request.
+
 ## Diagnostics and build inputs have different trust roles
 
 [`HostDiagnosticLog`](../src/OpenClaw.Launcher/HostDiagnosticLog.cs) writes
@@ -211,12 +321,48 @@ host diagnostics beneath packaged LocalState when packaged, or the documented
 per-user fallback otherwise. A named mutex keyed by the log path keeps
 concurrent writers from interleaving records.
 
+[`GatewayController`](../src/OpenClaw.Launcher/Gateway/GatewayController.cs)
+records how long each gateway status inspection took and the state it
+observed. [`SessionExecutor`](../src/OpenClaw.Launcher/Session/SessionExecutor.cs)
+records how long each non-attached session exchange, such as the Control UI
+handoff, took and its executor exit code. An inspection or exchange that
+throws instead, including on cancellation, is recorded with its duration,
+exception type, and any MXC error classification. Together they show where a
+slow command spent its time without a debugger. They never include captured
+output, exception messages, arguments, environment, URLs, or tokens.
+
+Each host start records an `Environment:` entry from
+[`HostEnvironment`](../src/OpenClaw.Launcher/HostEnvironment.cs): the Windows
+build and update revision, OS and process architecture, the package full name
+with the origin Windows recorded for the install (Developer Mode loose-layout
+registration, Store-signed, or developer-signed MSIX) and its install path, the
+compiled package and payload versions, the staged MXC runtime and wire schema,
+the packaged Node.js version, and the .NET runtime. Reading these facts starts
+no process; the MXC backend probe is logged where support is checked instead.
+The facts are descriptive only and never authorize an operation.
+
+Failure records are separate from those timing records. Users see an
+exception's message; the log records the whole failure through
+[`DiagnosticFailure`](../src/OpenClaw.Launcher/DiagnosticFailure.cs): its type
+and message, any MXC code, backend code, and failing operation, the Windows
+error code behind I/O and native failures, and every inner cause. A message can
+repeat guest-reported detail, such as an agent-profile path, which is why each
+bundle warns to review it before sharing. The process's last-chance handler
+also records the stack trace. The one deliberate omission is a browser launch
+failure, whose message would repeat a Control UI URL that can carry the gateway
+credential.
+
 [`DiagnosticsBundle`](../src/OpenClaw.Launcher/Gateway/DiagnosticsBundle.cs)
 collects troubleshooting material through the shared workspace while excluding
-credential stores. [`DiagnosticsRedactor`](../src/OpenClaw.Launcher/Gateway/DiagnosticsRedactor.cs)
-redacts credential-shaped JSON members in remaining text, but that redaction
-is deliberately best-effort and does not make a bundle safe to share without
-review.
+credential stores, and writes the collecting host's environment into its
+manifest. It also reads every recent gateway launch's output log and supervisor
+status from that workspace. It keeps a bounded tail of each and refuses reparse
+points, because the guest can write there.
+[`DiagnosticsRedactor`](../src/OpenClaw.Launcher/Gateway/DiagnosticsRedactor.cs)
+redacts credential-shaped JSON members, URL parameters, environment-style
+assignments, and authorization header credentials in the remaining text, the
+manifest, and the notes the command returns. That redaction is deliberately
+best-effort and does not make a bundle safe to share without review.
 
 Diagnostics describe runtime evidence; they are not release verification.
 The build path independently creates an inventory of package inputs and hashes
@@ -258,4 +404,4 @@ flowchart LR
 | MXC runtime and wire boundary | [`mxc-runtime.lock.json`](../mxc-runtime.lock.json), [`Get-MxcRuntime.ps1`](../scripts/Get-MxcRuntime.ps1), [`MxcRuntimeLocator.cs`](../src/OpenClaw.Launcher/Mxc/MxcRuntimeLocator.cs), [`MxcCliSessionClient.cs`](../src/OpenClaw.Launcher/Mxc/MxcCliSessionClient.cs), [`MxcWireProtocol.cs`](../src/OpenClaw.Launcher/Mxc/MxcWireProtocol.cs) |
 | Agent runtime installation | [`SessionRuntimeInstaller.cs`](../src/OpenClaw.SessionHost/SessionRuntimeInstaller.cs) |
 | Gateway lifecycle | [`SchTasksGatewayScheduler.cs`](../src/OpenClaw.Launcher/Gateway/SchTasksGatewayScheduler.cs), [`GatewayController.cs`](../src/OpenClaw.Launcher/Gateway/GatewayController.cs), [`GatewayConfigurationStore.cs`](../src/OpenClaw.Launcher/Gateway/GatewayConfigurationStore.cs) |
-| Diagnostics and payload integrity | [`HostDiagnosticLog.cs`](../src/OpenClaw.Launcher/HostDiagnosticLog.cs), [`DiagnosticsBundle.cs`](../src/OpenClaw.Launcher/Gateway/DiagnosticsBundle.cs), [`DiagnosticsRedactor.cs`](../src/OpenClaw.Launcher/Gateway/DiagnosticsRedactor.cs), [`Build-MSIX.ps1`](../scripts/Build-MSIX.ps1) |
+| Diagnostics and payload integrity | [`HostDiagnosticLog.cs`](../src/OpenClaw.Launcher/HostDiagnosticLog.cs), [`HostEnvironment.cs`](../src/OpenClaw.Launcher/HostEnvironment.cs), [`DiagnosticFailure.cs`](../src/OpenClaw.Launcher/DiagnosticFailure.cs), [`DiagnosticsBundle.cs`](../src/OpenClaw.Launcher/Gateway/DiagnosticsBundle.cs), [`DiagnosticsRedactor.cs`](../src/OpenClaw.Launcher/Gateway/DiagnosticsRedactor.cs), [`Build-MSIX.ps1`](../scripts/Build-MSIX.ps1) |

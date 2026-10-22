@@ -1,11 +1,12 @@
 {
   "id": "gateway-isolation",
   "name": "Windows Launcher",
-  "description": "Reports the Windows launch mode selected for the running Gateway.",
+  "description": "Reports Windows isolation status and supplies local-session agent guidance.",
   "enabledByDefault": true,
   "activation": {
     "onStartup": true
   },
+  "skills": ["./skills"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

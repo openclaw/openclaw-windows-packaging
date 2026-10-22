@@ -58,11 +58,13 @@ internal sealed class MxcException : Exception
         MxcErrorCode code,
         string message,
         string? backendCode = null,
-        Exception? innerException = null)
+        Exception? innerException = null,
+        string? operation = null)
         : base(message, innerException)
     {
         Code = code;
         BackendCode = backendCode;
+        Operation = operation;
     }
 
     public MxcErrorCode Code { get; }
@@ -73,6 +75,13 @@ internal sealed class MxcException : Exception
     /// report what the runtime actually said.
     /// </summary>
     public string? BackendCode { get; }
+
+    /// <summary>
+    /// The backend API call that failed, e.g.
+    /// <c>IsoSessionOps.StartSessionAsync</c>. It is diagnostic detail, not a
+    /// contract: MXC derives it from OS API names that may change.
+    /// </summary>
+    public string? Operation { get; }
 
     // Codes observed from @microsoft/mxc-sdk 0.8.0 wxc-exec.exe against the
     // Windows IsolationSession backend. Anything unlisted stays Unknown and

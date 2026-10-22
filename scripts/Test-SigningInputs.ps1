@@ -10,11 +10,30 @@ param(
     [string]$BundlePath,
 
     [Parameter(Mandatory)]
-    [string]$RequestedRef,
+    [string]$SourcePath,
+
+    [Parameter(Mandatory)]
+    [ValidatePattern('\A[1-9][0-9]*\z')]
+    [string]$WorkflowRunId,
+
+    [Parameter(Mandatory)]
+    [ValidateSet('official', 'store')]
+    [string]$SigningMode,
 
     [Parameter(Mandatory)]
     [ValidatePattern('^[0-9a-fA-F]{40}$')]
-    [string]$PackagingCommit
+    [string]$PackagingCommit,
+
+    [Parameter(Mandatory)][string]$WorkflowRef,
+    [Parameter(Mandatory)][string]$GitHubRef,
+    [Parameter(Mandatory)][string]$EventName,
+
+    [string]$RequestedRef = '',
+
+    [string]$GatewayVersion = '',
+
+    [ValidateSet('Store', 'Sideload')]
+    [string]$IdentityChannel = 'Store'
 )
 
 Set-StrictMode -Version Latest
@@ -153,36 +172,50 @@ $policy = Get-Content -LiteralPath $resolvedPolicyPath -Raw |
 
 if (
     $policy.repository -ne 'https://github.com/openclaw/openclaw' -or
-    [string]::IsNullOrWhiteSpace([string]$policy.gatewayTag) -or
     $policy.msixRevision -isnot [int64] -or
-    [string]::IsNullOrWhiteSpace([string]$policy.payloadPackageVersion) -or
-    $policy.gatewayTag -ne "v$($policy.payloadPackageVersion)" -or
-    $policy.approvedCommit -notmatch '^[0-9a-fA-F]{40}$' -or
     [string]::IsNullOrWhiteSpace([string]$policy.packageIdentityName) -or
     [string]::IsNullOrWhiteSpace([string]$policy.packageFamilyName) -or
-    [string]::IsNullOrWhiteSpace([string]$policy.publisher)
+    [string]::IsNullOrWhiteSpace([string]$policy.publisher) -or
+    [string]::IsNullOrWhiteSpace([string]$policy.sideloadPackageIdentity.name) -or
+    [string]::IsNullOrWhiteSpace([string]$policy.sideloadPackageIdentity.familyName) -or
+    [string]::IsNullOrWhiteSpace([string]$policy.sideloadPackageIdentity.publisher)
 ) {
     throw 'The Gateway MSIX release policy is invalid.'
 }
 
-$releaseIdentity = & (
-    Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1'
-) `
-    -GatewayTag ([string]$policy.gatewayTag) `
+$expectedIdentity = if ($IdentityChannel -eq 'Sideload') {
+    $policy.sideloadPackageIdentity
+}
+else {
+    [pscustomobject]@{
+        name = $policy.packageIdentityName
+        familyName = $policy.packageFamilyName
+        publisher = $policy.publisher
+    }
+}
+$expectedIdentityChannel = $IdentityChannel.ToLowerInvariant()
+
+# Replay the producer's source selection without querying the moving channel.
+$source = & (Join-Path $PSScriptRoot 'Get-WorkflowSource.ps1') `
+    -PolicyPath $resolvedPolicyPath `
+    -OutputPath $SourcePath `
+    -WorkflowRunId $WorkflowRunId `
+    -PackagingCommit $PackagingCommit `
+    -WorkflowRef $WorkflowRef -GitHubRef $GitHubRef -EventName $EventName `
+    -SigningMode $SigningMode `
+    -Ref $RequestedRef `
+    -GatewayVersion $GatewayVersion `
+    -ReuseSnapshot
+$releaseIdentitySource = if ($null -ne $source.PSObject.Properties['releaseIdentitySource']) {
+    $source.releaseIdentitySource
+}
+else { $source }
+$releaseIdentity = & (Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1') `
+    -GatewayTag $releaseIdentitySource.releaseTag `
     -MSIXRevision ([int]$policy.msixRevision)
 $approvedPackageVersion = $releaseIdentity.PackageVersion
-$approvedPayloadVersion = [string]$policy.payloadPackageVersion
-$approvedCommit = ([string]$policy.approvedCommit).ToLowerInvariant()
-$normalizedRequestedRef = $RequestedRef.Trim().ToLowerInvariant()
-if (
-    $normalizedRequestedRef -notmatch '^[0-9a-f]{40}$' -or
-    $normalizedRequestedRef -ne $approvedCommit
-) {
-    throw (
-        'Release authorization requires the approved immutable OpenClaw commit: ' +
-        $approvedCommit
-    )
-}
+$approvedPayloadVersion = $source.packageVersion
+$approvedCommit = $source.resolvedCommit
 
 $expectedPackagingCommit = $PackagingCommit.ToLowerInvariant()
 $expectedPackageVersion = $null
@@ -231,9 +264,10 @@ foreach ($architecture in @('x64', 'arm64')) {
         $metadata.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
         $metadata.signed -ne $false -or
         $metadata.packageVersion -ne $approvedPackageVersion -or
-        $metadata.packageIdentityName -ne $policy.packageIdentityName -or
-        $metadata.packageFamilyName -ne $policy.packageFamilyName -or
-        $metadata.publisher -ne $policy.publisher
+        $metadata.identityChannel -ne $expectedIdentityChannel -or
+        $metadata.packageIdentityName -ne $expectedIdentity.name -or
+        $metadata.packageFamilyName -ne $expectedIdentity.familyName -or
+        $metadata.publisher -ne $expectedIdentity.publisher
     ) {
         throw "The $architecture MSIX metadata is not eligible for signing."
     }
@@ -463,8 +497,8 @@ foreach ($architecture in @('x64', 'arm64')) {
         )
         if (
             $null -eq $identity -or
-            $identity.Name -ne $policy.packageIdentityName -or
-            $identity.Publisher -ne $policy.publisher -or
+            $identity.Name -ne $expectedIdentity.name -or
+            $identity.Publisher -ne $expectedIdentity.publisher -or
             $identity.ProcessorArchitecture -ne $architecture -or
             $identity.Version -ne $metadata.packageVersion
         ) {
@@ -608,8 +642,8 @@ try {
     }
     if (
         $null -eq $bundleIdentity -or
-        $bundleIdentity.Name -ne $policy.packageIdentityName -or
-        $bundleIdentity.Publisher -ne $policy.publisher -or
+        $bundleIdentity.Name -ne $expectedIdentity.name -or
+        $bundleIdentity.Publisher -ne $expectedIdentity.publisher -or
         -not $bundleVersionIsValid -or
         $bundleVersion -ne $approvedPackageVersion
     ) {

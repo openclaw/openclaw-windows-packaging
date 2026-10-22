@@ -2,6 +2,7 @@ using System.CommandLine;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using OpenClaw.Launcher.Gateway;
 
 namespace OpenClaw.Launcher.Tests;
 
@@ -105,9 +106,38 @@ public sealed class ClawCtlCommandLineTests
                 ClawCtlCommandLine.OpenCommandName,
                 ClawCtlCommandLine.CompletionCommandName,
                 "pwsh",
-                "gateway-service"
+                "gateway-service",
+                "companion"
             ],
             root.Subcommands.Select(command => command.Name));
+    }
+
+    [Fact]
+    public async Task RecoveryRemediationInvokesSetupWithoutResettingTheInstallation()
+    {
+        SetupOptions? requestedSetup = null;
+        RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
+        {
+            Setup = (options, _) =>
+            {
+                requestedSetup = options;
+                return Task.FromResult(0);
+            },
+            Status = _ => Task.FromResult(1),
+            CollectLogs = (_, _) => Task.FromResult(1),
+            Teardown = (_, _) => Task.FromResult(1),
+            PowerShell = (_, _) => Task.FromResult(1),
+            GatewayStart = (_, _) => Task.FromResult(1),
+            GatewayStatus = _ => Task.FromResult(1),
+            GatewayStop = _ => Task.FromResult(1),
+            GatewayRestart = _ => Task.FromResult(1)
+        });
+
+        int exitCode = await root.Parse(
+            [.. GatewayPersistenceManager.RepairCommand.Split(' ').Skip(1)]).InvokeAsync();
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(new SetupOptions(Fresh: false, Force: false), requestedSetup);
     }
 
     [Fact]
@@ -169,6 +199,66 @@ public sealed class ClawCtlCommandLineTests
     }
 
     [Fact]
+    public async Task CompanionConfigurationCheckDoesNotRequireAPort()
+    {
+        int receivedPort = -1;
+        bool receivedCheckOnly = false;
+        RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
+        {
+            Setup = (_, _) => Task.FromResult(0),
+            Status = _ => Task.FromResult(0),
+            CollectLogs = (_, _) => Task.FromResult(0),
+            Teardown = (_, _) => Task.FromResult(0),
+            PowerShell = (_, _) => Task.FromResult(0),
+            GatewayStart = (_, _) => Task.FromResult(0),
+            GatewayStatus = _ => Task.FromResult(0),
+            GatewayStop = _ => Task.FromResult(0),
+            GatewayRestart = _ => Task.FromResult(0),
+            CompanionPrepare = (port, checkOnly, _, _) =>
+            {
+                receivedPort = port;
+                receivedCheckOnly = checkOnly;
+                return Task.FromResult(0);
+            }
+        });
+
+        int exitCode = await root.Parse("companion prepare --check --json").InvokeAsync();
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(0, receivedPort);
+        Assert.True(receivedCheckOnly);
+    }
+
+    [Fact]
+    public async Task CompanionRestoreTokenUsesTheExplicitStdinOption()
+    {
+        bool receivedRestoreToken = false;
+        RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
+        {
+            Setup = (_, _) => Task.FromResult(0),
+            Status = _ => Task.FromResult(0),
+            CollectLogs = (_, _) => Task.FromResult(0),
+            Teardown = (_, _) => Task.FromResult(0),
+            PowerShell = (_, _) => Task.FromResult(0),
+            GatewayStart = (_, _) => Task.FromResult(0),
+            GatewayStatus = _ => Task.FromResult(0),
+            GatewayStop = _ => Task.FromResult(0),
+            GatewayRestart = _ => Task.FromResult(0),
+            CompanionPrepare = (_, _, restoreToken, _) =>
+            {
+                receivedRestoreToken = restoreToken;
+                return Task.FromResult(0);
+            }
+        });
+
+        int exitCode = await root.Parse(
+            "companion prepare --port 19001 --restore-token-stdin --json").InvokeAsync();
+
+        Assert.Equal(0, exitCode);
+        Assert.True(receivedRestoreToken);
+    }
+
+    [Fact]
     public async Task GatewayServiceRestartInvokesOnlyTheRestartHandler()
     {
         int restarts = 0;
@@ -211,11 +301,15 @@ public sealed class ClawCtlCommandLineTests
             GatewayRestart = _ => Task.FromResult(0)
         });
 
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
         int exitCode = await root
             .Parse("gateway-service restart --recovery")
-            .InvokeAsync();
+            .InvokeAsync(new InvocationConfiguration { Output = output, Error = error });
 
         Assert.Equal(1, exitCode);
+        Assert.Contains("--recovery", error.ToString(), StringComparison.Ordinal);
     }
 
     [Theory]
@@ -255,10 +349,17 @@ public sealed class ClawCtlCommandLineTests
     [InlineData("status --json")]
     [InlineData("collect-logs --json")]
     [InlineData("teardown --json")]
+    [InlineData("open --json")]
+    [InlineData("completion --json")]
+    [InlineData("--json gateway-service status")]
     [InlineData("gateway-service start --json")]
+    [InlineData("gateway-service --json start")]
     [InlineData("gateway-service status --json")]
+    [InlineData("gateway-service --json status")]
     [InlineData("gateway-service stop --json")]
+    [InlineData("gateway-service --json stop")]
     [InlineData("gateway-service restart --json")]
+    [InlineData("gateway-service --json restart")]
     public async Task JsonIsAvailableToEveryNonInteractiveCommand(string commandLine)
     {
         var outputOptions = new ClawCtlOutputOptions();
@@ -268,6 +369,8 @@ public sealed class ClawCtlCommandLineTests
             Status = _ => Task.FromResult(0),
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
+            Open = _ => Task.FromResult(0),
+            Completion = (_, _) => Task.FromResult(0),
             PowerShell = (_, _) => Task.FromResult(0),
             GatewayStart = (_, _) => Task.FromResult(0),
             GatewayStatus = _ => Task.FromResult(0),
@@ -281,17 +384,16 @@ public sealed class ClawCtlCommandLineTests
         Assert.True(outputOptions.Json);
     }
 
-    [Fact]
-    public async Task JsonIsRejectedForInteractivePowerShell()
+    [Theory]
+    [InlineData("pwsh --json")]
+    [InlineData("--json pwsh")]
+    public async Task JsonIsRejectedForInteractivePowerShell(string commandLine)
     {
         (int exitCode, _, string error) =
-            await RunAsync("pwsh", "--json").ConfigureAwait(true);
+            await RunAsync(commandLine.Split(' ')).ConfigureAwait(true);
 
         Assert.Equal(1, exitCode);
-        Assert.Contains(
-            "'--json' is not supported for 'pwsh'",
-            error,
-            StringComparison.Ordinal);
+        Assert.Contains("--json", error, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -366,16 +468,18 @@ public sealed class ClawCtlCommandLineTests
     }
 
     [Theory]
-    [InlineData("pwsh --command one --file two.ps1")]
-    [InlineData("pwsh --command one unexpected")]
-    [InlineData("pwsh unexpected")]
-    public async Task InvalidPowerShellModeDoesNotStartWork(string commandLine)
+    [InlineData("pwsh --command one --file two.ps1", "'--command' and '--file' cannot be used together.")]
+    [InlineData("pwsh --command one unexpected", "PowerShell script arguments require '--file'.")]
+    [InlineData("pwsh unexpected", "PowerShell script arguments require '--file'.")]
+    public async Task InvalidPowerShellModeDoesNotStartWork(
+        string commandLine,
+        string expectedError)
     {
         (int exitCode, _, string error) =
             await RunAsync(commandLine.Split(' ')).ConfigureAwait(true);
 
         Assert.Equal(1, exitCode);
-        Assert.NotEmpty(error);
+        Assert.Contains(expectedError, error, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -828,18 +932,24 @@ public sealed class ClawCtlCommandLineTests
         ClawCtlConsole.WriteVersion(colored, useColor: true);
         string text = colored.ToString();
 
-        int versionIndex = text.IndexOf(
-            ClawCtlBuildMetadata.PackageVersion,
-            StringComparison.Ordinal);
-        int commitIndex = text.IndexOf(
-            ClawCtlBuildMetadata.PackageCommit,
-            StringComparison.Ordinal);
+        foreach ((string label, string version, string commit) in new[]
+        {
+            ("Package:", ClawCtlBuildMetadata.PackageVersion, ClawCtlBuildMetadata.PackageCommit),
+            ("Payload:", ClawCtlBuildMetadata.PayloadVersion, ClawCtlBuildMetadata.PayloadCommit),
+        })
+        {
+            string row = Assert.Single(text.Split('\n'), line => line.Contains(label, StringComparison.Ordinal));
+            int versionIndex = row.IndexOf(
+                version,
+                row.IndexOf(label, StringComparison.Ordinal) + label.Length,
+                StringComparison.Ordinal);
+            Assert.True(versionIndex >= 0);
+            int versionEnd = versionIndex + version.Length;
+            int commitIndex = row.IndexOf($"({commit})", versionEnd, StringComparison.Ordinal);
 
-        Assert.True(versionIndex >= 0 && commitIndex > versionIndex);
-        Assert.Contains(
-            "\u001b[",
-            text[versionIndex..commitIndex],
-            StringComparison.Ordinal);
+            Assert.True(commitIndex >= versionEnd);
+            Assert.Contains("\u001b[", row[versionEnd..commitIndex], StringComparison.Ordinal);
+        }
     }
 
     // The old parser rejected `--version` combined with anything else. The
@@ -878,6 +988,23 @@ public sealed class ClawCtlCommandLineTests
 
         Assert.Equal(1, exitCode);
         Assert.NotEmpty(error);
+        Assert.DoesNotContain(
+            "package is ready",
+            output,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SetupForceWithoutFreshNamesTheOptionItRequires()
+    {
+        (int exitCode, string output, string error) =
+            await RunAsync("setup", "--force").ConfigureAwait(true);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains(
+            "Option '--force' requires option '--fresh'.",
+            error,
+            StringComparison.Ordinal);
         Assert.DoesNotContain(
             "package is ready",
             output,

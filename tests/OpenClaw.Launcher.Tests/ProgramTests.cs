@@ -322,6 +322,33 @@ public sealed class ProgramTests : IDisposable
                 StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData("start", "Preparing the isolated session.")]
+    [InlineData("restart", "Stopping the gateway.")]
+    public async Task GatewayLifecycleNarratesOnStandardErrorOnly(
+        string action,
+        string firstStage)
+    {
+        SessionRuntime runtime = await SetUpSessionAsync().ConfigureAwait(true);
+        ((FakeMxcSessionClient)runtime.Backend).ExecuteFailure =
+            new SessionException("gateway launch failed");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        await Assert.ThrowsAsync<SessionException>(
+            () => Program.RunControlAsync(
+                CreateSetupOptions(Path.Combine(_testDirectory, "app")),
+                ["gateway-service", action],
+                _ => { },
+                output,
+                error,
+                installationLifecycle: new FailingFreshLifecycle(runtime),
+                getLogonSessionId: () => $"logon-{action}"));
+
+        Assert.Contains(firstStage, error.ToString(), StringComparison.Ordinal);
+        Assert.Equal(string.Empty, output.ToString());
+    }
+
     [Fact]
     public async Task ManualGatewayStartAcknowledgesBeforeAStartFailure()
     {
@@ -342,6 +369,115 @@ public sealed class ProgramTests : IDisposable
         var store = new GatewayGuidanceStateStore(
             runtime.Paths.GatewayGuidanceStatePath);
         Assert.True(store.IsAcknowledged("logon-manual"));
+    }
+
+    [Theory]
+    [InlineData("start", false)]
+    [InlineData("start", true)]
+    [InlineData("restart", false)]
+    [InlineData("restart", true)]
+    public async Task GatewayStartAcknowledgesAnOwnedPendingLaunchWithoutClaimingReadiness(
+        string action,
+        bool json)
+    {
+        SessionRuntime runtime = await SetUpSessionAsync();
+        var clock = new Gateway.AdvancingTimeProvider(DateTimeOffset.UtcNow);
+        new GatewayConfigurationStore(runtime.Paths.GatewayConfigurationPath).Write(
+            new GatewayLaunchConfiguration { Port = 18789 });
+        ConfigureGatewayLaunch((FakeMxcSessionClient)runtime.Backend, new SessionInspectResult
+        {
+            ProcessFound = true,
+            StartTimeMatches = true,
+            SupervisorState = SessionSupervisorStatus.RunningState
+        });
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        int exitCode = await Program.RunControlAsync(
+            CreateSetupOptions(Path.Combine(_testDirectory, "app")),
+            json ? ["gateway-service", action, "--json"] : ["gateway-service", action, "--no-color"],
+            _ => { },
+            output,
+            error,
+            installationLifecycle: new StubbedRecoveryLifecycle(runtime),
+            clock: clock,
+            getLogonSessionId: () => "logon-pending");
+
+        Assert.Equal(0, exitCode);
+        Assert.True(clock.WaitCount > 0);
+        GatewayRecord record = runtime.GatewayState.Read().Record!;
+        Assert.Equal(1234, record.ProcessId);
+        Assert.Equal(18789, record.Port);
+        Assert.False(record.LaunchPending);
+        Assert.Null(record.ObservedPorts);
+        if (json)
+        {
+            using JsonDocument document = JsonDocument.Parse(output.ToString());
+            JsonElement root = document.RootElement;
+            Assert.True(root.GetProperty("ok").GetBoolean());
+            Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
+            Assert.Equal($"gateway-service {action}", root.GetProperty("command").GetString());
+            Assert.Equal("isolated-session", root.GetProperty("integration").GetProperty("kind").GetString());
+            Assert.Equal(1, root.GetProperty("integration").GetProperty("version").GetInt32());
+            JsonElement gateway = root.GetProperty("gateway");
+            Assert.Equal("starting", gateway.GetProperty("state").GetString());
+            Assert.False(gateway.TryGetProperty("ownership", out _));
+            Assert.False(gateway.TryGetProperty("url", out _));
+            Assert.False(gateway.TryGetProperty("port", out _));
+            Assert.False(gateway.TryGetProperty("readiness", out _));
+            Assert.False(root.TryGetProperty("companion", out _));
+            Assert.False(root.TryGetProperty("error", out _));
+            Assert.Equal(string.Empty, error.ToString());
+        }
+        else
+        {
+            Assert.Contains("starting", output.ToString(), StringComparison.Ordinal);
+            Assert.Contains("not listening yet", output.ToString(), StringComparison.Ordinal);
+            Assert.Contains("gateway-service status", output.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("Open Control UI", output.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Waiting for the gateway", error.ToString(), StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("start", false)]
+    [InlineData("start", true)]
+    [InlineData("restart", false)]
+    [InlineData("restart", true)]
+    public async Task GatewayStartDoesNotAcknowledgeAnExitedOrUnobservableLaunch(
+        string action,
+        bool inspectionFailed)
+    {
+        SessionRuntime runtime = await SetUpSessionAsync();
+        ConfigureGatewayLaunch((FakeMxcSessionClient)runtime.Backend, new SessionInspectResult
+        {
+            ProcessFound = true,
+            StartTimeMatches = true,
+            SupervisorState = inspectionFailed ? null : SessionSupervisorStatus.ExitedState,
+            SupervisorDetail = inspectionFailed ? null : "the application exited with code 78",
+            Error = inspectionFailed ? "inspection failed" : null
+        });
+        using var output = new StringWriter();
+
+        int exitCode = await Program.RunControlAsync(
+            CreateSetupOptions(Path.Combine(_testDirectory, "app")),
+            ["gateway-service", action, "--json"],
+            _ => { },
+            output,
+            TextWriter.Null,
+            installationLifecycle: new StubbedRecoveryLifecycle(runtime),
+            getLogonSessionId: () => "logon-failed");
+
+        Assert.Equal(1, exitCode);
+        using JsonDocument document = JsonDocument.Parse(output.ToString());
+        JsonElement root = document.RootElement;
+        Assert.False(root.GetProperty("ok").GetBoolean());
+        Assert.False(root.TryGetProperty("gateway", out _));
+        Assert.Contains(
+            inspectionFailed ? "inspection failed" : "exited with code 78",
+            root.GetProperty("error").GetProperty("message").GetString(),
+            StringComparison.Ordinal);
+        Assert.NotNull(runtime.GatewayState.Read().Record);
     }
 
     [Fact]
@@ -373,12 +509,9 @@ public sealed class ProgramTests : IDisposable
         string activationScriptPath =
             Path.ChangeExtension(runtime.Paths.GatewayLauncherPath, ".ps1");
         string legacyScript =
-            GatewayLauncherScript.CreateActivationScript(
-                runtime.Paths.PackageFamilyName!)
-            .Replace(
-                GatewayLauncherScript.ControlArguments,
-                "gateway-service start",
-                StringComparison.Ordinal);
+            GatewayLauncherScript.CreateLegacyActivationScript(
+                runtime.Paths.PackageFamilyName!,
+                "gateway-service start");
         await File.WriteAllTextAsync(
             activationScriptPath,
             legacyScript,
@@ -405,6 +538,88 @@ public sealed class ProgramTests : IDisposable
                 activationScriptPath,
                 CancellationToken.None),
             StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RecoveryRemediationMigratesLegacyFilesAndPreservesSessionData(bool fallback)
+    {
+        SessionRuntime runtime = await SetUpSessionAsync();
+        SessionRecord recorded = runtime.RequireSetup();
+        string workspace = recorded.WorkspacePath!;
+        var configuration = new GatewayConfigurationStore(runtime.Paths.GatewayConfigurationPath);
+        configuration.Write(new GatewayLaunchConfiguration
+        {
+            Port = ushort.MaxValue,
+            WorkingDirectory = workspace
+        });
+        byte[] configurationBefore = await File.ReadAllBytesAsync(runtime.Paths.GatewayConfigurationPath);
+        string dataPath = Path.Combine(workspace, "retained %PATH% 日本語.json");
+        await File.WriteAllTextAsync(dataPath, "{\"fixture\":\"retained session data\"}");
+        byte[] dataBefore = await File.ReadAllBytesAsync(dataPath);
+        var scheduler = new Gateway.FakeGatewayTaskScheduler();
+        var recovery = new GatewayPersistenceManager(
+            scheduler,
+            new GatewayPersistenceOptions(
+                UserSid: "S-1-5-21-1",
+                PackageFamilyName: runtime.Paths.PackageFamilyName!,
+                LauncherPath: runtime.Paths.GatewayLauncherPath,
+                StartupFolderPath: Path.Combine(_testDirectory, "startup"),
+                WorkingDirectory: runtime.Paths.StateRoot,
+                ScriptHostPath: @"C:\Windows\System32\wscript.exe"));
+        string legacyLauncher = Path.ChangeExtension(runtime.Paths.GatewayLauncherPath, ".cmd");
+        string legacyFallback = Path.ChangeExtension(recovery.FallbackPath, ".cmd");
+        Directory.CreateDirectory(Path.GetDirectoryName(legacyFallback)!);
+        await File.WriteAllTextAsync(legacyLauncher, GatewayLauncherScript.Marker);
+        await File.WriteAllTextAsync(legacyFallback, GatewayLauncherScript.Marker);
+        await File.WriteAllTextAsync(
+            Path.ChangeExtension(runtime.Paths.GatewayLauncherPath, ".ps1"),
+            GatewayLauncherScript.CreateLegacyActivationScript(
+                runtime.Paths.PackageFamilyName!, "gateway-service start"));
+        if (fallback)
+        {
+            scheduler.RegisterResult = GatewayTaskOperation.Failure("Access is denied.");
+        }
+        else
+        {
+            scheduler.Probe = GatewayTaskProbe.Present(GatewayTaskDefinition.CreateSnapshot(
+                "S-1-5-21-1", @"C:\Windows\System32\cmd.exe", legacyLauncher) with
+            {
+                Arguments = $"/d /c \"\"{legacyLauncher}\"\""
+            });
+        }
+        GatewayPersistenceStatus before = await recovery.GetStatusAsync(CancellationToken.None);
+        Assert.Equal(GatewayPersistenceState.ActionRequired, before.State);
+        Assert.StartsWith("clawctl ", before.Remediation, StringComparison.Ordinal);
+        string[] arguments = [.. before.Remediation!.Split(' ').Skip(1), "--json"];
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        int exitCode = await Program.RunControlAsync(
+            CreateSetupOptions(Path.Combine(_testDirectory, "app")),
+            arguments,
+            _ => { },
+            output,
+            error,
+            installationLifecycle: new StubbedRecoveryLifecycle(runtime, recovery));
+
+        Assert.True(exitCode == 0, $"'{before.Remediation}' returned {exitCode}: {error}");
+        using JsonDocument document = JsonDocument.Parse(output.ToString());
+        Assert.True(document.RootElement.GetProperty("ok").GetBoolean());
+        SessionRecord retained = runtime.RequireSetup();
+        Assert.Equal(recorded.SandboxId, retained.SandboxId);
+        Assert.Equal(recorded.Generation, retained.Generation);
+        Assert.Equal(recorded.AgentUserSid, retained.AgentUserSid);
+        Assert.Equal(recorded.WorkspacePath, retained.WorkspacePath);
+        Assert.Equal(configurationBefore, await File.ReadAllBytesAsync(runtime.Paths.GatewayConfigurationPath));
+        Assert.Equal(dataBefore, await File.ReadAllBytesAsync(dataPath));
+        GatewayPersistenceStatus after = await recovery.GetStatusAsync(CancellationToken.None);
+        Assert.Equal(GatewayPersistenceState.Ready, after.State);
+        Assert.Equal(fallback ? GatewayPersistenceLane.StartupFolderFallback : GatewayPersistenceLane.TaskScheduler,
+            after.Lane);
+        Assert.False(File.Exists(legacyLauncher));
+        Assert.False(File.Exists(legacyFallback));
     }
 
     /// <summary>
@@ -755,6 +970,7 @@ public sealed class ProgramTests : IDisposable
         DateTime lastWriteTime = File.GetLastWriteTimeUtc(entryPoint);
         var options = new HostOptions(applicationDirectory, null, []);
         using var output = new StringWriter();
+        using var error = new StringWriter();
 
         // The test host is unpackaged, so production readiness reports a
         // machine that cannot own a session.
@@ -764,19 +980,19 @@ public sealed class ProgramTests : IDisposable
                 ["setup"],
                 _ => { },
                 output,
-                TextWriter.Null));
+                error));
 
         AssertRecommendsNewerWindows(failure.Message);
         Assert.True(File.Exists(entryPoint));
         Assert.Equal(lastWriteTime, File.GetLastWriteTimeUtc(entryPoint));
 
-        // The attempted requirement check is visible, but nothing is reported
-        // as ready on a machine that cannot host a session.
+        // The attempted requirement check is visible on stderr, but nothing is
+        // reported as ready on a machine that cannot host a session.
         Assert.Contains(
             "Checking isolated-session support.",
-            output.ToString(),
+            error.ToString(),
             StringComparison.Ordinal);
-        Assert.DoesNotContain("ready", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(string.Empty, output.ToString());
     }
 
     [Fact]
@@ -1027,29 +1243,33 @@ public sealed class ProgramTests : IDisposable
         SessionRuntime runtime = CreateSessionRuntime();
         var lifecycle = new FailingFreshLifecycle(runtime) { TeardownSucceeds = true };
         using var output = new StringWriter();
+        using var error = new StringWriter();
 
         int exitCode = await Program.RunControlAsync(
             CreateSetupOptions(applicationDirectory),
             ["setup"],
             _ => { },
             output,
-            TextWriter.Null,
+            error,
             installationLifecycle: lifecycle,
             readEnvironmentVariable: name =>
                 name == "OPENCLAW_SESSION" ? "0" : null);
 
         Assert.Equal(0, exitCode);
         Assert.NotNull(runtime.SetupState.Read(runtime.ApplicationId).Record);
-        string rendered = output.ToString();
-        Assert.Contains("Checking isolated-session support.", rendered, StringComparison.Ordinal);
-        Assert.Contains("Preparing the isolated session.", rendered, StringComparison.Ordinal);
+        string narration = error.ToString();
+        Assert.Contains("Checking isolated-session support.", narration, StringComparison.Ordinal);
+        Assert.Contains("Preparing the isolated session.", narration, StringComparison.Ordinal);
         Assert.Contains(
             "Installing Node.js in the isolated session.",
-            rendered,
+            narration,
             StringComparison.Ordinal);
-        Assert.Contains("Enabling gateway startup at sign-in.", rendered, StringComparison.Ordinal);
-        Assert.Contains("Finalizing setup.", rendered, StringComparison.Ordinal);
-        Assert.Contains("openclaw onboard", rendered, StringComparison.Ordinal);
+        Assert.Contains("Enabling gateway startup at sign-in.", narration, StringComparison.Ordinal);
+        Assert.Contains("Finalizing setup.", narration, StringComparison.Ordinal);
+        string result = output.ToString();
+        Assert.Contains("openclaw onboard", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("Checking isolated-session support.", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("Finalizing setup.", result, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1157,12 +1377,17 @@ public sealed class ProgramTests : IDisposable
             ["status"],
             _ => { },
             statusOutput,
-            TextWriter.Null,
+            statusOutput,
             installationLifecycle: lifecycle);
 
         Assert.Equal(0, setupExitCode);
         Assert.Equal(0, statusExitCode);
         string status = statusOutput.ToString();
+        Assert.True(
+            status.IndexOf(
+                "Checking session, gateway, and recovery status.",
+                StringComparison.Ordinal) <
+            status.IndexOf("clawctl status", StringComparison.Ordinal));
         Assert.Contains("Session:", status, StringComparison.Ordinal);
         Assert.Contains("Agent:", status, StringComparison.Ordinal);
         Assert.Contains("agent_1", status, StringComparison.Ordinal);
@@ -1688,7 +1913,7 @@ public sealed class ProgramTests : IDisposable
             runtime.Paths,
             runtime,
             _ => { })
-            .CollectLogsAsync(bundlePath, CancellationToken.None);
+            .CollectLogsAsync(bundlePath, environment: null, new RecordingProgress(), CancellationToken.None);
         Assert.Equal(bundlePath, bundle.BundlePath);
         using ZipArchive archive = ZipFile.OpenRead(bundlePath);
         ZipArchiveEntry report = Assert.Single(
@@ -1721,8 +1946,12 @@ public sealed class ProgramTests : IDisposable
         Directory.CreateDirectory(applicationDirectory);
         Directory.CreateDirectory(runtimeDirectory);
         await File.WriteAllTextAsync(Path.Combine(applicationDirectory, "openclaw.mjs"), "fixture");
+        string architecture = System.Runtime.InteropServices.RuntimeInformation
+            .ProcessArchitecture == System.Runtime.InteropServices.Architecture.X64
+                ? "x64"
+                : "arm64";
         await File.WriteAllTextAsync(
-            Path.Combine(runtimeDirectory, "node-v24.20.0-win-x64.zip"),
+            Path.Combine(runtimeDirectory, $"node-v24.20.0-win-{architecture}.zip"),
             "fixture");
         var lifecycle = new FailingFreshLifecycle(runtime)
         {
@@ -2087,13 +2316,14 @@ public sealed class ProgramTests : IDisposable
         var backend = (FakeMxcSessionClient)runtime.Backend;
         bool browserLaunched = false;
         using var output = new StringWriter();
+        using var error = new StringWriter();
 
         int exitCode = await Program.RunControlAsync(
             new HostOptions(null, null, []),
             ["open"],
             _ => { },
             output,
-            TextWriter.Null,
+            error,
             installationLifecycle: lifecycle,
             launchBrowserAsync: _ =>
             {
@@ -2106,6 +2336,7 @@ public sealed class ProgramTests : IDisposable
         Assert.Contains("has not been set up", text, StringComparison.Ordinal);
         Assert.Contains("clawctl setup", text, StringComparison.Ordinal);
         Assert.DoesNotContain("This shouldn't happen", text, StringComparison.Ordinal);
+        Assert.Equal(string.Empty, error.ToString());
         Assert.Empty(backend.Calls);
         Assert.False(browserLaunched);
     }
@@ -2123,13 +2354,14 @@ public sealed class ProgramTests : IDisposable
         var backend = (FakeMxcSessionClient)runtime.Backend;
         bool browserLaunched = false;
         using var output = new StringWriter();
+        using var error = new StringWriter();
 
         int exitCode = await Program.RunControlAsync(
             new HostOptions(null, null, []),
             ["open"],
             _ => { },
             output,
-            TextWriter.Null,
+            error,
             installationLifecycle: lifecycle,
             launchBrowserAsync: _ =>
             {
@@ -2142,6 +2374,7 @@ public sealed class ProgramTests : IDisposable
         Assert.Contains("setup is incomplete", text, StringComparison.Ordinal);
         Assert.Contains("clawctl setup", text, StringComparison.Ordinal);
         Assert.DoesNotContain("This shouldn't happen", text, StringComparison.Ordinal);
+        Assert.Equal(string.Empty, error.ToString());
         Assert.Empty(backend.Calls);
         Assert.False(browserLaunched);
     }
@@ -2477,6 +2710,64 @@ public sealed class ProgramTests : IDisposable
         Assert.Equal("setup failed", failure.Message);
     }
 
+    [Fact]
+    public async Task TeardownKeepsTheOwnedSessionWhenRecoveryDeletionFails()
+    {
+        SessionRuntime runtime = await SetUpSessionAsync().ConfigureAwait(true);
+        var scheduler = new Gateway.FakeGatewayTaskScheduler
+        {
+            DeleteResult = GatewayTaskOperation.Failure("Access is denied."),
+        };
+        TeardownOrchestrator orchestrator = CreateTeardownOrchestrator(runtime, _ => { }, scheduler);
+
+        TeardownResult result = await orchestrator.RunAsync(
+            runtime.HelperPath,
+            force: false,
+            CancellationToken.None).ConfigureAwait(true);
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("Logon recovery could not be fully removed.", result.Message, StringComparison.Ordinal);
+        Assert.Contains("Access is denied.", result.Detail, StringComparison.Ordinal);
+        Assert.NotNull(runtime.SetupState.Read(runtime.ApplicationId).Record);
+        Assert.NotNull(runtime.Coordinator.GetRecordedStatus().Record);
+        Assert.Contains(scheduler.Calls, call => call.StartsWith("delete:", StringComparison.Ordinal));
+        FakeMxcSessionClient backend = (FakeMxcSessionClient)runtime.Backend;
+        Assert.DoesNotContain(backend.Calls, call => call.StartsWith("stop:", StringComparison.Ordinal));
+        Assert.DoesNotContain(backend.Calls, call => call.StartsWith("deprovision:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task TeardownRemovesOwnedSessionAfterIdempotentRecoveryCleanup()
+    {
+        SessionRuntime runtime = await SetUpSessionAsync().ConfigureAwait(true);
+        var scheduler = new Gateway.FakeGatewayTaskScheduler();
+        TeardownOrchestrator orchestrator = CreateTeardownOrchestrator(runtime, _ => { }, scheduler);
+
+        TeardownResult result = await orchestrator.RunAsync(
+            runtime.HelperPath,
+            force: false,
+            CancellationToken.None).ConfigureAwait(true);
+
+        Assert.True(result.Succeeded);
+        Assert.True(result.SessionRemoved);
+        Assert.Equal(SetupStateFault.Missing, runtime.SetupState.Read(runtime.ApplicationId).Fault);
+        Assert.Null(runtime.Coordinator.GetRecordedStatus().Record);
+        FakeMxcSessionClient backend = (FakeMxcSessionClient)runtime.Backend;
+        Assert.Equal(1, backend.Calls.Count(call => call.StartsWith("stop:", StringComparison.Ordinal)));
+        Assert.Equal(1, backend.Calls.Count(call => call.StartsWith("deprovision:", StringComparison.Ordinal)));
+
+        TeardownResult repeated = await orchestrator.RunAsync(
+            runtime.HelperPath,
+            force: false,
+            CancellationToken.None).ConfigureAwait(true);
+
+        Assert.True(repeated.Succeeded);
+        Assert.False(repeated.SessionRemoved);
+        Assert.Equal(2, scheduler.Calls.Count(call => call.StartsWith("delete:", StringComparison.Ordinal)));
+        Assert.Equal(1, backend.Calls.Count(call => call.StartsWith("stop:", StringComparison.Ordinal)));
+        Assert.Equal(1, backend.Calls.Count(call => call.StartsWith("deprovision:", StringComparison.Ordinal)));
+    }
+
     public void Dispose()
     {
         Directory.Delete(_testDirectory, recursive: true);
@@ -2507,19 +2798,20 @@ public sealed class ProgramTests : IDisposable
     // to supply a scheduler fixture rather than let it reach Task Scheduler.
     private TeardownOrchestrator CreateTeardownOrchestrator(
         SessionRuntime runtime,
-        Action<string> log)
+        Action<string> log,
+        Gateway.FakeGatewayTaskScheduler? scheduler = null)
     {
         string stateRoot = Path.Combine(_testDirectory, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(stateRoot);
         var recovery = new GatewayPersistenceManager(
-            new Gateway.FakeGatewayTaskScheduler(),
+            scheduler ?? new Gateway.FakeGatewayTaskScheduler(),
             new GatewayPersistenceOptions(
                 UserSid: "S-1-5-21-1",
                 PackageFamilyName: "OpenClaw.Gateway_test",
-                LauncherPath: Path.Combine(stateRoot, "gateway-launcher.cmd"),
+                LauncherPath: Path.Combine(stateRoot, "gateway-launcher.js"),
                 StartupFolderPath: Path.Combine(stateRoot, "startup"),
                 WorkingDirectory: stateRoot,
-                CommandProcessorPath: @"C:\Windows\System32\cmd.exe"),
+                ScriptHostPath: @"C:\Windows\System32\wscript.exe"),
             log);
         var controller = new GatewayController(
             runtime.Coordinator,
@@ -2616,6 +2908,142 @@ public sealed class ProgramTests : IDisposable
             ".openclaw")));
     }
 
+    // A run that waits on the isolated session must say what it is gathering.
+    // Redirected narration keeps one durable line per source on standard
+    // error, in the order the bundle gathers them, leaving standard output to
+    // carry only the result.
+    [Fact]
+    public async Task CollectLogsNarratesEachSourceAsItGathersIt()
+    {
+        SessionRuntime runtime = await SetUpSessionAsync().ConfigureAwait(true);
+        RespondToCollection(_lastSessionBackend!);
+        Directory.CreateDirectory(Path.GetDirectoryName(runtime.Paths.LogPath)!);
+        await File.WriteAllTextAsync(runtime.Paths.LogPath, "host evidence").ConfigureAwait(true);
+        string bundlePath = Path.Combine(_testDirectory, "narrated.zip");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        int exitCode = await Program.RunControlAsync(
+            CollectionOptions(),
+            ["collect-logs", "--output", bundlePath],
+            _ => { },
+            output,
+            error,
+            new StubbedRecoveryLifecycle(runtime)).ConfigureAwait(true);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(
+            [
+                "Collecting redacted diagnostics.",
+                "Starting the isolated session.",
+                "Collecting OpenClaw logs and configuration from the isolated session.",
+                "Collecting the host diagnostic log.",
+                "Collecting the setup record.",
+                "Collecting the session record.",
+                "Adding the OpenClaw logs and configuration from the isolated session."
+            ],
+            error.ToString()
+                .Split('\n', StringSplitOptions.TrimEntries)
+                .Where(line => line.Length > 0));
+        string text = output.ToString();
+        Assert.StartsWith("clawctl collect-logs", text.TrimStart(), StringComparison.Ordinal);
+        Assert.Contains("host and session diagnostics", text, StringComparison.Ordinal);
+        using ZipArchive archive = ZipFile.OpenRead(bundlePath);
+        Assert.Contains(
+            archive.Entries,
+            entry => entry.FullName == "agent/logs/openclaw-2026-09-23.log");
+    }
+
+    // Narration and the JSON document are separate streams, and a structured
+    // run narrates nothing on either, so a caller parsing standard output and
+    // collecting standard error sees only the document.
+    [Fact]
+    public async Task CollectLogsJsonKeepsTheAgentTailAndCompleteConfigurationWithoutNarration()
+    {
+        SessionRuntime runtime = await SetUpSessionAsync().ConfigureAwait(true);
+        string agentLog = "old beginning\n" +
+            new string('a', GatewayRuntime.MaximumGatewayFileBytes * 2) +
+            "\nthe last agent line\n";
+        string configText = "{\"gateway\":{\"mode\":\"local\"},\"padding\":\"" +
+            new string('c', GatewayRuntime.MaximumGatewayFileBytes + 1) + "\"}";
+        RespondToCollection(_lastSessionBackend!, agentLog, configText);
+        string bundlePath = Path.Combine(_testDirectory, "structured.zip");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        int exitCode = await Program.RunControlAsync(
+            CollectionOptions(),
+            ["collect-logs", "--json", "--output", bundlePath],
+            _ => { },
+            output,
+            error,
+            new StubbedRecoveryLifecycle(runtime)).ConfigureAwait(true);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        using JsonDocument document = JsonDocument.Parse(output.ToString());
+        Assert.Equal("collect-logs", document.RootElement.GetProperty("command").GetString());
+        Assert.Equal(
+            "host-and-session",
+            document.RootElement.GetProperty("bundle").GetProperty("included").GetString());
+        using ZipArchive archive = ZipFile.OpenRead(bundlePath);
+        using var logReader = new StreamReader(archive.GetEntry("agent/logs/openclaw-2026-09-23.log")!.Open());
+        string kept = await logReader.ReadToEndAsync().ConfigureAwait(true);
+        Assert.True(kept.Length <= GatewayRuntime.MaximumGatewayFileBytes);
+        Assert.DoesNotContain("old beginning", kept, StringComparison.Ordinal);
+        Assert.EndsWith("the last agent line\n", kept, StringComparison.Ordinal);
+        using var configReader = new StreamReader(archive.GetEntry("agent/config/openclaw.json")!.Open());
+        Assert.Equal(configText, await configReader.ReadToEndAsync().ConfigureAwait(true));
+        using var manifestReader = new StreamReader(archive.GetEntry("manifest.txt")!.Open());
+        Assert.Contains(
+            "agent/logs/openclaw-2026-09-23.log: only the last 1024 KiB of ",
+            await manifestReader.ReadToEndAsync().ConfigureAwait(true),
+            StringComparison.Ordinal);
+    }
+
+    private HostOptions CollectionOptions() =>
+        new(
+            Path.Combine(_testDirectory, "app"),
+            Path.Combine(_testDirectory, "node-v24.15.0-win-x64.zip"),
+            []);
+
+    // Stands in for the guest helper's collect mode: stage one log and the
+    // configuration where the request asks, then report both as copied.
+    private static void RespondToCollection(
+        FakeMxcSessionClient backend,
+        string logText = "gateway ready",
+        string configText = """{"gateway":{"mode":"local"}}""")
+    {
+        backend.ExecuteBehavior = _ =>
+        {
+            string requestPath = Directory
+                .GetFiles(backend.Metadata!.EphemeralWorkspacePath, "collect-*.json")
+                .Single(path => !path.EndsWith(".result.json", StringComparison.Ordinal));
+            SessionCollectRequest request = SessionCollectProtocol.ReadRequest(
+                File.ReadAllText(requestPath));
+            string logs = Path.Combine(request.DestinationDirectory!, "logs");
+            Directory.CreateDirectory(logs);
+            File.WriteAllText(Path.Combine(logs, "openclaw-2026-09-23.log"), logText);
+            string config = Path.Combine(request.DestinationDirectory!, "config");
+            Directory.CreateDirectory(config);
+            File.WriteAllText(
+                Path.Combine(config, "openclaw.json"),
+                configText);
+            File.WriteAllText(
+                SessionLaunchProtocol.ResultPathFor(requestPath),
+                SessionCollectProtocol.SerializeResult(new SessionCollectResult
+                {
+                    RequestId = request.RequestId,
+                    Entries =
+                    [
+                        new SessionCollectEntry { Name = "logs", Copied = true },
+                        new SessionCollectEntry { Name = "config", Copied = true }
+                    ]
+                }));
+            return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
+        };
+    }
+
     private SessionRuntime CreateSessionRuntime()
     {
         string stateRoot = Path.Combine(_testDirectory, "state");
@@ -2647,6 +3075,41 @@ public sealed class ProgramTests : IDisposable
             backend);
     }
 
+    private static void ConfigureGatewayLaunch(
+        FakeMxcSessionClient backend,
+        SessionInspectResult inspection)
+    {
+        backend.ExecuteBehavior = _ =>
+        {
+            string workspace = backend.Metadata!.EphemeralWorkspacePath;
+            string? inspectPath = Directory.GetFiles(workspace, "inspect-*.json")
+                .SingleOrDefault(path => !path.EndsWith(".result.json", StringComparison.Ordinal));
+            if (inspectPath is not null)
+            {
+                SessionInspectRequest request = SessionInspectProtocol.ReadRequest(File.ReadAllText(inspectPath));
+                File.WriteAllText(
+                    SessionLaunchProtocol.ResultPathFor(inspectPath),
+                    SessionInspectProtocol.SerializeResult(inspection with { RequestId = request.RequestId }));
+            }
+            else
+            {
+                string requestPath = Directory.GetFiles(workspace, "gateway-*.json")
+                    .Single(path => !path.EndsWith(".result.json", StringComparison.Ordinal));
+                SessionLaunchRequest request = SessionLaunchProtocol.ReadRequest(File.ReadAllText(requestPath));
+                File.WriteAllText(
+                    SessionLaunchProtocol.ResultPathFor(requestPath),
+                    SessionLaunchProtocol.SerializeResult(new SessionLaunchResult
+                    {
+                        RequestId = request.RequestId,
+                        Launched = true,
+                        ProcessId = 1234,
+                        ProcessStartTimeUtc = DateTimeOffset.UtcNow
+                    }));
+            }
+            return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
+        };
+    }
+
     private async Task<SessionRuntime> SetUpSessionAsync()
     {
         SessionRuntime runtime = CreateSessionRuntime();
@@ -2672,7 +3135,9 @@ public sealed class ProgramTests : IDisposable
     // Setup only reaches Ready once logon recovery is configured, and a test
     // must never register a real scheduled task. Everything else is left to
     // production behaviour so the fixture still exercises the real path.
-    private sealed class StubbedRecoveryLifecycle(SessionRuntime runtime)
+    private sealed class StubbedRecoveryLifecycle(
+        SessionRuntime runtime,
+        GatewayPersistenceManager? recovery = null)
         : IInstallationLifecycle
     {
         private static readonly InstallationLifecycle Inner =
@@ -2681,6 +3146,7 @@ public sealed class ProgramTests : IDisposable
         public SessionRuntime CreateRuntime(Action<string> log) => runtime;
 
         public Task EnsureSessionSupportedAsync(
+            Action<string> log,
             CancellationToken cancellationToken) => Task.CompletedTask;
 
         public PackageRuntimeMetadata ValidatePackageRuntime(
@@ -2704,7 +3170,7 @@ public sealed class ProgramTests : IDisposable
         public Task<GatewayPersistenceInstallResult> InstallRecoveryAsync(
             Action<string> log,
             CancellationToken cancellationToken) =>
-            Task.FromResult(new GatewayPersistenceInstallResult(
+            recovery?.InstallAsync(cancellationToken) ?? Task.FromResult(new GatewayPersistenceInstallResult(
                 GatewayPersistenceState.Ready,
                 GatewayPersistenceLane.TaskScheduler,
                 "Logon recovery is configured.",
@@ -2715,7 +3181,7 @@ public sealed class ProgramTests : IDisposable
         public Task<GatewayPersistenceStatus> GetRecoveryStatusAsync(
             Action<string> log,
             CancellationToken cancellationToken) =>
-            Task.FromResult(new GatewayPersistenceStatus(
+            recovery?.GetStatusAsync(cancellationToken) ?? Task.FromResult(new GatewayPersistenceStatus(
                 GatewayPersistenceState.Ready,
                 GatewayPersistenceLane.TaskScheduler,
                 "Logon recovery is configured."));
@@ -2854,6 +3320,7 @@ public sealed class ProgramTests : IDisposable
         public SessionRuntime CreateRuntime(Action<string> log) => _runtime;
 
         public Task EnsureSessionSupportedAsync(
+            Action<string> log,
             CancellationToken cancellationToken) => Task.CompletedTask;
 
         public PackageRuntimeMetadata ValidatePackageRuntime(
@@ -2933,7 +3400,7 @@ public sealed class ProgramTests : IDisposable
     {
         public SessionRuntime CreateRuntime(Action<string> log) => runtime;
 
-        public Task EnsureSessionSupportedAsync(CancellationToken cancellationToken)
+        public Task EnsureSessionSupportedAsync(Action<string> log, CancellationToken cancellationToken)
         {
             onProbe();
             return Task.CompletedTask;

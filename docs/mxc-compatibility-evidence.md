@@ -129,6 +129,17 @@ owned by that process or one of its descendants. A missing record is
 process is `Unhealthy`; and failed inspection is `Unknown` to avoid starting a
 second gateway beside one that could still be healthy.
 
+The helper judges descendant ownership from one process snapshot per
+inspection, taken only when a listener belongs to some other process. Such a
+listener counts only when its owner's snapshot parent chain reaches the
+recorded process, every process on that chain has a readable creation time,
+and every parent started no later than its child. An owner whose chain never
+reaches the recorded process is rejected without being opened. Measured inside
+an isolated session with a live gateway, 26 listeners held by 20 processes, and
+about 450 processes, evaluating each listener with its own snapshot and process
+opens took 2.6-3.8 s; the single-snapshot evaluation returned the same gateway
+port in 50-52 ms.
+
 Both `clawctl status` and `clawctl gateway-service status` add the helper's
 file-only config readiness whenever the managed gateway is not confirmed
 running. The gateway-only command first observes gateway state, then starts
@@ -172,15 +183,36 @@ discard available host diagnostics.
 Agent paths are relative to the agent profile: OpenClaw logs come from
 `AppData\Local\Temp\openclaw`, and configuration candidates are
 `.openclaw\openclaw.json*`. The collector excludes SQLite databases and
-authentication-profile files by name. JSON entries are passed through
-credential-shaped-value redaction before being added. Collection is
-best-effort, and the ZIP manifest warns that redaction is not a substitute for
-review before sharing.
+authentication-profile files by name. Text entries are passed through
+credential-shaped-value redaction before being added: JSON members, URL query
+or fragment parameters, environment-style assignments, and HTTP authorization
+header credentials. The manifest and the notes the command returns are
+redacted the same way, because a failure note can quote raw executor or guest
+output. Every redaction pattern runs non-backtracking, so crafted guest text
+cannot stall collection. Collection is best-effort, and the ZIP manifest warns
+that redaction is not a substitute for review before sharing.
+
+The host also reads each gateway launch's output log and supervisor status
+straight from the shared workspace. The files must be named for the recorded
+session's generation, and reparse points are refused. Only the newest 10
+launches are kept, each file cut to its last 1 MiB, because the workspace is
+guest-writable. Reading these files does not start the session.
 
 The helper accepts only host-named sources and writes collected files to the
 shared workspace. Missing sources are reported as entries rather than treated
 as a collection failure, which makes a bundle useful for partial or failed
 setup. The collector does not enumerate arbitrary agent-profile files.
+
+MXC failures reach the host log with the backend's own evidence: the error
+code, the failing IsolationSession operation (for example
+`IsoSessionOps.StartSessionAsync`), the native status, and any remediation
+text. When the executor produces no interpretable envelope, the failure keeps
+its exit code, executor diagnostics, and a bounded excerpt of its output.
+Both `clawctl setup` and `openclaw` log the evidence behind the support
+decision (host build, runtime provenance, and backend probe result) before
+acting on it, and `clawctl status` logs the MXC failure when the recorded
+session cannot be started. The collector's manifest records the collecting
+host's Windows build, package provenance, and component versions.
 
 ## Supported operational flow
 

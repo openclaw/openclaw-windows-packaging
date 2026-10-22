@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -23,7 +24,9 @@ public sealed class GuestProcessObserverTests
             int port = ((IPEndPoint)listener.LocalEndpoint).Port;
 
             Assert.True(GuestProcessObserver.AnythingListeningOn(port));
-            Assert.True(GuestProcessObserver.OwnsListenerOn(port, Environment.ProcessId));
+            Assert.Contains(
+                port,
+                GuestProcessObserver.ListeningPortsOwnedBy(Environment.ProcessId));
         }
         finally
         {
@@ -46,7 +49,9 @@ public sealed class GuestProcessObserverTests
             try
             {
                 Assert.True(GuestProcessObserver.AnythingListeningOn(port));
-                Assert.False(GuestProcessObserver.OwnsListenerOn(port, unrelated.Id));
+                Assert.DoesNotContain(
+                    port,
+                    GuestProcessObserver.ListeningPortsOwnedBy(unrelated.Id));
             }
             finally
             {
@@ -79,11 +84,11 @@ public sealed class GuestProcessObserverTests
         using Process child = StartLongRunningProcess();
         try
         {
-            Assert.True(ProcessAncestry.IsSelfOrDescendant(child.Id, Environment.ProcessId));
-            Assert.True(ProcessAncestry.IsSelfOrDescendant(
-                Environment.ProcessId,
-                Environment.ProcessId));
-            Assert.False(ProcessAncestry.IsSelfOrDescendant(Environment.ProcessId, child.Id));
+            var tree = new ProcessTreeSnapshot();
+
+            Assert.True(tree.IsSelfOrDescendant(child.Id, Environment.ProcessId));
+            Assert.True(tree.IsSelfOrDescendant(Environment.ProcessId, Environment.ProcessId));
+            Assert.False(tree.IsSelfOrDescendant(Environment.ProcessId, child.Id));
         }
         finally
         {
@@ -168,6 +173,131 @@ public sealed class GuestProcessObserverTests
 
 public sealed class SessionInspectorTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SequenceSnapshotsBracketListenerObservationAndRejectReplacement(bool replaced)
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        int captures = 0;
+        try
+        {
+            using Process current = Process.GetCurrentProcess();
+            SessionInspectResult result = SessionInspector.Inspect(
+                new SessionInspectRequest
+                {
+                    RequestId = "sequence-bracket",
+                    ProcessId = current.Id,
+                    ProcessStartTimeUtc = current.StartTime.ToUniversalTime(),
+                    HelperPath = current.MainModule!.FileName
+                },
+                _ => throw new FileNotFoundException(),
+                () =>
+                {
+                    if (++captures == 1)
+                    {
+                        listener.Start();
+                    }
+                    return new Dictionary<int, ulong>
+                    {
+                        [current.Id] = replaced && captures > 1 ? 102UL : 101UL
+                    };
+                });
+
+            int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            Assert.Equal(2, captures);
+            Assert.True(result.IsOwnedAndHealthy);
+            Assert.Contains(port, result.ListeningPorts!);
+            if (replaced)
+            {
+                Assert.Null(result.OwnedListeners);
+            }
+            else
+            {
+                Assert.Contains(result.OwnedListeners!, identity =>
+                    identity.Port == port && identity.ProcessId == current.Id &&
+                    identity.SequenceNumber == 101 &&
+                    identity.ProcessStartTimeUtc == current.StartTime.ToUniversalTime());
+            }
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    public static IEnumerable<object[]> UnavailableSequenceCaptures()
+    {
+        yield return
+        [
+            (Func<IReadOnlyDictionary<int, ulong>>)(
+                () => throw new NotSupportedException("Sequence capture is unsupported."))
+        ];
+        yield return
+        [
+            (Func<IReadOnlyDictionary<int, ulong>>)(
+                () => throw new InvalidOperationException("Sequence capture failed."))
+        ];
+        yield return
+        [
+            (Func<IReadOnlyDictionary<int, ulong>>)(
+                () => throw new InvalidDataException("Sequence capture was corrupt."))
+        ];
+    }
+
+    public static IEnumerable<object[]> IncompleteSequenceCaptures()
+    {
+        yield return
+        [
+            (Func<IReadOnlyDictionary<int, ulong>>)(
+                () => new Dictionary<int, ulong>())
+        ];
+        yield return
+        [
+            (Func<IReadOnlyDictionary<int, ulong>>)(
+                () => new Dictionary<int, ulong> { [Environment.ProcessId] = 0 })
+        ];
+    }
+
+    [Theory]
+    [MemberData(nameof(UnavailableSequenceCaptures))]
+    [MemberData(nameof(IncompleteSequenceCaptures))]
+    public void HealthyGatewayInspectionRemainsHealthyWithoutSequenceOwnershipProof(
+        Func<IReadOnlyDictionary<int, ulong>> captureSequences)
+    {
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            int port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+            using Process current = Process.GetCurrentProcess();
+            SessionInspectResult result = SessionInspector.Inspect(
+                new SessionInspectRequest
+                {
+                    RequestId = "sequence-unavailable",
+                    ProcessId = current.Id,
+                    ProcessStartTimeUtc = current.StartTime.ToUniversalTime(),
+                    HelperPath = current.MainModule!.FileName,
+                    Port = port
+                },
+                _ => throw new FileNotFoundException(),
+                captureSequences);
+
+            Assert.True(result.ProcessFound);
+            Assert.True(result.StartTimeMatches);
+            Assert.True(result.PortListening);
+            Assert.Contains(port, result.ListeningPorts!);
+            Assert.True(result.ListenerOwned);
+            Assert.True(result.IsOwnedAndHealthy);
+            Assert.Null(result.Error);
+            Assert.Null(result.OwnedListeners);
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
     [Fact]
     public void AnUnconfirmedLaunchIsUnknownRatherThanSuccessfulAbsence()
     {
@@ -258,6 +388,167 @@ public sealed class SessionInspectorTests
         {
             GuestProcessObserverTests.Kill(child);
         }
+    }
+
+    [Fact]
+    public void WindowsQueryHandleRetainsTheRecordedIdentityAfterTheProcessExits()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+        using Process child = GuestProcessObserverTests.StartLongRunningProcess();
+        try
+        {
+            using var pinned = SessionProcessQuery.Open(child.Id);
+            var created = SessionProcessQuery.StartTime(pinned);
+            GuestProcessObserverTests.Kill(child);
+            child.WaitForExit();
+
+            Assert.True(SessionProcessQuery.HasExited(pinned));
+            Assert.Equal(created, SessionProcessQuery.StartTime(pinned));
+        }
+        finally
+        {
+            GuestProcessObserverTests.Kill(child);
+        }
+    }
+
+    [Fact]
+    public void WindowsInspectionQueriesARestrictedOwnedProcessWithoutFullAccess()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+        using Process child = GuestProcessObserverTests.StartLongRunningProcess();
+        try
+        {
+            var request = RequestFor(child);
+            using var permissions = new ProcessAccessScope(child);
+            ProcessAccessScope.WithoutDebugPrivilege(() =>
+            {
+                using Process fresh = Process.GetProcessById(child.Id);
+                Assert.Equal(5, Assert.Throws<Win32Exception>(() => _ = fresh.Handle).NativeErrorCode);
+
+                var inspected = SessionInspector.Inspect(request, _ => throw new FileNotFoundException());
+                var stopped = SessionTerminator.Stop(request, _ => throw new FileNotFoundException());
+
+                Assert.True(inspected.ProcessFound);
+                Assert.True(inspected.StartTimeMatches);
+                Assert.Null(inspected.Error);
+                Assert.NotNull(stopped.Error);
+                Assert.False(child.HasExited);
+            });
+        }
+        finally
+        {
+            GuestProcessObserverTests.Kill(child);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MissingPidSnapshotReconcilesDeniedAccessWithoutSelectingAProcess(bool stopping)
+    {
+        using var current = Process.GetCurrentProcess();
+        var request = new SessionInspectRequest
+        {
+            RequestId = "missing-pid",
+            ProcessId = current.Id,
+            ProcessStartTimeUtc = current.StartTime.ToUniversalTime(),
+            HelperPath = current.MainModule!.FileName
+        };
+        static IReadOnlyDictionary<int, DateTimeOffset> Missing() => new Dictionary<int, DateTimeOffset>();
+        var result = stopping
+            ? SessionTerminator.Stop(request, _ => throw new FileNotFoundException(),
+                _ => throw new Win32Exception(5), Missing)
+            : SessionInspector.Inspect(request, _ => throw new FileNotFoundException(),
+                probeAccess: _ => throw new Win32Exception(5), captureCreationTimes: Missing);
+
+        Assert.Null(result.Error);
+        Assert.False(result.ProcessFound);
+        Assert.False(result.StartTimeMatches);
+        Assert.False(current.HasExited);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AccessDeniedRequiresAnObservedCreationTimeMismatch(bool sameIdentity)
+    {
+        using Process current = Process.GetCurrentProcess();
+        SessionInspectRequest request = new SessionInspectRequest
+        {
+            RequestId = "denied-identity",
+            ProcessId = current.Id,
+            ProcessStartTimeUtc = current.StartTime.ToUniversalTime(),
+            HelperPath = current.MainModule!.FileName
+        };
+        var times = new Dictionary<int, DateTimeOffset>
+        {
+            [current.Id] = sameIdentity ? request.ProcessStartTimeUtc : DateTimeOffset.UnixEpoch
+        };
+        SessionInspectResult inspected = SessionInspector.Inspect(
+            request, _ => throw new FileNotFoundException(),
+            probeAccess: _ => throw new Win32Exception(5), captureCreationTimes: () => times);
+        SessionInspectResult stopped = SessionTerminator.Stop(
+            request, _ => throw new FileNotFoundException(),
+            probeAccess: _ => throw new Win32Exception(5), captureCreationTimes: () => times);
+
+        foreach (SessionInspectResult result in new[] { inspected, stopped })
+        {
+            Assert.Equal(request.RequestId, result.RequestId);
+            Assert.False(result.StartTimeMatches);
+            Assert.Equal(sameIdentity, result.Error is not null);
+            Assert.Equal(!sameIdentity, result.ProcessFound);
+            Assert.False(result.IsOwnedAndHealthy);
+        }
+        Assert.False(current.HasExited);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AccessDeniedWithoutAnIdentitySnapshotRemainsUnknown(bool stopping)
+    {
+        using Process current = Process.GetCurrentProcess();
+        var request = new SessionInspectRequest
+        {
+            RequestId = "denied-identity",
+            ProcessId = current.Id,
+            ProcessStartTimeUtc = current.StartTime.ToUniversalTime(),
+            HelperPath = current.MainModule!.FileName
+        };
+        SessionInspectResult result = stopping
+            ? SessionTerminator.Stop(request, _ => throw new FileNotFoundException(),
+                _ => throw new Win32Exception(5), () => throw new NotSupportedException())
+            : SessionInspector.Inspect(request, _ => throw new FileNotFoundException(),
+                probeAccess: _ => throw new Win32Exception(5),
+                captureCreationTimes: () => throw new InvalidDataException());
+
+        Assert.NotNull(result.Error);
+        Assert.False(result.IsOwnedAndHealthy);
+        Assert.False(current.HasExited);
+    }
+
+    [Fact]
+    public void ADifferentNativeFailureDoesNotUseTheRecoverySnapshot()
+    {
+        using Process current = Process.GetCurrentProcess();
+        SessionInspectResult result = SessionInspector.Inspect(
+            new SessionInspectRequest
+            {
+                RequestId = "denied-identity",
+                ProcessId = current.Id,
+                ProcessStartTimeUtc = current.StartTime.ToUniversalTime(),
+                HelperPath = current.MainModule!.FileName
+            }, _ => throw new FileNotFoundException(),
+            probeAccess: _ => throw new Win32Exception(6),
+            captureCreationTimes: () => throw new Xunit.Sdk.XunitException("Unexpected snapshot"));
+
+        Assert.NotNull(result.Error);
     }
 
     [Fact]

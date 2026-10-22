@@ -31,7 +31,7 @@ internal static class Program
             errorOutput.WriteLine(
                 "openclaw-session-host: usage: openclaw-session-host " +
                 "--request|--supervise|--inspect|--stop|--collect|--install-runtime|" +
-                "--install-tools|--check-config <path>");
+                "--install-tools|--check-config|--companion-config <path>");
             return SessionLaunchProtocol.HelperFailureExitCode;
         }
 
@@ -53,6 +53,9 @@ internal static class Program
                         requestPath,
                         readFile,
                         File.WriteAllText);
+            case "--companion-config":
+                return SessionCompanionConfig.Run(
+                    requestPath, readFile, File.WriteAllText);
         }
 
         if (args[0] == "--collect")
@@ -133,7 +136,8 @@ internal static class Program
         }
 
         if (args[0] is not ("--request" or "--supervise" or "--inspect" or "--stop" or
-            "--collect" or "--install-runtime" or "--install-tools" or "--check-config"))
+            "--collect" or "--install-runtime" or "--install-tools" or "--check-config" or
+            "--companion-config"))
         {
             return false;
         }

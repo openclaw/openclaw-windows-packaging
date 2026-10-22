@@ -189,6 +189,46 @@ public sealed class MxcReadinessTests : IDisposable
         Assert.Empty(Directory.GetFileSystemEntries(_testDirectory));
     }
 
+    // A refusal with no probe result looks identical to a refusal the backend
+    // measured; the description is what tells them apart in a bundle.
+    [Fact]
+    public void AFailedProbeIsDescribedWithTheBuildEvidenceUsedInstead()
+    {
+        var report = new MxcReadinessReport(
+            null,
+            null,
+            "The MXC runtime is not available.",
+            MxcHostSupport.Unsupported,
+            new MxcHostBuild(26100, 4000),
+            MxcSupportEvidence.HostBuild,
+            BackendProbeFailureReason: "The MXC host capability probe failed (exit code 1).");
+
+        Assert.Equal(
+            "Unsupported from HostBuild evidence; host build 26100.4000; " +
+            "runtime unavailable (The MXC runtime is not available.); " +
+            "backend probe failed (The MXC host capability probe failed (exit code 1).)",
+            report.Describe());
+    }
+
+    [Fact]
+    public void AProbeWithoutWarningsSaysSo()
+    {
+        var report = new MxcReadinessReport(
+            @"C:\package\mxc\x64",
+            new MxcRuntimeProvenance("@microsoft/mxc-sdk", "0.8.0", "x64"),
+            null,
+            MxcHostSupport.Supported,
+            null,
+            MxcSupportEvidence.BackendProbe,
+            new MxcBackendProbe(true, null, []));
+
+        Assert.Equal(
+            "Supported from BackendProbe evidence; host build unknown; " +
+            "runtime @microsoft/mxc-sdk 0.8.0 x64; backend probe isolation sessions " +
+            "available, tier unreported, warnings none",
+            report.Describe());
+    }
+
     public void Dispose()
     {
         Directory.Delete(_testDirectory, recursive: true);

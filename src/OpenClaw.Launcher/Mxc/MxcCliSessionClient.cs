@@ -240,13 +240,39 @@ internal sealed class MxcCliSessionClient : IMxcSessionClient
         // Parse before inspecting the exit code: a structured {error} envelope
         // names the real failure, and reporting the exit code instead would
         // discard it.
-        return MxcWireProtocol.ParseNonExecutionResponse(outcome.StandardOutput);
+        try
+        {
+            return MxcWireProtocol.ParseNonExecutionResponse(outcome.StandardOutput);
+        }
+        catch (MxcException exception) when (exception.Code == MxcErrorCode.ProtocolViolation)
+        {
+            // With no envelope to name the failure, the executor's exit code,
+            // diagnostics, and raw output are the only remaining evidence.
+            throw new MxcException(
+                MxcErrorCode.ProtocolViolation,
+                $"{exception.Message} (exit code {outcome.ExitCode}). " +
+                $"{Describe(outcome.StandardError)} " +
+                $"Executor output: {Excerpt(outcome.StandardOutput)}",
+                innerException: exception);
+        }
     }
 
     private static string Describe(string standardError) =>
         string.IsNullOrWhiteSpace(standardError)
             ? "The executor reported no diagnostics."
             : $"Executor diagnostics: {standardError.Trim()}";
+
+    // Non-execution phases print only the response envelope, so this carries
+    // no guest output; the bound keeps a runaway executor from flooding a
+    // single log entry.
+    private static string Excerpt(string standardOutput)
+    {
+        const int maximumLength = 512;
+        string trimmed = standardOutput.Trim();
+        return trimmed.Length <= maximumLength
+            ? trimmed
+            : $"{trimmed[..maximumLength]}... ({trimmed.Length} characters)";
+    }
 }
 
 internal sealed class ProcessMxcExecutorInvoker

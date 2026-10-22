@@ -8,11 +8,52 @@ param(
 
     [string]$PolicyPath = (
         Join-Path (Split-Path $PSScriptRoot -Parent) 'release-policy.json'
-    )
+    ),
+
+    [ValidateSet('store', 'sideload')]
+    [string]$IdentityChannel = 'store',
+
+    # Test seam that replaces certificate-store operations so tests never
+    # touch Cert:\. Production callers omit it.
+    [hashtable]$Operations = @{}
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+$certificateServices = @{
+    NewCertificate = {
+        param($publisher)
+
+        New-SelfSignedCertificate `
+            -Type Custom `
+            -Subject $publisher `
+            -KeyAlgorithm RSA `
+            -KeyLength 3072 `
+            -HashAlgorithm SHA256 `
+            -KeyExportPolicy Exportable `
+            -KeyUsage DigitalSignature `
+            -CertStoreLocation 'Cert:\CurrentUser\My' `
+            -FriendlyName 'OpenClaw Gateway temporary MSIX test signing' `
+            -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3') `
+            -NotAfter (Get-Date).AddDays(30)
+    }
+    RemoveCertificate = {
+        param($certificate)
+
+        Remove-Item `
+            -LiteralPath "Cert:\CurrentUser\My\$($certificate.Thumbprint)" `
+            -Force `
+            -ErrorAction SilentlyContinue
+    }
+}
+foreach ($name in $Operations.Keys) {
+    if (-not $certificateServices.ContainsKey($name) -or
+        $Operations[$name] -isnot [scriptblock]) {
+        throw "Unknown or invalid test signing operation adapter: $name"
+    }
+    $certificateServices[$name] = $Operations[$name]
+}
 
 if (-not $IsWindows) {
     throw 'Test MSIX signing requires Windows.'
@@ -24,7 +65,12 @@ $resolvedArtifactsDirectory = (
 $resolvedPolicyPath = (Resolve-Path -LiteralPath $PolicyPath).Path
 $policy = Get-Content -LiteralPath $resolvedPolicyPath -Raw |
     ConvertFrom-Json
-$publisher = [string]$policy.publisher
+$publisher = if ($IdentityChannel -ceq 'sideload') {
+    [string]$policy.sideloadPackageIdentity.publisher
+}
+else {
+    [string]$policy.publisher
+}
 if ([string]::IsNullOrWhiteSpace($publisher)) {
     throw 'The Gateway MSIX release policy publisher is missing.'
 }
@@ -75,18 +121,7 @@ $temporaryPfx = Join-Path $temporaryDirectory (
 )
 $passwordText = [guid]::NewGuid().ToString('N')
 $password = ConvertTo-SecureString $passwordText -AsPlainText -Force
-$certificate = New-SelfSignedCertificate `
-    -Type Custom `
-    -Subject $publisher `
-    -KeyAlgorithm RSA `
-    -KeyLength 3072 `
-    -HashAlgorithm SHA256 `
-    -KeyExportPolicy Exportable `
-    -KeyUsage DigitalSignature `
-    -CertStoreLocation 'Cert:\CurrentUser\My' `
-    -FriendlyName 'OpenClaw Gateway temporary MSIX test signing' `
-    -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3') `
-    -NotAfter (Get-Date).AddDays(30)
+$certificate = & $certificateServices.NewCertificate $publisher
 
 try {
     Export-PfxCertificate `
@@ -223,14 +258,20 @@ try {
         ) {
             throw 'The bundle test signature was not applied.'
         }
+
+        $certificatePath = Join-Path `
+            $destinationDirectory `
+            'OpenClawGateway-test-signing.cer'
+        Export-Certificate `
+            -Cert $certificate `
+            -FilePath $certificatePath `
+            -Type CERT |
+            Out-Null
     }
 }
 finally {
     Remove-Item -LiteralPath $temporaryPfx -Force -ErrorAction SilentlyContinue
-    Remove-Item `
-        -LiteralPath "Cert:\CurrentUser\My\$($certificate.Thumbprint)" `
-        -Force `
-        -ErrorAction SilentlyContinue
+    & $certificateServices.RemoveCertificate $certificate
 }
 
 Write-Host "Created test-signed MSIX artifacts under: $OutputDirectory"

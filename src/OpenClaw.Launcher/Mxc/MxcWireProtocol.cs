@@ -261,6 +261,7 @@ internal static class MxcWireProtocol
         return new MxcException(
             MxcException.Classify(error.Code),
             message,
-            error.Code);
+            error.Code,
+            operation: error.Operation);
     }
 }

@@ -1,0 +1,4 @@
+name: OpenClaw production sources
+
+paths-ignore:
+  - tests/**

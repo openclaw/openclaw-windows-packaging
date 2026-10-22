@@ -38,7 +38,7 @@ function New-Submission([string]$Id) {
         TargetPublishDate = $null
         Listings = [pscustomobject]@{
             'en-us' = [pscustomobject]@{
-                title = 'OpenClaw Gateway'
+                title = 'OpenClaw'
                 description = 'Personal AI assistant'
             }
         }
@@ -49,16 +49,16 @@ function New-Submission([string]$Id) {
         GamingOptions = @()
         HasExternalInAppProducts = $false
         MeetAccessibilityGuidelines = $true
-        NotesForCertification = 'OpenClaw Gateway.'
+        NotesForCertification = 'OpenClaw Windows Hub.'
         EnterpriseLicensing = 'Online'
         AllowMicrosoftDecideAppAvailabilityToFutureDeviceFamilies = $true
         AllowTargetFutureDeviceFamilies = [pscustomobject]@{ Desktop = $true }
-        FriendlyName = 'OpenClaw Gateway'
+        FriendlyName = 'OpenClaw'
         Trailers = @()
         FileUploadUrl = 'https://storage.example.invalid/upload?sas=redacted'
         ApplicationPackages = @(
-            [pscustomobject]@{ FileName = 'old-x64.msix'; FileStatus = 'Published' },
-            [pscustomobject]@{ FileName = 'old-arm64.msix'; FileStatus = 'Published' }
+            [pscustomobject]@{ FileName = 'old-x64.msix'; FileStatus = 'Uploaded'; minimumDirectXVersion = 'None'; minimumSystemRam = 'None' },
+            [pscustomobject]@{ FileName = 'old-arm64.msix'; FileStatus = 'Uploaded'; minimumDirectXVersion = 'None'; minimumSystemRam = 'None' }
         )
         PackageDeliveryOptions = [pscustomobject]@{
             PackageRollout = [pscustomobject]@{
@@ -76,9 +76,12 @@ function Reset-Fixture {
     $global:OpenClawStoreTest_pendingId = $null
     $global:OpenClawStoreTest_tokenLifetime = 3600
     $global:OpenClawStoreTest_commitStatus = 'CommitStarted'
+    $global:OpenClawStoreTest_commitThrows = $false
     $global:OpenClawStoreTest_replaceAfterUpload = $false
     $global:OpenClawStoreTest_driftAfterUpload = $false
     $global:OpenClawStoreTest_mutatePackagesAfterUpload = $false
+    $global:OpenClawStoreTest_wrongIdentity = $false
+    $global:OpenClawStoreTest_serverFields = $false
     $global:OpenClawStoreTest_uploadHash = $null
     $global:OpenClawStoreTest_uploadedEntries = @()
 }
@@ -103,6 +106,8 @@ $httpInvoker = {
     if ($Method -eq 'Get' -and $Uri -ceq $applicationPath) {
         return [pscustomobject]@{
             Id = $applicationId
+            PackageIdentityName = if ($global:OpenClawStoreTest_wrongIdentity) { 'Other.Product' } else { 'Test.OpenClaw' }
+            PublisherName = 'CN=Test'
             PendingApplicationSubmission = if ($null -eq $global:OpenClawStoreTest_pendingId) { $null } else { [pscustomobject]@{ Id = $global:OpenClawStoreTest_pendingId } }
             LastPublishedApplicationSubmission = [pscustomobject]@{ Id = 'published-1' }
         }
@@ -136,7 +141,10 @@ $httpInvoker = {
     }
     if ($Method -eq 'Post' -and $Uri -ceq "$applicationPath/submissions/draft-2/Commit") {
         if ($global:OpenClawStoreTest_pendingId -cne 'draft-2') { throw 'Draft ownership changed before commit.' }
-        $global:OpenClawStoreTest_pendingId = $null
+        if ($global:OpenClawStoreTest_commitThrows) { throw 'Commit response was lost.' }
+        if ($global:OpenClawStoreTest_commitStatus -ceq 'CommitStarted') {
+            $global:OpenClawStoreTest_pendingId = $null
+        }
         return [pscustomobject]@{ Status = $global:OpenClawStoreTest_commitStatus }
     }
     if ($Method -eq 'Delete' -and $Uri -ceq "$applicationPath/submissions/draft-2") {
@@ -156,6 +164,14 @@ $uploadInvoker = {
     $archive = [IO.Compression.ZipFile]::OpenRead($Path)
     try { $global:OpenClawStoreTest_uploadedEntries = @($archive.Entries.FullName) }
     finally { $archive.Dispose() }
+    if ($global:OpenClawStoreTest_serverFields) {
+        $package = $global:OpenClawStoreTest_draft.ApplicationPackages[-1]
+        $package.FileStatus = 'Uploaded'
+        $package | Add-Member Id 'server-package-id'
+        $package | Add-Member Architecture 'x64'
+        $global:OpenClawStoreTest_draft.PackageDeliveryOptions.PackageRollout | Add-Member PackageRolloutStatus 'PackageRolloutNotStarted'
+        $global:OpenClawStoreTest_draft.PackageDeliveryOptions.PackageRollout | Add-Member FallbackSubmissionId 'published-1'
+    }
     if ($global:OpenClawStoreTest_driftAfterUpload) {
         $global:OpenClawStoreTest_draft.Listings.'en-us'.description = 'Unexpected replacement'
     }
@@ -171,10 +187,11 @@ $uploadInvoker = {
 function Invoke-Submission {
     param(
         [string]$PolicyPath = (Join-Path $testRoot 'policy.json'),
-        [string]$BundlePath = (Join-Path $testRoot 'OpenClawGateway.msixbundle'),
+        [string]$BundlePath = (Join-Path $testRoot 'OpenClaw.msixbundle'),
         [string]$EvidencePath = (Join-Path $testRoot 'evidence.json')
     )
     & $scriptPath -BundlePath $BundlePath -ApplicationId $applicationId `
+        -PackageIdentityName 'Test.OpenClaw' -Publisher 'CN=Test' `
         -TenantId $tenantId -ClientId $clientId `
         -ClientAssertionFile (Join-Path $testRoot 'assertion.jwt') `
         -PolicyPath $PolicyPath -EvidencePath $EvidencePath `
@@ -183,7 +200,10 @@ function Invoke-Submission {
 
 New-Item -Path $testRoot -ItemType Directory | Out-Null
 try {
-    [IO.File]::WriteAllText((Join-Path $testRoot 'OpenClawGateway.msixbundle'), 'bundle-fixture')
+    $bundleRoot = Join-Path $testRoot 'bundle/AppxMetadata'
+    New-Item $bundleRoot -ItemType Directory -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $bundleRoot 'AppxBundleManifest.xml'), '<Bundle><Identity Name="Test.OpenClaw" Publisher="CN=Test" /></Bundle>')
+    [IO.Compression.ZipFile]::CreateFromDirectory((Split-Path $bundleRoot -Parent), (Join-Path $testRoot 'OpenClaw.msixbundle'))
     [IO.File]::WriteAllText((Join-Path $testRoot 'assertion.jwt'), 'header.payload.signature')
     [ordered]@{
         schemaVersion = 1
@@ -194,7 +214,7 @@ try {
         commitSubmission = $true
         submissionWriterPolicy = 'exclusive-github-environment'
         pendingSubmissionPolicy = 'reject'
-        failedDraftPolicy = 'delete-owned'
+        failedDraftPolicy = 'delete-owned-before-commit'
         packageRolloutPercentage = 100
         uploadTimeoutSeconds = 1800
         minimumAccessTokenLifetimeSeconds = 2400
@@ -203,7 +223,7 @@ try {
     Reset-Fixture
     Invoke-Submission
     if ($null -ne $global:OpenClawStoreTest_pendingId -or $global:OpenClawStoreTest_uploadedEntries.Count -ne 1 -or
-        $global:OpenClawStoreTest_uploadedEntries[0] -cne 'OpenClawGateway.msixbundle') {
+        $global:OpenClawStoreTest_uploadedEntries[0] -cne 'OpenClaw.msixbundle') {
         throw 'Successful publication did not upload exactly one bundle and commit its owned draft.'
     }
     if (@($global:OpenClawStoreTest_calls | Where-Object { $_ -match '/submissions/draft-2/Commit$' }).Count -ne 1 -or
@@ -217,6 +237,16 @@ try {
         [string]$evidence.preparedMutationSha256 -cne [string]$evidence.verifiedMutationSha256) {
         throw 'Store evidence did not bind the verified and committed draft.'
     }
+
+    Reset-Fixture
+    $global:OpenClawStoreTest_wrongIdentity = $true
+    Assert-Fails -MessagePattern 'product does not match' -Action { Invoke-Submission }
+    if ($global:OpenClawStoreTest_calls -match 'isMinimalResponse') { throw 'Wrong-product preflight created a draft.' }
+
+    Reset-Fixture
+    $global:OpenClawStoreTest_serverFields = $true
+    $global:OpenClawStoreTest_published.PSObject.Properties.Remove('TargetPublishDate')
+    Invoke-Submission
 
     Reset-Fixture
     $global:OpenClawStoreTest_pendingId = 'human-draft'
@@ -255,11 +285,27 @@ try {
     }
 
     Reset-Fixture
+    $global:OpenClawStoreTest_commitStatus = 'PendingCommit'
+    Assert-Fails -MessagePattern 'did not accept the submission commit' -Action { Invoke-Submission }
+    if ($global:OpenClawStoreTest_pendingId -cne 'draft-2' -or
+        $global:OpenClawStoreTest_calls -match 'Delete .*/submissions/draft-2$') {
+        throw 'Ambiguous commit status deleted the submission with an unknown outcome.'
+    }
+
+    Reset-Fixture
+    $global:OpenClawStoreTest_commitThrows = $true
+    Assert-Fails -MessagePattern 'Commit response was lost' -Action { Invoke-Submission }
+    if ($global:OpenClawStoreTest_pendingId -cne 'draft-2' -or
+        $global:OpenClawStoreTest_calls -match 'Delete .*/submissions/draft-2$') {
+        throw 'Ambiguous commit transport failure deleted the submission with an unknown outcome.'
+    }
+
+    Reset-Fixture
     $global:OpenClawStoreTest_tokenLifetime = 2000
     Assert-Fails -MessagePattern 'too short-lived' -Action { Invoke-Submission }
     if ($global:OpenClawStoreTest_calls.Count -ne 1) { throw 'Short-lived authorization reached the Store API.' }
 
-    $wrongPackagePath = Join-Path $testRoot 'OpenClawGateway-x64.msix'
+    $wrongPackagePath = Join-Path $testRoot 'OpenClaw-x64.msix'
     [IO.File]::WriteAllText($wrongPackagePath, 'standalone-fixture')
     Assert-Fails -MessagePattern 'requires one .msixbundle' -Action {
         Invoke-Submission -BundlePath $wrongPackagePath

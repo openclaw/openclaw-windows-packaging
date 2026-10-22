@@ -1,6 +1,11 @@
 const ISOLATION_ENVIRONMENT_VARIABLE = "CLAWCTL_GATEWAY_ISOLATION";
 const STATUS_PATH = "/plugins/gateway-isolation/status";
 const THEME_MESSAGE_TYPE = "openclaw:widget-theme";
+const ISOLATION_AGENT_CONTEXT = [
+  "## Windows agent session",
+  "The Gateway and local tools run in an isolated Windows agent session, not the user's desktop: local windows are invisible to the user, and local file access does not imply user access.",
+  "Do not solicit or expose credentials/tokens, bypass MFA/consent, alter ACLs/isolation, open local GUI for human participation, or export private workspaces; consult windows-agent-handoff for supported GUI, sign-in, and verified nonsensitive file delivery.",
+].join("\n\n");
 const COMMAND_GROUPS = [
   {
     id: "clawctl",
@@ -373,14 +378,19 @@ function writeHtmlResponse(response, statusCode, html) {
   response.end(html);
 }
 
-export function createGatewayIsolationPlugin(env = process.env) {
+export function createGatewayIsolationPlugin(env = process.env, platform = process.platform) {
   const launchMode = readGatewayIsolationMode(env);
 
   return {
     id: "gateway-isolation",
     name: "Windows Launcher",
-    description: "Reports the Windows launch mode selected for the running Gateway.",
+    description: "Reports Windows isolation status and supplies local-session agent guidance.",
     register(api) {
+      if (platform === "win32" && launchMode === "enabled") {
+        api.on("before_prompt_build", () => ({
+          appendSystemContext: ISOLATION_AGENT_CONTEXT,
+        }));
+      }
       api.session.controls.registerControlUiDescriptor({
         surface: "tab",
         id: "gateway-isolation",

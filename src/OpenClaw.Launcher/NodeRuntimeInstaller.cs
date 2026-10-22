@@ -110,7 +110,7 @@ internal static partial class NodeRuntimeInstaller
                 }
                 catch (InvalidOperationException exception)
                 {
-                    log($"Reinstalling invalid bundled Node.js: {exception.Message}");
+                    log($"Reinstalling invalid bundled Node.js: {DiagnosticFailure.Describe(exception)}");
                 }
             }
 

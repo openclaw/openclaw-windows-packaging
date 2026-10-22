@@ -21,7 +21,7 @@ namespace OpenClaw.Launcher.Gateway;
 internal sealed class GatewayPersistenceManager
 {
     /// <summary>The command a reported problem tells the user to run.</summary>
-    public const string RepairCommand = "clawctl gateway-service install";
+    public const string RepairCommand = "clawctl setup";
 
     private readonly IGatewayTaskScheduler _scheduler;
     private readonly GatewayPersistenceOptions _options;
@@ -58,7 +58,7 @@ internal sealed class GatewayPersistenceManager
     /// </summary>
     public string FallbackPath => ResolveOwnedFilePath(
         _options.StartupFolderPath,
-        $"{GatewayTaskIdentity.DisplayName} {_options.PackageFamilyName}.cmd");
+        $"{GatewayTaskIdentity.DisplayName} {_options.PackageFamilyName}.wsf");
 
     private string LauncherPath => ResolveOwnedFilePath(
         _options.WorkingDirectory,
@@ -77,6 +77,7 @@ internal sealed class GatewayPersistenceManager
 
         if (probe.Presence == GatewayTaskPresence.Unreadable)
         {
+            _log($"The logon task '{_identity.Name}' could not be read: {DiagnosticFailure.SingleLine(probe.Detail ?? "no detail was reported.")}");
             return new GatewayPersistenceStatus(
                 GatewayPersistenceState.Unknown,
                 GatewayPersistenceLane.None,
@@ -89,6 +90,16 @@ internal sealed class GatewayPersistenceManager
 
         if (probe.Presence == GatewayTaskPresence.Missing)
         {
+            if (File.Exists(Path.ChangeExtension(FallbackPath, ".cmd")))
+            {
+                return new GatewayPersistenceStatus(
+                    GatewayPersistenceState.ActionRequired,
+                    GatewayPersistenceLane.StartupFolderFallback,
+                    "The Startup-folder recovery uses the previous console launcher.",
+                    "Reinstall logon recovery to run it in the background.",
+                    RepairCommand);
+            }
+
             return fallbackPresent
                 ? new GatewayPersistenceStatus(
                     GatewayPersistenceState.Ready,
@@ -145,6 +156,9 @@ internal sealed class GatewayPersistenceManager
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException)
         {
+            _log(
+                $"The gateway launcher '{_options.LauncherPath}' could not be written: " +
+                DiagnosticFailure.Describe(exception));
             return new GatewayPersistenceInstallResult(
                 GatewayPersistenceState.ActionRequired,
                 GatewayPersistenceLane.None,
@@ -162,6 +176,9 @@ internal sealed class GatewayPersistenceManager
         // unbounded retry: the write is as likely to be refused as the read was.
         if (probe.Presence == GatewayTaskPresence.Unreadable)
         {
+            _log(
+                $"The logon task '{_identity.Name}' could not be read, so it was " +
+                $"left unchanged: {DiagnosticFailure.SingleLine(probe.Detail ?? "no detail was reported.")}");
             return new GatewayPersistenceInstallResult(
                 GatewayPersistenceState.Unknown,
                 GatewayPersistenceLane.None,
@@ -177,12 +194,11 @@ internal sealed class GatewayPersistenceManager
 
         if (alreadyCorrect)
         {
-            _ = RemoveFallback();
-            return new GatewayPersistenceInstallResult(
+            return CompleteMigration(new GatewayPersistenceInstallResult(
                 GatewayPersistenceState.Ready,
                 GatewayPersistenceLane.TaskScheduler,
                 "Logon recovery is configured.",
-                changed);
+                changed));
         }
 
         GatewayTaskOperation registration = await _scheduler.RegisterAsync(
@@ -193,15 +209,49 @@ internal sealed class GatewayPersistenceManager
         if (registration.Succeeded)
         {
             _log($"Registered the logon task '{_identity.Name}'.");
-            _ = RemoveFallback();
-            return new GatewayPersistenceInstallResult(
+            // A successful schtasks write is not evidence that its normalized
+            // principal and trigger match. Keep any fallback until read-back proves it.
+            GatewayPersistenceStatus verified = await GetStatusAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (verified.State != GatewayPersistenceState.Ready ||
+                verified.Lane != GatewayPersistenceLane.TaskScheduler)
+            {
+                _log($"Registered logon recovery could not be verified: {DiagnosticFailure.SingleLine(verified.Detail ?? verified.Message)}");
+                return new GatewayPersistenceInstallResult(
+                    verified.State == GatewayPersistenceState.Unknown
+                        ? GatewayPersistenceState.Unknown
+                        : GatewayPersistenceState.ActionRequired,
+                    GatewayPersistenceLane.TaskScheduler,
+                    "The logon task was registered, but its recovery configuration could not be verified.",
+                    Changed: true,
+                    verified.Detail ?? verified.Message,
+                    RepairCommand);
+            }
+            return CompleteMigration(new GatewayPersistenceInstallResult(
                 GatewayPersistenceState.Ready,
                 GatewayPersistenceLane.TaskScheduler,
                 "Logon recovery is configured.",
-                Changed: true);
+                Changed: true));
         }
 
-        return InstallFallback(registration.Detail);
+        _log(
+            $"The logon task '{_identity.Name}' could not be registered; trying the " +
+            $"Startup-folder fallback: {DiagnosticFailure.SingleLine(registration.Detail ?? "no detail was reported.")}");
+        GatewayPersistenceInstallResult fallback = InstallFallback(registration.Detail);
+        if (probe.Presence == GatewayTaskPresence.Present)
+        {
+            // The unchanged task may still reference the CMD launcher. A new
+            // fallback cannot retire files that the existing task still uses.
+            return fallback with
+            {
+                State = GatewayPersistenceState.ActionRequired,
+                Detail = Combine(fallback.Detail,
+                    "The existing logon task could not be replaced. Its previous recovery " +
+                    "files were retained until migration can be completed."),
+                Remediation = RepairCommand
+            };
+        }
+        return CompleteMigration(fallback);
     }
 
     public async Task<GatewayPersistenceRemovalResult> UninstallAsync(
@@ -214,29 +264,65 @@ internal sealed class GatewayPersistenceManager
         GatewayGeneratedFileRemoval fallback = RemoveFallback();
         GatewayGeneratedFileRemoval launcher = RemoveLauncher();
         GatewayGeneratedFileRemoval activationScript = RemoveActivationScript();
+        GatewayGeneratedFileRemoval legacy = RemoveLegacyFiles();
         string? detail = Combine(
             deletion.Detail,
-            Combine(fallback.Detail, launcher.Detail, activationScript.Detail));
+            Combine(fallback.Detail, launcher.Detail, Combine(activationScript.Detail, legacy.Detail)));
 
         if (!deletion.Succeeded || detail is not null)
         {
+            _log($"Logon recovery could not be fully removed: {DiagnosticFailure.SingleLine(detail ?? "no detail was reported.")}");
             return new GatewayPersistenceRemovalResult(
                 Succeeded: false,
-                fallback.Changed || launcher.Changed || activationScript.Changed,
+                fallback.Changed || launcher.Changed || activationScript.Changed || legacy.Changed,
                 "Logon recovery could not be fully removed.",
                 detail);
         }
 
         return new GatewayPersistenceRemovalResult(
             Succeeded: true,
-            fallback.Changed || launcher.Changed || activationScript.Changed,
+            fallback.Changed || launcher.Changed || activationScript.Changed || legacy.Changed,
             "Logon recovery is removed.");
+    }
+
+    // Shipped CMD registrations remain recoverable until an explicit install
+    // switches the task or fallback. Remove only marked files after that succeeds.
+    private GatewayPersistenceInstallResult CompleteMigration(GatewayPersistenceInstallResult result)
+    {
+        if (result.State != GatewayPersistenceState.Ready)
+        {
+            return result;
+        }
+
+        GatewayGeneratedFileRemoval fallback = result.Lane == GatewayPersistenceLane.TaskScheduler
+            ? RemoveFallback()
+            : new GatewayGeneratedFileRemoval(false, null);
+        GatewayGeneratedFileRemoval legacy = RemoveLegacyFiles();
+        string? detail = Combine(fallback.Detail, legacy.Detail);
+        return result with
+        {
+            State = detail is null ? result.State : GatewayPersistenceState.ActionRequired,
+            Changed = result.Changed || fallback.Changed || legacy.Changed,
+            Detail = Combine(result.Detail, detail),
+            Remediation = detail is null ? result.Remediation : RepairCommand
+        };
+    }
+
+    private GatewayGeneratedFileRemoval RemoveLegacyFiles()
+    {
+        GatewayGeneratedFileRemoval launcher =
+            RemoveGeneratedFile(Path.ChangeExtension(LauncherPath, ".cmd"));
+        GatewayGeneratedFileRemoval fallback =
+            RemoveGeneratedFile(Path.ChangeExtension(FallbackPath, ".cmd"));
+        return new GatewayGeneratedFileRemoval(
+            launcher.Changed || fallback.Changed,
+            Combine(launcher.Detail, fallback.Detail));
     }
 
     private GatewayTaskSnapshot DesiredSnapshot() =>
         GatewayTaskDefinition.CreateSnapshot(
             _options.UserSid,
-            _options.CommandProcessorPath,
+            _options.ScriptHostPath,
             LauncherPath,
             _options.LogonTriggerUserSid);
 
@@ -260,12 +346,16 @@ internal sealed class GatewayPersistenceManager
         }
         else if (!MatchesUserSid(actual.LogonTriggerUserId, desired.LogonTriggerUserId))
         {
-            differences.Add("The logon trigger is scoped to a different user.");
+            differences.Add(
+                $"The logon trigger is scoped to a different user. " +
+                $"Expected '{desired.LogonTriggerUserId}', observed '{actual.LogonTriggerUserId}'.");
         }
 
         if (!Same(actual.UserId, desired.UserId))
         {
-            differences.Add("The task runs as a different user.");
+            differences.Add(
+                $"The task runs as a different user. " +
+                $"Expected '{desired.UserId}', observed '{actual.UserId}'.");
         }
 
         if (!Same(actual.LogonType, desired.LogonType))
@@ -321,6 +411,9 @@ internal sealed class GatewayPersistenceManager
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException)
         {
+            _log(
+                $"The Startup-folder fallback '{FallbackPath}' could not be written: " +
+                DiagnosticFailure.Describe(exception));
             return new GatewayPersistenceInstallResult(
                 GatewayPersistenceState.ActionRequired,
                 GatewayPersistenceLane.None,
@@ -378,7 +471,11 @@ internal sealed class GatewayPersistenceManager
             }
         }
 
-        File.WriteAllText(path, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        // WScript reads Unicode scripts with a UTF-16 BOM; UTF-8 paths would be
+        // decoded using the machine's ANSI code page and fail for other alphabets.
+        File.WriteAllText(path, content, Path.GetExtension(path) == ".js"
+            ? Encoding.Unicode
+            : new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         return true;
     }
 
@@ -451,6 +548,9 @@ internal sealed class GatewayPersistenceManager
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException)
         {
+            _log(
+                $"The generated recovery file '{path}' could not be removed: " +
+                DiagnosticFailure.Describe(exception));
             return new GatewayGeneratedFileRemoval(
                 false,
                 $"Could not remove generated recovery file '{path}': {exception.Message}");

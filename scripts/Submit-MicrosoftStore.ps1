@@ -2,6 +2,8 @@
 param(
     [Parameter(Mandatory)][string]$BundlePath,
     [Parameter(Mandatory)][string]$ApplicationId,
+    [Parameter(Mandatory)][string]$PackageIdentityName,
+    [Parameter(Mandatory)][string]$Publisher,
     [Parameter(Mandatory)][guid]$TenantId,
     [Parameter(Mandatory)][guid]$ClientId,
     [Parameter(Mandatory)][string]$ClientAssertionFile,
@@ -18,6 +20,7 @@ function Assert-NonEmptyValue {
     param([Parameter(Mandatory)][string]$Name, [AllowEmptyString()][string]$Value)
     if ([string]::IsNullOrWhiteSpace($Value)) { throw "$Name must not be empty." }
 }
+
 function Get-RequiredProperty {
     param([Parameter(Mandatory)][object]$Object, [Parameter(Mandatory)][string]$Name)
     $property = $Object.PSObject.Properties[$Name]
@@ -58,7 +61,15 @@ function Get-SubmissionMetadataHash {
         'AllowMicrosoftDecideAppAvailabilityToFutureDeviceFamilies',
         'AllowTargetFutureDeviceFamilies', 'Trailers'
     )) {
-        $metadata[$name] = ConvertTo-CanonicalValue (Get-RequiredProperty $Submission $name)
+        # Conditional metadata is omitted by valid Store responses. Preserve it
+        # when applicable, without requiring an Immediate submission's date.
+        if ($name -eq 'TargetPublishDate' -and $Submission.TargetPublishMode -ne 'SpecificDate') { continue }
+        $property = $Submission.PSObject.Properties[$name]
+        if ($name -in @('ApplicationCategory', 'Pricing', 'Visibility', 'TargetPublishMode', 'Listings', 'TargetPublishDate')) {
+            $metadata[$name] = ConvertTo-CanonicalValue (Get-RequiredProperty $Submission $name)
+        } else {
+            $metadata[$name] = if ($null -eq $property) { $null } else { ConvertTo-CanonicalValue $property.Value }
+        }
     }
     $json = $metadata | ConvertTo-Json -Depth 100 -Compress
     $hash = [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($json))
@@ -67,11 +78,26 @@ function Get-SubmissionMetadataHash {
 
 function Get-SubmissionMutationHash {
     param([Parameter(Mandatory)][psobject]$Submission)
+    # Partner Center owns package IDs, architecture, version and upload status.
+    # Compare only our requested files/actions and editable delivery settings.
+    $packages = @(foreach ($package in @(Get-RequiredProperty $Submission 'ApplicationPackages')) {
+        $status = [string](Get-RequiredProperty $package 'FileStatus')
+        if ($status -notin @('PendingUpload', 'Uploaded', 'PendingDelete')) { throw 'Unexpected Store package status.' }
+        [ordered]@{
+            FileName = [string](Get-RequiredProperty $package 'FileName')
+            Action = if ($status -eq 'PendingDelete') { 'delete' } else { 'upload' }
+            MinimumDirectXVersion = if ($null -ne $package.PSObject.Properties['minimumDirectXVersion']) { $package.PSObject.Properties['minimumDirectXVersion'].Value } else { $null }
+            MinimumSystemRam = if ($null -ne $package.PSObject.Properties['minimumSystemRam']) { $package.PSObject.Properties['minimumSystemRam'].Value } else { $null }
+        }
+    })
+    $delivery = ConvertTo-CanonicalValue (Get-RequiredProperty $Submission 'PackageDeliveryOptions')
+    if ($null -ne $delivery -and $null -ne $delivery['PackageRollout']) {
+        $delivery['PackageRollout'].Remove('PackageRolloutStatus')
+        $delivery['PackageRollout'].Remove('FallbackSubmissionId')
+    }
     $mutationState = [ordered]@{
-        ApplicationPackages = ConvertTo-CanonicalValue (
-            Get-RequiredProperty $Submission 'ApplicationPackages')
-        PackageDeliveryOptions = ConvertTo-CanonicalValue (
-            Get-RequiredProperty $Submission 'PackageDeliveryOptions')
+        ApplicationPackages = @($packages | Sort-Object { $_.FileName })
+        PackageDeliveryOptions = $delivery
     }
     $json = $mutationState | ConvertTo-Json -Depth 100 -Compress
     $hash = [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($json))
@@ -87,6 +113,18 @@ if ([IO.Path]::GetExtension($resolvedBundle) -cne '.msixbundle') {
     throw "Store submission requires one .msixbundle: $resolvedBundle"
 }
 if ((Get-Item -LiteralPath $resolvedBundle).Length -eq 0) { throw "MSIX bundle is empty: $resolvedBundle" }
+$bundleArchive = [IO.Compression.ZipFile]::OpenRead($resolvedBundle)
+try {
+    $manifestEntry = $bundleArchive.GetEntry('AppxMetadata/AppxBundleManifest.xml')
+    if ($null -eq $manifestEntry) { throw 'Bundle manifest is missing.' }
+    $reader = [IO.StreamReader]::new($manifestEntry.Open())
+    try { [xml]$manifest = $reader.ReadToEnd() } finally { $reader.Dispose() }
+    if ([string]$manifest.Bundle.Identity.Name -cne $PackageIdentityName -or
+        [string]$manifest.Bundle.Identity.Publisher -cne $Publisher) {
+        throw 'Bundle does not match the approved Store package identity.'
+    }
+} finally { $bundleArchive.Dispose() }
+
 if (-not (Test-Path -LiteralPath $ClientAssertionFile -PathType Leaf)) {
     throw "OIDC client assertion file does not exist: $ClientAssertionFile"
 }
@@ -119,7 +157,7 @@ if ([string]$policy.apiBaseUri -cne 'https://manage.devcenter.microsoft.com' -or
 if ([bool]$policy.commitSubmission -ne $true -or
     [string]$policy.submissionWriterPolicy -cne 'exclusive-github-environment' -or
     [string]$policy.pendingSubmissionPolicy -cne 'reject' -or
-    [string]$policy.failedDraftPolicy -cne 'delete-owned') {
+    [string]$policy.failedDraftPolicy -cne 'delete-owned-before-commit') {
     throw 'Store submission policy must commit safely and reject unowned drafts.'
 }
 $rollout = [float]$policy.packageRolloutPercentage
@@ -187,11 +225,16 @@ function Assert-OwnedDraft {
 
 $draftId = $null
 $committed = $false
+$draftDeletionAllowed = $true
 $temporaryDirectory = $null
 try {
     $application = Invoke-StoreApi -Method Get -Path "/v1.0/my/applications/$encodedApplicationId"
     if ([string](Get-RequiredProperty $application 'Id') -cne $ApplicationId) {
         throw 'Microsoft Store application preflight returned the wrong product.'
+    }
+    if ([string](Get-RequiredProperty $application 'PackageIdentityName') -cne $PackageIdentityName -or
+        [string](Get-RequiredProperty $application 'PublisherName') -cne $Publisher) {
+        throw 'Microsoft Store product does not match the approved package identity.'
     }
     if ($null -ne (Get-RequiredProperty $application 'PendingApplicationSubmission')) {
         throw 'Partner Center already has a pending submission; automation will not replace it.'
@@ -237,13 +280,13 @@ try {
         }
     }
 
+    $draftMutationHash = Get-SubmissionMutationHash $draft
     $draft = Invoke-StoreApi -Method Put `
         -Path "/v1.0/my/applications/$encodedApplicationId/submissions/$encodedDraftId" `
         -Body $draft
     if ([string](Get-RequiredProperty $draft 'Id') -cne $draftId) {
         throw 'Store updated a different draft than the automation owns.'
     }
-    $draftMutationHash = Get-SubmissionMutationHash $draft
     Assert-OwnedDraft -SubmissionId $draftId
 
     $temporaryDirectory = Join-Path ([IO.Path]::GetTempPath()) (
@@ -270,10 +313,18 @@ try {
         throw 'The Store draft package mutation state changed after upload.'
     }
     Assert-OwnedDraft -SubmissionId $draftId
+    # Once the commit request leaves this process, a transport failure is
+    # ambiguous: Partner Center may have accepted it even if no response
+    # arrived. Never delete that submission unless Partner Center explicitly
+    # reports a terminal rejection.
+    $draftDeletionAllowed = $false
     $commit = Invoke-StoreApi -Method Post `
         -Path "/v1.0/my/applications/$encodedApplicationId/submissions/$encodedDraftId/Commit"
     $commitStatus = [string](Get-RequiredProperty $commit 'Status')
     if ($commitStatus -cne 'CommitStarted') {
+        if ($commitStatus -cin @('CommitFailed', 'Canceled')) {
+            $draftDeletionAllowed = $true
+        }
         throw "Store did not accept the submission commit: $commitStatus"
     }
     $committed = $true
@@ -300,7 +351,8 @@ try {
 }
 catch {
     $failure = $_
-    if (-not $committed -and -not [string]::IsNullOrWhiteSpace($draftId)) {
+    if ($draftDeletionAllowed -and -not $committed -and
+        -not [string]::IsNullOrWhiteSpace($draftId)) {
         try {
             $encodedDraftId = [Uri]::EscapeDataString($draftId)
             Invoke-StoreApi -Method Delete `

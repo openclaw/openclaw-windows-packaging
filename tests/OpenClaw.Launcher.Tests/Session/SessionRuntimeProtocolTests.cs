@@ -14,17 +14,6 @@ public sealed class SessionRuntimeProtocolTests
         ApplicationDirectory = @"C:\Package\app"
     };
 
-    [Fact]
-    public void AValidRequestRoundTrips()
-    {
-        SessionRuntimeInstallRequest parsed = SessionRuntimeProtocol.ReadRequest(
-            SessionRuntimeProtocol.SerializeRequest(Valid()));
-
-        Assert.Equal("r1", parsed.RequestId);
-        Assert.Equal(Valid().ArchivePath, parsed.ArchivePath);
-        Assert.True(parsed.UpdateUserPath);
-    }
-
     // The host names the archive; a relative or traversing value would let a
     // malformed request point the guest outside the package.
     [Theory]

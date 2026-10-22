@@ -148,17 +148,20 @@ foreach ($requiredPath in @('package.json', 'openclaw.mjs', 'dist')) {
     -OpenClawDirectory $installedPackage
 
 $applicationDirectory = Join-Path $OutputDirectory 'app'
-if (Test-Path -LiteralPath $applicationDirectory) {
-    Remove-Item -LiteralPath $applicationDirectory -Recurse -Force
-}
-Copy-Item `
-    -LiteralPath $installedPackage `
-    -Destination $applicationDirectory `
-    -Recurse
+# The staged install stays intact: the workflow caches it after this script,
+# and -ReuseStagedInstall builds from it again.
+& (Join-Path $PSScriptRoot 'Copy-PayloadTree.ps1') `
+    -Source $installedPackage `
+    -Destination $applicationDirectory
 $installedPackage = $applicationDirectory
 
 $pluginSource = Join-Path $repositoryRoot 'plugins\gateway-isolation'
-$pluginFiles = @('package.json', 'openclaw.plugin.json', 'index.js')
+$pluginFiles = @(
+    'package.json'
+    'openclaw.plugin.json'
+    'index.js'
+    'skills\windows-agent-handoff\SKILL.md'
+)
 foreach ($pluginFile in $pluginFiles) {
     $sourcePath = Join-Path $pluginSource $pluginFile
     if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
@@ -199,9 +202,11 @@ if (Test-Path -LiteralPath $pluginTarget) {
 }
 New-Item -Path $pluginTarget -ItemType Directory | Out-Null
 foreach ($pluginFile in $pluginFiles) {
+    $targetPath = Join-Path $pluginTarget $pluginFile
+    New-Item -Path (Split-Path $targetPath -Parent) -ItemType Directory -Force | Out-Null
     Copy-Item `
         -LiteralPath (Join-Path $pluginSource $pluginFile) `
-        -Destination (Join-Path $pluginTarget $pluginFile)
+        -Destination $targetPath
 }
 
 $previousStateDirectory = $env:OPENCLAW_STATE_DIR
@@ -217,18 +222,22 @@ $validationConfigPath = Join-Path `
 try {
     $env:OPENCLAW_STATE_DIR = $validationStateDirectory
     $env:OPENCLAW_CONFIG_PATH = $validationConfigPath
-    $env:CLAWCTL_GATEWAY_ISOLATION = 'disabled'
+    $env:CLAWCTL_GATEWAY_ISOLATION = 'enabled'
     $env:XDG_CACHE_HOME = Join-Path $validationStateDirectory 'cache'
     Push-Location $installedPackage
     try {
         if (Test-Path -LiteralPath $validationConfigPath) {
             throw 'Gateway isolation validation requires a fresh, isolated profile.'
         }
-        foreach ($profileKind in @('fresh', 'existing-without-plugin-decision')) {
+        foreach ($profileKind in @('fresh', 'existing-without-plugin-decision', 'invalid-isolation-report')) {
             if ($profileKind -eq 'existing-without-plugin-decision') {
                 New-Item -Path $validationStateDirectory -ItemType Directory -Force | Out-Null
                 Set-Content -LiteralPath $validationConfigPath -Value '{}' -Encoding utf8
             }
+            if ($profileKind -eq 'invalid-isolation-report') {
+                $env:CLAWCTL_GATEWAY_ISOLATION = 'disabled'
+            }
+            $expectedHookCount = if ($IsWindows -and $env:CLAWCTL_GATEWAY_ISOLATION -ceq 'enabled') { 1 } else { 0 }
             $configHashBefore = if (Test-Path -LiteralPath $validationConfigPath) {
                 (Get-FileHash -LiteralPath $validationConfigPath -Algorithm SHA256).Hash
             } else { $null }
@@ -256,6 +265,9 @@ try {
                 $inspection.plugin.status -ne 'loaded' -or
                 $inspection.plugin.imported -ne $true -or
                 $inspection.plugin.httpRoutes -ne 1 -or
+                $inspection.plugin.hookCount -ne $expectedHookCount -or
+                @($inspection.typedHooks).Count -ne $expectedHookCount -or
+                ($expectedHookCount -eq 1 -and $inspection.typedHooks[0].name -cne 'before_prompt_build') -or
                 $inspection.httpRouteCount -ne 1 -or
                 @($inspection.gatewayMethods).Count -ne 0 -or
                 @($inspection.tools).Count -ne 0 -or
@@ -276,6 +288,7 @@ try {
             }
         }
 
+        $env:CLAWCTL_GATEWAY_ISOLATION = 'enabled'
         Set-Content `
             -LiteralPath $validationConfigPath `
             -Value '{"plugins":{"entries":{"gateway-isolation":{"enabled":false}}}}' `
@@ -302,6 +315,8 @@ try {
             $disabledInspection.plugin.activated -ne $false -or
             $disabledInspection.plugin.imported -ne $false -or
             $disabledInspection.plugin.httpRoutes -ne 0 -or
+            $disabledInspection.plugin.hookCount -ne 0 -or
+            @($disabledInspection.typedHooks).Count -ne 0 -or
             $disabledInspection.httpRouteCount -ne 0 -or
             $disabledConfigHash -cne (
                 Get-FileHash -LiteralPath $validationConfigPath -Algorithm SHA256

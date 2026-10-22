@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using Microsoft.Win32.SafeHandles;
 using OpenClaw.SessionProtocol;
 
 namespace OpenClaw.SessionHost;
@@ -45,7 +46,10 @@ internal static class SessionInspector
 
     internal static SessionInspectResult Inspect(
         SessionInspectRequest request,
-        Func<string, string> readFile)
+        Func<string, string> readFile,
+        Func<IReadOnlyDictionary<int, ulong>>? captureSequences = null,
+        Action<Process>? probeAccess = null,
+        Func<IReadOnlyDictionary<int, DateTimeOffset>>? captureCreationTimes = null)
     {
         if (request.LaunchPending)
         {
@@ -64,13 +68,28 @@ internal static class SessionInspector
         try
         {
             using Process process = Process.GetProcessById(request.ProcessId);
-            _ = process.Handle;
-            if (process.HasExited)
+            probeAccess?.Invoke(process);
+            // Pin the identity for the complete observation. Short-lived query handles
+            // could allow the root PID to be reused between start-time and image checks.
+            using SafeProcessHandle? query = OperatingSystem.IsWindows()
+                ? SessionProcessQuery.Open(request.ProcessId)
+                : null;
+            if (query is null)
+            {
+                _ = process.Handle;
+            }
+            if (query is not null ? SessionProcessQuery.HasExited(query) : process.HasExited)
             {
                 return NotFound(request, readFile);
             }
-            bool matches = process.StartTime.ToUniversalTime() == request.ProcessStartTimeUtc;
-            string? error = matches ? ValidateImage(process, request) : null;
+            bool matches = (query is not null
+                ? SessionProcessQuery.StartTime(query)
+                : process.StartTime.ToUniversalTime()) == request.ProcessStartTimeUtc;
+            string? error = matches
+                ? ValidateImage(query is not null
+                    ? SessionProcessQuery.ImagePath(query)
+                    : process.MainModule?.FileName, request)
+                : null;
             SessionSupervisorStatus? supervisor = ReadSupervisorStatus(request.StatusPath, readFile);
 
             // Ownership is established by finding a listener belonging to this
@@ -78,9 +97,26 @@ internal static class SessionInspector
             // the user pinned a port, it is additionally checked against what
             // was observed, so a gateway on the wrong port is not reported as
             // healthy.
-            IReadOnlyList<int> owned = matches && error is null
-                ? GuestProcessObserver.ListeningPortsOwnedBy(request.ProcessId)
+            IReadOnlyDictionary<int, ulong> before = matches && error is null
+                ? CaptureSequences(captureSequences ?? WindowsProcessSnapshot.Capture)
+                : new Dictionary<int, ulong>();
+            IReadOnlyList<(int Port, int Owner)> listeners = matches && error is null
+                ? TcpListenerOwnership.GetListeners()
                 : [];
+            ProcessTreeSnapshot tree = new();
+            IReadOnlyList<int> owned = GuestProcessObserver.ListeningPortsOwnedBy(
+                listeners, tree, request.ProcessId);
+            List<SessionOwnedListener> identities = ObserveOwnedListeners(listeners, tree, request.ProcessId);
+            IReadOnlyDictionary<int, ulong> after = identities.Count > 0
+                ? CaptureSequences(captureSequences ?? WindowsProcessSnapshot.Capture)
+                : new Dictionary<int, ulong>();
+            if (identities.Any(identity =>
+                !tree.HasStableAncestry(identity.ProcessId, request.ProcessId, before, after)))
+            {
+                identities.Clear();
+            }
+            identities = [.. identities.Select(identity =>
+                identity with { SequenceNumber = after[identity.ProcessId] })];
             bool ownsConfigured = request.Port is not int configured ||
                 owned.Contains(configured);
 
@@ -95,6 +131,7 @@ internal static class SessionInspector
                     ? GuestProcessObserver.AnythingListeningOn(probe)
                     : owned.Count > 0,
                 ListeningPorts = owned,
+                OwnedListeners = identities.Count > 0 ? identities : null,
                 ListenerOwned = owned.Count > 0 && ownsConfigured,
                 Error = error
             };
@@ -103,20 +140,94 @@ internal static class SessionInspector
         {
             return NotFound(request, readFile);
         }
+        catch (Win32Exception exception) when (exception.NativeErrorCode == 5)
+        {
+            return ReconcileAccessDenied(request, exception, captureCreationTimes);
+        }
         catch (Exception exception) when (
-            exception is Win32Exception or InvalidOperationException or NotSupportedException)
+            exception is Win32Exception or InvalidOperationException or NotSupportedException or InvalidDataException)
         {
             return new SessionInspectResult { RequestId = request.RequestId, Error = exception.Message };
         }
     }
 
-    internal static string? ValidateImage(Process process, SessionInspectRequest request)
+    internal static SessionInspectResult ReconcileAccessDenied(
+        SessionInspectRequest request,
+        Win32Exception denial,
+        Func<IReadOnlyDictionary<int, DateTimeOffset>>? captureCreationTimes)
+    {
+        try
+        {
+            var times = (captureCreationTimes ?? WindowsProcessSnapshot.CaptureCreationTimes)();
+            bool found = times.TryGetValue(request.ProcessId, out DateTimeOffset created);
+            if (!found || created != request.ProcessStartTimeUtc)
+            {
+                return new SessionInspectResult
+                {
+                    RequestId = request.RequestId,
+                    ProcessFound = found,
+                    StartTimeMatches = false
+                };
+            }
+        }
+        catch (Exception exception) when (
+            exception is InvalidDataException or InvalidOperationException or
+            NotSupportedException or ArgumentOutOfRangeException or Win32Exception)
+        {
+            // Unavailable identity evidence must retain the record and block replacement.
+        }
+        return new SessionInspectResult { RequestId = request.RequestId, Error = denial.Message };
+    }
+
+    internal static List<SessionOwnedListener> ObserveOwnedListeners(
+        IReadOnlyList<(int Port, int Owner)> listeners, ProcessTreeSnapshot tree, int ancestor)
+    {
+        List<SessionOwnedListener> identities = [];
+        foreach ((int port, int owner) in listeners.Distinct())
+        {
+            if (!tree.IsSelfOrDescendant(owner, ancestor))
+            {
+                continue;
+            }
+            DateTimeOffset? startTime = tree.StartTimeOf(owner);
+            if (startTime is null)
+            {
+                return [];
+            }
+            identities.Add(new SessionOwnedListener
+            {
+                Port = port,
+                ProcessId = owner,
+                ProcessStartTimeUtc = startTime.Value
+            });
+        }
+        return identities;
+    }
+
+    private static IReadOnlyDictionary<int, ulong> CaptureSequences(
+        Func<IReadOnlyDictionary<int, ulong>> captureSequences)
+    {
+        try
+        {
+            return captureSequences();
+        }
+        catch (Exception exception) when (
+            exception is InvalidDataException or InvalidOperationException or NotSupportedException)
+        {
+            return new Dictionary<int, ulong>();
+        }
+    }
+
+    internal static string? ValidateImage(Process process, SessionInspectRequest request) =>
+        ValidateImage(process.MainModule?.FileName, request);
+
+    private static string? ValidateImage(string? imagePath, SessionInspectRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.HelperPath))
         {
             return "The recorded helper image is missing; ownership cannot be verified.";
         }
-        return string.Equals(process.MainModule?.FileName, request.HelperPath, StringComparison.OrdinalIgnoreCase)
+        return string.Equals(imagePath, request.HelperPath, StringComparison.OrdinalIgnoreCase)
             ? null : "The process image differs from the recorded gateway helper.";
     }
 

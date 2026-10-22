@@ -44,11 +44,11 @@ try {
     $packageB = & $scriptPath -Layer package -Commit $commitB
     Assert-NotEqual $packageA $packageB 'distinct commits'
 
-    $packageV2 = & $scriptPath `
+    $legacyPackage = & $scriptPath `
         -Layer package `
         -Commit $commitA `
-        -FormatVersion 2
-    Assert-NotEqual $packageA $packageV2 'package cache format version'
+        -FormatVersion 1
+    Assert-NotEqual $packageA $legacyPackage 'pre-boundary package cache invalidation'
 
     $payloadX64 = & $scriptPath `
         -Layer payload `
@@ -88,15 +88,15 @@ try {
         -PayloadScriptPath $payloadScript
     Assert-NotEqual $payloadX64 $payloadAfterEdit 'payload script edit'
 
-    $payloadV2 = & $scriptPath `
+    $legacyPayload = & $scriptPath `
         -Layer payload `
         -Commit $commitA `
         -Architecture x64 `
         -NodeVersion 24.20.0 `
         -PackageSha256 $packageHashA `
         -PayloadScriptPath $payloadScript `
-        -FormatVersion 2
-    Assert-NotEqual $payloadAfterEdit $payloadV2 'payload cache format version'
+        -FormatVersion 1
+    Assert-NotEqual $payloadAfterEdit $legacyPayload 'pre-boundary payload cache invalidation'
 }
 finally {
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue

@@ -8,7 +8,12 @@ on:
   workflow_dispatch:
     inputs:
       openclaw_ref:
-        description: Optional stable-source ref; empty follows npm latest (release publication still requires policy approval)
+        description: Optional OpenClaw branch, tag, or full SHA to package; empty follows stable
+        required: false
+        default: ''
+        type: string
+      gateway_version:
+        description: Optional older exact stable payload; MSIX identity remains on release-policy stableVersion or npm latest
         required: false
         default: ''
         type: string
@@ -22,10 +27,17 @@ on:
           - test
           - store
           - official
+      publish_release:
+        description: Publish the signed sideload packages as a GitHub Release
+        required: true
+        default: true
+        type: boolean
 
 concurrency:
   group: gateway-msix-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+cache-mode: read
 
 permissions:
   contents: read
@@ -37,11 +49,14 @@ env:
 
 jobs:
   changes:
-    name: Classify pull request changes
+    name: Select Gateway MSIX validation
     runs-on: ubuntu-latest
     outputs:
       packaging: ${{ steps.filter.outputs.packaging }}
+      payload_artifact: ${{ steps.filter.outputs.payload_artifact }}
+      bundle_build: ${{ steps.filter.outputs.bundle_build }}
       versioning: ${{ steps.filter.outputs.versioning }}
+      upgrade_matrix: ${{ steps.filter.outputs.upgrade_matrix }}
     steps:
       - uses: actions/checkout@v6
 
@@ -50,10 +65,22 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          SIGNING_MODE: ${{ inputs.signing_mode || 'unsigned' }}
         run: |
+          $upgradeMatrix = .\scripts\Get-MSIXUpgradeMatrix.ps1
+          "upgrade_matrix=$upgradeMatrix" >> $env:GITHUB_OUTPUT
+
           if ($env:GITHUB_EVENT_NAME -ne 'pull_request') {
             'packaging=true' >> $env:GITHUB_OUTPUT
-            'versioning=false' >> $env:GITHUB_OUTPUT
+            'payload_artifact=true' >> $env:GITHUB_OUTPUT
+            'bundle_build=true' >> $env:GITHUB_OUTPUT
+            # Test dispatches prove the release candidate without publication.
+            # Push and unsigned dispatches retain development package versions.
+            $versioning = (
+              $env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and
+              $env:SIGNING_MODE -in @('test', 'store', 'official')
+            )
+            "versioning=$($versioning.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
             return
           }
 
@@ -71,27 +98,23 @@ jobs:
             -FileListPath $fileListPath
           "packaging=$packaging" >> $env:GITHUB_OUTPUT
 
-          $pages = Get-Content -LiteralPath $fileListPath -Raw |
-            ConvertFrom-Json
-          $versioningPaths = @(
-            'release-policy.json'
-            'scripts/OpenClawSource.ps1'
-            'scripts/Get-WorkflowSource.ps1'
-            'scripts/Test-OpenClawSource.Tests.ps1'
-            'scripts/Get-MSIXReleaseIdentity.ps1'
-            'scripts/Test-MSIXReleaseIdentity.Tests.ps1'
-            'scripts/Test-MSIXUpgrade.ps1'
-            'scripts/msix-upgrade-baselines.json'
-          )
-          $versioning = 'false'
-          foreach ($page in @($pages)) {
-            foreach ($file in @($page)) {
-              if ([string]$file.filename -in $versioningPaths) {
-                $versioning = 'true'
-              }
-            }
-          }
+          $payloadArtifact = .\scripts\Get-PackagingRelevance.ps1 `
+            -FileListPath $fileListPath `
+            -PayloadArtifact
+          "payload_artifact=$payloadArtifact" >> $env:GITHUB_OUTPUT
+
+          $versioning = .\scripts\Get-PackagingRelevance.ps1 `
+            -FileListPath $fileListPath `
+            -Versioning
           "versioning=$versioning" >> $env:GITHUB_OUTPUT
+
+          $bundleBuild = $versioning
+          if ($bundleBuild -ne 'true') {
+            $bundleBuild = .\scripts\Get-PackagingRelevance.ps1 `
+              -FileListPath $fileListPath `
+              -BundleBuild
+          }
+          "bundle_build=$bundleBuild" >> $env:GITHUB_OUTPUT
 
   # Advisory only. This job annotates documentation-reference findings but is
   # deliberately absent from ci-gate's needs, so it can never block a merge.
@@ -110,8 +133,12 @@ jobs:
         shell: pwsh
         run: ./scripts/Test-DocReferences.ps1 -Advisory
 
+  # Documentation-only pull requests skip the host tests; the classification
+  # lives in scripts\Get-PackagingRelevance.ps1.
   test-host:
     name: Test Gateway MSIX host
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.packaging == 'true' }}
+    needs: changes
     runs-on: windows-latest
     steps:
       - name: Check out repository
@@ -141,11 +168,54 @@ jobs:
           -Configuration Release
           -SkipRestore
 
+      # A test that never completes would otherwise hold this job until the
+      # six-hour limit. Blame aborts after three minutes without test activity,
+      # names the unfinished test, and keeps a minidump for the upload below.
       - name: Test
         run: >
           dotnet test .\OpenClaw.Gateway.MSIX.slnx
           --configuration Release
           --no-restore
+          --blame-hang-timeout 3min
+          --blame-hang-dump-type mini
+          --results-directory TestResults
+          --logger "trx;LogFileName=coverage.trx"
+
+      - name: Collect and summarize test coverage
+        id: coverage
+        if: ${{ success() }}
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          .\scripts\Measure-Coverage.ps1 `
+            -OutputDirectory .\CoverageResults `
+            -Uncovered
+          [IO.File]::AppendAllText(
+            $env:GITHUB_STEP_SUMMARY,
+            [IO.File]::ReadAllText('.\CoverageResults\summary.md') + [Environment]::NewLine)
+
+      - name: Warn if coverage reporting fails
+        if: ${{ steps.coverage.outcome == 'failure' }}
+        shell: pwsh
+        run: Write-Host '::warning title=Coverage reporting failed::Coverage is advisory. Inspect the failed coverage step and available test results artifact.'
+
+      - name: Upload test and coverage results
+        id: results_upload
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: gateway-msix-test-results
+          path: |
+            TestResults
+            CoverageResults
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Warn if results upload fails
+        if: ${{ always() && steps.results_upload.outcome == 'failure' }}
+        shell: pwsh
+        run: Write-Host '::warning title=Test results upload failed::Artifact service error. Inspect the failed Upload test and coverage results step logs; test results may be unavailable.'
 
       # The xUnit suite runs under a JIT test host, so it cannot prove the
       # native entrypoint alias and root command name, or that
@@ -167,6 +237,16 @@ jobs:
         run: >
           .\scripts\Test-SigningInputs.Tests.ps1
 
+      - name: Test MSIX test signing
+        shell: pwsh
+        run: >
+          .\scripts\Test-Sign-TestMSIX.Tests.ps1
+
+      - name: Test MSIX upgrade safety
+        shell: pwsh
+        run: >
+          .\scripts\Test-MSIXUpgradeSafety.Tests.ps1
+
       - name: Test Node.js packaging inputs
         shell: pwsh
         run: .\scripts\Test-NodeRuntimeInputs.Tests.ps1
@@ -175,15 +255,21 @@ jobs:
         shell: pwsh
         run: .\scripts\Test-Get-MxcRuntime.Tests.ps1
 
+      - name: Test Microsoft Store submission
+        shell: pwsh
+        run: |
+          ./scripts/Test-Submit-MicrosoftStore.Tests.ps1
+          ./scripts/Test-StoreSubmissionSource.Tests.ps1
+
       - name: Test signing workflow configuration
         shell: pwsh
         run: >
           .\scripts\Test-WorkflowSigningConfiguration.ps1
 
-      - name: Test Microsoft Store submission
+      - name: Test MSBuild property escaping
         shell: pwsh
         run: >
-          .\scripts\Test-Submit-MicrosoftStore.Tests.ps1
+          .\scripts\Test-MSBuildPropertyValue.Tests.ps1
 
       - name: Test OpenClaw build identity validation
         shell: pwsh
@@ -210,7 +296,12 @@ jobs:
         run: >
           .\scripts\Test-OpenClawPackage.Tests.ps1
 
-      - name: Test stable source selection
+      - name: Test coverage reporting
+        shell: pwsh
+        run: >
+          .\scripts\Test-Measure-Coverage.Tests.ps1
+
+      - name: Test OpenClaw source selection
         shell: pwsh
         run: .\scripts\Test-OpenClawSource.Tests.ps1
 
@@ -224,33 +315,57 @@ jobs:
         run: >
           .\scripts\Test-MSIXReleaseIdentity.Tests.ps1
 
+      - name: Test MSIX upgrade matrix
+        shell: pwsh
+        run: >
+          .\scripts\Test-MSIXUpgradeMatrix.Tests.ps1
+
+      - name: Test workflow job results
+        shell: pwsh
+        run: >
+          .\scripts\Test-WorkflowJobResults.Tests.ps1
+
       - name: Test MSIX bundle build
         shell: pwsh
         run: >
           .\scripts\Test-Build-MSIXBundle.Tests.ps1
+
+      - name: Test payload tree copy
+        shell: pwsh
+        run: >
+          .\scripts\Test-Copy-PayloadTree.Tests.ps1
 
       - name: Test Git hooks
         shell: pwsh
         run: >
           .\scripts\Test-GitHooks.Tests.ps1
 
+      - name: Test documentation reference checker
+        shell: pwsh
+        run: >
+          .\scripts\Test-DocReferences.Tests.ps1
+
       - name: Test Gateway isolation plugin
         shell: pwsh
         run: >
           .\scripts\Test-GatewayIsolationPlugin.Tests.ps1
 
-  build-package:
-    name: Build OpenClaw npm package
+      - name: Test native dependency redirect
+        shell: pwsh
+        run: >
+          .\scripts\Test-NativeRedirect.Tests.ps1
+
+  source-preflight:
+    name: Capture source and validate build route
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.packaging == 'true' }}
     needs: changes
     runs-on: ubuntu-latest
     outputs:
       source_sha: ${{ steps.resolve.outputs.sha }}
       source_tag: ${{ steps.resolve.outputs.tag }}
-      package_cache_key: ${{ steps.resolve.outputs.package_cache_key }}
-      package_version: ${{ steps.package.outputs.version }}
-      node_version: ${{ steps.package.outputs.node_version }}
-      package_sha256: ${{ steps.package.outputs.package_sha256 }}
+      release_identity_tag: ${{ steps.resolve.outputs.release_identity_tag }}
+      package_version: ${{ steps.resolve.outputs.version }}
+      route: ${{ steps.resolve.outputs.route }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -270,6 +385,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_REF: ${{ inputs.openclaw_ref }}
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
           SIGNING_MODE: ${{ inputs.signing_mode || 'unsigned' }}
         run: |
           $snapshotPath = Join-Path $env:RUNNER_TEMP 'openclaw-source/source-resolution.json'
@@ -277,18 +393,22 @@ jobs:
             -PolicyPath ./release-policy.json `
             -OutputPath $snapshotPath `
             -Ref $env:SOURCE_REF `
+            -GatewayVersion $env:GATEWAY_VERSION `
             -SigningMode $env:SIGNING_MODE `
             -WorkflowRunId $env:GITHUB_RUN_ID `
             -PackagingCommit $env:GITHUB_SHA `
+            -WorkflowRef $env:GITHUB_WORKFLOW_REF -GitHubRef $env:GITHUB_REF -EventName $env:GITHUB_EVENT_NAME `
             -ReuseSnapshot:($env:GITHUB_RUN_ATTEMPT -ne '1')
-          $cacheKey = .\scripts\Get-OpenClawCacheKey.ps1 `
-            -Layer package `
-            -Commit $source.resolvedCommit
+          "route=$($source.buildRoute)" >> $env:GITHUB_OUTPUT
           "sha=$($source.resolvedCommit)" >> $env:GITHUB_OUTPUT
           "tag=v$($source.packageVersion)" >> $env:GITHUB_OUTPUT
+          $releaseIdentitySource = if ($null -ne $source.PSObject.Properties['releaseIdentitySource']) {
+            $source.releaseIdentitySource
+          }
+          else { $source }
+          "release_identity_tag=$($releaseIdentitySource.releaseTag)" >> $env:GITHUB_OUTPUT
           "version=$($source.packageVersion)" >> $env:GITHUB_OUTPUT
-          "package_cache_key=$cacheKey" >> $env:GITHUB_OUTPUT
-          "OpenClaw $($source.packageVersion) ($($source.resolvedCommit)), selected by $($source.requestedRef)." >> $env:GITHUB_STEP_SUMMARY
+          "OpenClaw $($source.packageVersion) ($($source.resolvedCommit)), selected by $($source.requestedRef); release identity $($releaseIdentitySource.releaseTag)." >> $env:GITHUB_STEP_SUMMARY
 
       - name: Save immutable source selection
         if: ${{ github.run_attempt == 1 }}
@@ -299,267 +419,162 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-      - name: Restore cached OpenClaw package
-        id: package-cache
-        if: ${{ github.event_name != 'workflow_dispatch' || (inputs.signing_mode != 'official' && inputs.signing_mode != 'store') }}
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ runner.temp }}/openclaw-package
-          key: ${{ steps.resolve.outputs.package_cache_key }}
-
-      # The OpenClaw checkout below must own GITHUB_WORKSPACE because its
-      # composite setup action resolves workspace files from that root. Keep
-      # the package verifier outside the workspace before replacing this
-      # checkout with the OpenClaw source tree.
-      - name: Stage package verifier
-        shell: pwsh
-        run: |
-          Copy-Item `
-            ./scripts/Test-OpenClawPackage.ps1 `
-            $env:RUNNER_TEMP/Test-OpenClawPackage.ps1
-
-      - name: Check out OpenClaw source
-        if: ${{ steps.package-cache.outputs.cache-hit != 'true' }}
-        uses: actions/checkout@v7
-        with:
-          repository: openclaw/openclaw
-          ref: ${{ steps.resolve.outputs.sha }}
-          persist-credentials: false
-          fetch-depth: 1
-
-      - name: Set up upstream Node.js and pnpm
-        if: ${{ steps.package-cache.outputs.cache-hit != 'true' }}
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          install-deps: "false"
-
-      - name: Install dependencies
-        if: ${{ steps.package-cache.outputs.cache-hit != 'true' }}
-        run: pnpm install --frozen-lockfile
-
-      - name: Build OpenClaw
-        if: ${{ steps.package-cache.outputs.cache-hit != 'true' }}
-        env:
-          OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1"
-        run: pnpm build
-
-      - name: Pack npm package
-        if: ${{ steps.package-cache.outputs.cache-hit != 'true' }}
-        env:
-          OPENCLAW_REF: ${{ steps.resolve.outputs.sha }}
-        run: |
-          set -euo pipefail
-          artifact_dir="${RUNNER_TEMP}/openclaw-package"
-          mkdir -p "${artifact_dir}"
-          node scripts/package-openclaw-for-docker.mjs \
-            --allow-unreleased-changelog \
-            --skip-build \
-            --pnpm-pack \
-            --output-dir "${artifact_dir}" \
-            --output-name openclaw.tgz
-
-          source_sha="$(git rev-parse HEAD)"
-          package_version="$(node -p "require('./package.json').version")"
-          node_version="$(node -p 'process.versions.node')"
-          package_sha256="$(sha256sum "${artifact_dir}/openclaw.tgz" | cut -d' ' -f1)"
-
-          cat > "${artifact_dir}/source.json" <<EOF
-          {
-            "repository": "https://github.com/openclaw/openclaw",
-            "requestedRef": "${OPENCLAW_REF}",
-            "resolvedCommit": "${source_sha}",
-            "packageVersion": "${package_version}",
-            "nodeVersion": "${node_version}",
-            "packageSha256": "${package_sha256}"
-          }
-          EOF
-
-      - name: Verify OpenClaw package
-        id: package
-        shell: pwsh
-        run: |
-          $packageDirectory = Join-Path $env:RUNNER_TEMP 'openclaw-package'
-          $metadataPath = Join-Path $packageDirectory 'source.json'
-          & "$env:RUNNER_TEMP/Test-OpenClawPackage.ps1" `
-            -PackageDirectory $packageDirectory `
-            -ExpectedCommit '${{ steps.resolve.outputs.sha }}' `
-            -ExpectedVersion '${{ steps.resolve.outputs.version }}' `
-            -RequestedRef '${{ steps.resolve.outputs.sha }}'
-          $metadata = Get-Content -LiteralPath $metadataPath -Raw |
-            ConvertFrom-Json
-          "version=$([string]$metadata.packageVersion)" >> $env:GITHUB_OUTPUT
-          "node_version=$([string]$metadata.nodeVersion)" >> $env:GITHUB_OUTPUT
-          "package_sha256=$([string]$metadata.packageSha256)" >> $env:GITHUB_OUTPUT
-
-      - name: Save OpenClaw package cache
-        if: ${{ steps.package-cache.outputs.cache-hit != 'true' && (github.event_name != 'workflow_dispatch' || (inputs.signing_mode != 'official' && inputs.signing_mode != 'store')) }}
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ runner.temp }}/openclaw-package
-          key: ${{ steps.resolve.outputs.package_cache_key }}
-
-      - name: Upload intermediate package
-        uses: actions/upload-artifact@v7
-        with:
-          name: openclaw-gateway-npm-package
-          path: ${{ runner.temp }}/openclaw-package/
-          if-no-files-found: error
-          retention-days: 7
-
-  build-msix:
-    name: Build unsigned ${{ matrix.architecture }} Gateway MSIX
-    needs:
-      - changes
-      - test-host
-      - build-package
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - architecture: x64
-            runner: windows-latest
-          - architecture: arm64
-            runner: windows-11-arm
+  cache-proof-write:
+    name: Prove write-scoped cache persistence
+    needs: changes
+    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.versioning == 'true' }}
+    runs-on: ubuntu-latest
+    cache-mode: write
+    permissions:
+      contents: read
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: ${{ needs.build-package.outputs.node_version }}
-          architecture: ${{ matrix.architecture }}
-
-      - name: Test native payload installation
-        shell: pwsh
-        run: .\scripts\Test-NodeRuntimeInputs.Tests.ps1
-
-      - name: Download intermediate package
-        uses: actions/download-artifact@v8
-        with:
-          name: openclaw-gateway-npm-package
-          path: ${{ runner.temp }}\openclaw-package
-
-      - name: Resolve payload cache key
-        id: payload-key
+      - name: Create synthetic cache content
         shell: pwsh
         run: |
-          $cacheKey = .\scripts\Get-OpenClawCacheKey.ps1 `
-            -Layer payload `
-            -Commit '${{ needs.build-package.outputs.source_sha }}' `
-            -Architecture '${{ matrix.architecture }}' `
-            -NodeVersion '${{ needs.build-package.outputs.node_version }}' `
-            -PackageSha256 '${{ needs.build-package.outputs.package_sha256 }}'
-          "key=$cacheKey" >> $env:GITHUB_OUTPUT
+          $root = Join-Path $env:RUNNER_TEMP 'cache-capability-proof'
+          [IO.Directory]::CreateDirectory($root) | Out-Null
+          [IO.File]::WriteAllText((Join-Path $root 'value.txt'), 'openclaw-cache-capability-proof')
 
-      - name: Restore cached Windows dependency tree
-        id: payload-cache
-        if: ${{ github.event_name != 'workflow_dispatch' || (inputs.signing_mode != 'official' && inputs.signing_mode != 'store') }}
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ runner.temp }}\openclaw-stage-${{ matrix.architecture }}
-          key: ${{ steps.payload-key.outputs.key }}
-
-      - name: Build expanded payload
-        shell: pwsh
-        run: |
-          $parameters = @{
-            PackageDirectory = '${{ runner.temp }}\openclaw-package'
-            Architecture = '${{ matrix.architecture }}'
-            OutputDirectory = '${{ runner.temp }}\openclaw-payload'
-          }
-          if ('${{ steps.payload-cache.outputs.cache-hit }}' -eq 'true') {
-            $parameters.ReuseStagedInstall = $true
-          }
-          .\scripts\Build-Payload.ps1 @parameters
-
-      - name: Save Windows dependency tree cache
-        if: ${{ steps.payload-cache.outputs.cache-hit != 'true' && (github.event_name != 'workflow_dispatch' || (inputs.signing_mode != 'official' && inputs.signing_mode != 'store')) }}
+      - name: Persist a cache with a write-capable token
         uses: actions/cache/save@v4
         with:
-          path: ${{ runner.temp }}\openclaw-stage-${{ matrix.architecture }}
-          key: ${{ steps.payload-key.outputs.key }}
+          path: ${{ runner.temp }}/cache-capability-proof
+          key: openclaw-cache-proof-${{ github.run_id }}-${{ github.run_attempt }}-allowed
 
-      - name: Upload payload
-        uses: actions/upload-artifact@v7
+  cache-proof-read:
+    name: Prove read-scoped cache denial
+    needs: [changes, cache-proof-write]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.versioning == 'true' && needs.cache-proof-write.result == 'success' }}
+    runs-on: ubuntu-latest
+    cache-mode: read
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Restore the trusted cache
+        id: restore
+        uses: actions/cache/restore@v4
         with:
-          name: openclaw-gateway-payload-${{ matrix.architecture }}
-          path: ${{ runner.temp }}\openclaw-payload\
-          if-no-files-found: error
-          retention-days: ${{ github.event_name == 'pull_request' && 1 || 7 }}
+          path: ${{ runner.temp }}/cache-capability-proof
+          key: openclaw-cache-proof-${{ github.run_id }}-${{ github.run_attempt }}-allowed
+          fail-on-cache-miss: true
 
-      - name: Set up .NET
-        uses: actions/setup-dotnet@v6
-        with:
-          global-json-file: global.json
-          cache: true
-          cache-dependency-path: Directory.Packages.props
-
-      - name: Restore NativeAOT and MSIX dependencies
+      - name: Verify persisted content
         shell: pwsh
         run: |
-          dotnet restore `
-            .\src\OpenClaw.Launcher\OpenClaw.Launcher.csproj `
-            --runtime 'win-${{ matrix.architecture }}' `
-            -p:PublishAot=true `
-            -p:IncludePackagingContent=true `
-            -p:Platform='${{ matrix.architecture }}'
-          dotnet restore `
-            .\src\OpenClaw.SessionHost\OpenClaw.SessionHost.csproj `
-            --runtime 'win-${{ matrix.architecture }}' `
-            -p:PublishAot=true `
-            -p:Platform='${{ matrix.architecture }}'
+          $path = Join-Path $env:RUNNER_TEMP 'cache-capability-proof/value.txt'
+          if ([IO.File]::ReadAllText($path) -cne 'openclaw-cache-capability-proof') {
+            throw 'The write-capable job did not persist the expected cache bytes.'
+          }
 
-      - name: Compose unsigned MSIX
+      # Deliberately bypass the cache client's mode guard. Only the service's
+      # scoped token may prevent this otherwise ordinary cache save.
+      - name: Attempt a write after forging the client mode
+        uses: actions/cache/save@v4
+        env:
+          ACTIONS_CACHE_MODE: write
+        with:
+          path: ${{ runner.temp }}/cache-capability-proof
+          key: openclaw-cache-proof-${{ github.run_id }}-${{ github.run_attempt }}-denied
+
+      - name: Require service-side write denial
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const prefix = `openclaw-cache-proof-${context.runId}-${process.env.GITHUB_RUN_ATTEMPT}`;
+            const result = await github.rest.actions.getActionsCacheList({
+              ...context.repo, ref: context.ref, key: `${prefix}-denied`
+            });
+            if (result.data.total_count !== 0) {
+              throw new Error('A read-scoped token persisted a cache after its client mode was forged.');
+            }
+            await core.summary.addHeading('Cache service capability proof')
+              .addTable([
+                [{data: 'Operation', header: true}, {data: 'Observed result', header: true}],
+                ['Write-capable token, then independent restore', 'Exact synthetic bytes retained'],
+                ['Read-scoped token with ACTIONS_CACHE_MODE=write', 'No cache persisted']
+              ]).addRaw(`Cache namespace: ${prefix}; workflow ref: ${context.ref}`).write();
+
+  build-trusted:
+    name: Build with write cache access
+    needs: [changes, source-preflight]
+    if: ${{ needs.source-preflight.outputs.route == 'trusted' }}
+    cache-mode: write
+    permissions:
+      contents: read
+    uses: ./.github/workflows/gateway-msix-build.yml
+    with:
+      source_ref: ${{ inputs.openclaw_ref || '' }}
+      gateway_version: ${{ inputs.gateway_version || '' }}
+      signing_mode: ${{ inputs.signing_mode || 'unsigned' }}
+      versioning: ${{ needs.changes.outputs.versioning }}
+      payload_artifact: ${{ needs.changes.outputs.payload_artifact }}
+      bundle_build: ${{ needs.changes.outputs.bundle_build }}
+      cache_write: true
+
+  build-read-only:
+    name: Build with read cache access
+    needs: [changes, source-preflight]
+    if: ${{ needs.source-preflight.outputs.route == 'read-only' }}
+    cache-mode: read
+    permissions:
+      contents: read
+    uses: ./.github/workflows/gateway-msix-build.yml
+    with:
+      source_ref: ${{ inputs.openclaw_ref || '' }}
+      gateway_version: ${{ inputs.gateway_version || '' }}
+      signing_mode: ${{ inputs.signing_mode || 'unsigned' }}
+      versioning: ${{ needs.changes.outputs.versioning }}
+      payload_artifact: ${{ needs.changes.outputs.payload_artifact }}
+      bundle_build: ${{ needs.changes.outputs.bundle_build }}
+      cache_write: false
+
+  build:
+    name: Validate selected build
+    if: ${{ always() }}
+    needs: [changes, source-preflight, build-trusted, build-read-only]
+    runs-on: ubuntu-latest
+    outputs:
+      source_sha: ${{ steps.select.outputs.source_sha }}
+      source_tag: ${{ steps.select.outputs.source_tag }}
+      release_identity_tag: ${{ steps.select.outputs.release_identity_tag }}
+      package_version: ${{ steps.select.outputs.package_version }}
+      node_version: ${{ steps.select.outputs.node_version }}
+      package_sha256: ${{ steps.select.outputs.package_sha256 }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Select exactly one successful route
+        id: select
         shell: pwsh
         env:
-          SIGNING_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode || 'unsigned' }}
-          VERSIONING_CHANGE: ${{ needs.changes.outputs.versioning }}
-          GATEWAY_TAG: ${{ needs.build-package.outputs.source_tag }}
+          RESULTS: ${{ toJSON(needs) }}
+          PACKAGING_EXPECTED: ${{ github.event_name != 'pull_request' || needs.changes.outputs.packaging == 'true' }}
+          EXPECTED_ROUTE: ${{ needs.source-preflight.outputs.route }}
         run: |
-          $versionParameters = @{
-            RunNumber = '${{ github.run_number }}'
-            RunAttempt = '${{ github.run_attempt }}'
+          $results = $env:RESULTS | ConvertFrom-Json
+          if ($results.changes.result -cne 'success') { throw 'Change classification failed.' }
+          $expected = $env:PACKAGING_EXPECTED -ceq 'true'
+          if ($expected -and $results.'source-preflight'.result -cne 'success') { throw 'Source preflight failed.' }
+          $outputs = ./scripts/Select-WorkflowBuild.ps1 `
+            -PackagingExpected $expected `
+            -ExpectedRoute $env:EXPECTED_ROUTE `
+            -ExpectedSource $results.'source-preflight'.outputs `
+            -Trusted $results.'build-trusted' -ReadOnly $results.'build-read-only'
+          if ($null -ne $outputs) {
+            foreach ($field in $outputs.PSObject.Properties) {
+              "$($field.Name)=$($field.Value)" >> $env:GITHUB_OUTPUT
+            }
           }
-          if (
-            $env:SIGNING_MODE -in @('official', 'store') -or
-            $env:VERSIONING_CHANGE -eq 'true'
-          ) {
-            $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
-              ConvertFrom-Json
-            $identity = .\scripts\Get-MSIXReleaseIdentity.ps1 `
-              -GatewayTag $env:GATEWAY_TAG `
-              -MSIXRevision ([int]$policy.msixRevision)
-            $versionParameters.ReleaseVersion = $identity.PackageVersion
-          }
-          $packageVersion = .\scripts\Get-WorkflowPackageVersion.ps1 `
-            @versionParameters
-
-          .\scripts\Build-MSIX.ps1 `
-            -PayloadDirectory '${{ runner.temp }}\openclaw-payload' `
-            -Architecture '${{ matrix.architecture }}' `
-            -PackageVersion $packageVersion `
-            -SourceCommit '${{ github.sha }}' `
-            -OutputDirectory '${{ runner.temp }}\openclaw-msix'
-
-      - name: Upload unsigned MSIX
-        uses: actions/upload-artifact@v7
-        with:
-          name: openclaw-gateway-msix-unsigned-${{ matrix.architecture }}
-          path: |
-            ${{ runner.temp }}\openclaw-msix\OpenClawGateway-${{ matrix.architecture }}.msix
-            ${{ runner.temp }}\openclaw-msix\msix-metadata.json
-          if-no-files-found: error
-          retention-days: 7
 
   test-sign-msix:
+    cache-mode: none
     name: Test-sign Gateway MSIX packages
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode == 'test' }}
-    needs: build-msix
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.signing_mode == 'test' && needs.test-host.result == 'success' && needs.build.result == 'success' }}
+    needs:
+      - test-host
+      - build
     runs-on: windows-latest
     permissions:
       actions: read
@@ -573,13 +588,13 @@ jobs:
       - name: Download unsigned x64 package
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-unsigned-x64
+          name: openclaw-gateway-msix-store-unsigned-x64
           path: artifacts\x64
 
       - name: Download unsigned ARM64 package
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-unsigned-arm64
+          name: openclaw-gateway-msix-store-unsigned-arm64
           path: artifacts\arm64
 
       - name: Apply temporary test signature
@@ -605,154 +620,114 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  build-msix-bundle:
-    name: Build unsigned multi-architecture Gateway MSIX bundle
-    needs:
-      - changes
-      - build-package
-      - build-msix
-    runs-on: windows-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Download unsigned x64 package
-        uses: actions/download-artifact@v8
-        with:
-          name: openclaw-gateway-msix-unsigned-x64
-          path: artifacts\x64
-
-      - name: Download unsigned ARM64 package
-        uses: actions/download-artifact@v8
-        with:
-          name: openclaw-gateway-msix-unsigned-arm64
-          path: artifacts\arm64
-
-      - name: Compose unsigned multi-architecture MSIX bundle
-        shell: pwsh
-        env:
-          SIGNING_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode || 'unsigned' }}
-          VERSIONING_CHANGE: ${{ needs.changes.outputs.versioning }}
-          GATEWAY_TAG: ${{ needs.build-package.outputs.source_tag }}
-        run: |
-          $versionParameters = @{
-            RunNumber = '${{ github.run_number }}'
-            RunAttempt = '${{ github.run_attempt }}'
-          }
-          if (
-            $env:SIGNING_MODE -in @('official', 'store') -or
-            $env:VERSIONING_CHANGE -eq 'true'
-          ) {
-            $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
-              ConvertFrom-Json
-            $identity = .\scripts\Get-MSIXReleaseIdentity.ps1 `
-              -GatewayTag $env:GATEWAY_TAG `
-              -MSIXRevision ([int]$policy.msixRevision)
-            $versionParameters.ReleaseVersion = $identity.PackageVersion
-          }
-          $packageVersion = .\scripts\Get-WorkflowPackageVersion.ps1 `
-            @versionParameters
-
-          .\scripts\Build-MSIXBundle.ps1 `
-            -X64Package artifacts\x64\OpenClawGateway-x64.msix `
-            -Arm64Package artifacts\arm64\OpenClawGateway-arm64.msix `
-            -PackageVersion $packageVersion `
-            -OutputPath artifacts\bundle\OpenClawGateway.msixbundle
-
-      - name: Upload unsigned multi-architecture MSIX bundle
-        uses: actions/upload-artifact@v7
-        with:
-          name: openclaw-gateway-msix-unsigned-bundle
-          path: artifacts\bundle\OpenClawGateway.msixbundle
-          if-no-files-found: error
-          retention-days: 7
-
   test-msix-upgrades:
-    name: Test proof-release MSIX identity transition
-    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.versioning == 'true' }}
+    cache-mode: none
+    name: Test MSIX upgrade (${{ matrix.name }})
+    if: ${{ !cancelled() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') && needs.changes.result == 'success' && needs.changes.outputs.versioning == 'true' && needs.test-host.result == 'success' && needs.build.result == 'success' }}
     needs:
       - changes
-      - build-package
-      - build-msix
-      - build-msix-bundle
+      - test-host
+      - build
     runs-on: windows-latest
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.changes.outputs.upgrade_matrix) }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - name: Download unsigned x64 candidate
+      - name: Download unsigned candidate
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-unsigned-x64
-          path: artifacts\x64
-
-      - name: Download unsigned bundle candidate
-        uses: actions/download-artifact@v8
-        with:
-          name: openclaw-gateway-msix-unsigned-bundle
-          path: artifacts\bundle
+          name: ${{ matrix.artifact }}
+          path: artifacts\${{ matrix.channel }}\${{ matrix.delivery_dir }}
 
       - name: Apply temporary test signature
         shell: pwsh
+        env:
+          CANDIDATE_CHANNEL: ${{ matrix.channel }}
         run: |
           .\scripts\Sign-TestMSIX.ps1 `
-            -ArtifactsDirectory artifacts `
-            -OutputDirectory test-signed
+            -ArtifactsDirectory (Join-Path artifacts $env:CANDIDATE_CHANNEL) `
+            -OutputDirectory (Join-Path test-signed $env:CANDIDATE_CHANNEL) `
+            -IdentityChannel $env:CANDIDATE_CHANNEL
 
-      - name: Download hash-pinned proof releases
+      - name: Download hash-pinned proof release
+        if: ${{ matrix.transition_mode != 'store-in-place' }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          BASELINE_ASSET: ${{ matrix.baseline_asset }}
+          BASELINE_RELEASE_TAG: ${{ matrix.release_tag }}
         run: |
-          $baselines = Get-Content `
-            -LiteralPath .\scripts\msix-upgrade-baselines.json `
-            -Raw |
-            ConvertFrom-Json
           New-Item -Path baselines -ItemType Directory -Force | Out-Null
-          foreach ($baseline in $baselines.baselines) {
-            & gh release download ([string]$baseline.releaseTag) `
-              --repo $env:GITHUB_REPOSITORY `
-              --pattern ([string]$baseline.assetName) `
-              --dir baselines
-            if ($LASTEXITCODE -ne 0) {
-              throw "Unable to download $($baseline.releaseTag) upgrade baseline."
-            }
+          & gh release download $env:BASELINE_RELEASE_TAG `
+            --repo $env:GITHUB_REPOSITORY `
+            --pattern $env:BASELINE_ASSET `
+            --dir baselines
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to download $env:BASELINE_RELEASE_TAG upgrade baseline."
           }
 
-      - name: Test installed-package identity reset and isolated LocalState
+      - name: Test package transition
         shell: pwsh
         env:
-          GATEWAY_TAG: ${{ needs.build-package.outputs.source_tag }}
+          GATEWAY_TAG: ${{ needs.build.outputs.release_identity_tag }}
+          BASELINE_ASSET: ${{ matrix.baseline_asset }}
+          CANDIDATE_CHANNEL: ${{ matrix.channel }}
+          CANDIDATE_FILE: ${{ matrix.candidate_file }}
+          DELIVERY_DIRECTORY: ${{ matrix.delivery_dir }}
+          EVIDENCE_ID: ${{ matrix.id }}
+          TRANSITION_MODE: ${{ matrix.transition_mode }}
         run: |
           $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
             ConvertFrom-Json
           $identity = .\scripts\Get-MSIXReleaseIdentity.ps1 `
             -GatewayTag $env:GATEWAY_TAG `
             -MSIXRevision ([int]$policy.msixRevision)
-          .\scripts\Test-MSIXUpgrade.ps1 `
-            -BaselinesPath .\scripts\msix-upgrade-baselines.json `
-            -BaselinesDirectory baselines `
-            -CandidatePackagePath test-signed\x64\OpenClawGateway-x64.msix `
-            -CandidateBundlePath test-signed\bundle\OpenClawGateway.msixbundle `
-            -CandidateCertificatePath test-signed\x64\OpenClawGateway-test-signing.cer `
-            -ExpectedCandidateVersion $identity.PackageVersion `
-            -EvidencePath evidence\msix-upgrade-evidence.json
+          $candidateRoot = Join-Path `
+            (Join-Path test-signed $env:CANDIDATE_CHANNEL) `
+            $env:DELIVERY_DIRECTORY
+          $candidatePath = Join-Path $candidateRoot $env:CANDIDATE_FILE
+          $certificatePath = Join-Path `
+            $candidateRoot `
+            'OpenClawGateway-test-signing.cer'
+          $evidencePath = Join-Path evidence "$env:EVIDENCE_ID.json"
+          New-Item -Path evidence -ItemType Directory -Force | Out-Null
+          if ($env:TRANSITION_MODE -ceq 'store-in-place') {
+            .\scripts\Test-MSIXStoreUpgrade.ps1 `
+              -CandidatePath $candidatePath `
+              -CandidateCertificatePath $certificatePath `
+              -ExpectedCandidateVersion $identity.PackageVersion `
+              -StoreProductId '9NV70LV3D6XC' `
+              -EvidencePath $evidencePath
+          }
+          else {
+            .\scripts\Test-MSIXUpgrade.ps1 `
+              -BaselinesPath .\scripts\msix-upgrade-baselines.json `
+              -BaselinesDirectory baselines `
+              -CandidatePath $candidatePath `
+              -CandidateCertificatePath $certificatePath `
+              -ExpectedCandidateVersion $identity.PackageVersion `
+              -TransitionMode $env:TRANSITION_MODE `
+              -BaselineAssetName $env:BASELINE_ASSET `
+              -EvidencePath $evidencePath
+          }
 
-      - name: Upload identity-transition evidence
+      - name: Upload transition evidence
         uses: actions/upload-artifact@v7
         with:
-          name: openclaw-gateway-msix-upgrade-evidence
-          path: evidence\msix-upgrade-evidence.json
+          name: openclaw-gateway-msix-upgrade-evidence-${{ matrix.id }}
+          path: evidence\${{ matrix.id }}.json
           if-no-files-found: error
           retention-days: 90
 
   reject-untrusted-official-signing:
+    cache-mode: none
     name: Reject release publication outside main
     if: ${{ github.event_name == 'workflow_dispatch' && (inputs.signing_mode == 'official' || inputs.signing_mode == 'store') && github.ref != 'refs/heads/main' }}
     runs-on: windows-latest
@@ -766,12 +741,13 @@ jobs:
           )
 
   authorize-signing:
+    cache-mode: none
     name: Authorize Gateway MSIX release
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.signing_mode == 'official' || inputs.signing_mode == 'store') && github.ref == 'refs/heads/main' }}
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && (inputs.signing_mode == 'official' || inputs.signing_mode == 'store') && github.ref == 'refs/heads/main' && needs.test-host.result == 'success' && needs.build.result == 'success' && needs.test-msix-upgrades.result == 'success' }}
     needs:
-      - build-package
-      - build-msix
-      - build-msix-bundle
+      - test-host
+      - build
+      - test-msix-upgrades
     runs-on: windows-latest
     outputs:
       package_version: ${{ steps.release.outputs.package_version }}
@@ -787,32 +763,74 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Download unsigned x64 package
+      - name: Download unsigned Store x64 package
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-unsigned-x64
-          path: artifacts\x64
+          name: openclaw-gateway-msix-store-unsigned-x64
+          path: artifacts\store\x64
 
-      - name: Download unsigned ARM64 package
+      - name: Download unsigned Store ARM64 package
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-unsigned-arm64
-          path: artifacts\arm64
+          name: openclaw-gateway-msix-store-unsigned-arm64
+          path: artifacts\store\arm64
 
-      - name: Download unsigned multi-architecture bundle
+      - name: Download unsigned Store bundle
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-unsigned-bundle
-          path: artifacts\bundle
+          name: openclaw-gateway-msix-store-unsigned-bundle
+          path: artifacts\store\bundle
+
+      - name: Download unsigned sideload x64 package
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-sideload-unsigned-x64
+          path: artifacts\sideload\x64
+
+      - name: Download unsigned sideload ARM64 package
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-sideload-unsigned-arm64
+          path: artifacts\sideload\arm64
+
+      - name: Download unsigned sideload bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-sideload-unsigned-bundle
+          path: artifacts\sideload\bundle
+
+      - name: Download captured source selection
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-source-resolution
+          path: source-resolution
 
       - name: Resolve official release metadata
         id: release
         shell: pwsh
+        env:
+          SIGNING_MODE: ${{ inputs.signing_mode }}
+          SOURCE_REF: ${{ inputs.openclaw_ref }}
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
         run: |
+          $source = .\scripts\Get-WorkflowSource.ps1 `
+            -PolicyPath .\release-policy.json `
+            -OutputPath source-resolution\source-resolution.json `
+            -WorkflowRunId $env:GITHUB_RUN_ID `
+            -PackagingCommit $env:GITHUB_SHA `
+            -WorkflowRef $env:GITHUB_WORKFLOW_REF -GitHubRef $env:GITHUB_REF -EventName $env:GITHUB_EVENT_NAME `
+            -SigningMode $env:SIGNING_MODE `
+            -Ref $env:SOURCE_REF `
+            -GatewayVersion $env:GATEWAY_VERSION `
+            -ReuseSnapshot
           $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
             ConvertFrom-Json
+          $releaseIdentitySource = if ($null -ne $source.PSObject.Properties['releaseIdentitySource']) {
+            $source.releaseIdentitySource
+          }
+          else { $source }
           $identity = .\scripts\Get-MSIXReleaseIdentity.ps1 `
-            -GatewayTag ([string]$policy.gatewayTag) `
+            -GatewayTag $releaseIdentitySource.releaseTag `
             -MSIXRevision ([int]$policy.msixRevision)
           $packageVersion = .\scripts\Get-WorkflowPackageVersion.ps1 `
             -RunNumber '${{ github.run_number }}' `
@@ -822,27 +840,38 @@ jobs:
           "package_version=$packageVersion" >> $env:GITHUB_OUTPUT
           "release_tag=$($identity.ReleaseTag)" >> $env:GITHUB_OUTPUT
           "release_version=$($identity.ReleaseVersion)" >> $env:GITHUB_OUTPUT
-          "publisher=$($policy.publisher)" >> $env:GITHUB_OUTPUT
+          "publisher=$($policy.sideloadPackageIdentity.publisher)" >> $env:GITHUB_OUTPUT
 
       - name: Enforce reviewed release policy
         shell: pwsh
         env:
-          OPENCLAW_REF: ${{ inputs.openclaw_ref || needs.build-package.outputs.source_sha }}
+          SIGNING_MODE: ${{ inputs.signing_mode }}
+          SOURCE_REF: ${{ inputs.openclaw_ref }}
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
           PACKAGING_COMMIT: ${{ github.sha }}
         run: |
-          .\scripts\Test-SigningInputs.ps1 `
-            -ArtifactsDirectory artifacts `
-            -PolicyPath .\release-policy.json `
-            -BundlePath artifacts\bundle\OpenClawGateway.msixbundle `
-            -RequestedRef $env:OPENCLAW_REF `
-            -PackagingCommit $env:PACKAGING_COMMIT
+          foreach ($channel in @('Store', 'Sideload')) {
+            $channelDirectory = $channel.ToLowerInvariant()
+            .\scripts\Test-SigningInputs.ps1 `
+              -ArtifactsDirectory "artifacts\$channelDirectory" `
+              -PolicyPath .\release-policy.json `
+              -BundlePath "artifacts\$channelDirectory\bundle\OpenClawGateway.msixbundle" `
+              -SourcePath source-resolution\source-resolution.json `
+              -RequestedRef $env:SOURCE_REF `
+              -GatewayVersion $env:GATEWAY_VERSION `
+              -WorkflowRunId $env:GITHUB_RUN_ID `
+              -SigningMode $env:SIGNING_MODE `
+              -PackagingCommit $env:PACKAGING_COMMIT `
+              -WorkflowRef $env:GITHUB_WORKFLOW_REF -GitHubRef $env:GITHUB_REF -EventName $env:GITHUB_EVENT_NAME `
+              -IdentityChannel $channel
+          }
 
   sign-msix:
+    cache-mode: none
     name: Officially sign Gateway MSIX packages
-    if: ${{ inputs.signing_mode == 'official' && needs.authorize-signing.result == 'success' }}
+    if: ${{ !cancelled() && inputs.signing_mode == 'official' && needs.build.result == 'success' && needs.authorize-signing.result == 'success' }}
     needs:
-      - build-msix
-      - build-msix-bundle
+      - build
       - authorize-signing
     runs-on: windows-latest
     environment: release-signing
@@ -854,19 +883,19 @@ jobs:
       - name: Download unsigned x64 package
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-unsigned-x64
+          name: openclaw-gateway-msix-sideload-unsigned-x64
           path: artifacts\x64
 
       - name: Download unsigned ARM64 package
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-unsigned-arm64
+          name: openclaw-gateway-msix-sideload-unsigned-arm64
           path: artifacts\arm64
 
       - name: Download unsigned multi-architecture bundle
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-unsigned-bundle
+          name: openclaw-gateway-msix-sideload-unsigned-bundle
           path: artifacts\bundle
 
       - name: Azure login
@@ -982,10 +1011,11 @@ jobs:
           retention-days: 7
 
   publish-release:
+    cache-mode: none
     name: Publish signed Gateway MSIX release
-    if: ${{ needs.sign-msix.result == 'success' }}
+    if: ${{ !cancelled() && inputs.publish_release && needs.build.result == 'success' && needs.authorize-signing.result == 'success' && needs.sign-msix.result == 'success' }}
     needs:
-      - build-package
+      - build
       - authorize-signing
       - sign-msix
     runs-on: ubuntu-latest
@@ -1039,8 +1069,8 @@ jobs:
             release-assets/*.msix
             release-assets/*.msixbundle
           body: |
-            Packages OpenClaw `${{ needs.build-package.outputs.package_version }}`
-            from [`openclaw/openclaw@${{ needs.build-package.outputs.source_sha }}`](https://github.com/openclaw/openclaw/commit/${{ needs.build-package.outputs.source_sha }}).
+            Packages OpenClaw `${{ needs.build.outputs.package_version }}`
+            from [`openclaw/openclaw@${{ needs.build.outputs.source_sha }}`](https://github.com/openclaw/openclaw/commit/${{ needs.build.outputs.source_sha }}).
 
             ### Downloads
             - **Recommended:** `OpenClawGateway-${{ needs.authorize-signing.outputs.release_version }}.msixbundle`
@@ -1049,129 +1079,39 @@ jobs:
 
             The packages are signed by OpenClaw Foundation through Azure Artifact Signing.
 
-  submit-microsoft-store:
-    name: Submit Gateway bundle to Microsoft Store
-    if: >-
-      ${{ github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/main' &&
-          inputs.signing_mode == 'store' &&
-          needs.authorize-signing.result == 'success' }}
+  retain-store-submission:
+    cache-mode: none
+    name: Retain authorized Microsoft Store submission bundle
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.authorize-signing.result == 'success' }}
     needs:
-      - build-msix-bundle
+      - build
       - authorize-signing
-    runs-on: ubuntu-latest
-    environment: microsoft-store
-    concurrency:
-      group: microsoft-store-submission
-      cancel-in-progress: false
+    runs-on: windows-latest
     permissions:
       actions: read
-      contents: read
-      id-token: write
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Download authorized Store bundle
+      - name: Download authorized unsigned Store bundle
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-unsigned-bundle
+          name: openclaw-gateway-msix-store-unsigned-bundle
           path: store
 
-      - name: Validate Microsoft Store environment
+      - name: Stage versioned Store submission bundle
         shell: pwsh
         env:
-          MSSTORE_TENANT_ID: ${{ vars.MSSTORE_TENANT_ID }}
-          MSSTORE_CLIENT_ID: ${{ vars.MSSTORE_CLIENT_ID }}
-          MSSTORE_APPLICATION_ID: ${{ vars.MSSTORE_APPLICATION_ID }}
+          RELEASE_VERSION: ${{ needs.authorize-signing.outputs.release_version }}
         run: |
-          foreach ($name in @(
-            'MSSTORE_TENANT_ID'
-            'MSSTORE_CLIENT_ID'
-            'MSSTORE_APPLICATION_ID'
-          )) {
-            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
-              throw "The microsoft-store environment is missing $name."
-            }
-          }
-          foreach ($name in @('MSSTORE_TENANT_ID', 'MSSTORE_CLIENT_ID')) {
-            $value = [Environment]::GetEnvironmentVariable($name)
-            $parsed = [guid]::Empty
-            if (-not [guid]::TryParse($value, [ref]$parsed)) {
-              throw "$name must be a GUID."
-            }
-          }
-      - name: Request short-lived Microsoft Store assertion
-        id: oidc
-        shell: pwsh
-        run: |
-          $policy = Get-Content -LiteralPath .\store-submission.json -Raw |
-            ConvertFrom-Json
-          $requestUrl = $env:ACTIONS_ID_TOKEN_REQUEST_URL
-          $requestToken = $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN
-          if ([string]::IsNullOrWhiteSpace($requestUrl) -or
-              [string]::IsNullOrWhiteSpace($requestToken)) {
-            throw 'GitHub did not provide an OIDC token endpoint.'
-          }
-          $oidcRequestUri = .\scripts\New-GitHubOidcRequestUri.ps1 `
-            -RequestUri $requestUrl `
-            -Audience ([string]$policy.oidcAudience)
-          $response = Invoke-RestMethod `
-            -Headers @{ Authorization = "Bearer $requestToken" } `
-            -Uri $oidcRequestUri
-          $assertion = [string]$response.value
-          if ([string]::IsNullOrWhiteSpace($assertion)) {
-            throw 'GitHub returned an empty OIDC assertion.'
-          }
-          Write-Output "::add-mask::$assertion"
-          $assertionPath = Join-Path $env:RUNNER_TEMP 'msstore-assertion.jwt'
-          [IO.File]::WriteAllText($assertionPath, $assertion)
-          & chmod 600 $assertionPath
-          if ($LASTEXITCODE -ne 0) {
-            throw 'Unable to restrict the OIDC assertion file permissions.'
-          }
-          "assertion_path=$assertionPath" >> $env:GITHUB_OUTPUT
+          Rename-Item `
+            -LiteralPath store\OpenClawGateway.msixbundle `
+            -NewName "OpenClawGateway-$env:RELEASE_VERSION-store.msixbundle"
 
-      - name: Submit bundle and commit Store update
-        shell: pwsh
-        env:
-          MSSTORE_TENANT_ID: ${{ vars.MSSTORE_TENANT_ID }}
-          MSSTORE_CLIENT_ID: ${{ vars.MSSTORE_CLIENT_ID }}
-          MSSTORE_APPLICATION_ID: ${{ vars.MSSTORE_APPLICATION_ID }}
-          MSSTORE_ASSERTION_FILE: ${{ steps.oidc.outputs.assertion_path }}
-        run: |
-          .\scripts\Submit-MicrosoftStore.ps1 `
-            -BundlePath .\store\OpenClawGateway.msixbundle `
-            -ApplicationId $env:MSSTORE_APPLICATION_ID `
-            -TenantId $env:MSSTORE_TENANT_ID `
-            -ClientId $env:MSSTORE_CLIENT_ID `
-            -ClientAssertionFile $env:MSSTORE_ASSERTION_FILE `
-            -PolicyPath .\store-submission.json `
-            -EvidencePath .\evidence\store-submission.json
-
-      - name: Upload Store submission evidence
-        continue-on-error: true
+      - name: Upload Store submission bundle
         uses: actions/upload-artifact@v7
         with:
-          name: openclaw-gateway-store-submission-evidence
-          path: evidence/store-submission.json
+          name: openclaw-gateway-msix-store-submission
+          path: store\OpenClawGateway-${{ needs.authorize-signing.outputs.release_version }}-store.msixbundle
           if-no-files-found: error
           retention-days: 90
-
-      - name: Remove short-lived assertion
-        if: ${{ always() }}
-        shell: pwsh
-        env:
-          MSSTORE_ASSERTION_FILE: ${{ steps.oidc.outputs.assertion_path }}
-        run: |
-          if (-not [string]::IsNullOrWhiteSpace($env:MSSTORE_ASSERTION_FILE)) {
-            Remove-Item `
-              -LiteralPath $env:MSSTORE_ASSERTION_FILE `
-              -Force `
-              -ErrorAction SilentlyContinue
-          }
 
   ci-gate:
     name: Gateway MSIX CI
@@ -1179,16 +1119,16 @@ jobs:
     needs:
       - changes
       - test-host
-      - build-package
-      - build-msix
+      - cache-proof-write
+      - cache-proof-read
+      - build
       - test-sign-msix
-      - build-msix-bundle
       - test-msix-upgrades
       - reject-untrusted-official-signing
       - authorize-signing
       - sign-msix
       - publish-release
-      - submit-microsoft-store
+      - retain-store-submission
     runs-on: ubuntu-latest
     steps:
       - name: Check workflow results
@@ -1201,3 +1141,30 @@ jobs:
       - name: Confirm workflow success
         shell: bash
         run: echo "All required workflow jobs succeeded or were intentionally skipped."
+
+      - name: Check out repository
+        if: ${{ always() }}
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Require candidate upgrade tests
+        if: ${{ always() }}
+        shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SIGNING_MODE: ${{ inputs.signing_mode || 'unsigned' }}
+          VERSIONING: ${{ needs.changes.outputs.versioning }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          TEST_HOST_RESULT: ${{ needs.test-host.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          UPGRADE_RESULT: ${{ needs.test-msix-upgrades.result }}
+        run: |
+          ./scripts/Assert-WorkflowJobResults.ps1 `
+            -EventName $env:EVENT_NAME `
+            -SigningMode $env:SIGNING_MODE `
+            -Versioning $env:VERSIONING `
+            -ChangesResult $env:CHANGES_RESULT `
+            -TestHostResult $env:TEST_HOST_RESULT `
+            -BuildResult $env:BUILD_RESULT `
+            -UpgradeResult $env:UPGRADE_RESULT

@@ -12,7 +12,9 @@ internal sealed class FailIfWorkStartsLifecycle : IInstallationLifecycle
 
     public SessionRuntime CreateRuntime(Action<string> log) => throw Fail();
 
-    public Task EnsureSessionSupportedAsync(CancellationToken cancellationToken) =>
+    public Task EnsureSessionSupportedAsync(
+        Action<string> log,
+        CancellationToken cancellationToken) =>
         throw Fail();
 
     public PackageRuntimeMetadata ValidatePackageRuntime(

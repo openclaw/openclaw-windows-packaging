@@ -171,9 +171,90 @@ public sealed class GatewayStartWaitTests
         Assert.Equal(TimeSpan.FromSeconds(90), GatewayController.ListenerWaitBudget);
         Assert.Equal(GatewayState.Starting, result.State);
         Assert.Contains("not listening yet", result.Message, StringComparison.Ordinal);
+        Assert.Equal(result.Record.ProcessId, harness.Store.Read().Record!.ProcessId);
+        Assert.Equal(result.Record.ProcessStartTimeUtc, harness.Store.Read().Record!.ProcessStartTimeUtc);
+        Assert.False(result.Record.LaunchPending);
+        Assert.Null(result.Record.ObservedPorts);
 
         // The elapsed time is the budget, not an unbounded spin.
         Assert.True(harness.Clock.GetUtcNow() - harness.Start >= GatewayController.ListenerWaitBudget);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task AListenerConflictIsNotAcknowledgedAsStillStarting(
+        bool portOccupied,
+        bool ownsOtherPort)
+    {
+        using var harness = new GatewayStartHarness(port: 18789);
+        harness.Client.Inspection = StartingUp() with
+        {
+            PortListening = portOccupied,
+            ListeningPorts = ownsOtherPort ? [18790] : []
+        };
+
+        GatewayStartResult result = await harness.StartAsync();
+
+        Assert.Equal(GatewayState.Unhealthy, result.State);
+        Assert.Equal(result.Record.ProcessId, harness.Store.Read().Record!.ProcessId);
+        Assert.True(harness.Clock.GetUtcNow() - harness.Start >= GatewayController.ListenerWaitBudget);
+    }
+
+    [Fact]
+    public async Task AnAcceptedPendingLaunchRemainsObservableAndStoppable()
+    {
+        using var harness = new GatewayStartHarness();
+        harness.Client.Inspection = StartingUp();
+
+        GatewayStartResult start = await harness.StartAsync();
+        GatewayStatusReport pending = await harness.GetStatusAsync();
+        harness.Client.Inspection = Listening();
+        GatewayStatusReport running = await harness.GetStatusAsync();
+        GatewayStopResult stopped = await harness.StopAsync();
+
+        Assert.Equal(GatewayState.Starting, start.State);
+        Assert.Equal(GatewayState.Unhealthy, pending.State);
+        Assert.Equal(GatewayState.Running, running.State);
+        Assert.True(stopped.Succeeded);
+        Assert.True(stopped.Stopped);
+        Assert.Single(harness.Client.Calls, call => call == "start");
+        Assert.Equal(GatewayStateFault.Missing, harness.Store.Read().Fault);
+    }
+
+    [Fact]
+    public async Task CancelingTheListenerWaitRetainsOwnershipWithoutReturningAcceptance()
+    {
+        using var harness = new GatewayStartHarness();
+        using var cancellation = new CancellationTokenSource();
+        harness.Client.Inspection = StartingUp();
+        harness.Client.DuringInspection = cancellation.Cancel;
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => harness.StartAsync(cancellationToken: cancellation.Token));
+
+        GatewayRecord record = harness.Store.Read().Record!;
+        Assert.Equal(1234, record.ProcessId);
+        Assert.False(record.LaunchPending);
+        Assert.Single(harness.Client.Calls, call => call == "start");
+    }
+
+    [Fact]
+    public async Task AStillExitingSupervisorDoesNotAcknowledgeAStartedGateway()
+    {
+        using var harness = new GatewayStartHarness();
+        harness.Client.Inspection = StartingUp() with
+        {
+            SupervisorState = SessionSupervisorStatus.ExitedState,
+            SupervisorDetail = "the application exited with code 78"
+        };
+
+        GatewayStartResult result = await harness.StartAsync();
+
+        Assert.Equal(GatewayState.Stopped, result.State);
+        Assert.Contains("exited with code 78", result.Message, StringComparison.Ordinal);
+        Assert.Equal(0, harness.Clock.WaitCount);
+        Assert.Equal(result.Record.ProcessId, harness.Store.Read().Record!.ProcessId);
     }
 
     // Waiting only makes sense while the process is alive and observable.

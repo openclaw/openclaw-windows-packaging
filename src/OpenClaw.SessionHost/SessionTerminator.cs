@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using OpenClaw.SessionProtocol;
 
@@ -42,12 +43,21 @@ internal static class SessionTerminator
 
     internal static SessionInspectResult Stop(
         SessionInspectRequest request,
-        Func<string, string> readFile)
+        Func<string, string> readFile,
+        Action<Process>? probeAccess = null,
+        Func<IReadOnlyDictionary<int, DateTimeOffset>>? captureCreationTimes = null)
     {
         try
         {
             using Process process = Process.GetProcessById(request.ProcessId);
-            _ = process.Handle;
+            if (probeAccess is null)
+            {
+                _ = process.Handle;
+            }
+            else
+            {
+                probeAccess(process);
+            }
             if (process.HasExited)
             {
                 return new SessionInspectResult { RequestId = request.RequestId };
@@ -81,8 +91,12 @@ internal static class SessionTerminator
             // It exited between the observation and the kill, which is the
             // requested end state.
         }
+        catch (Win32Exception exception) when (exception.NativeErrorCode == 5)
+        {
+            return SessionInspector.ReconcileAccessDenied(request, exception, captureCreationTimes);
+        }
         catch (Exception exception) when (
-            exception is System.ComponentModel.Win32Exception or NotSupportedException or InvalidOperationException)
+            exception is Win32Exception or NotSupportedException or InvalidOperationException)
         {
             return new SessionInspectResult
             {

@@ -14,53 +14,73 @@ $testRoot = Join-Path $env:TEMP (
 )
 $artifactsDirectory = Join-Path $testRoot 'artifacts'
 $outputDirectory = Join-Path $testRoot 'signed'
-$policy = Get-Content `
-    -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'release-policy.json') `
-    -Raw |
-    ConvertFrom-Json
-$publisher = [string]$policy.publisher
-$thumbprintsBefore = @(
-    Get-ChildItem -Path 'Cert:\CurrentUser\My' |
-        Where-Object Subject -eq $publisher |
-        Select-Object -ExpandProperty Thumbprint
-)
 
 try {
     New-Item -Path $artifactsDirectory -ItemType Directory -Force | Out-Null
 
-    $output = @(
-        & pwsh -NoProfile -File $scriptPath `
-            -ArtifactsDirectory $artifactsDirectory `
-            -OutputDirectory $outputDirectory 2>&1
-    )
-    $exitCode = $LASTEXITCODE
-    $message = $output -join [Environment]::NewLine
+    $calls = [System.Collections.Generic.List[string]]::new()
+    $operations = @{
+        NewCertificate = {
+            param($publisher)
 
-    if ($exitCode -eq 0) {
-        throw 'Signing unexpectedly succeeded without an architecture directory.'
+            $calls.Add('new')
+            [pscustomobject]@{ Thumbprint = 'fake-thumbprint' }
+        }
+        RemoveCertificate = {
+            param($certificate)
+
+            $calls.Add('remove')
+        }
     }
-    if ($message -notmatch 'No signable package directories were found') {
-        throw "Signing failure did not identify the missing package directories. Output: $message"
+    $threw = $false
+    try {
+        & $scriptPath `
+            -ArtifactsDirectory $artifactsDirectory `
+            -OutputDirectory $outputDirectory `
+            -Operations $operations
+    }
+    catch {
+        $threw = $true
+        if ($_.Exception.Message -notmatch 'No signable package directories were found') {
+            throw
+        }
+    }
+    if (-not $threw) {
+        throw 'Signing unexpectedly succeeded without an architecture directory.'
     }
     if (Test-Path -LiteralPath $outputDirectory) {
         throw 'Signing created an output directory despite finding no architecture directory.'
     }
-
-    $thumbprintsAfter = @(
-        Get-ChildItem -Path 'Cert:\CurrentUser\My' |
-            Where-Object Subject -eq $publisher |
-            Select-Object -ExpandProperty Thumbprint
-    )
-    $newThumbprints = Compare-Object `
-        -ReferenceObject $thumbprintsBefore `
-        -DifferenceObject $thumbprintsAfter `
-        -PassThru |
-        Where-Object SideIndicator -eq '=>'
-    if ($null -ne $newThumbprints) {
-        throw 'Signing created a publisher certificate on the no-op failure path.'
+    if ($calls.Count -ne 0) {
+        throw "Signing invoked certificate operations on the no-op path: $($calls -join ', ')."
     }
 
-    Write-Host 'Test MSIX no-op signing regression test passed.'
+    foreach ($invalidOperations in @(
+            @{ NewCertificat = { } },
+            @{ NewCertificate = 'not a scriptblock' }
+        )) {
+        $threw = $false
+        try {
+            & $scriptPath `
+                -ArtifactsDirectory $artifactsDirectory `
+                -OutputDirectory $outputDirectory `
+                -Operations $invalidOperations
+        }
+        catch {
+            $threw = $true
+            if ($_.Exception.Message -notmatch 'Unknown or invalid test signing operation adapter') {
+                throw
+            }
+        }
+        if (-not $threw) {
+            throw 'Signing accepted an invalid certificate operation override.'
+        }
+        if (Test-Path -LiteralPath $outputDirectory) {
+            throw 'Signing created an output directory before rejecting an invalid operation override.'
+        }
+    }
+
+    Write-Host 'Test MSIX test-signing operation regression tests passed.'
 }
 finally {
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue

@@ -3,212 +3,222 @@ param()
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$selector = Join-Path $PSScriptRoot 'Select-WorkflowBuild.ps1'
+$outputs = [pscustomobject]@{
+    source_sha = 'c' * 40
+    source_tag = 'v2026.9.7'
+    release_identity_tag = 'v2026.9.7'
+    package_version = '2026.9.7'
+    node_version = '24.21.0'
+    package_sha256 = 'a' * 64
+}
+$expectedSource = $outputs | ConvertTo-Json | ConvertFrom-Json
+function New-Result {
+    param([string]$Result)
+    return [pscustomobject]@{ result = $Result; outputs = $outputs }
+}
+function Assert-Rejected {
+    param([scriptblock]$Action, [string]$Pattern = 'build|source|package|node|Documentation|field')
+    try { & $Action | Out-Null }
+    catch {
+        if ($_.Exception.Message -notmatch $Pattern) { throw }
+        return
+    }
+    throw 'An invalid build selection was accepted.'
+}
+
+foreach ($route in @('trusted', 'read-only')) {
+    foreach ($trustedResult in @('success', 'failure', 'cancelled', 'skipped')) {
+        foreach ($readResult in @('success', 'failure', 'cancelled', 'skipped')) {
+            $parameters = @{
+                PackagingExpected = $true; ExpectedRoute = $route
+                ExpectedSource = $expectedSource
+                Trusted = New-Result $trustedResult; ReadOnly = New-Result $readResult
+            }
+            $valid = ($route -ceq 'trusted' -and $trustedResult -ceq 'success' -and $readResult -ceq 'skipped') -or
+                ($route -ceq 'read-only' -and $readResult -ceq 'success' -and $trustedResult -ceq 'skipped')
+            if ($valid) {
+                $selected = & $selector @parameters
+                foreach ($field in $outputs.PSObject.Properties) {
+                    if ($selected.($field.Name) -cne $field.Value) { throw 'The selected build outputs changed.' }
+                }
+            }
+            else { Assert-Rejected { & $selector @parameters } }
+        }
+    }
+}
+$skipped = New-Result skipped
+if (@(& $selector -PackagingExpected $false -ExpectedRoute '' -ExpectedSource ([pscustomobject]@{}) -Trusted $skipped -ReadOnly $skipped).Count -ne 0) {
+    throw 'Documentation-only builds must emit no package outputs.'
+}
+Assert-Rejected { & $selector -PackagingExpected $false -ExpectedRoute '' -ExpectedSource $expectedSource -Trusted (New-Result success) -ReadOnly $skipped }
+Assert-Rejected { & $selector -PackagingExpected $true -ExpectedRoute '' -ExpectedSource $expectedSource -Trusted $skipped -ReadOnly $skipped }
+foreach ($field in @('source_sha', 'source_tag', 'package_version', 'node_version', 'package_sha256')) {
+    $saved = $outputs.$field
+    $outputs.$field = 'invalid'
+    Assert-Rejected { & $selector -PackagingExpected $true -ExpectedRoute trusted -ExpectedSource $expectedSource -Trusted (New-Result success) -ReadOnly $skipped }
+    $outputs.$field = $saved
+}
+foreach ($field in @('source_sha', 'source_tag', 'package_version')) {
+    $saved = $expectedSource.$field
+    $expectedSource.$field = if ($field -ceq 'source_sha') { 'b' * 40 } elseif ($field -ceq 'source_tag') { 'v2026.9.8' } else { '2026.9.8' }
+    Assert-Rejected {
+        & $selector -PackagingExpected $true -ExpectedRoute trusted -ExpectedSource $expectedSource `
+            -Trusted (New-Result success) -ReadOnly $skipped
+    } 'differs from the captured source'
+    $expectedSource.$field = $saved
+}
+$savedIdentity = $outputs.release_identity_tag
+$outputs.release_identity_tag = 'v2026.9.8'
+Assert-Rejected {
+    & $selector -PackagingExpected $true -ExpectedRoute trusted -ExpectedSource $expectedSource `
+        -Trusted (New-Result success) -ReadOnly $skipped
+} 'release identity'
+$outputs.release_identity_tag = $savedIdentity
+$expectedSource.release_identity_tag = 'v2026.9.8'
+$outputs.release_identity_tag = 'v2026.9.8'
+$selected = & $selector -PackagingExpected $true -ExpectedRoute trusted -ExpectedSource $expectedSource `
+    -Trusted (New-Result success) -ReadOnly $skipped
+if ($selected.release_identity_tag -cne 'v2026.9.8') { throw 'The selected release identity changed.' }
+$outputs.release_identity_tag = $savedIdentity
+$expectedSource.release_identity_tag = $savedIdentity
+# Arbitrary unsigned refs have no release identity. Actions can omit an
+# empty job output from needs while retaining it on the reusable workflow.
+$outputs.release_identity_tag = ''
+$expectedSource.release_identity_tag = ''
+foreach ($omitExpectedIdentity in @($false, $true)) {
+    if ($omitExpectedIdentity) { $expectedSource.PSObject.Properties.Remove('release_identity_tag') }
+    $selected = & $selector -PackagingExpected $true -ExpectedRoute read-only -ExpectedSource $expectedSource `
+        -Trusted $skipped -ReadOnly (New-Result success)
+    if ($selected.release_identity_tag -cne '') { throw 'An unsigned ref acquired a release identity.' }
+    Assert-Rejected {
+        & $selector -PackagingExpected $true -ExpectedRoute trusted -ExpectedSource $expectedSource `
+            -Trusted (New-Result success) -ReadOnly $skipped
+    } 'release_identity_tag'
+    $outputs.release_identity_tag = $savedIdentity
+    Assert-Rejected {
+        & $selector -PackagingExpected $true -ExpectedRoute read-only -ExpectedSource $expectedSource `
+            -Trusted $skipped -ReadOnly (New-Result success)
+    } 'release identity'
+    $outputs.release_identity_tag = ''
+}
+foreach ($invalidIdentity in @(' ', "`n", $null)) {
+    $outputs.release_identity_tag = $invalidIdentity
+    Assert-Rejected {
+        & $selector -PackagingExpected $true -ExpectedRoute read-only -ExpectedSource $expectedSource `
+            -Trusted $skipped -ReadOnly (New-Result success)
+    } 'release_identity_tag'
+}
+$outputs.release_identity_tag = ''
+$expectedSource | Add-Member -NotePropertyName release_identity_tag -NotePropertyValue $savedIdentity -Force
+Assert-Rejected {
+    & $selector -PackagingExpected $true -ExpectedRoute read-only -ExpectedSource $expectedSource `
+        -Trusted $skipped -ReadOnly (New-Result success)
+} 'release identity'
+$outputs.release_identity_tag = $savedIdentity
+Assert-Rejected {
+    & $selector -PackagingExpected $true -ExpectedRoute trusted -ExpectedSource $expectedSource `
+        -Trusted ([pscustomobject]@{ result = 'success'; outputs = [pscustomobject]@{} }) -ReadOnly $skipped
+} 'Missing required field'
+Write-Host 'Workflow build selection contracts passed (source/signing contracts run in their owning suites).'
 
 $repositoryRoot = Split-Path $PSScriptRoot -Parent
-$workflowPath = Join-Path `
-    $repositoryRoot `
-    '.github\workflows\gateway-msix.yml'
+$workflowPath = Join-Path $repositoryRoot '.github/workflows/gateway-msix.yml'
 $workflow = Get-Content -LiteralPath $workflowPath -Raw
-$storePolicyPath = Join-Path $repositoryRoot 'store-submission.json'
-$storePolicy = Get-Content -LiteralPath $storePolicyPath -Raw |
-    ConvertFrom-Json
-
-$requiredFragments = @(
-    'group: gateway-msix-${{ github.event.pull_request.number || github.run_id }}'
-    "cancel-in-progress: `${{ github.event_name == 'pull_request' }}"
-    'name: Classify pull request changes'
-    '.\scripts\Get-PackagingRelevance.ps1'
-    'name: Test packaging relevance'
-    "if: `${{ github.event_name != 'pull_request' || needs.changes.outputs.packaging == 'true' }}"
-    'name: Gateway MSIX CI'
-    'name: Test Microsoft Store submission'
-    '.\scripts\Test-Submit-MicrosoftStore.Tests.ps1'
-    "if: `${{ always() }}"
-    "contains(needs.*.result, 'failure')"
-    "contains(needs.*.result, 'cancelled')"
-    'name: Upload payload'
-    'name: Test stable source selection'
-    'name: Restore source selection for a retry'
-    'name: Save immutable source selection'
-    'name: openclaw-source-resolution'
-    './scripts/Get-WorkflowSource.ps1'
-    "'scripts/OpenClawSource.ps1'"
-    "'scripts/Get-WorkflowSource.ps1'"
-    "'scripts/Test-OpenClawSource.Tests.ps1'"
-    '-ReuseSnapshot:($env:GITHUB_RUN_ATTEMPT -ne ''1'')'
-    'ref: ${{ steps.resolve.outputs.sha }}'
-    '-ExpectedVersion ''${{ steps.resolve.outputs.version }}'''
-    'GATEWAY_TAG: ${{ needs.build-package.outputs.source_tag }}'
-    '-GatewayTag $env:GATEWAY_TAG'
-    'OPENCLAW_REF: ${{ inputs.openclaw_ref || needs.build-package.outputs.source_sha }}'
-    "retention-days: `${{ github.event_name == 'pull_request' && 1 || 7 }}"
-    'name: Restore cached OpenClaw package'
-    "if: `${{ github.event_name != 'workflow_dispatch' || (inputs.signing_mode != 'official' && inputs.signing_mode != 'store') }}"
-    'uses: actions/cache/restore@v4'
-    'name: Save OpenClaw package cache'
-    "steps.package-cache.outputs.cache-hit != 'true' && (github.event_name != 'workflow_dispatch' || (inputs.signing_mode != 'official' && inputs.signing_mode != 'store'))"
-    'uses: actions/cache/save@v4'
-    'name: Restore cached Windows dependency tree'
-    'path: ${{ runner.temp }}\openclaw-stage-${{ matrix.architecture }}'
-    'key: ${{ steps.payload-key.outputs.key }}'
-    'name: Save Windows dependency tree cache'
-    "steps.payload-cache.outputs.cache-hit != 'true' && (github.event_name != 'workflow_dispatch' || (inputs.signing_mode != 'official' && inputs.signing_mode != 'store'))"
-    'environment: release-signing'
-    'id-token: write'
-    'uses: azure/login@v3'
-    'client-id: ${{ vars.AZURE_CLIENT_ID }}'
-    'tenant-id: ${{ vars.AZURE_TENANT_ID }}'
-    'subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}'
-    'uses: azure/artifact-signing-action@v2'
-    'name: Compose unsigned multi-architecture MSIX bundle'
-    'name: Upload unsigned multi-architecture MSIX bundle'
-    'name: Test proof-release MSIX identity transition'
-    "needs.changes.outputs.versioning == 'true'"
-    'scripts/Test-MSIXReleaseIdentity.Tests.ps1'
-    '.\scripts\msix-upgrade-baselines.json'
-    '.\scripts\Test-MSIXUpgrade.ps1'
-    'name: Download unsigned bundle candidate'
-    '-CandidateBundlePath test-signed\bundle\OpenClawGateway.msixbundle'
-    'openclaw-gateway-msix-upgrade-evidence'
-    'retention-days: 90'
-    '-BundlePath artifacts\bundle\OpenClawGateway.msixbundle'
-    'files-folder-recurse: true'
-    'files: ${{ github.workspace }}\artifacts\bundle\OpenClawGateway.msixbundle'
-    'publisher: ${{ steps.release.outputs.publisher }}'
-    '"publisher=$($policy.publisher)" >> $env:GITHUB_OUTPUT'
-    'EXPECTED_PUBLISHER: ${{ needs.authorize-signing.outputs.publisher }}'
-    '$expectedSubject = $env:EXPECTED_PUBLISHER'
-    'name: Upload signed multi-architecture MSIX bundle'
-    'endpoint: https://eus.codesigning.azure.net/'
-    'signing-account-name: openclaw'
-    'certificate-profile-name: openclaw'
-    'name: Publish signed Gateway MSIX release'
-    'name: Submit Gateway bundle to Microsoft Store'
-    "github.event_name == 'workflow_dispatch'"
-    "github.ref == 'refs/heads/main'"
-    "inputs.signing_mode == 'store'"
-    "needs.authorize-signing.result == 'success'"
-    'environment: microsoft-store'
-    'group: microsoft-store-submission'
-    'cancel-in-progress: false'
-    'name: Request short-lived Microsoft Store assertion'
-    '.\scripts\New-GitHubOidcRequestUri.ps1'
-    '.\scripts\Submit-MicrosoftStore.ps1'
-    '& chmod 600 $assertionPath'
-    '-BundlePath .\store\OpenClawGateway.msixbundle'
-    'name: openclaw-gateway-store-submission-evidence'
-    'continue-on-error: true'
-    '.\scripts\Get-MSIXReleaseIdentity.ps1'
-    'contents: write'
-    'uses: softprops/action-gh-release@v3'
-    'tag_name: ${{ needs.authorize-signing.outputs.release_tag }}'
-    'target_commitish: ${{ github.sha }}'
-    'generate_release_notes: true'
-    'overwrite_files: false'
-    'fail_on_unmatched_files: true'
-    'release-assets/*.msixbundle'
-)
-
-foreach ($fragment in $requiredFragments) {
-    if (-not $workflow.Contains($fragment, [StringComparison]::Ordinal)) {
-        throw "Signing workflow is missing required configuration: $fragment"
-    }
-}
-
-$buildMsixJobMatch = [regex]::Match(
+$classificationStep = [regex]::Match(
     $workflow,
-    '(?ms)^  build-msix:\s*(?<job>.*?)(?=^  [a-z][a-z0-9-]+:)'
+    '(?ms)^      - name: Detect packaging changes\r?\n' +
+        '.*?^        run: \|\r?\n' +
+        '(?<script>(?:^ {10}[^\r\n]*\r?\n|^\r?\n)+)'
 )
-if (-not $buildMsixJobMatch.Success) {
-    throw 'Unable to locate the build-msix workflow job.'
+if (-not $classificationStep.Success) {
+    throw 'Unable to locate the workflow classification script.'
 }
-$buildMsixJob = $buildMsixJobMatch.Groups['job'].Value
-if ($buildMsixJob.Contains(
-        'name: Download payload',
-        [StringComparison]::Ordinal)) {
-    throw 'The build-msix job must compose the locally built payload directly.'
-}
-
-$dispatchDefaultMatch = [regex]::Match(
-    $workflow,
-    '(?ms)openclaw_ref:\s+description:.*?required:\s*false\s+default:\s*''''\s+type:\s*string'
+$classificationScript = [scriptblock]::Create(
+    [regex]::Replace(
+        $classificationStep.Groups['script'].Value,
+        '(?m)^ {10}',
+        ''
+    ).Replace('${{ github.event.pull_request.number }}', '1')
 )
-if (-not $dispatchDefaultMatch.Success -or
-    $workflow -match "(?m)^\s*OPENCLAW_REF:.*\|\|\s*'[0-9a-f]{40}'") {
-    throw 'An empty source input must follow stable; do not add a second source pin.'
-}
 
-$identityCalls = [regex]::Matches($workflow, '-GatewayTag \$env:GATEWAY_TAG')
-if ($identityCalls.Count -ne 3) {
-    throw 'MSIX, bundle and upgrade verification must use the same resolved Gateway tag.'
-}
-
-if ($workflow.Contains('AZURE_CLIENT_SECRET', [StringComparison]::Ordinal)) {
-    throw 'Signing workflow must use OIDC, not an Azure client secret.'
-}
-
-$signJobMatch = [regex]::Match(
-    $workflow,
-    '(?ms)^  sign-msix:\s*(?<job>.*?)(?=^  [a-z][a-z0-9-]+:)'
-)
-if (-not $signJobMatch.Success) {
-    throw 'Unable to locate the sign-msix workflow job.'
-}
-$signJob = $signJobMatch.Groups['job'].Value
-if ($signJob.Contains('release-policy.json', [StringComparison]::Ordinal)) {
-    throw (
-        'The signing runner must consume the publisher authorized by the ' +
-        'authorize-signing job; it does not check out release policy.'
+# Execute the production classifier with fixture inputs; non-PR events must
+# select the candidate version and full matrix without querying GitHub.
+function Assert-WorkflowClassification {
+    param(
+        [string]$EventName,
+        [string]$SigningMode,
+        [bool]$ExpectedVersioning
     )
-}
 
-$storeSubmissionJobMatch = [regex]::Match(
-    $workflow,
-    '(?ms)^  submit-microsoft-store:\s*(?<job>.*?)(?=^  [a-z][a-z0-9-]+:)'
-)
-if (-not $storeSubmissionJobMatch.Success) {
-    throw 'Unable to locate the submit-microsoft-store workflow job.'
-}
-$storeSubmissionJob = $storeSubmissionJobMatch.Groups['job'].Value
-foreach ($forbidden in @(
-    'azure/login'
-    'artifact-signing-action'
-    'softprops/action-gh-release'
-    'openclaw-gateway-msix-unsigned-x64'
-    'openclaw-gateway-msix-unsigned-arm64'
-    'clientSecret'
-    'CLIENT_SECRET'
-)) {
-    if ($storeSubmissionJob.Contains($forbidden, [StringComparison]::Ordinal)) {
-        throw "Store submission contains forbidden configuration: $forbidden"
+    function gh {
+        throw 'Non-PR classification must not query pull-request files.'
+    }
+
+    $outputPath = Join-Path ([IO.Path]::GetTempPath()) (
+        "openclaw-workflow-classification-$([guid]::NewGuid().ToString('N'))"
+    )
+    $savedEnvironment = @{}
+    foreach ($name in @('GITHUB_EVENT_NAME', 'GITHUB_OUTPUT', 'SIGNING_MODE')) {
+        $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
+    }
+    $location = Get-Location
+    try {
+        Set-Location -LiteralPath $repositoryRoot
+        $env:GITHUB_EVENT_NAME = $EventName
+        $env:GITHUB_OUTPUT = $outputPath
+        $env:SIGNING_MODE = $SigningMode
+        & $classificationScript
+
+        $outputs = @{}
+        foreach ($line in [IO.File]::ReadAllLines($outputPath)) {
+            $entry = $line.Split('=', 2)
+            if ($entry.Count -ne 2 -or $outputs.ContainsKey($entry[0])) {
+                throw "Invalid or duplicate workflow output: $line"
+            }
+            $outputs[$entry[0]] = $entry[1]
+        }
+        foreach ($name in @('packaging', 'payload_artifact', 'bundle_build')) {
+            if ($outputs[$name] -cne 'true') {
+                throw "$EventName/$SigningMode did not select $name."
+            }
+        }
+        $expected = $ExpectedVersioning.ToString().ToLowerInvariant()
+        if ($outputs['versioning'] -cne $expected) {
+            throw (
+                "$EventName/$SigningMode expected versioning=$expected; " +
+                "received '$($outputs['versioning'])'."
+            )
+        }
+        if (-not $outputs.ContainsKey('upgrade_matrix')) {
+            throw "$EventName/$SigningMode did not emit the upgrade matrix."
+        }
+        $matrix = $outputs['upgrade_matrix'] | ConvertFrom-Json
+        if (@($matrix.include).Count -ne 13) {
+            throw "$EventName/$SigningMode did not select all upgrade scenarios."
+        }
+    }
+    finally {
+        Set-Location -LiteralPath $location.Path
+        foreach ($name in $savedEnvironment.Keys) {
+            [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name])
+        }
+        Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
     }
 }
-foreach ($required in @(
-    'openclaw-gateway-msix-unsigned-bundle'
-    'actions: read'
-    'contents: read'
-    'id-token: write'
-    'MSSTORE_TENANT_ID: ${{ vars.MSSTORE_TENANT_ID }}'
-    'MSSTORE_CLIENT_ID: ${{ vars.MSSTORE_CLIENT_ID }}'
-    'MSSTORE_APPLICATION_ID: ${{ vars.MSSTORE_APPLICATION_ID }}'
-    'MSSTORE_ASSERTION_FILE: ${{ steps.oidc.outputs.assertion_path }}'
-    '-ClientAssertionFile $env:MSSTORE_ASSERTION_FILE'
-    'retention-days: 90'
-)) {
-    if (-not $storeSubmissionJob.Contains($required, [StringComparison]::Ordinal)) {
-        throw "Store submission is missing required configuration: $required"
-    }
-}
 
-if ($workflow.Contains(
-        'publish-store-release:',
-        [StringComparison]::Ordinal)) {
-    throw 'Store mode must not publish unsigned packages as a GitHub Release.'
+foreach ($mode in @('test', 'store', 'official')) {
+    Assert-WorkflowClassification `
+        -EventName workflow_dispatch `
+        -SigningMode $mode `
+        -ExpectedVersioning $true
 }
-foreach ($forbidden in @('microsoft-store-apppublisher', 'MSSTORE_SELLER_ID')) {
-    if ($storeSubmissionJob.Contains($forbidden, [StringComparison]::Ordinal)) {
-        throw "Store submission must use submission-ID-bound API operations: $forbidden"
-    }
-}
-
-Write-Host 'Gateway MSIX signing workflow configuration passed.'
+Assert-WorkflowClassification `
+    -EventName workflow_dispatch `
+    -SigningMode unsigned `
+    -ExpectedVersioning $false
+Assert-WorkflowClassification `
+    -EventName push `
+    -SigningMode unsigned `
+    -ExpectedVersioning $false
+Write-Host 'Workflow dispatch classification contracts passed.'

@@ -19,8 +19,12 @@ internal sealed record ClawCtlJsonDocument(
     ClawCtlJsonBundle? Bundle = null,
     ClawCtlJsonCompletion? Completion = null,
     ClawCtlJsonWarning? Warning = null,
-    ClawCtlJsonError? Error = null);
+    ClawCtlJsonError? Error = null,
+    ClawCtlJsonIntegration? Integration = null,
+    ClawCtlJsonCompanion? Companion = null);
 
+internal sealed record ClawCtlJsonIntegration(string Kind, int Version);
+internal sealed record ClawCtlJsonCompanion(int Port, string Token);
 // A version and the commit that produced it. Reported for the package and for
 // the OpenClaw payload it carries.
 internal sealed record ClawCtlJsonBuild(string Version, string Commit);
@@ -42,7 +46,13 @@ internal sealed record ClawCtlJsonGateway(
     string State,
     int? Port = null,
     string? Url = null,
-    ClawCtlJsonReadiness? Readiness = null);
+    ClawCtlJsonReadiness? Readiness = null,
+    ClawCtlJsonOwnership? Ownership = null);
+
+internal sealed record ClawCtlJsonOwnership(
+    string SandboxId,
+    string AgentUserSid,
+    IReadOnlyList<SessionOwnedListener> Listeners);
 
 internal sealed record ClawCtlJsonReadiness(
     string State,
@@ -96,6 +106,16 @@ internal static class ClawCtlJson
                     completion.ProfilePath,
                     completion.CachePath)),
             GatewayCommandResult gateway => FromGateway(gateway),
+            CompanionPrepareResult companion => new ClawCtlJsonDocument(
+                companion.ExitCode == 0,
+                SchemaVersion,
+                companion.Command,
+                Error: companion.Error is null
+                    ? null
+                    : new ClawCtlJsonError("cli_error", NormalizeMessage(companion.Error)),
+                Companion: companion.Port is int port && companion.Token is string token
+                    ? new ClawCtlJsonCompanion(port, token)
+                    : null),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(result),
                 result.GetType().FullName,
@@ -103,7 +123,7 @@ internal static class ClawCtlJson
         };
 
         output.WriteLine(JsonSerializer.Serialize(
-            document,
+            document with { Integration = new ClawCtlJsonIntegration("isolated-session", 1) },
             ClawCtlJsonContext.Default.ClawCtlJsonDocument));
     }
 
@@ -137,7 +157,10 @@ internal static class ClawCtlJson
             false,
             SchemaVersion,
             command,
-            Error: new ClawCtlJsonError("cli_error", NormalizeMessage(message))));
+            Error: new ClawCtlJsonError("cli_error", NormalizeMessage(message)),
+            // Capability is a package fact, not proof that setup or status succeeded.
+            // Companion must still be able to reach explicit setup after a probe fails.
+            Integration: new ClawCtlJsonIntegration("isolated-session", 1)));
     }
 
     private static ClawCtlJsonDocument FromSetup(SetupCommandResult result)
@@ -189,7 +212,13 @@ internal static class ClawCtlJson
             Gateway: new ClawCtlJsonGateway(
                 DescribeGateway(result.Gateway.State),
                 GatewayAddress.ResolvePort(result.Gateway.Record),
-                Readiness: FromReadiness(result.Readiness)),
+                Readiness: FromReadiness(result.Readiness),
+                Ownership: FromOwnership(
+                    result.Gateway.State,
+                    GatewayAddress.ResolvePort(result.Gateway.Record),
+                    result.Gateway.SandboxId,
+                    result.Gateway.AgentUserSid,
+                    result.Gateway.OwnedListeners)),
             Recovery: new ClawCtlJsonRecovery(DescribeRecovery(result.Recovery.State)),
             Error: result.ExitCode == 0
                 ? null
@@ -230,15 +259,27 @@ internal static class ClawCtlJson
                 true,
                 SchemaVersion,
                 result.Command,
+                Session: result.SessionAvailability is { } successAvailability
+                    ? new ClawCtlJsonSession(DescribeSession(successAvailability))
+                    : null,
                 Gateway: new ClawCtlJsonGateway(
                     DescribeGateway(result.State),
                     result.Port,
                     result.Url,
-                    FromReadiness(result.Readiness)))
+                    FromReadiness(result.Readiness),
+                    FromOwnership(
+                        result.State,
+                        result.Port,
+                        result.SandboxId,
+                        result.AgentUserSid,
+                        result.OwnedListeners)))
             : new ClawCtlJsonDocument(
                 false,
                 SchemaVersion,
                 result.Command,
+                Session: result.SessionAvailability is { } failureAvailability
+                    ? new ClawCtlJsonSession(DescribeSession(failureAvailability))
+                    : null,
                 Gateway: result.Readiness is null
                     ? null
                     : new ClawCtlJsonGateway(
@@ -269,6 +310,21 @@ internal static class ClawCtlJson
 
     private static int? GetSinglePort(GatewayRecord? record) =>
         record?.ObservedPorts is { Count: 1 } ports ? ports[0] : null;
+
+    private static ClawCtlJsonOwnership? FromOwnership(
+        GatewayState state,
+        int? port,
+        string? sandboxId,
+        string? agentUserSid,
+        IReadOnlyList<SessionOwnedListener>? listeners) =>
+        state == GatewayState.Running &&
+        port is > 0 &&
+        !string.IsNullOrWhiteSpace(sandboxId) &&
+        !string.IsNullOrWhiteSpace(agentUserSid) &&
+        listeners?.Any(listener => listener.Port == port) == true &&
+        listeners.All(listener => listener.SequenceNumber > 0)
+            ? new ClawCtlJsonOwnership(sandboxId, agentUserSid, listeners)
+            : null;
 
     private static string DescribeSession(SessionAvailability state) =>
         state switch

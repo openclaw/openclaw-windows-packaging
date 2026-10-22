@@ -7,24 +7,39 @@ public sealed class AgentShellTests : IDisposable
 {
     private readonly string _root = TestDirectory.Create();
 
-    [Fact]
-    public void PowerShell7IsPreferredBeforePreviewAndWindowsPowerShell()
+    // PowerShell 7 is preferred, the stable release before the preview;
+    // Windows PowerShell is used only when neither machine-wide install exists.
+    public static TheoryData<string[], string, string> InstalledShells => new()
+    {
+        {
+            [AgentShellResolver.PowerShell7Paths[0], AgentShellResolver.PowerShell7Paths[1]],
+            AgentShellResolver.PowerShell7Paths[0],
+            "PowerShell 7"
+        },
+        {
+            [AgentShellResolver.PowerShell7Paths[1]],
+            AgentShellResolver.PowerShell7Paths[1],
+            "PowerShell 7"
+        },
+        {
+            [],
+            AgentShellResolver.WindowsPowerShellPath,
+            "Windows PowerShell"
+        }
+    };
+
+    [Theory]
+    [MemberData(nameof(InstalledShells))]
+    public void ResolverChoosesTheMostPreferredInstalledShell(
+        string[] installed,
+        string expectedPath,
+        string expectedName)
     {
         AgentShell shell = AgentShellResolver.Resolve(
-            path => path == AgentShellResolver.PowerShell7Paths[0] ||
-                path == AgentShellResolver.PowerShell7Paths[1]);
+            path => installed.Contains(path, StringComparer.Ordinal));
 
-        Assert.Equal(AgentShellResolver.PowerShell7Paths[0], shell.ExecutablePath);
-        Assert.Equal("PowerShell 7", shell.DisplayName);
-    }
-
-    [Fact]
-    public void WindowsPowerShellIsUsedWhenNoMachineWidePowerShell7Exists()
-    {
-        AgentShell shell = AgentShellResolver.Resolve(_ => false);
-
-        Assert.Equal(AgentShellResolver.WindowsPowerShellPath, shell.ExecutablePath);
-        Assert.Equal("Windows PowerShell", shell.DisplayName);
+        Assert.Equal(expectedPath, shell.ExecutablePath);
+        Assert.Equal(expectedName, shell.DisplayName);
     }
 
     [Fact]

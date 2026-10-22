@@ -1,4 +1,6 @@
+using System.ComponentModel;
 using OpenClaw.Launcher.Gateway;
+using OpenClaw.SessionHost;
 using OpenClaw.Launcher.Mxc;
 using OpenClaw.Launcher.Session;
 using OpenClaw.Launcher.Tests.Session;
@@ -23,6 +25,12 @@ internal sealed class FakeSessionGatewayClient : ISessionGatewayClient
     /// after several checks.
     /// </summary>
     public Queue<SessionInspectResult> InspectionSequence { get; } = new();
+
+    /// <summary>
+    /// Runs inside each inspection, so a test can make the exchange take time
+    /// or end by throwing.
+    /// </summary>
+    public Action? DuringInspection { get; set; }
 
     public SessionInspectResult? StopResult { get; set; }
 
@@ -55,6 +63,7 @@ internal sealed class FakeSessionGatewayClient : ISessionGatewayClient
         CancellationToken cancellationToken)
     {
         Calls.Add($"inspect:{gateway.ProcessId}");
+        DuringInspection?.Invoke();
         return Task.FromResult(
             InspectionSequence.Count > 0 ? InspectionSequence.Dequeue() : Inspection);
     }
@@ -126,6 +135,7 @@ public sealed class GatewayControllerTests : IDisposable
     }
     private readonly FakeSessionGatewayClient _client = new();
     private readonly FakeMxcSessionClient _backend = new();
+    private readonly List<string> _log = [];
     private const string ApplicationId = "PFN:OpenClaw.Gateway_test";
 
     public void Dispose()
@@ -176,7 +186,7 @@ public sealed class GatewayControllerTests : IDisposable
                 NodePath: @"C:\Program Files\nodejs\node.exe",
                 ApplicationDirectory: Path.Combine(_root, "app"),
                 Port: null)),
-            _ => { },
+            _log.Add,
             () => sessions.GetRecordedStatus().Record ?? throw new SessionException("Run setup."),
             lifecycleLock ?? new AlwaysFreeLock(),
             clock);
@@ -324,6 +334,34 @@ public sealed class GatewayControllerTests : IDisposable
     }
 
     [Fact]
+    public async Task RunningStatusCarriesTheGuestListenerAndRecordedAgentIdentity()
+    {
+        var controller = CreateController();
+        var sessionStore = new SessionStateStore(Path.Combine(_root, "session.json"));
+        SessionRecord session = sessionStore.Read(ApplicationId).Record!;
+        sessionStore.Write(session with
+        {
+            AgentUserSid = "S-1-5-21-1111111111-2222222222-3333333333-1001"
+        });
+        var listener = new SessionOwnedListener
+        {
+            Port = 18789,
+            ProcessId = 4321,
+            ProcessStartTimeUtc = new DateTimeOffset(2026, 9, 29, 12, 0, 0, TimeSpan.Zero),
+            SequenceNumber = 77
+        };
+        _client.Inspection = Healthy() with { OwnedListeners = [listener] };
+        await controller.StartAsync("helper.exe", CancellationToken.None);
+
+        GatewayStatusReport report = await controller.GetStatusAsync("helper.exe", CancellationToken.None);
+
+        Assert.Equal(GatewayState.Running, report.State);
+        Assert.Equal("iso:sandbox1", report.SandboxId);
+        Assert.Equal("S-1-5-21-1111111111-2222222222-3333333333-1001", report.AgentUserSid);
+        Assert.Equal([listener], report.OwnedListeners);
+    }
+
+    [Fact]
     public async Task ARecordedGatewayThatIsGoneIsReportedAsStopped()
     {
         // Stopping the session terminates detached work silently, so a record
@@ -377,6 +415,56 @@ public sealed class GatewayControllerTests : IDisposable
         Assert.Contains("clawctl collect-logs", result.Message, StringComparison.Ordinal);
     }
 
+    // A field bundle showed a start that logged only "Starting the gateway" and
+    // then "Host exiting", so it could not say whether the gateway came up or
+    // exited, or why. Every start path ends here, so the outcome is logged once.
+    [Fact]
+    public async Task AStartupExitIsLoggedWithWhatTheUserWasTold()
+    {
+        _client.Inspection = new SessionInspectResult
+        {
+            SupervisorDetail = "the application exited with code 1"
+        };
+
+        GatewayStartResult result = await CreateController()
+            .StartAsync("helper.exe", CancellationToken.None);
+
+        Assert.Contains($"Gateway start finished: Stopped. {result.Message}", _log);
+    }
+
+    [Fact]
+    public async Task AListeningStartIsLoggedWithItsObservedPort()
+    {
+        _client.Inspection = Healthy();
+
+        await CreateController().StartAsync("helper.exe", CancellationToken.None);
+
+        Assert.Contains("Gateway start finished: Running. The gateway is running on port 18789.", _log);
+    }
+
+    // The supervisor detail is written by the guest. A line break in it must
+    // not let the guest append a forged entry to the host log.
+    [Fact]
+    public async Task GuestTextInAStartOutcomeStaysOnItsOwnLogEntry()
+    {
+        _client.Inspection = new SessionInspectResult
+        {
+            SupervisorDetail =
+                "the application exited with code 1\r\n2026-09-24T16:30:00Z pid=1 Host exiting.\u001b[2J"
+        };
+
+        await CreateController().StartAsync("helper.exe", CancellationToken.None);
+
+        string entry = Assert.Single(
+            _log,
+            line => line.StartsWith("Gateway start finished:", StringComparison.Ordinal));
+        Assert.Contains(
+            "exited with code 1 2026-09-24T16:30:00Z pid=1 Host exiting. [2J",
+            entry,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(entry, character => char.IsControl(character));
+    }
+
     [Fact]
     public async Task ALiveProcessThatIsNotServingIsReportedAsUnhealthy()
     {
@@ -416,6 +504,93 @@ public sealed class GatewayControllerTests : IDisposable
             .GetStatusAsync("helper.exe", CancellationToken.None);
 
         Assert.Equal(GatewayState.Unknown, report.State);
+    }
+
+    // The diagnostic log is where a slow `clawctl open` or `clawctl status` is
+    // diagnosed, and an inspection that fails still spent its time.
+    [Theory]
+    [InlineData(true, "Gateway inspection finished in 2873 ms: Running.")]
+    [InlineData(false, "Gateway inspection finished in 2873 ms: Unknown.")]
+    public async Task StatusRecordsHowLongTheInspectionTookAndWhatItFound(
+        bool answered,
+        string expected)
+    {
+        RecordGateway();
+        var clock = new ManualMonotonicTimeProvider();
+        _client.Inspection = answered
+            ? Healthy()
+            : new SessionInspectResult { Error = "no answer" };
+        _client.DuringInspection = () => clock.Advance(TimeSpan.FromMilliseconds(2873));
+
+        await CreateController(clock: clock)
+            .GetStatusAsync("helper.exe", CancellationToken.None);
+
+        Assert.Equal([expected], _log);
+    }
+
+    // Cancelling a slow `clawctl status` or `clawctl open` during the
+    // inspection still spent that time, and the caller must still observe the
+    // original cancellation.
+    [Fact]
+    public async Task ACancelledInspectionRecordsItsDurationAndPropagatesUnchanged()
+    {
+        RecordGateway();
+        var clock = new ManualMonotonicTimeProvider();
+        using var cancellation = new CancellationTokenSource();
+        var canceled = new OperationCanceledException(cancellation.Token);
+        _client.DuringInspection = () =>
+        {
+            clock.Advance(TimeSpan.FromMilliseconds(4100));
+            cancellation.Cancel();
+            throw canceled;
+        };
+
+        OperationCanceledException thrown = await Assert.ThrowsAsync<OperationCanceledException>(
+            () => CreateController(clock: clock)
+                .GetStatusAsync("helper.exe", cancellation.Token));
+
+        Assert.Same(canceled, thrown);
+        Assert.Equal(
+            ["Gateway inspection failed after 4100 ms (OperationCanceledException)."],
+            _log);
+    }
+
+    // A report decided before any inspection spent no time in the session, so
+    // a timing line there would send a slow-command investigation astray.
+    [Theory]
+    [InlineData("no gateway record", "NotStarted")]
+    [InlineData("unreadable gateway record", "Unknown")]
+    [InlineData("unconfirmed launch", "Unknown")]
+    [InlineData("unrecorded session", "Unknown")]
+    [InlineData("different session", "Unknown")]
+    public async Task StatusDecidedWithoutAnInspectionRecordsNoTiming(
+        string condition,
+        string state)
+    {
+        switch (condition)
+        {
+            case "unreadable gateway record":
+                await File.WriteAllTextAsync(Path.Combine(_root, "gateway.json"), "{ not json");
+                break;
+            case "unconfirmed launch":
+                RecordPendingGateway();
+                break;
+            case "unrecorded session":
+                RecordGateway();
+                await File.WriteAllTextAsync(Path.Combine(_root, "session.json"), "{ not json");
+                break;
+            case "different session":
+                RecordGateway();
+                Store.Write(Store.Read().Record! with { SandboxId = "iso:other" });
+                break;
+        }
+
+        GatewayStatusReport report = await CreateController()
+            .GetStatusAsync("helper.exe", CancellationToken.None);
+
+        Assert.Equal(state, report.State.ToString());
+        Assert.Empty(_client.Calls);
+        Assert.Empty(_log);
     }
 
     [Fact]
@@ -488,6 +663,45 @@ public sealed class GatewayControllerTests : IDisposable
 
         Assert.False(result.AlreadyRunning);
         Assert.Equal(2, _client.Calls.Count(call => call == "start"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DeniedPidRecoveryRequiresIdentityEvidenceBeforeReplacingTheGateway(bool sameIdentity)
+    {
+        _client.Inspection = Healthy();
+        var controller = CreateController();
+        await controller.StartAsync("helper.exe", CancellationToken.None);
+        var recorded = Store.Read().Record!;
+        string persisted = File.ReadAllText(Path.Combine(_root, "gateway.json"));
+        var request = new SessionInspectRequest
+        {
+            RequestId = "denied-controller",
+            ProcessId = recorded.ProcessId,
+            ProcessStartTimeUtc = recorded.ProcessStartTimeUtc
+        };
+        _client.InspectionSequence.Enqueue(SessionInspector.ReconcileAccessDenied(
+            request, new Win32Exception(5), () => new Dictionary<int, DateTimeOffset>
+            {
+                [recorded.ProcessId] = sameIdentity
+                    ? recorded.ProcessStartTimeUtc
+                    : DateTimeOffset.UnixEpoch
+            }));
+
+        if (sameIdentity)
+        {
+            await Assert.ThrowsAsync<SessionException>(() =>
+                controller.StartAsync("helper.exe", CancellationToken.None));
+            Assert.Equal(persisted, File.ReadAllText(Path.Combine(_root, "gateway.json")));
+        }
+        else
+        {
+            var result = await controller.StartAsync("helper.exe", CancellationToken.None);
+            Assert.Equal(GatewayState.Running, result.State);
+        }
+        Assert.Equal(sameIdentity ? 1 : 2, _client.Calls.Count(call => call == "start"));
+        Assert.DoesNotContain(_client.Calls, call => call.StartsWith("stop:", StringComparison.Ordinal));
     }
 
     [Fact]

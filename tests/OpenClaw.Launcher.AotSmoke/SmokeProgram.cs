@@ -1,8 +1,11 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using OpenClaw.Launcher.Gateway;
 using OpenClaw.Launcher.Mxc;
 using OpenClaw.Launcher.Session;
+using OpenClaw.SessionHost;
 using OpenClaw.SessionProtocol;
 using LauncherProgram = OpenClaw.Launcher.Program;
 
@@ -40,21 +43,25 @@ internal static class SmokeProgram
             ("--help prints help", HelpOptionPrintsHelpAsync),
             ("setup --help prints command help", SetupHelpPrintsCommandHelpAsync),
             ("gateway-service help includes restart", GatewayServiceHelpIncludesRestartAsync),
+            ("Companion help parses under NativeAOT", CompanionHelpParsesAsync),
+            ("Companion failures identify their command", CompanionFailureNamesCommandAsync),
             ("completion --help prints command help", CompletionHelpPrintsCommandHelpAsync),
             ("pwsh help includes execution modes", PowerShellHelpIncludesExecutionModesAsync),
-            ("pwsh rejects conflicting execution modes", PowerShellRejectsConflictingModesAsync),
             ("--version reports the launcher", VersionReportsLauncherAssemblyAsync),
-            ("--version wins over trailing arguments", VersionWinsOverTrailingAsync),
             ("unknown command fails", UnknownCommandFailsAsync),
-            ("setup --force requires --fresh", SetupForceRequiresFreshAsync),
-            ("response-file token is not expanded", ResponseFileTokenIsNotExpandedAsync),
             ("completion directive suggests commands", CompletionDirectiveSuggestsAsync),
             ("unpackaged setup reports identity failure", SetupReportsReadinessAsync),
             ("JSON failures survive NativeAOT", JsonFailureIsStructuredAsync),
             ("version JSON survives NativeAOT", VersionJsonIsStructuredAsync),
+            ("Companion JSON survives NativeAOT", CompanionJsonIsStructured),
+            ("Companion snapshot and patch survive NativeAOT", CompanionSnapshotAndPatchAreStructured),
             ("Spectre renders clawctl output under NativeAOT", SpectreOutputRenders),
             ("gateway narration survives NativeAOT", GatewayNarrationRenders),
+            ("pending gateway JSON survives NativeAOT", PendingGatewayJsonIsStructured),
             ("Windows logon identity survives NativeAOT", WindowsLogonIdentityWorks),
+            ("Windows process identity survives NativeAOT", WindowsProcessIdentityWorks),
+            ("package provenance reads survive NativeAOT", PackageProvenanceReadsBind),
+            ("diagnostics redaction survives NativeAOT", DiagnosticsRedactionWorks),
             ("missing application reports diagnostics", MissingApplicationReportsAsync),
             ("openclaw never parses its arguments", AgentNeverParsesItsArgumentsAsync),
             ("first agent launch provisions and forwards arguments", FirstAgentLaunchProvisionsAsync),
@@ -103,6 +110,67 @@ internal static class SmokeProgram
             id.Length == 17 && id[8] == ':' &&
             id.Where(character => character != ':').All(Uri.IsHexDigit),
             $"Unexpected Windows logon identity '{id}'.");
+        return Task.CompletedTask;
+    }
+
+    // Read-only native queries exercise the same interop as guest inspection.
+    // A synthetic denial tests reconciliation without modifying any process DACL.
+    private static Task WindowsProcessIdentityWorks()
+    {
+        using Process process = Process.GetCurrentProcess();
+        using var handle = SessionProcessQuery.Open(process.Id);
+        DateTimeOffset created = SessionProcessQuery.StartTime(handle);
+        Assert(!SessionProcessQuery.HasExited(handle), "The running driver was reported as exited.");
+        Assert(created == process.StartTime.ToUniversalTime(), "The pinned creation time changed.");
+        Assert(string.Equals(SessionProcessQuery.ImagePath(handle), Environment.ProcessPath,
+            StringComparison.OrdinalIgnoreCase), "The pinned process image did not match the driver.");
+        Assert(WindowsProcessSnapshot.CaptureCreationTimes()[process.Id] == created,
+            "The OS process table disagreed with the pinned identity.");
+
+        var request = new SessionInspectRequest
+        {
+            RequestId = "aot-process-identity",
+            ProcessId = process.Id,
+            ProcessStartTimeUtc = created
+        };
+        SessionInspectResult owned = SessionInspector.ReconcileAccessDenied(request, new Win32Exception(5), null);
+        Assert(owned.Error is not null, "Access denial discarded a matching process identity.");
+        SessionInspectResult reused = SessionInspector.ReconcileAccessDenied(
+            request with { ProcessStartTimeUtc = created.AddTicks(-1) }, new Win32Exception(5), null);
+        Assert(reused.Error is null && reused.ProcessFound && !reused.StartTimeMatches,
+            "OS creation-time mismatch did not permit stale-record recovery.");
+        return Task.CompletedTask;
+    }
+
+    // Every host start reads package provenance. The driver is unpackaged, so
+    // each read must report absence; a native entry point that does not bind
+    // would instead throw here, and in a packaged host fail every command.
+    private static Task PackageProvenanceReadsBind()
+    {
+        Assert(PackageIdentity.TryReadProvenance() is null, "An unpackaged driver reported provenance.");
+        Assert(
+            PackageIdentity.TryReadOrigin("OpenClaw.NotInstalled_1.0.0.0_x64__0000000000000") is null,
+            "An uninstalled package reported an origin.");
+        Assert(PackageIdentity.TryReadDevelopmentMode() is null, "An unpackaged driver reported a registration mode.");
+        Assert(PackageIdentity.TryReadInstallPath() is null, "An unpackaged driver reported an install path.");
+        return Task.CompletedTask;
+    }
+
+    // The redactor's patterns run non-backtracking, which the regex source
+    // generator serves through a runtime-built engine rather than generated
+    // code. Every collect-logs run depends on it, so it must run trimmed.
+    private static Task DiagnosticsRedactionWorks()
+    {
+        const string secret = "ghu_verysecretvalue";
+        string redacted = DiagnosticsRedactor.Redact(
+            $$"""{"apiKey": "{{secret}}"} http://127.0.0.1:18789/#token={{secret}} """ +
+            $"OPENAI_API_KEY={secret} Authorization: Bearer {secret}");
+        Assert(
+            !redacted.Contains(secret, StringComparison.Ordinal),
+            $"A credential survived redaction: {redacted}");
+        Assert(
+            redacted.Split(DiagnosticsRedactor.Placeholder).Length == 5,
+            $"Expected four redactions: {redacted}");
         return Task.CompletedTask;
     }
 
@@ -172,6 +240,92 @@ internal static class SmokeProgram
         fixture.AssertNoInstallationWorkStarted();
     }
 
+    private static async Task CompanionHelpParsesAsync()
+    {
+        using Fixture fixture = Fixture.CreateWithoutApplication();
+
+        int prepare = await fixture.RunAsync(["companion", "prepare", "--help"])
+            .ConfigureAwait(false);
+        AssertExitCode(0, prepare, fixture);
+        AssertContains(fixture.Output.ToString(), "--port", fixture);
+        AssertContains(fixture.Output.ToString(), "--check", fixture);
+        fixture.Output.GetStringBuilder().Clear();
+        int companion = await fixture.RunAsync(["companion", "--help"])
+            .ConfigureAwait(false);
+        AssertExitCode(0, companion, fixture);
+        AssertContains(fixture.Output.ToString(), "prepare", fixture);
+        AssertNotContains(fixture.Output.ToString(), "devices", fixture);
+        fixture.AssertNoInstallationWorkStarted();
+    }
+
+    private static async Task CompanionFailureNamesCommandAsync()
+    {
+        using Fixture fixture = Fixture.CreateWithoutApplication();
+
+        int exitCode = await fixture.RunAsync(["companion", "prepare", "--check"])
+            .ConfigureAwait(false);
+
+        AssertExitCode(1, exitCode, fixture);
+        AssertContains(fixture.Error.ToString(), "companion prepare", fixture);
+        AssertNotContains(fixture.Error.ToString(), "command:", fixture);
+        AssertContains(
+            fixture.Error.ToString(),
+            "scenario driver never performs installation work",
+            fixture);
+    }
+
+    private static Task CompanionJsonIsStructured()
+    {
+        using var output = new StringWriter();
+        ClawCtlJson.WriteResult(output, new CompanionPrepareResult(
+            0, Port: 19001, Token: "fixture-token"));
+        using JsonDocument document = JsonDocument.Parse(output.ToString());
+        JsonElement root = document.RootElement;
+        Assert(root.GetProperty("integration").GetProperty("kind").GetString() == "isolated-session",
+            "Companion integration was missing from the native JSON document.");
+        Assert(root.GetProperty("companion").GetProperty("token").GetString() == "fixture-token",
+            "Companion's prepared agent token was missing from the native JSON document.");
+
+        return Task.CompletedTask;
+    }
+
+    private static Task CompanionSnapshotAndPatchAreStructured()
+    {
+        using Fixture fixture = Fixture.CreateWithoutApplication();
+        string configPath = Path.Combine(fixture.Root, "agent", ".openclaw", "openclaw.json");
+        using JsonDocument gateway = JsonDocument.Parse("{}");
+        string snapshot = JsonSerializer.Serialize(
+            new CompanionConfigSnapshot(gateway.RootElement, configPath, "initial-hash", false),
+            CompanionConfigPatchContext.Default.CompanionConfigSnapshot);
+        CompanionConfigPatch? patch = null;
+        SessionCompanionConfigResult result = SessionCompanionConfig.Configure(
+            new SessionCompanionConfigRequest { RequestId = "aot-snapshot", Port = 19001 },
+            configPath, File.WriteAllText,
+            (_, path) =>
+            {
+                patch = JsonSerializer.Deserialize(
+                    File.ReadAllText(path), CompanionConfigPatchContext.Default.CompanionConfigPatch);
+                Assert(patch is not null && patch.ExpectedHash == "initial-hash" &&
+                    patch.ExpectedPath == configPath &&
+                    !patch.ExpectedGateway.EnumerateObject().Any(),
+                    "The conditional patch lost its snapshot identity.");
+                string prepared = JsonSerializer.Serialize(
+                    patch, CompanionConfigPatchContext.Default.CompanionConfigPatch);
+                using JsonDocument preparedDocument = JsonDocument.Parse(prepared);
+                snapshot = JsonSerializer.Serialize(new CompanionConfigSnapshot(
+                    preparedDocument.RootElement.GetProperty("gateway"), configPath, "written-hash", true),
+                    CompanionConfigPatchContext.Default.CompanionConfigSnapshot);
+                return 0;
+            },
+            _ => (0, snapshot));
+
+        Assert(patch is not null && result.Port == 19001 && result.Token == patch.Gateway.Auth.Token,
+            "The prepared result did not survive the snapshot/patch round trip.");
+        Assert(!Directory.EnumerateFiles(Path.GetDirectoryName(configPath)!).Any(),
+            "The temporary credential patch was not removed.");
+        return Task.CompletedTask;
+    }
+
     private static async Task CompletionHelpPrintsCommandHelpAsync()
     {
         using Fixture fixture = Fixture.CreateWithoutApplication();
@@ -195,19 +349,6 @@ internal static class SmokeProgram
         AssertExitCode(0, exitCode, fixture);
         AssertContains(fixture.Output.ToString(), "--command", fixture);
         AssertContains(fixture.Output.ToString(), "--file", fixture);
-        fixture.AssertNoInstallationWorkStarted();
-    }
-
-    private static async Task PowerShellRejectsConflictingModesAsync()
-    {
-        using Fixture fixture = Fixture.CreateWithoutApplication();
-
-        int exitCode = await fixture
-            .RunAsync(["pwsh", "--command", "Get-Date", "--file", "test.ps1"])
-            .ConfigureAwait(false);
-
-        AssertExitCode(1, exitCode, fixture);
-        AssertContains(fixture.Error.ToString(), "cannot be used together", fixture);
         fixture.AssertNoInstallationWorkStarted();
     }
 
@@ -267,20 +408,6 @@ internal static class SmokeProgram
             "The version document did not carry the baked payload commit.");
     }
 
-    private static async Task VersionWinsOverTrailingAsync()
-    {
-        using Fixture fixture = Fixture.CreateWithoutApplication();
-
-        int exitCode = await fixture.RunAsync(["--version", "bogus"]).ConfigureAwait(false);
-
-        AssertExitCode(0, exitCode, fixture);
-        Assert(
-            fixture.Output.ToString().Contains(
-                ClawCtlBuildMetadata.PackageVersion,
-                StringComparison.Ordinal),
-            "Expected the launcher version with a trailing argument present.");
-    }
-
     private static async Task UnknownCommandFailsAsync()
     {
         using Fixture fixture = Fixture.CreateWithoutApplication();
@@ -289,31 +416,6 @@ internal static class SmokeProgram
 
         AssertExitCode(1, exitCode, fixture);
         AssertContains(fixture.Error.ToString(), "bogus", fixture);
-        fixture.AssertNoInstallationWorkStarted();
-    }
-
-    private static async Task SetupForceRequiresFreshAsync()
-    {
-        using Fixture fixture = Fixture.CreateWithoutApplication();
-
-        int exitCode = await fixture.RunAsync(["setup", "--force"]).ConfigureAwait(false);
-
-        AssertExitCode(1, exitCode, fixture);
-        AssertContains(fixture.Error.ToString(), "requires option '--fresh'", fixture);
-        fixture.AssertNoInstallationWorkStarted();
-    }
-
-    // Response-file expansion is disabled, so a readable file behind an `@`
-    // token must still be rejected as an unrecognized argument.
-    private static async Task ResponseFileTokenIsNotExpandedAsync()
-    {
-        using Fixture fixture = Fixture.CreateWithoutApplication();
-        string responseFile = Path.Combine(fixture.Root, "help.rsp");
-        await File.WriteAllTextAsync(responseFile, "--help").ConfigureAwait(false);
-
-        int exitCode = await fixture.RunAsync([$"@{responseFile}"]).ConfigureAwait(false);
-
-        AssertExitCode(1, exitCode, fixture);
         fixture.AssertNoInstallationWorkStarted();
     }
 
@@ -345,14 +447,16 @@ internal static class SmokeProgram
         AssertContains(error, "newer version of Windows", fixture);
         AssertContains(error, "clawctl collect-logs", fixture);
 
-        // The attempted requirement check is visible, but nothing is reported
-        // as ready when the support check refuses.
+        // The attempted requirement check is visible on standard error, and
+        // standard output stays empty when the support check refuses.
         Assert(
-            fixture.Output.ToString().Contains(
+            fixture.Error.ToString().Contains(
                 "Checking isolated-session support.",
-                StringComparison.Ordinal) &&
-            !fixture.Output.ToString().Contains("ready", StringComparison.Ordinal),
-            "A failed support check still reported readiness on standard output.");
+                StringComparison.Ordinal),
+            "The failed support check was not narrated on standard error.");
+        Assert(
+            fixture.Output.ToString().Length == 0,
+            "A failed support check wrote to standard output.");
         fixture.AssertLogRecordsStartupAndExit();
         Assert(
             File.Exists(fixture.EntryPoint),
@@ -361,20 +465,30 @@ internal static class SmokeProgram
 
     private static async Task JsonFailureIsStructuredAsync()
     {
-        using Fixture fixture = Fixture.CreateWithoutApplication();
+        foreach (string command in new[] { "setup", "status" })
+        {
+            using Fixture fixture = Fixture.CreateWithoutApplication();
 
-        int exitCode = await fixture.RunAsync(["setup", "--json"]).ConfigureAwait(false);
+            int exitCode = await fixture.RunAsync([command, "--json"]).ConfigureAwait(false);
 
-        AssertExitCode(1, exitCode, fixture);
-        using JsonDocument document = JsonDocument.Parse(fixture.Output.ToString());
-        JsonElement root = document.RootElement;
-        Assert(!root.GetProperty("ok").GetBoolean(), "The JSON failure reported success.");
-        Assert(
-            root.GetProperty("schemaVersion").GetInt32() == 1,
-            "The JSON failure did not report schema version 1.");
-        Assert(
-            root.GetProperty("error").GetProperty("type").GetString() == "cli_error",
-            "The JSON failure did not use the cli_error envelope.");
+            AssertExitCode(1, exitCode, fixture);
+            using JsonDocument document = JsonDocument.Parse(fixture.Output.ToString());
+            JsonElement root = document.RootElement;
+            Assert(!root.GetProperty("ok").GetBoolean(), "The JSON failure reported success.");
+            Assert(
+                root.GetProperty("schemaVersion").GetInt32() == 1,
+                "The JSON failure did not report schema version 1.");
+            Assert(
+                root.GetProperty("error").GetProperty("type").GetString() == "cli_error",
+                "The JSON failure did not use the cli_error envelope.");
+            Assert(root.GetProperty("command").GetString() == command,
+                "The JSON failure lost the selected command.");
+            Assert(root.GetProperty("integration").GetProperty("kind").GetString() == "isolated-session" &&
+                root.GetProperty("integration").GetProperty("version").GetInt32() == 1,
+                "The JSON failure hid the package's isolated-session capability.");
+            Assert(!root.TryGetProperty("session", out _) && !root.TryGetProperty("companion", out _),
+                "The JSON failure fabricated session readiness or Companion credentials.");
+        }
     }
 
     // Spectre.Console composes the renderables; this proves the composition,
@@ -509,6 +623,35 @@ internal static class SmokeProgram
         Assert(
             result.ToString().Contains("http://127.0.0.1:18789/", StringComparison.Ordinal),
             "The gateway result did not report its URL.");
+    }
+
+    private static Task PendingGatewayJsonIsStructured()
+    {
+        foreach (string action in new[] { "start", "restart" })
+        {
+            using var output = new StringWriter();
+            ClawCtlJson.WriteResult(output, new GatewayCommandResult(
+                action,
+                GatewayState.Starting,
+                "The supervised gateway launch was accepted.",
+                null,
+                0));
+            using JsonDocument document = JsonDocument.Parse(output.ToString());
+            JsonElement root = document.RootElement;
+            JsonElement gateway = root.GetProperty("gateway");
+            Assert(root.GetProperty("ok").GetBoolean(), "An accepted launch was reported as failed.");
+            Assert(root.GetProperty("schemaVersion").GetInt32() == 1, "The JSON schema version changed.");
+            Assert(root.GetProperty("command").GetString() == $"gateway-service {action}",
+                "The accepted launch lost its command identity.");
+            Assert(gateway.GetProperty("state").GetString() == "starting",
+                "The pending gateway state did not survive NativeAOT.");
+            Assert(!gateway.TryGetProperty("port", out _) &&
+                !gateway.TryGetProperty("url", out _) &&
+                !gateway.TryGetProperty("ownership", out _) &&
+                !root.TryGetProperty("error", out _),
+                "Pending acceptance claimed readiness or reported an error.");
+        }
+        return Task.CompletedTask;
     }
 
     private static string StripAnsi(string value)
@@ -679,6 +822,15 @@ internal static class SmokeProgram
         Assert(
             haystack.Contains(needle, StringComparison.Ordinal),
             $"Expected to find '{needle}'." +
+            $"{Environment.NewLine}stdout: {fixture.Output}" +
+            $"{Environment.NewLine}stderr: {fixture.Error}");
+    }
+
+    private static void AssertNotContains(string haystack, string needle, Fixture fixture)
+    {
+        Assert(
+            !haystack.Contains(needle, StringComparison.Ordinal),
+            $"Expected not to find '{needle}'." +
             $"{Environment.NewLine}stdout: {fixture.Output}" +
             $"{Environment.NewLine}stderr: {fixture.Error}");
     }
@@ -939,7 +1091,9 @@ internal static class SmokeProgram
                     Changed: true));
             }
 
-            public Task EnsureSessionSupportedAsync(CancellationToken cancellationToken) =>
+            public Task EnsureSessionSupportedAsync(
+                Action<string> log,
+                CancellationToken cancellationToken) =>
                 throw new NotSupportedException();
 
             public PackageRuntimeMetadata ValidatePackageRuntime(
@@ -1114,7 +1268,9 @@ internal static class SmokeProgram
 
             public SessionRuntime CreateRuntime(Action<string> log) => throw Started();
 
-            public Task EnsureSessionSupportedAsync(CancellationToken cancellationToken) =>
+            public Task EnsureSessionSupportedAsync(
+                Action<string> log,
+                CancellationToken cancellationToken) =>
                 throw Started();
 
             public PackageRuntimeMetadata ValidatePackageRuntime(

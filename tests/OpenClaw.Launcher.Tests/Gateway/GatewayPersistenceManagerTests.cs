@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using OpenClaw.Launcher.Gateway;
 
 namespace OpenClaw.Launcher.Tests.Gateway;
@@ -23,13 +24,14 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
 
     private string StartupFolder => Path.Combine(_root, "startup");
 
-    private string LauncherPath => Path.Combine(StateRoot, "gateway-launcher.cmd");
+    private string LauncherPath => Path.Combine(StateRoot, "gateway-launcher.js");
 
     private string ActivationScriptPath => Path.ChangeExtension(LauncherPath, ".ps1");
 
     private GatewayPersistenceManager CreateManager(
         Func<string, string?>? resolveUserSid = null,
-        Action<string>? deleteFile = null) =>
+        Action<string>? deleteFile = null,
+        Action<string>? log = null) =>
         new(
             _scheduler,
             new GatewayPersistenceOptions(
@@ -38,19 +40,20 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
                 LauncherPath: LauncherPath,
                 StartupFolderPath: StartupFolder,
                 WorkingDirectory: StateRoot,
-                CommandProcessorPath: @"C:\Windows\System32\cmd.exe",
+                ScriptHostPath: @"C:\Windows\System32\wscript.exe",
                 DeleteFile: deleteFile),
+            log,
             resolveUserSid: resolveUserSid);
 
     private GatewayTaskSnapshot DesiredSnapshot() =>
         GatewayTaskDefinition.CreateSnapshot(
             "S-1-5-21-1",
-            @"C:\Windows\System32\cmd.exe",
+            @"C:\Windows\System32\wscript.exe",
             LauncherPath);
 
     [Theory]
-    [InlineData(@"C:\outside\gateway-launcher.cmd")]
-    [InlineData(@"state\child\gateway-launcher.cmd")]
+    [InlineData(@"C:\outside\gateway-launcher.js")]
+    [InlineData(@"state\child\gateway-launcher.js")]
     public void RejectsLauncherPathOutsideTheStateRoot(string launcherPath)
     {
         GatewayPersistenceOptions options = new(
@@ -61,7 +64,7 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
                 : Path.Combine(_root, launcherPath),
             StartupFolderPath: StartupFolder,
             WorkingDirectory: StateRoot,
-            CommandProcessorPath: @"C:\Windows\System32\cmd.exe");
+            ScriptHostPath: @"C:\Windows\System32\wscript.exe");
 
         Assert.Throws<ArgumentException>(() =>
             new GatewayPersistenceManager(_scheduler, options));
@@ -81,6 +84,54 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
         Assert.True(File.Exists(LauncherPath));
         Assert.True(File.Exists(ActivationScriptPath));
         Assert.Contains($"register:{manager.TaskName}", _scheduler.Calls);
+    }
+
+    [Fact]
+    public async Task SuccessfulRegistrationWithTriggerDriftDoesNotClaimRecoveryIsReady()
+    {
+        _scheduler.RegistrationProbe = GatewayTaskProbe.Present(DesiredSnapshot() with
+        {
+            LogonTriggerUserId = "S-1-5-21-2"
+        });
+        GatewayPersistenceManager manager = CreateManager();
+        Directory.CreateDirectory(StartupFolder);
+        File.WriteAllText(manager.FallbackPath, "existing fallback");
+
+        var result = await manager.InstallAsync(CancellationToken.None);
+
+        Assert.Equal(GatewayPersistenceState.ActionRequired, result.State);
+        Assert.Contains("Expected 'S-1-5-21-1', observed 'S-1-5-21-2'", result.Detail, StringComparison.Ordinal);
+        Assert.Equal(GatewayPersistenceManager.RepairCommand, result.Remediation);
+        Assert.True(File.Exists(manager.FallbackPath));
+        Assert.Single(_scheduler.Calls, call => call.StartsWith("register:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task SuccessfulRegistrationWithUnreadableResultRemainsUnknown()
+    {
+        _scheduler.RegistrationProbe = GatewayTaskProbe.Unreadable("Access is denied.");
+
+        var result = await CreateManager().InstallAsync(CancellationToken.None);
+
+        Assert.Equal(GatewayPersistenceState.Unknown, result.State);
+        Assert.Contains("Access is denied.", result.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RepairReplacesWrongTriggerAndStatusConfirmsTheRegisteredIdentity()
+    {
+        _scheduler.Probe = GatewayTaskProbe.Present(DesiredSnapshot() with
+        {
+            LogonTriggerUserId = "S-1-5-21-2"
+        });
+        var manager = CreateManager();
+
+        var installed = await manager.InstallAsync(CancellationToken.None);
+        var status = await manager.GetStatusAsync(CancellationToken.None);
+
+        Assert.Equal(GatewayPersistenceState.Ready, installed.State);
+        Assert.Equal(GatewayPersistenceState.Ready, status.State);
+        Assert.Equal("S-1-5-21-1", _scheduler.Probe.Snapshot!.LogonTriggerUserId);
     }
 
     [Fact]
@@ -107,14 +158,14 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
         string launcher = await File.ReadAllTextAsync(LauncherPath, CancellationToken.None);
         string activation = await File.ReadAllTextAsync(ActivationScriptPath, CancellationToken.None);
 
-        Assert.Contains("chcp 65001", launcher, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("OpenClaw.Gateway_test!Control", activation, StringComparison.Ordinal);
-        Assert.Contains("ActivateApplication", activation, StringComparison.Ordinal);
+        Assert.Contains("shell.Run(command, 0, true)", launcher, StringComparison.Ordinal);
+        Assert.Contains("$applicationId = 'Control'", activation, StringComparison.Ordinal);
+        Assert.Contains("$start.CreateNoWindow = $true", activation, StringComparison.Ordinal);
         Assert.Contains(
             "gateway-service start --recovery",
             activation,
             StringComparison.Ordinal);
-        Assert.DoesNotContain("WindowsApps", launcher + activation, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Microsoft\\WindowsApps\\", activation, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -157,9 +208,31 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
         string activation = await File.ReadAllTextAsync(ActivationScriptPath, CancellationToken.None);
 
         Assert.Contains("PackageFamilyName -eq $packageFamilyName", activation, StringComparison.Ordinal);
-        Assert.Contains("Get-AppxPackage -Name 'OpenClawFoundation.OpenClawGateway'", activation, StringComparison.Ordinal);
+        Assert.Contains("Get-AppxPackage -Name 'OpenClaw.Gateway' |", activation, StringComparison.Ordinal);
         Assert.Contains("does not declare application '$applicationId'", activation, StringComparison.Ordinal);
         Assert.Contains("does not target openclaw.exe", activation, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(
+        "OpenClawFoundation.OpenClawGateway_rfcbke2p71se2",
+        "OpenClawFoundation.OpenClawGateway")]
+    [InlineData(
+        "OpenClawFoundation.OpenClawGateway-foo_rfcbke2p71se2",
+        "OpenClawFoundation.OpenClawGateway-foo")]
+    public void TheControlActivationScriptLooksUpTheIdentityThatGeneratedIt(
+        string packageFamilyName,
+        string packageName)
+    {
+        // A side-by-side identity's logon recovery must find its own package;
+        // looking up the base name would report it as not registered.
+        string activation =
+            GatewayLauncherScript.CreateActivationScript(packageFamilyName);
+
+        Assert.Contains(
+            $"$package = Get-AppxPackage -Name '{packageName}' | ",
+            activation,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -264,6 +337,23 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
         Assert.Contains("Access is denied.", result.Detail, StringComparison.Ordinal);
     }
 
+    // Setup reports the degraded lane on the console; the bundle must still
+    // record why the preferred logon task was refused.
+    [Fact]
+    public async Task AFailedRegistrationIsLoggedWithTheSchedulersReason()
+    {
+        _scheduler.RegisterResult = GatewayTaskOperation.Failure("Access is denied.");
+        List<string> log = [];
+
+        await CreateManager(log: log.Add).InstallAsync(CancellationToken.None);
+
+        Assert.Contains(
+            log,
+            line => line.EndsWith(
+                "could not be registered; trying the Startup-folder fallback: Access is denied.",
+                StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task TheFallbackCallsTheSameLauncherAsTheTask()
     {
@@ -315,17 +405,17 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
     }
 
     [Fact]
-    public async Task GeneratedCommandFilesUseUtf8WithoutABom()
+    public async Task GeneratedScriptFilesUseTheirHostEncoding()
     {
         _scheduler.RegisterResult = GatewayTaskOperation.Failure("Access is denied.");
         GatewayPersistenceManager manager = CreateManager();
 
         await manager.InstallAsync(CancellationToken.None);
 
-        Assert.DoesNotContain((byte)0, await File.ReadAllBytesAsync(LauncherPath));
-        Assert.DoesNotContain((byte)0, await File.ReadAllBytesAsync(manager.FallbackPath));
+        Assert.Equal(Encoding.Unicode.GetPreamble(), (await File.ReadAllBytesAsync(LauncherPath))[..2]);
+        Assert.NotEqual(new byte[] { 0xEF, 0xBB, 0xBF }, (await File.ReadAllBytesAsync(manager.FallbackPath))[..3]);
         Assert.NotEqual(new byte[] { 0xEF, 0xBB, 0xBF },
-            (await File.ReadAllBytesAsync(LauncherPath))[..3]);
+            (await File.ReadAllBytesAsync(ActivationScriptPath))[..3]);
     }
 
     [Fact]
@@ -575,67 +665,179 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
         Assert.Equal(GatewayPersistenceState.Ready, result.State);
         Assert.Equal(before, _scheduler.RegisteredXml);
         Assert.Contains(
-            "OpenClaw.Gateway_test!Control",
+            "$packageFamilyName = 'OpenClaw.Gateway_test'",
             await File.ReadAllTextAsync(
                 ActivationScriptPath,
                 CancellationToken.None),
             StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void ThePackageActivationSourceCompilesWithWindowsPowerShell()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RecoveryLaunchesHiddenAndReturnsTheChildExitCode(bool fallback)
     {
-        string script = GatewayLauncherScript.CreateActivationScript(
-            "OpenClaw.Gateway_test");
-        int sourceIndex = script.IndexOf(
-            "$source = @'",
-            StringComparison.Ordinal);
-        int addTypeIndex = script.IndexOf(
-            "Add-Type -TypeDefinition $source -Language CSharp",
-            sourceIndex,
-            StringComparison.Ordinal);
-        Assert.True(sourceIndex > 0);
-        Assert.True(addTypeIndex > sourceIndex);
-        int addTypeEnd = script.IndexOf("\r\n", addTypeIndex, StringComparison.Ordinal);
-        Assert.True(addTypeEnd > addTypeIndex);
-        string compileOnlyPath = Path.Combine(_root, "compile-activation.ps1");
+        // The only child is a fixture PowerShell script. No package, alias,
+        // session, scheduled task, or user profile is read or modified.
+        string workingDirectory = Path.Combine(_root, "recovery %PATH% 日本語");
+        Directory.CreateDirectory(workingDirectory);
+        string activationPath = Path.Combine(workingDirectory, "fixture.ps1");
+        string launcherPath = Path.Combine(workingDirectory, "launcher.js");
+        string fallbackPath = Path.Combine(workingDirectory, "fallback.wsf");
+        File.WriteAllText(activationPath, """
+            $ErrorActionPreference = 'Stop'
+            Add-Type -TypeDefinition @'
+            using System;
+            using System.Runtime.InteropServices;
+            public static class FixtureConsole {
+                [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+                [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
+            }
+            '@
+            $window = [FixtureConsole]::GetConsoleWindow()
+            if ($window -ne [IntPtr]::Zero -and [FixtureConsole]::IsWindowVisible($window)) { exit 99 }
+            [IO.File]::WriteAllText((Join-Path (Get-Location).Path 'observed.txt'), (Get-Location).Path)
+            exit 23
+            """, Encoding.Unicode);
         File.WriteAllText(
-            compileOnlyPath,
-            string.Concat(
-                "$ErrorActionPreference = 'Stop'\r\n",
-                script.AsSpan(sourceIndex, addTypeEnd - sourceIndex),
-                "\r\nexit 0\r\n"));
-
+            launcherPath,
+            GatewayLauncherScript.Create(workingDirectory, activationPath),
+            Encoding.Unicode);
+        File.WriteAllText(
+            fallbackPath,
+            GatewayLauncherScript.CreateFallback(launcherPath),
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         using Process process = Process.Start(new ProcessStartInfo
         {
-            FileName = Path.Combine(
-                Environment.SystemDirectory,
-                "WindowsPowerShell",
-                "v1.0",
-                "powershell.exe"),
+            FileName = Path.Combine(Environment.SystemDirectory, "wscript.exe"),
+            UseShellExecute = false,
+            ArgumentList = { "//B", "//Nologo", fallback ? fallbackPath : launcherPath }
+        })!;
+        process.WaitForExit();
+
+        Assert.Equal(23, process.ExitCode);
+        Assert.Equal(workingDirectory, File.ReadAllText(Path.Combine(workingDirectory, "observed.txt")));
+    }
+
+    [Theory]
+    [InlineData("other.exe", "clawctl.exe", "does not target openclaw.exe")]
+    [InlineData("openclaw.exe", "openclaw.exe", "unexpected control alias")]
+    [InlineData("openclaw.exe", "../clawctl.exe", "unexpected control alias")]
+    public void RecoveryRejectsInvalidPackageTargetsBeforeLaunching(
+        string executable, string alias, string expectedError)
+    {
+        string manifestPath = Path.Combine(_root, "AppxManifest.xml");
+        File.WriteAllText(manifestPath, $"""
+            <Package><Applications><Application Id="Control" Executable="{executable}">
+            <Extensions><Extension Category="windows.appExecutionAlias"><AppExecutionAlias>
+            <ExecutionAlias Alias="{alias}" /></AppExecutionAlias></Extension></Extensions>
+            </Application></Applications></Package>
+            """);
+        string scriptPath = Path.Combine(_root, "invalid-target.ps1");
+        string fixtureRoot = _root.Replace("'", "''", StringComparison.Ordinal);
+        File.WriteAllText(scriptPath,
+            $"function Get-AppxPackage {{ [pscustomobject]@{{ PackageFamilyName = 'OpenClaw.Gateway_test'; Status = 'Ok'; InstallLocation = '{fixtureRoot}' }} }}\n" +
+            GatewayLauncherScript.CreateActivationScript("OpenClaw.Gateway_test"),
+            Encoding.Unicode);
+        using Process process = Process.Start(new ProcessStartInfo
+        {
+            FileName = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"),
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardError = true,
             RedirectStandardOutput = true,
-            ArgumentList =
-            {
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                compileOnlyPath
-            }
+            ArgumentList = { "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath }
         })!;
-        string output = process.StandardOutput.ReadToEnd();
         string error = process.StandardError.ReadToEnd();
         process.WaitForExit();
+        Assert.Equal(1, process.ExitCode);
+        Assert.Contains(expectedError, error, StringComparison.Ordinal);
+    }
 
-        Assert.True(
-            process.ExitCode == 0,
-            $"Windows PowerShell exited {process.ExitCode}.{Environment.NewLine}" +
-            $"{output}{Environment.NewLine}{error}");
+    [Fact]
+    public async Task AFailedLegacyCleanupIsReportedWithARepairCommand()
+    {
+        GatewayPersistenceManager manager = CreateManager(deleteFile: path =>
+        {
+            if (Path.GetExtension(path) == ".cmd")
+            {
+                throw new IOException("legacy file is locked");
+            }
+            File.Delete(path);
+        });
+        Directory.CreateDirectory(StateRoot);
+        await File.WriteAllTextAsync(Path.ChangeExtension(LauncherPath, ".cmd"), GatewayLauncherScript.Marker);
+
+        GatewayPersistenceInstallResult result = await manager.InstallAsync(CancellationToken.None);
+
+        Assert.Equal(GatewayPersistenceState.ActionRequired, result.State);
+        Assert.Contains("legacy file is locked", result.Detail, StringComparison.Ordinal);
+        Assert.Equal(GatewayPersistenceManager.RepairCommand, result.Remediation);
+        Assert.True(File.Exists(Path.ChangeExtension(LauncherPath, ".cmd")));
+    }
+
+    [Fact]
+    public async Task ARefusedLegacyTaskMigrationKeepsItsReferencedFiles()
+    {
+        GatewayPersistenceManager manager = CreateManager();
+        Directory.CreateDirectory(StateRoot);
+        Directory.CreateDirectory(StartupFolder);
+        string legacyLauncher = Path.ChangeExtension(LauncherPath, ".cmd");
+        string legacyFallback = Path.ChangeExtension(manager.FallbackPath, ".cmd");
+        await File.WriteAllTextAsync(legacyLauncher, GatewayLauncherScript.Marker);
+        await File.WriteAllTextAsync(legacyFallback, GatewayLauncherScript.Marker);
+        _scheduler.Probe = GatewayTaskProbe.Present(DesiredSnapshot() with
+        {
+            Command = @"C:\Windows\System32\cmd.exe",
+            Arguments = $"/d /c \"\"{legacyLauncher}\"\""
+        });
+        _scheduler.RegisterResult = GatewayTaskOperation.Failure("Access is denied.");
+
+        GatewayPersistenceInstallResult result = await manager.InstallAsync(CancellationToken.None);
+
+        Assert.Equal(GatewayPersistenceState.ActionRequired, result.State);
+        Assert.Equal(GatewayPersistenceLane.StartupFolderFallback, result.Lane);
+        Assert.Equal(GatewayPersistenceManager.RepairCommand, result.Remediation);
+        Assert.Contains("existing logon task", result.Detail, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(GatewayLauncherScript.Marker, await File.ReadAllTextAsync(legacyLauncher));
+        Assert.Equal(GatewayLauncherScript.Marker, await File.ReadAllTextAsync(legacyFallback));
+        Assert.True(File.Exists(LauncherPath));
+        Assert.True(File.Exists(manager.FallbackPath));
+        Assert.Equal(GatewayPersistenceState.ActionRequired,
+            (await manager.GetStatusAsync(CancellationToken.None)).State);
+    }
+
+    [Fact]
+    public async Task ReinstallMigratesOnlyGeneratedCmdFiles()
+    {
+        GatewayPersistenceManager manager = CreateManager();
+        Directory.CreateDirectory(StateRoot);
+        Directory.CreateDirectory(StartupFolder);
+        string legacyLauncher = Path.ChangeExtension(LauncherPath, ".cmd");
+        string legacyFallback = Path.ChangeExtension(manager.FallbackPath, ".cmd");
+        await File.WriteAllTextAsync(legacyLauncher, GatewayLauncherScript.Marker);
+        await File.WriteAllTextAsync(legacyFallback, GatewayLauncherScript.Marker);
+        _scheduler.Probe = GatewayTaskProbe.Present(DesiredSnapshot() with
+        {
+            Command = @"C:\Windows\System32\cmd.exe",
+            Arguments = $"/d /c \"\"{legacyLauncher}\"\""
+        });
+
+        Assert.Equal(GatewayPersistenceState.ActionRequired,
+            (await manager.GetStatusAsync(CancellationToken.None)).State);
+        GatewayPersistenceInstallResult result = await manager.InstallAsync(CancellationToken.None);
+
+        Assert.Equal(GatewayPersistenceState.Ready, result.State);
+        Assert.False(File.Exists(legacyLauncher));
+        Assert.False(File.Exists(legacyFallback));
+        Assert.True(GatewayTaskDefinition.TryParse(_scheduler.RegisteredXml!, out GatewayTaskSnapshot? registered, out _));
+        Assert.Equal(DesiredSnapshot(), registered);
+
+        await File.WriteAllTextAsync(legacyFallback, "user-owned file");
+        await manager.UninstallAsync(CancellationToken.None);
+        Assert.Equal("user-owned file", await File.ReadAllTextAsync(legacyFallback));
+        Assert.False(File.Exists(LauncherPath));
+        Assert.False(File.Exists(ActivationScriptPath));
     }
 
     [Fact]
@@ -645,7 +847,7 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
         await CreateManager().InstallAsync(CancellationToken.None);
 
         Assert.Contains(
-            $"cd /d \"{StateRoot}\"",
+            $"shell.CurrentDirectory = \"{StateRoot.Replace("\\", "\\\\", StringComparison.Ordinal)}\";",
             await File.ReadAllTextAsync(
                 LauncherPath,
                 CancellationToken.None),

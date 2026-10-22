@@ -240,6 +240,10 @@ public sealed class MxcWireProtocolTests
         Assert.Contains("No active session exists.", exception.Message, StringComparison.Ordinal);
         Assert.Contains("Start a session first", exception.Message, StringComparison.Ordinal);
         Assert.Contains("0x80070520", exception.Message, StringComparison.Ordinal);
+
+        // The failing OS call is what distinguishes, say, a refused start from
+        // a refused exec when only the log is available.
+        Assert.Equal("IsoSessionOps.RunProcessWithOptionsAsync", exception.Operation);
     }
 
     [Fact]

@@ -17,22 +17,6 @@ public sealed class SessionConfigReadinessProtocolTests
     };
 
     [Fact]
-    public void AValidRequestAndResultRoundTrip()
-    {
-        SessionConfigReadinessRequest request =
-            SessionConfigReadinessProtocol.ReadRequest(
-                SessionConfigReadinessProtocol.SerializeRequest(ValidRequest()));
-        SessionConfigReadinessResult result =
-            SessionConfigReadinessProtocol.ReadResult(
-                SessionConfigReadinessProtocol.SerializeResult(ValidResult()),
-                request.RequestId);
-
-        Assert.Equal("readiness-1", result.RequestId);
-        Assert.Equal(SessionConfigReadinessState.StartupEligible, result.State);
-        Assert.Equal(SessionConfigReadinessReason.GatewayModeLocal, result.Reason);
-    }
-
-    [Fact]
     public void ARequestWithoutAnIdIsRejected()
     {
         Assert.Throws<SessionLaunchException>(

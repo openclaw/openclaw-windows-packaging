@@ -136,11 +136,13 @@ it enabled.
 | `clawctl pwsh` | Open an interactive PowerShell session inside the agent session. |
 | `clawctl pwsh --command <text>` | Run one quoted PowerShell command string inside the agent session and return its exit code. |
 | `clawctl pwsh --file <path> [-- <arguments>]` | Run an agent-visible PowerShell script and return its exit code. Relative paths start in the shared folder reported by `clawctl status`; use `--` before script arguments that begin with `-`. |
-| `clawctl collect-logs [--output <path>]` | Create a redacted host-and-agent diagnostics ZIP. |
+| `clawctl collect-logs [--output <path>]` | Create a redacted host-and-agent diagnostics ZIP. See [Copilot diagnostics investigation](docs/troubleshooting.md#investigating-a-bundle-with-copilot-cli). |
 | `clawctl gateway-service start` | Start the OpenClaw gateway in the isolated session and wait for it to listen. Requires setup. |
 | `clawctl gateway-service status` | Inspect the gateway without starting it. When the gateway is not running, it may start/probe only the already-recorded isolated session to report file-only config readiness; it never provisions a replacement or starts the gateway. |
 | `clawctl gateway-service stop` | Stop the gateway while retaining the session and its data. |
 | `clawctl gateway-service restart` | Stop the gateway and start it again as one lifecycle operation. If the stop cannot be verified, it retains the gateway record and does not start a replacement. If no gateway is running, it starts one. |
+| `clawctl companion prepare --port <port> --json` | Prepare the agent account's Gateway for the Windows Companion app after `clawctl setup`. Read its effective upstream configuration, including JSON5 and `$include` values. Return a complete local token configuration unchanged, initialize an absent Gateway, or fill missing port/token values in a compatible local Gateway. A partially configured Gateway without local mode, password authentication, and agent-side profile/Gateway overrides require explicit recovery. Concurrent configuration changes fail rather than being overwritten. The JSON response includes `companion.port` and `companion.token`, so keep it private. |
+| `clawctl companion prepare --check --json` | Read the existing effective agent Gateway port and token without restoring backups, rewriting configuration, or recording config-health observations. Missing, incomplete, or incompatible configuration fails without a patch. Keep the credential-bearing response private. |
 | `clawctl --version` | Print the packaged launcher version. |
 
 Bare `clawctl`, `clawctl -h`, and `clawctl --help` print help without changing
@@ -176,6 +178,20 @@ where applicable. The readiness states are `absent`, `not-ready`,
 `startup-eligible`, `unavailable`, and `unknown`. A running gateway omits this
 object and incurs no config-readiness probe.
 
+The package-qualified `clawctl status --json` identifies the Companion
+integration as `integration.kind: "isolated-session"` and
+`integration.version: 1`. After `clawctl companion prepare --port <port> --json`,
+use `clawctl gateway-service start --json` and
+`clawctl gateway-service status --json`. A running status includes
+`gateway.ownership` only when a single port and its isolated-session listener
+identities were observed. Each listener identity includes an OS process
+sequence number so Companion can detect PID reuse without opening an agent
+process handle. Companion checks those identities against fresh Windows
+listener and process-sequence snapshots before sending credentials; a port or
+session ID alone is not ownership proof. No `openclaw.json` is created under Companion's
+Windows account for this path. Older Gateway packages without the supported
+integration contract cannot be treated as isolated.
+
 Interactive terminals use color for headings and status marks. `--no-color`,
 the `NO_COLOR` environment variable, redirected output, and CI disable color;
 `FORCE_COLOR` enables it for redirected output or CI unless color was
@@ -185,13 +201,22 @@ explicitly disabled. JSON output never contains terminal escape sequences.
 
 `clawctl gateway-service start` waits for the gateway to bind rather than
 returning as soon as the process exists, because a process without a listener
-is not a usable gateway. It reports each stage as it happens — a spinner on an
-interactive terminal, one line per stage anywhere else — and narrates nothing
-at all under `--json`, so standard output carries exactly one document.
+is not a usable gateway. It reports each stage on standard error as it
+happens — a spinner when standard error is an interactive terminal, one line
+per stage anywhere else — so standard output carries only the result. Under
+`--json` it narrates nothing at all, and standard output carries exactly one
+document.
 
 The wait has a fixed budget. A gateway still coming up when the budget is spent
 is reported as starting rather than failed, and `clawctl gateway-service status`
-will show it once it binds.
+will show it once it binds. For `start` and `restart`, an accepted supervised
+launch whose process identity is verified but has no listener after 90 seconds
+returns exit code 0; JSON reports `ok: true` and `gateway.state: "starting"`.
+This acknowledges the owned launch, not readiness: it reports no port, URL, or
+listener ownership. Clients must continue bounded status polling and verify a
+running listener before using the Gateway or sending credentials. A failed
+inspection, exited process, or conflicting listener does not receive this
+acknowledgement.
 
 `clawctl` reports the gateway port only when it can identify that listener
 unambiguously:
@@ -249,9 +274,8 @@ Those four values are compiled into the binary as constants by the build that
 produces the package, so the report cannot drift from the payload it shipped
 with and costs no file or process access at startup. `Build-MSIX.ps1` supplies
 the versions and commits it also records in `msix-metadata.json`; an ordinary
-build falls back to the pin recorded in `release-policy.json`, and reports
-`unknown` for a value no build supplied. The report never comes from the entry
-assembly, so it stays correct when the launcher is hosted by another process.
+build reports `unknown` for a value no build supplied. The report never comes
+from the entry assembly, so it stays correct when the launcher is hosted by another process.
 
 Response-file expansion is disabled. A leading `@` has no meaning to `clawctl`
 and is reported as an unrecognized argument rather than read from disk.
@@ -327,10 +351,14 @@ update does not remove a running process's runtime.
 
 ## Selecting the OpenClaw revision
 
-`.github\workflows\gateway-msix.yml` selects **stable** through public npm
-`openclaw@latest` whenever a new packaging run starts. The resolver checks the
-exact published version, its signed upstream tag and commit, and the source
-package version before building. There is no automatic fallback to another
+`.github\workflows\gateway-msix.yml` selects **stable** whenever a new packaging
+run starts: the exact `stableVersion` when `release-policy.json` pins one,
+otherwise public npm `openclaw@latest`. The resolver checks the exact
+published version, its GitHub-verified signed annotated upstream tag and target
+commit, and the source package version before building. A missing or invalid tag
+signature stops source selection; commit signatures are not required.
+Official publication uses the same stable selection and validates its recorded
+commit and version before signing. There is no automatic fallback to another
 version or channel; extended-stable and named prereleases are rejected.
 Source selection also checks the MSIX release-version rules before building:
 numeric correction suffixes must be `-2` through `-9`. Unsupported corrections
@@ -341,17 +369,37 @@ Retries reuse it without querying the moving channel again. If the snapshot
 is missing or expired (90-day retention), start a new run instead of retrying.
 Package and payload metadata record the resolved source commit and version.
 
-For a one-time unsigned/test override, provide a stable-source tag, branch, or
-full commit SHA in the manual `openclaw_ref` input. Empty means follow stable.
+For a one-time source override in any signing mode, provide an OpenClaw tag,
+branch, or full commit SHA in the manual `openclaw_ref` input. Empty means follow
+stable. The resolver records the ref's exact commit and package version once;
+retries use that immutable snapshot even if a branch later moves.
+Release-candidate modes (`test`, `store`, and `official`) also capture the
+unmodified stable selector as the MSIX and GitHub release identity source, so a
+hotfix payload does not create a second version owner.
+The override payload version may equal or precede that stable identity, but may
+not be newer.
+For a one-run rollback of the bundled payload in any signing mode, set
+`gateway_version` to an older exact stable release. The payload uses that version,
+while the MSIX and GitHub release identity continue from the unmodified stable
+selector above so the package remains an upgrade. Both sources are verified and
+captured in the immutable snapshot. The workflow rejects an override that is not
+older than the release-identity source. Unsigned runs reject combining it with
+`openclaw_ref`; test, Store, and official runs preserve a full-SHA
+`openclaw_ref` as an assertion that the version resolved to the intended commit.
 If compatibility requires an older known-good stable release, a reviewed
 `stableVersion` field in `release-policy.json` can pin its exact version, for
-example `"stableVersion": "2026.9.4"`. A pin is not automatic fallback and does
-not grant official-signing approval.
+example `"stableVersion": "2026.9.4"`. That pin applies to all modes until removed;
+it is not automatic fallback.
 
-For official signing, the selected source must match `approvedCommit`,
-`gatewayTag`, and `payloadPackageVersion` in `release-policy.json`. An empty
-input selects stable and checks that approval; an explicit input must be the
-full approved commit SHA.
+For `store` and `official`, `openclaw_ref` selects the payload source while the
+reviewed stable policy still owns release identity. Before authorization, the
+workflow restores the same run's payload and release-identity snapshot and
+checks its requested ref, workflow run ID, packaging commit, signing mode,
+workflow ref, event, and Git ref. Missing or incompatible snapshot context
+requires a new run.
+When `gateway_version` selects the payload instead, `openclaw_ref` may only be a
+full SHA and must match that release. The workflow does not resolve the moving
+branch or stable channel again.
 
 Payload composition validates that the selected OpenClaw runtime discovers and
 activates the packaging-owned Windows Launcher plugin by default, both without
@@ -370,13 +418,31 @@ the launcher derives its runtime version and LocalState path from the bundled
 archive name. There is no separate packaging-side Node.js version pin or
 runtime-support policy.
 
-Non-official workflows cache the packed OpenClaw tarball by its resolved
+Unsigned/test builds restore the packed OpenClaw tarball cache by its resolved
 upstream commit. They also cache each architecture's Windows dependency tree by
 the resolved commit, tarball SHA-256, Node.js version, and payload-build script.
 A tarball cache hit still verifies the recorded version, commit and SHA-256; a
 dependency-tree hit still runs every payload validation and smoke test.
-Official-signing workflows bypass
+Store and official workflows bypass
 both caches and always rebuild upstream source and Windows dependencies.
+
+Source preflight selects one of two callers of
+`.github\workflows\gateway-msix-build.yml`. For payload builds, only validated stable selection
+from the packaging workflow on `main` grants `cache-mode: write`.
+Unsigned/test overrides (including overrides dispatched from `main`),
+non-main dispatches, and pull requests use `cache-mode: read`. They can
+restore eligible caches but cannot save them. This caller-scoped token cap
+also covers setup-dotnet's NuGet cache and caches nested in upstream actions
+or build scripts; changing an environment variable cannot increase it.
+Signing and publication jobs use `cache-mode: none`.
+
+Package and payload caches use a new namespace that excludes pre-boundary
+entries. Versioning PRs exercise write/restore with synthetic bytes and attempt
+read-token writes after overriding the client's mode, including a direct
+service request from the reusable build job. The cache-boundary cutover still requires coordinated legacy main-cache
+invalidation and cold/warm CI proof before trusting existing cache contents.
+Local policy tests do not prove GitHub's token enforcement or fresh CodeQL
+results; see [release process](docs/release-process.md#cache-boundary-cutover).
 
 The payload artifact records the requested ref and resolved upstream commit in
 `payload-metadata.json`. That build-only file is not embedded in the MSIX.
@@ -384,11 +450,10 @@ The payload artifact records the requested ref and resolved upstream commit in
 OpenClaw commit, while embedded `payload-files.json` records every packaged
 application file's path, length, and SHA-256.
 
-`release-policy.json` records the immutable OpenClaw commit and Gateway tag
-approved for official signing, plus an independent MSIX packaging revision.
-Updating that
-policy requires a reviewed repository change. Official signing runs only from
-`main` and verifies the workflow input, policy-approved package version, both
+`release-policy.json` records the stable channel, MSIX packaging revision, and
+package identities. Updating that policy requires a reviewed repository change.
+Official signing runs only from `main` and verifies the recorded source snapshot,
+derived package version, both
 architecture metadata files, both MSIX hashes, the embedded manifests, and
 every file against the embedded application inventory. It also byte-compares
 the bundle's embedded packages with those authorized standalone packages before
@@ -415,7 +480,9 @@ E2E on a supported host. `Build-MSIX.ps1` and
 `Build-LocalMSIX.ps1 -PayloadDirectory` can still cross-compose an already-qualified
 payload.
 It validates the Gateway and Control UI
-build identities on the installed tree, including reused staged installs, then
+build identities on the installed tree, including reused staged installs, and
+copies that tree into the payload without changing it. The copy refuses links
+or reparse points inside the tree rather than skipping them. The script then
 provisions the packaging-owned Windows Launcher plugin into the payload copy's
 bundled plugin directory. Its internal package, path, and plugin ID remain
 `gateway-isolation`. The bundled plugin is enabled by default and adds the
@@ -464,17 +531,70 @@ and restrictive allowlists retain OpenClaw's standard precedence; the package
 does not rewrite them. Direct-Node UI fixtures verify rendering and interactions,
 not packaged-launcher isolation or installed upgrade behavior.
 
+The same plugin supplies agent instructions on Windows when the launcher report
+is exactly `enabled`. Its `before_prompt_build` hook supplies two sentences
+explaining that local windows are invisible to the user, local file access does
+not imply user access, and essential credential, MFA/consent, ACL/isolation,
+human-GUI, and private-workspace prohibitions apply before any skill is loaded.
+Procedural detail stays in the skill. Static guidance is appended through
+`appendSystemContext`, without duplicating it in the user prompt.
+This is guidance, not isolation enforcement or a file-export feature; it does
+not overwrite workspace instructions or configuration.
+It is not a blanket prohibition on agent-only GUI work.
+
+The plugin also bundles the
+[`windows-agent-handoff` skill](plugins/gateway-isolation/skills/windows-agent-handoff/SKILL.md).
+The short context names it for user-facing GUI, sign-in, and file delivery.
+OpenClaw advertises eligible skills and loads their instructions on demand;
+the detailed procedures are not inserted into every prompt. One successful
+`SKILL.md` read supplies the complete GUI/authentication, client delivery, and
+filesystem handoff procedures, without branch-file lookups. It checks the exact
+isolation report before acting and requires observable completion evidence.
+For an unknown sign-in service, it asks which service and waits; for a known
+service without official instructions, it obtains or requests those instructions
+before proposing a flow. Its Windows and
+environment metadata are discovery filters, not authorization. Disabling the
+plugin removes its skill; `skills.entries.windows-agent-handoff.enabled=false`
+disables the skill independently. Hook opt-outs do not disable manifest skills.
+
+The plugin supplies static guidance, not a shared-path environment variable.
+For filesystem handoff, prefer a host-reported or user-selected destination.
+The host reports `session.sharedFolder` through `clawctl status --json` in the
+user's normal terminal; that command can start the recorded session.
+The skill names the isolated agent's existing `Shared` folder as a handoff
+option. When neither destination is supplied, resolve it with a local tool
+inside that agent session, for example:
+
+```powershell
+(Resolve-Path -LiteralPath (Join-Path $env:USERPROFILE 'Shared') -ErrorAction Stop).Path
+```
+
+Verify that the result is an existing directory. `USERPROFILE` must belong to
+the isolated agent, not the interactive user; do not substitute the OpenClaw
+workspace/state directory or hard-code an account path. Before copying, display
+the complete destination in a fenced text code block rather than a filename-only
+chip, and offer another destination. Do not copy to a destination the user declines.
+Copy only intended nonsensitive deliverables, preserving private originals and
+unrelated files. Agent-side access or a successful copy does not prove recipient
+access; verify it where feasible and state what remains unverified.
+If resolution, directory availability, access or copying fails, report the failure
+and ask for a supported destination. Do not fall back to Public Documents or
+`PUBLIC`/`TEMP`, create a replacement shared root, or change permissions.
+For requested in-chat delivery, verify and attach the current file or explain
+the limitation; a saved copy, path, or earlier attachment is not delivery.
+Recipient filesystem access and client delivery require separate verification.
+The prompt hook also respects `hooks.allowPromptInjection=false` and
+`hooks.allowConversationAccess=false` under the plugin's configuration entry.
+Coverage and the local-only runtime proof are described in
+[local development](docs/local-development.md#agent-context-guidance).
+
 Full selected-theme cohesion requires the generic plugin-frame theme forwarding
 merged by
 [`openclaw/openclaw#145409`](https://github.com/openclaw/openclaw/pull/145409).
 OpenClaw `v2026.9.5` at `ec9c1a13db8938e5a3eaa51fca2e981cde2395a9`
 includes that forwarding and has been qualified with this default-on plugin.
-Unsigned and test builds follow the stable-source selection above; that
-qualification is not an official runtime approval.
-The official-signing policy remains on the release-approved OpenClaw `v2026.9.4`
-baseline (`3a9d69db306cd7f081e06254cb89c4bcc14a7107`); that approval does not
-establish support for this default-on/theme contract. A compatible runtime
-requires separate reviewed approval before an official release. Without theme
+All build modes follow the stable-source selection above and validate plugin
+compatibility during payload composition. Without theme
 forwarding, the page uses the browser or operating system light/dark preference
 with a safe built-in palette.
 
@@ -488,17 +608,36 @@ archive, but its version and architecture must match the payload metadata.
 
 ### Running a local development build
 
-To go from a clean checkout to a registered, runnable package:
+To go from a clean checkout to a registered, runnable package, deploy under a
+patched identity named for the change you are iterating on:
 
 ```powershell
-.\scripts\Deploy-LocalPackage.ps1
+.\scripts\Deploy-LocalPackage.ps1 -Patch pwsh-exec
 ```
 
 This is the development inner loop. It does not build, sign, or install an
 MSIX. It acquires the payload and the bundled Node.js runtime, publishes the
 NativeAOT launcher, assembles a Developer Mode layout under
 `artifacts\local-package`, registers it with `Add-AppxPackage -Register`, and
-runs `clawctl setup` so `openclaw` is immediately usable.
+runs setup so `openclaw-pwsh-exec` is immediately usable. The patch registers
+beside the base package as `openclaw-pwsh-exec` and `clawctl-pwsh-exec`, with
+its own app data and isolated session, so iteration never replaces the base
+`openclaw` and `clawctl`. Patched identities are a local inner-loop affordance
+for keeping several development and test deployments registered at once; they
+are not release identities. Their help and error guidance still names
+`clawctl` and `openclaw`, so run the patched commands instead. Omit `-Patch`
+only to exercise the base identity itself, such as its aliases, shell
+completion, or a loose/MSIX transition.
+
+When you finish, tear down and unregister the patch, in that order:
+
+```powershell
+clawctl-pwsh-exec teardown --force
+.\scripts\Deploy-LocalPackage.ps1 -Unregister -Patch pwsh-exec
+```
+
+See [side-by-side patched identities](docs/local-development.md#side-by-side-patched-identities)
+for naming rules, limits, and recovery.
 
 The command is idempotent: re-running with nothing changed reports that the
 package is already up to date and does nothing, and re-running after a source
@@ -515,18 +654,21 @@ nor duplicate hundreds of megabytes.
 | `-ReplaceExistingInstall` | Remove a conflicting MSIX-installed package first (see below) |
 | `-SkipSetup` | Register without extracting the Node.js runtime |
 | `-Force` | Re-register even when nothing changed |
-| `-Unregister` | Remove the local registration, preserving app data and caches |
+| `-Patch <name>` | Register a side-by-side `OpenClawFoundation.OpenClawGateway-<name>` identity run as `openclaw-<name>` and `clawctl-<name>`; recommended for iteration |
+| `-Unregister` | Remove the local registration, preserving app data and caches; pass the same `-Patch` to remove a patch |
 
 **Requires Developer Mode**, which the script checks before doing any work.
 
-**It cannot coexist with an MSIX-installed
+**Without `-Patch`, it cannot coexist with an MSIX-installed
 `OpenClawFoundation.OpenClawGateway`.** Windows
 refuses to replace a packaged install with a local layout, and it cannot
 preserve that package's app data across the switch, so the script stops and
 explains rather than removing anything implicitly. Pass
-`-ReplaceExistingInstall` to accept that trade.
+`-ReplaceExistingInstall` to accept that trade. A patched identity has a
+different package name, so it sits beside an installed release instead.
 
-**Run `-Unregister` before installing a released package.** Windows will not
+**Run `-Unregister` on a base registration before installing a released
+package.** Windows will not
 replace a loose registration with a packaged install: `Add-AppxPackage` fails
 with `0x80073CFB`, reporting that an unpackaged version is already installed
 and a packaged version cannot replace it. This is the same mutual exclusion as
@@ -547,17 +689,26 @@ never official-signing inputs.
 Normal pull-request and push workflows publish unsigned packages for
 validation. Manual runs support four modes:
 
-- `unsigned` follows stable or a stable-source override and publishes unsigned
+- `unsigned` follows stable or an `openclaw_ref` override and publishes unsigned
   MSIX packages;
-- `test` uses the same source-selection rules and publishes MSIX packages signed with a
-  temporary self-signed certificate plus the public `.cer` needed for local
-  installation;
-- `store` requires the reviewed immutable commit from `release-policy.json`,
-  may run only from `main`, and submits the unsigned multi-architecture bundle
-  directly to Partner Center; Microsoft signs it during Store ingestion;
-- `official` requires the approved immutable commit from
-  `release-policy.json`, may run only from `main`, and publishes the signed
-  packages as permanent assets on a GitHub Release named by the policy.
+- `test` uses the same source-selection rules, derives the release-candidate
+  version, and runs the installed-upgrade matrix without release authorization
+  or Azure credentials. It publishes MSIX packages signed with a temporary
+  self-signed certificate plus the public `.cer` needed for local installation;
+- `store` follows stable, an `openclaw_ref` override, or an older payload pinned
+  with `gateway_version`,
+  may run only from `main`, and retains an unsigned Partner Center submission bundle for 90 days;
+  Microsoft signs it during Store ingestion;
+- `official` uses the same source rules, may run only from `main`, and publishes
+  signed packages as permanent GitHub Release assets when `publish_release`
+  is enabled.
+
+Following stable does not automatically sign or publish a new Gateway release;
+publication still requires a manual workflow dispatch.
+Manual `store` and `official` runs require their own successful installed-upgrade
+matrix before authorization. A new upstream stable release needs no throwaway
+pull request to obtain current-source proof; use `test` mode for an optional
+preflight. `unsigned` dispatches keep development versions and skip that matrix.
 
 Official signing uses the protected `release-signing` environment, Azure OIDC,
 and the existing OpenClaw Artifact Signing account and certificate profile.
@@ -566,7 +717,10 @@ and are deleted before artifacts are uploaded. No signing secret or private
 key is stored in the repository.
 
 Official releases derive their GitHub tag and four-part numeric MSIX identity
-from `gatewayTag` and `msixRevision` in `release-policy.json`. The GitHub tag is
+from the recorded release-identity source and `msixRevision` in
+`release-policy.json`. Normally that source is also the packaged payload. A
+`openclaw_ref` and `gateway_version` overrides keep the unmodified stable source
+as the release identity and record the selected payload separately. The GitHub tag is
 `<gateway-tag>-msix.<revision>`. The MSIX identity is
 `year.month.VVPN.0`: `VV` is the two-digit monthly Gateway release sequence,
 `P` is the Gateway correction digit, and `N` is the MSIX rebuild digit. The
@@ -590,49 +744,64 @@ Decimal place value guarantees Gateway release > Gateway correction > MSIX
 rebuild while keeping every component at four digits or fewer and reserving the
 fourth component as `0` for Microsoft Store submission.
 
-To prepare an official release, update these policy inputs together in a
-reviewed pull request:
+For a new Gateway release, keep `msixRevision` at `0`; if a previous packaging
+rebuild increased it, reset it in a reviewed pull request first. Increment it
+only to rebuild the same Gateway tag. No policy version or commit update is
+needed when stable advances.
 
-1. `gatewayTag` to the stable upstream Gateway tag;
-2. `approvedCommit` to the immutable commit resolved from that tag;
-3. `payloadPackageVersion` to the version reported by the pinned payload;
-4. `msixRevision` to `0`, or increment it for a packaging-only rebuild of the
-   same Gateway tag.
+Manually run **Build OpenClaw Gateway MSIX** on `main`. Leave `openclaw_ref`
+empty to follow policy/latest, or set it to the OpenClaw branch, tag, or full
+SHA to package. Prefer the reviewed full SHA for a hot release; a branch is
+resolved once and its commit is captured in the run snapshot. Leave
+`gateway_version` empty unless selecting an exact stable version older than
+policy/latest for a one-off payload rollback.
+Use `signing_mode=store`
+to retain only the unsigned Partner Center bundle, or `signing_mode=official`
+to additionally sign and publish the sideload identity. The workflow derives
+the package version and release tag. Official mode creates the tag and
+publishes a GitHub Release with generated release notes. Each GitHub Release
+contains a signed sideload
+`OpenClawGateway-<version>.msixbundle`, plus
+`OpenClawGateway-<version>-x64.msix` and
+`OpenClawGateway-<version>-arm64.msix` packages for architecture-specific
+deployment. The unsigned Store-identity bundle is retained separately as the
+`openclaw-gateway-msix-store-submission` Actions artifact for 90 days; Partner
+Center signs it during ingestion.
 
-After that pull request merges, manually run **Build OpenClaw Gateway MSIX** on
-`main` with `openclaw_ref` set to the approved commit. Use `signing_mode=store`
-to submit the Partner Center bundle, or `signing_mode=official` only when the
-Azure certificate subject exactly matches the reviewed publisher. The workflow
-derives the package version and release tag. Official mode creates that tag and
-publishes a signed GitHub Release. Store mode uploads only
-`OpenClawGateway.msixbundle` to the existing Partner Center product and commits
-the update; it does not publish unsigned packages on a GitHub Release. The
-bundle already contains both architecture packages, so also uploading the x64
-and ARM64 MSIX files would create duplicate-package validation errors. GitHub
-Actions artifacts remain short-lived transport and diagnostic copies.
+Direct GitHub distribution and Store submission intentionally use distinct
+identities because the current Azure certificate matches the legacy sideload
+publisher rather than Partner Center's reserved publisher.
 
-The same identity can be used for direct distribution and Microsoft Store
-submission; the fourth component is always `0`.
-
-The signed `v0.0.0.0` and `v0.0.0.1` proof releases and the latest production
-release retain the former `OpenClaw.Gateway` identity and remain immutable
-transition baselines. Partner Center requires the reserved
+The signed `v0.0.0.0` and `v0.0.0.1` proof releases and the latest signed
+sideload release retain the `OpenClaw.Gateway` identity and remain immutable
+upgrade baselines. Partner Center requires the reserved
 `OpenClawFoundation.OpenClawGateway` identity, so Windows cannot update those
-packages in place or retain their packaged LocalState. Pull requests that
-change release policy download the hash-pinned standalone x64 and recommended
+packages in place or retain their packaged LocalState. Versioning/source-selection
+pull requests and manual `test`, `store`, and `official` runs download the
+hash-pinned standalone x64 and recommended
 `.msixbundle` assets, install each one on a clean GitHub-hosted Windows runner,
-verify the legacy identity, remove it, install the candidate through the same
-delivery format, and prove that Windows registered the reserved package family
-with isolated LocalState. Changes to source-selection scripts also trigger this
-check against the selected release. The gate additionally proves fresh
-installation of both candidate formats. It refuses to run when a Gateway package is
-already registered and removes only packages installed by that test
-invocation. It temporarily trusts the ephemeral test-signing certificate in
-the local-machine Trusted People store, as required by Windows deployment, and
-removes that certificate in `finally`. The resulting JSON evidence is retained
-as a workflow artifact for 90 days. This identity change is the explicitly
-approved breaking reset; future releases under the reserved identity must
-return to in-place upgrade and LocalState-retention proof.
+verify the legacy identity, remove it, install the Store candidate through the
+same delivery format, and prove that Windows registered the reserved package
+family with isolated LocalState. The same gate updates each baseline in place
+to the new sideload candidate and proves that standalone and bundle delivery
+retain the exact LocalState marker. The gate also installs the package Microsoft
+Store currently delivers by Store ID, records its validated version, requires
+the candidate to be newer, and proves that the Store bundle updates it in place
+while retaining the marker. Changes to source-selection scripts also trigger
+this check against the selected release. Each baseline, delivery format, and
+transition mode runs on its own clean Windows runner. The identity-reset
+scenarios also prove that both Store candidate formats install fresh after the
+legacy package is removed.
+Each scenario refuses to run when a Gateway package is already registered and
+removes only packages installed by that test invocation. It temporarily trusts
+the ephemeral test-signing certificate in the local-machine Trusted People
+store, as required by Windows deployment, and removes that certificate in
+`finally`. The per-scenario JSON evidence artifacts are retained for 90 days.
+This identity change is the explicitly approved breaking reset. Until Partner
+Center distributes a Store-signed package, later policy revisions repeat the
+reset and fresh-install proof. After the reserved identity reaches users,
+subsequent releases install the authentic Store baseline and prove in-place
+upgrade with LocalState retention.
 
 An `.msixbundle` is a single installable container for the x64 and ARM64 MSIX
 packages; Windows selects the package appropriate for the device. An
@@ -671,51 +840,6 @@ is recorded in `release-policy.json`. Before an official dispatch, the
 certificate profile must issue that exact Partner Center publisher subject;
 signature verification fails closed when it does not.
 
-### Microsoft Store submission setup
-
-Store submission behavior is reviewable in `store-submission.json`: it pins the
-packaged-app API origin and scope, OIDC audience, commit behavior, draft
-ownership, package rollout percentage, upload timeout, and minimum access-token
-lifetime. The repository-owned `scripts\Submit-MicrosoftStore.ps1` boundary
-submits exactly one bundle and retains bundle-hash evidence for 90 days. It
-rejects an existing draft, creates a new submission without deleting anything,
-and binds update, verification, cleanup, and commit to that exact submission
-ID. Existing listing, availability, pricing, and screenshot state must survive
-a canonical comparison before commit. A replaced or changed draft fails closed.
-
-Create a protected `microsoft-store` GitHub environment and define these
-environment variables (identifiers, not credentials):
-
-- `MSSTORE_TENANT_ID`: Microsoft Entra tenant ID;
-- `MSSTORE_CLIENT_ID`: dedicated Entra application client ID;
-- `MSSTORE_APPLICATION_ID`: the existing Partner Center product ID.
-
-The product's first submission must already be published. In Partner Center,
-add the Entra application with the **Manager (Windows)** role. Do not create a
-client secret. Add this federated identity credential to the Entra application:
-
-- issuer: `https://token.actions.githubusercontent.com`;
-- subject:
-  `repo:openclaw@252820863/openclaw-windows-packaging@1347889239:environment:microsoft-store`;
-- audience: `api://AzureADTokenExchange`.
-
-This must be the Entra application's only credential: do not add client
-secrets, certificates, or additional federated subjects, and do not share the
-application with another publisher. The Store identity is an exclusive writer;
-only this serialized GitHub environment may use it. Do not edit an API-created
-draft in Partner Center. Microsoft documents that such an edit invalidates
-further API update or commit operations; let the workflow clean up its own
-failed draft before retrying.
-
-The protected environment binds that assertion to the Store deployment job and
-can require maintainer approval independently of repository branch protection.
-GitHub issues a short-lived assertion for each run; the workflow passes it by a
-temporary file, never places it on the command line, and removes it in an
-`always()` cleanup step. A successful run commits a Partner Center submission
-for certification. Certification and rollout remain visible in Partner Center;
-the workflow proves API acceptance and preserves its evidence rather than
-holding a runner open for the full certification queue.
-
 ## Installed data
 
 | Data | Default path |
@@ -737,9 +861,11 @@ removing the MSIX.
 ## Integrity and isolation boundary
 
 The payload build emits an expanded npm-installed application tree.
-`Build-MSIX.ps1` rejects Node.js from that tree, copies it into package content,
-and records every application file's path, length, and SHA-256 in
-`payload-files.json`. It separately validates and hashes the pinned Node.js
+`Build-MSIX.ps1` rejects Node.js and links from that tree, copies it into
+package content without modifying the payload directory, and records every
+application file's path, length, and SHA-256 in `payload-files.json`. It
+refuses a payload directory that overlaps the package content directory. It
+separately validates and hashes the pinned Node.js
 archive. Package construction verifies both inputs against the generated MSIX.
 Official signing authorization repeats the application inventory and Node.js
 archive validation before requesting signing credentials.

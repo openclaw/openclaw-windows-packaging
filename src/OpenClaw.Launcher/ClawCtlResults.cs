@@ -99,7 +99,20 @@ internal sealed record GatewayCommandResult(
     int ExitCode,
     int? Port = null,
     string? Url = null,
-    AgentConfigReadinessStatus? Readiness = null) : IClawCtlResult
+    AgentConfigReadinessStatus? Readiness = null,
+    string? SandboxId = null,
+    string? AgentUserSid = null,
+    IReadOnlyList<OpenClaw.SessionProtocol.SessionOwnedListener>? OwnedListeners = null,
+    SessionAvailability? SessionAvailability = null) : IClawCtlResult
 {
     public string Command => $"gateway-service {Action}";
+}
+
+internal sealed record CompanionPrepareResult(
+    int ExitCode,
+    int? Port = null,
+    string? Token = null,
+    string? Error = null) : IClawCtlResult
+{
+    public string Command => "companion prepare";
 }

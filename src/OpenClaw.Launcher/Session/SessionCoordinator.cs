@@ -235,6 +235,7 @@ internal sealed class SessionCoordinator
         }
         catch (MxcException exception) when (exception.Code == MxcErrorCode.StaleId)
         {
+            _log($"MXC reported the recorded provision missing: {DiagnosticFailure.Describe(exception)}");
             return new SessionStatus(
                 SessionAvailability.Stale,
                 status.Record,
@@ -243,6 +244,7 @@ internal sealed class SessionCoordinator
         }
         catch (MxcException exception) when (exception.Code == MxcErrorCode.RuntimeUnavailable)
         {
+            _log($"The MXC runtime could not start the recorded provision: {DiagnosticFailure.Describe(exception)}");
             return new SessionStatus(
                 SessionAvailability.BackendUnavailable,
                 status.Record,
@@ -251,6 +253,7 @@ internal sealed class SessionCoordinator
         }
         catch (MxcException exception)
         {
+            _log($"MXC could not start the recorded provision: {DiagnosticFailure.Describe(exception)}");
             return new SessionStatus(
                 SessionAvailability.BackendError,
                 status.Record,
@@ -288,7 +291,8 @@ internal sealed class SessionCoordinator
             catch (MxcException exception) when (exception.Code == MxcErrorCode.StaleId)
             {
                 _log(
-                    "The recorded OpenClaw provision no longer exists. " +
+                    "The recorded OpenClaw provision no longer exists " +
+                    $"({DiagnosticFailure.Describe(exception)}). " +
                     "Provisioning a replacement for this installation.");
                 SessionRecord replacement = await ProvisionAndStartAsync(
                     GetSupersededSandboxIds(state.Record),
@@ -339,7 +343,9 @@ internal sealed class SessionCoordinator
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            _log($"The new session could not be recorded: {exception.Message}. Deprovisioning this attempt.");
+            _log(
+                "The new session could not be recorded: " +
+                $"{DiagnosticFailure.Describe(exception)}. Deprovisioning this attempt.");
             try
             {
                 await _backend.DeprovisionAsync(provisioned.SandboxId, null, CancellationToken.None)
@@ -347,6 +353,9 @@ internal sealed class SessionCoordinator
             }
             catch (MxcException cleanup)
             {
+                _log(
+                    "Deprovisioning the unrecorded session failed: " +
+                    $"{DiagnosticFailure.Describe(cleanup)}");
                 throw new SessionException(
                     $"The session record could not be saved, and deprovision failed: {cleanup.Message}. " +
                     $"Recover the owned sandbox ID from diagnostics before retrying. ID: {provisioned.SandboxId.Value}",
@@ -448,7 +457,9 @@ internal sealed class SessionCoordinator
             // more behind than continuing does, so the failure is reported
             // rather than used to stop the teardown.
             stopFailure = exception.Message;
-            _log($"Stop failed before removal; continuing to deprovision: {exception.Message}");
+            _log(
+                "Stop failed before removal; continuing to deprovision: " +
+                DiagnosticFailure.Describe(exception));
         }
 
         await _backend.DeprovisionAsync(sandboxId, null, cancellationToken)

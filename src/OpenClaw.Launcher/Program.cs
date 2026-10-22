@@ -2,6 +2,7 @@ using System.CommandLine;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Text;
 using OpenClaw.SessionProtocol;
 
 namespace OpenClaw.Launcher;
@@ -52,7 +53,7 @@ internal static class Program
                 {
                     consoleWarningWritten = true;
                     WriteDiagnostic(
-                        $"Console error output failed: {exception.GetType().Name}.");
+                        $"Console error output failed: {DiagnosticFailure.Describe(exception)}");
                 }
             }
         }
@@ -107,20 +108,9 @@ internal static class Program
             {
                 WriteDiagnostic(
                     $"Failure output to {destination} failed: " +
-                    $"{exception.GetType().Name}.");
+                    DiagnosticFailure.Describe(exception));
             }
         }
-
-        static string GetDiagnosticFailure(Exception exception) =>
-            exception switch
-            {
-                InvalidDataException or
-                TimeoutException or
-                PlatformNotSupportedException or
-                FileNotFoundException =>
-                    $"{exception.GetType().Name}: {exception.Message}",
-                _ => exception.GetType().Name
-            };
 
         try
         {
@@ -135,6 +125,12 @@ internal static class Program
             }
 
             HostOptions options = HostOptions.Parse(args, startup.BaseDirectory);
+            string environment = (startup.ReadEnvironment ?? (parsed => HostEnvironment.Read(
+                startup.BaseDirectory,
+                parsed.PackagedNodeArchivePath,
+                startup.ReadEnvironmentVariable ?? Environment.GetEnvironmentVariable)))(options)
+                .Describe();
+            WriteDiagnostic($"Environment: {environment}");
             return startup.Entrypoint == HostEntrypoint.Control
                 ? await RunControlAsync(
                     options,
@@ -143,7 +139,8 @@ internal static class Program
                     output,
                     error,
                     startup.InstallationLifecycle,
-                    controlOutputOptions: controlOutputOptions).ConfigureAwait(false)
+                    controlOutputOptions: controlOutputOptions,
+                    environment: environment).ConfigureAwait(false)
                 : await RunAgentAsync(
                     options,
                     WriteDiagnostic,
@@ -162,7 +159,8 @@ internal static class Program
         }
         catch (Exception exception)
         {
-            WriteDiagnostic($"Unhandled failure: {GetDiagnosticFailure(exception)}");
+            WriteDiagnostic(
+                $"Unhandled failure: {DiagnosticFailure.DescribeWithStackTrace(exception)}");
             if (startup.Entrypoint == HostEntrypoint.Control)
             {
                 string command = ResolveClawCtlCommand(args);
@@ -241,6 +239,13 @@ internal static class Program
                 return action is null ? argument : $"{argument} {action}";
             }
 
+            if (argument == "companion")
+            {
+                string? action = args.Skip(index + 1)
+                    .FirstOrDefault(candidate => candidate == "prepare");
+                return action is null ? argument : $"{argument} {action}";
+            }
+
             if (argument is "setup" or "status" or "collect-logs" or "teardown" or "open" or "pwsh")
             {
                 return argument;
@@ -300,6 +305,7 @@ internal static class Program
 
         Mxc.MxcReadinessReport readiness = await (probeReadiness ??
             Mxc.MxcReadiness.ProbeAsync)(CancellationToken.None).ConfigureAwait(false);
+        log($"Isolated-session support: {readiness.Describe()}");
         Session.SessionSupportPolicy.EnsureSupported(
             (getPackageFamilyName ?? (() => HostPaths.Create().PackageFamilyName))(),
             readiness);
@@ -508,7 +514,9 @@ internal static class Program
         Func<string>? getLogonSessionId = null,
         TimeProvider? clock = null,
         Func<string, Task>? launchBrowserAsync = null,
-        Action? beforeBrowserValidation = null)
+        Action? beforeBrowserValidation = null,
+        string? environment = null,
+        Func<CancellationToken, Task<string?>>? readInputLine = null)
     {
         Session.IInstallationLifecycle lifecycle =
             installationLifecycle ?? Session.InstallationLifecycle.Production;
@@ -518,22 +526,42 @@ internal static class Program
         Session.SessionRuntime GetSessionRuntime() =>
             sessionRuntime ??= lifecycle.CreateRuntime(log);
 
-        // Colour is decided the same way for narration and for the result that
-        // follows it, so a run cannot narrate in colour and then render plain.
-        // The returned scope restores the console mode and must be held for as
-        // long as anything is being written.
-        (bool UseColor, IDisposable? Restore) PrepareColor()
+        // Narration goes to standard error and the result to standard output,
+        // so colour is decided for the stream being written: redirecting one
+        // must not strip or force colour on the other. The returned scope
+        // restores the console mode and must be held for as long as that
+        // stream is being written.
+        (bool UseColor, IDisposable? Restore) PrepareColor(TextWriter target)
         {
             IDisposable? restore = null;
             bool useColor = ClawCtlColorPolicy.PrepareOutput(
                 outputOptions.NoColor,
                 outputOptions.Json,
-                ReferenceEquals(output, Console.Out),
-                WindowsHostConsole.Instance.IsInteractive,
+                ReferenceEquals(target, Console.Out) ||
+                    ReferenceEquals(target, Console.Error),
+                WindowsHostConsole.Instance.IsInteractiveOutput(target),
                 Environment.GetEnvironmentVariable,
                 () => WindowsHostConsole.Instance
-                    .TryEnableVirtualTerminalProcessing(output, log, out restore));
+                    .TryEnableVirtualTerminalProcessing(target, log, out restore));
             return (useColor, restore);
+        }
+
+        async Task<T> NarrateOperationAsync<T>(
+            ClawCtlProgress initial,
+            Func<IProgress<ClawCtlProgress>, Task<T>> operation)
+        {
+            (bool useColor, IDisposable? restore) = outputOptions.Json
+                ? (false, null)
+                : PrepareColor(error);
+            using (restore)
+            {
+                return await ClawCtlConsole.NarrateAsync(
+                    error,
+                    useColor,
+                    narrate: !outputOptions.Json,
+                    initial,
+                    operation).ConfigureAwait(false);
+            }
         }
 
         int WriteResult(IClawCtlResult result)
@@ -544,7 +572,7 @@ internal static class Program
             }
             else
             {
-                (bool useColor, IDisposable? restore) = PrepareColor();
+                (bool useColor, IDisposable? restore) = PrepareColor(output);
                 using (restore)
                 {
                     ClawCtlConsole.WriteResult(output, result, useColor);
@@ -571,15 +599,26 @@ internal static class Program
 
         int WriteGatewayStartResult(string action, Gateway.GatewayStartResult result)
         {
-            int? port = Gateway.GatewayAddress.ResolvePort(result.Record);
+            int? port = result.State == Gateway.GatewayState.Starting
+                ? null
+                : Gateway.GatewayAddress.ResolvePort(result.Record);
             return WriteResult(new GatewayCommandResult(
                 action,
                 result.State,
                 result.Message,
                 null,
-                result.State == Gateway.GatewayState.Running ? 0 : 1,
+                result.State is Gateway.GatewayState.Running or Gateway.GatewayState.Starting ? 0 : 1,
                 port));
         }
+
+        IReadOnlyDictionary<string, string> CompanionEnvironment(
+            string applicationDirectory, string? nativeRoot) =>
+            nativeRoot is null
+                ? OpenClawRuntimeEnvironment.Build()
+                : Session.SessionExecutor.MergeEnvironment(
+                    OpenClawRuntimeEnvironment.Build(),
+                    OpenClawRuntimeEnvironment.BuildNativeRedirect(
+                        applicationDirectory, nativeRoot));
 
         async Task<int> RunSetupCommandAsync(
             SetupOptions setupOptions,
@@ -587,32 +626,23 @@ internal static class Program
         {
             try
             {
-                (bool useColor, IDisposable? restore) = outputOptions.Json
-                    ? (false, null)
-                    : PrepareColor();
-                SetupCommandResult result;
-                using (restore)
-                {
-                    result = await ClawCtlConsole.NarrateAsync(
-                        output,
-                        useColor,
-                        narrate: !outputOptions.Json,
-                        new ClawCtlProgress("Checking isolated-session support."),
-                        progress => Session.SetupOrchestrator.RunAsync(
-                            setupOptions,
-                            options,
-                            GetSessionRuntime,
-                            lifecycle,
-                            log,
-                            progress,
-                            cancellationToken))
-                        .ConfigureAwait(false);
-                }
+                SetupCommandResult result = await NarrateOperationAsync(
+                    new ClawCtlProgress("Checking isolated-session support."),
+                    progress => Session.SetupOrchestrator.RunAsync(
+                        setupOptions,
+                        options,
+                        GetSessionRuntime,
+                        lifecycle,
+                        log,
+                        progress,
+                        cancellationToken))
+                    .ConfigureAwait(false);
 
                 return WriteResult(result);
             }
             catch (Session.SessionException exception) when (outputOptions.Json)
             {
+                log($"Setup failed: {DiagnosticFailure.Describe(exception)}");
                 return WriteResult(new SetupCommandResult(
                     1,
                     options.RequirePackagedApplicationDirectory(),
@@ -630,45 +660,57 @@ internal static class Program
                 Setup = RunSetupCommandAsync,
                 Status = async cancellationToken =>
                 {
-                    Session.SessionRuntime runtime = GetSessionRuntime();
-                    Session.SessionStatus status = await runtime
-                        .Coordinator.ProbeRecordedStatusAsync(cancellationToken)
-                        .ConfigureAwait(false);
-                    Gateway.GatewayStatusReport gateway = await Gateway.GatewayRuntime
-                        .Create(options, runtime.Paths, runtime, log)
-                        .Controller
-                        .GetStatusAsync(runtime.HelperPath, cancellationToken)
-                        .ConfigureAwait(false);
-                    Gateway.GatewayPersistenceStatus recovery = await lifecycle
-                        .GetRecoveryStatusAsync(log, cancellationToken)
-                        .ConfigureAwait(false);
-                    Session.AgentConfigReadinessStatus? configReadiness =
-                        gateway.State == Gateway.GatewayState.Running
-                            ? null
-                            : await Session.AgentConfigReadinessProbe.CheckAsync(
-                                runtime,
+                    StatusCommandResult result = await NarrateOperationAsync(
+                        new ClawCtlProgress("Checking session, gateway, and recovery status."),
+                        async _ =>
+                        {
+                            Session.SessionRuntime runtime = GetSessionRuntime();
+                            Session.SessionStatus status = await runtime
+                                .Coordinator.ProbeRecordedStatusAsync(cancellationToken)
+                                .ConfigureAwait(false);
+                            Gateway.GatewayStatusReport gateway =
+                                await Gateway.GatewayRuntime
+                                    .Create(options, runtime.Paths, runtime, log)
+                                    .Controller
+                                    .GetStatusAsync(runtime.HelperPath, cancellationToken)
+                                    .ConfigureAwait(false);
+                            Gateway.GatewayPersistenceStatus recovery = await lifecycle
+                                .GetRecoveryStatusAsync(log, cancellationToken)
+                                .ConfigureAwait(false);
+                            Session.AgentConfigReadinessStatus? configReadiness =
+                                gateway.State == Gateway.GatewayState.Running
+                                    ? null
+                                    : await Session.AgentConfigReadinessProbe.CheckAsync(
+                                        runtime,
+                                        status,
+                                        log,
+                                        cancellationToken).ConfigureAwait(false);
+                            Session.SetupStateResult setup =
+                                runtime.SetupState.Read(runtime.ApplicationId);
+                            return new StatusCommandResult(
                                 status,
-                                cancellationToken).ConfigureAwait(false);
-                    Session.SetupStateResult setup =
-                        runtime.SetupState.Read(runtime.ApplicationId);
-                    return WriteResult(new StatusCommandResult(
-                        status,
-                        gateway,
-                        recovery,
-                        setup.Record?.AgentNodeVersion,
-                        configReadiness));
+                                gateway,
+                                recovery,
+                                setup.Record?.AgentNodeVersion,
+                                configReadiness);
+                        }).ConfigureAwait(false);
+                    return WriteResult(result);
                 },
                 CollectLogs = async (requestedPath, cancellationToken) =>
                 {
-                    HostPaths paths = HostPaths.Create();
-                    Gateway.DiagnosticsBundleResult result =
-                        await Gateway.GatewayRuntime.Create(
-                            options,
-                            paths,
-                            GetSessionRuntime(),
-                            log)
-                        .CollectLogsAsync(requestedPath, cancellationToken)
-                        .ConfigureAwait(false);
+                    Session.SessionRuntime runtime = GetSessionRuntime();
+                    Gateway.GatewayRuntime gateway = Gateway.GatewayRuntime.Create(
+                        options,
+                        runtime.Paths,
+                        runtime,
+                        log);
+                    Gateway.DiagnosticsBundleResult result = await NarrateOperationAsync(
+                        new ClawCtlProgress("Collecting redacted diagnostics."),
+                        progress => gateway.CollectLogsAsync(
+                            requestedPath,
+                            environment,
+                            progress,
+                            cancellationToken)).ConfigureAwait(false);
                     return WriteResult(new CollectLogsCommandResult(result));
                 },
                 Teardown = async (force, cancellationToken) =>
@@ -689,9 +731,14 @@ internal static class Program
                     }
 
                     Session.SessionRuntime runtime = GetSessionRuntime();
-                    Session.TeardownResult result = await lifecycle.TeardownAsync(
-                        options, runtime, log, lockAlreadyHeld: false, cancellationToken)
-                        .ConfigureAwait(false);
+                    Session.TeardownResult result = await NarrateOperationAsync(
+                        new ClawCtlProgress("Removing the isolated session and its data."),
+                        _ => lifecycle.TeardownAsync(
+                            options,
+                            runtime,
+                            log,
+                            lockAlreadyHeld: false,
+                            cancellationToken)).ConfigureAwait(false);
                     return WriteResult(new TeardownCommandResult(result));
                 },
                 Open = async cancellationToken =>
@@ -703,109 +750,127 @@ internal static class Program
                     }
                     catch (Session.SessionException exception)
                     {
+                        log($"The Control UI cannot be opened: {DiagnosticFailure.Describe(exception)}");
                         return WriteResult(new OpenCommandResult(null, exception.Message, 1));
                     }
 
-                    Gateway.GatewayStatusReport gateway = await Gateway.GatewayRuntime
-                        .Create(options, runtime.Paths, runtime, log)
-                        .Controller
-                        .GetStatusAsync(runtime.HelperPath, cancellationToken)
-                        .ConfigureAwait(false);
-                    if (gateway.State != Gateway.GatewayState.Running)
+                    OpenCommandResult result = await NarrateOperationAsync(
+                        new ClawCtlProgress("Preparing the Control UI handoff."),
+                        async _ =>
                     {
-                        string message = gateway.State is Gateway.GatewayState.NotStarted or
-                            Gateway.GatewayState.Stopped
-                            ? $"{gateway.Message} Run `clawctl gateway-service start` before opening the Control UI."
-                            : gateway.Message;
-                        return WriteResult(new OpenCommandResult(gateway.State, message, 1));
-                    }
-
-                    Session.SessionRecord record = await runtime.StartForExecutionAsync(cancellationToken)
-                        .ConfigureAwait(false);
-                    string applicationDirectory = options.RequirePackagedApplicationDirectory();
-                    string nodePath = runtime.RequireAgentNodePath(
-                        options.RequirePackagedNodeArchivePath());
-                    IReadOnlyDictionary<string, string> dashboardEnvironment =
-                        BuildRuntimeEnvironment(
-                            runtime,
-                            applicationDirectory,
-                            isInteractive: false,
-                            readEnvironmentVariable ?? Environment.GetEnvironmentVariable);
-                    if (gateway.Record?.ObservedPorts is { Count: 1 } observedPorts)
-                    {
-                        dashboardEnvironment = Session.SessionExecutor.MergeEnvironment(
-                            dashboardEnvironment,
-                            new Dictionary<string, string>
-                            {
-                                [Gateway.GatewayConfigurationStore.PortVariable] =
-                                    observedPorts[0].ToString(CultureInfo.InvariantCulture)
-                            });
-                    }
-
-                    Session.SessionCommandCaptureResult capture = await runtime.Executor
-                        .ExecuteCommandCaptureAsync(
-                            record,
-                            new Session.SessionCommandRequest(
-                                runtime.RequireStagedHelper(record),
-                                nodePath,
-                                [
-                                    .. BuildNativeRedirectNodeArguments(runtime) ?? [],
-                                    Path.Combine(applicationDirectory, "openclaw.mjs"),
-                                    "dashboard",
-                                    "--json"
-                                ],
-                                record.WorkspacePath!)
-                            {
-                                PathPrefix = Path.GetDirectoryName(nodePath),
-                                AdditionalEnvironment = dashboardEnvironment,
-                                NativeRootPath = runtime.GetAgentNativeRoot()
-                            },
-                            "Resolving the Control UI handoff in the isolated session.",
-                            "OpenClaw dashboard",
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                    if (!Gateway.ControlUiHandoffParser.TryParse(
-                            capture.StandardOutput,
-                            gateway.Record?.ObservedPorts ?? [],
-                            out string? browserUrl) ||
-                        browserUrl is null)
-                    {
-                        return WriteResult(new OpenCommandResult(
-                            gateway.State,
-                            "OpenClaw did not return a usable Control UI handoff.",
-                            1));
-                    }
-
-                    beforeBrowserValidation?.Invoke();
-                    if (!runtime.IsCurrentSessionRecord(record))
-                    {
-                        return WriteResult(new OpenCommandResult(
-                            gateway.State,
-                            "The isolated session changed before the Control UI could be opened. Retry the command.",
-                            1));
-                    }
-
-                    try
-                    {
-                        await (launchBrowserAsync ?? (url => LaunchBrowserAsync(url)))(browserUrl)
+                        Gateway.GatewayStatusReport gateway = await Gateway.GatewayRuntime
+                            .Create(options, runtime.Paths, runtime, log)
+                            .Controller
+                            .GetStatusAsync(runtime.HelperPath, cancellationToken)
                             .ConfigureAwait(false);
-                    }
-                    catch (Exception exception) when (
-                        exception is System.ComponentModel.Win32Exception or
-                        InvalidOperationException or
-                        NotSupportedException)
-                    {
-                        log($"Browser launch failed: {exception.GetType().Name}");
-                        return WriteResult(new OpenCommandResult(
-                            gateway.State,
-                            "The Control UI is ready, but the default browser could not be opened.",
-                            1));
-                    }
+                        if (gateway.State != Gateway.GatewayState.Running)
+                        {
+                            string message = gateway.State is
+                                Gateway.GatewayState.NotStarted or
+                                Gateway.GatewayState.Stopped
+                                ? $"{gateway.Message} Run `clawctl gateway-service start` before opening the Control UI."
+                                : gateway.Message;
+                            return new OpenCommandResult(gateway.State, message, 1);
+                        }
 
-                    return WriteResult(new OpenCommandResult(
-                        gateway.State,
-                        "Opened the Control UI in the default browser.",
-                        0));
+                        Session.SessionRecord record =
+                            await runtime.StartForExecutionAsync(cancellationToken)
+                                .ConfigureAwait(false);
+                        string applicationDirectory =
+                            options.RequirePackagedApplicationDirectory();
+                        string nodePath = runtime.RequireAgentNodePath(
+                            options.RequirePackagedNodeArchivePath());
+                        IReadOnlyDictionary<string, string> dashboardEnvironment =
+                            BuildRuntimeEnvironment(
+                                runtime,
+                                applicationDirectory,
+                                isInteractive: false,
+                                readEnvironmentVariable ??
+                                    Environment.GetEnvironmentVariable);
+                        if (gateway.Record?.ObservedPorts is { Count: 1 } observedPorts)
+                        {
+                            dashboardEnvironment = Session.SessionExecutor.MergeEnvironment(
+                                dashboardEnvironment,
+                                new Dictionary<string, string>
+                                {
+                                    [Gateway.GatewayConfigurationStore.PortVariable] =
+                                        observedPorts[0].ToString(
+                                            CultureInfo.InvariantCulture)
+                                });
+                        }
+
+                        Session.SessionCommandCaptureResult capture = await runtime.Executor
+                            .ExecuteCommandCaptureAsync(
+                                record,
+                                new Session.SessionCommandRequest(
+                                    runtime.RequireStagedHelper(record),
+                                    nodePath,
+                                    [
+                                        .. BuildNativeRedirectNodeArguments(runtime) ?? [],
+                                        Path.Combine(applicationDirectory, "openclaw.mjs"),
+                                        "dashboard",
+                                        "--json"
+                                    ],
+                                    record.WorkspacePath!)
+                                {
+                                    PathPrefix = Path.GetDirectoryName(nodePath),
+                                    AdditionalEnvironment = dashboardEnvironment,
+                                    NativeRootPath = runtime.GetAgentNativeRoot()
+                                },
+                                "Resolving the Control UI handoff in the isolated session.",
+                                "OpenClaw dashboard",
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                        if (!Gateway.ControlUiHandoffParser.TryParse(
+                                capture.StandardOutput,
+                                gateway.Record?.ObservedPorts ?? [],
+                                out string? browserUrl) ||
+                            browserUrl is null)
+                        {
+                            return new OpenCommandResult(
+                                gateway.State,
+                                "OpenClaw did not return a usable Control UI handoff.",
+                                1);
+                        }
+
+                        beforeBrowserValidation?.Invoke();
+                        if (!runtime.IsCurrentSessionRecord(record))
+                        {
+                            return new OpenCommandResult(
+                                gateway.State,
+                                "The isolated session changed before the Control UI could be opened. Retry the command.",
+                                1);
+                        }
+
+                        try
+                        {
+                            await (launchBrowserAsync ??
+                                (url => LaunchBrowserAsync(url)))(browserUrl)
+                                .ConfigureAwait(false);
+                        }
+                        catch (Exception exception) when (
+                            exception is System.ComponentModel.Win32Exception or
+                            InvalidOperationException or
+                            NotSupportedException)
+                        {
+                            // The start failure message names the URL it tried to
+                            // open, and a Control UI handoff URL can carry the
+                            // gateway credential, so only the error code is kept.
+                            log(exception is System.ComponentModel.Win32Exception win32
+                                ? $"Browser launch failed: Win32Exception [Win32 error {win32.NativeErrorCode}]"
+                                : $"Browser launch failed: {exception.GetType().Name}");
+                            return new OpenCommandResult(
+                                gateway.State,
+                                "The Control UI is ready, but the default browser could not be opened.",
+                                1);
+                        }
+
+                        return new OpenCommandResult(
+                            gateway.State,
+                            "Opened the Control UI in the default browser.",
+                            0);
+                    }).ConfigureAwait(false);
+                    return WriteResult(result);
                 },
                 PowerShell = (powerShellOptions, cancellationToken) => RunPowerShellAsync(
                     options,
@@ -877,68 +942,77 @@ internal static class Program
                     // Narration is human guidance, so it is off whenever the
                     // caller asked for a document: stdout carries exactly one
                     // JSON object.
-                    (bool useColor, IDisposable? restore) = PrepareColor();
-                    Gateway.GatewayStartResult result;
-                    using (restore)
-                    {
-                        result = await ClawCtlConsole.NarrateAsync(
-                            output,
-                            useColor,
-                            narrate: !outputOptions.Json,
-                            Gateway.GatewayStartProgress.Initial,
-                            progress => controller.StartAsync(
-                                runtime.HelperPath, cancellationToken, progress))
-                            .ConfigureAwait(false);
-                    }
+                    Gateway.GatewayStartResult result = await NarrateOperationAsync(
+                        Gateway.GatewayStartProgress.Initial,
+                        progress => controller.StartAsync(
+                            runtime.HelperPath, cancellationToken, progress))
+                        .ConfigureAwait(false);
 
                     return WriteGatewayStartResult("start", result);
                 },
                 GatewayStatus = async cancellationToken =>
                 {
-                    Session.SessionRuntime sessionRuntime = GetSessionRuntime();
-                    Gateway.GatewayRuntime runtime = Gateway.GatewayRuntime.Create(
-                        options,
-                        sessionRuntime.Paths,
-                        sessionRuntime,
-                        log);
-                    Gateway.GatewayStatusReport result = await runtime.Controller
-                        .GetStatusAsync(sessionRuntime.HelperPath, cancellationToken)
-                        .ConfigureAwait(false);
-                    Session.AgentConfigReadinessStatus? configReadiness = null;
-                    if (result.State != Gateway.GatewayState.Running)
-                    {
-                        Session.SessionStatus session = await sessionRuntime.Coordinator
-                            .ProbeRecordedStatusAsync(cancellationToken)
-                            .ConfigureAwait(false);
-                        configReadiness =
-                            await Session.AgentConfigReadinessProbe.CheckAsync(
+                    GatewayCommandResult commandResult = await NarrateOperationAsync(
+                        new ClawCtlProgress("Checking the gateway service."),
+                        async _ =>
+                        {
+                            Session.SessionRuntime sessionRuntime = GetSessionRuntime();
+                            Gateway.GatewayRuntime runtime = Gateway.GatewayRuntime.Create(
+                                options,
+                                sessionRuntime.Paths,
                                 sessionRuntime,
-                                session,
-                                cancellationToken).ConfigureAwait(false);
-                    }
+                                log);
+                            Gateway.GatewayStatusReport result = await runtime.Controller
+                                .GetStatusAsync(
+                                    sessionRuntime.HelperPath,
+                                    cancellationToken)
+                                .ConfigureAwait(false);
+                            Session.AgentConfigReadinessStatus? configReadiness = null;
+                            Session.SessionStatus? session = null;
+                            if (result.State != Gateway.GatewayState.Running)
+                            {
+                                session =
+                                    await sessionRuntime.Coordinator
+                                        .ProbeRecordedStatusAsync(cancellationToken)
+                                        .ConfigureAwait(false);
+                                configReadiness =
+                                    await Session.AgentConfigReadinessProbe.CheckAsync(
+                                        sessionRuntime,
+                                        session,
+                                        log,
+                                        cancellationToken).ConfigureAwait(false);
+                            }
 
-                    int? port = result.Record?.ObservedPorts is { Count: 1 }
-                        ? result.Record.ObservedPorts[0]
-                        : null;
-                    return WriteResult(new GatewayCommandResult(
-                        "status",
-                        result.State,
-                        result.Message,
-                        result.Detail,
-                        result.State is Gateway.GatewayState.Running or
-                            Gateway.GatewayState.NotStarted
-                            ? configReadiness?.ProbeFailed == true ? 1 : 0
-                            : 1,
-                        port,
-                        Readiness: configReadiness));
+                            int? port = result.Record?.ObservedPorts is { Count: 1 }
+                                ? result.Record.ObservedPorts[0]
+                                : null;
+                            return new GatewayCommandResult(
+                                "status",
+                                result.State,
+                                result.Message,
+                                result.Detail,
+                                result.State is Gateway.GatewayState.Running or
+                                    Gateway.GatewayState.NotStarted
+                                    ? configReadiness?.ProbeFailed == true ? 1 : 0
+                                    : 1,
+                                port,
+                                Readiness: configReadiness,
+                                SandboxId: result.SandboxId,
+                                AgentUserSid: result.AgentUserSid,
+                                OwnedListeners: result.OwnedListeners,
+                                SessionAvailability: session?.Availability);
+                        }).ConfigureAwait(false);
+                    return WriteResult(commandResult);
                 },
                 GatewayStop = async cancellationToken =>
                 {
                     Session.SessionRuntime runtime = GetSessionRuntime();
-                    Gateway.GatewayStopResult result = await Gateway.GatewayRuntime
-                        .Create(options, runtime.Paths, runtime, log)
-                        .Controller
-                        .StopAsync(runtime.HelperPath, cancellationToken)
+                    Gateway.GatewayStopResult result = await NarrateOperationAsync(
+                        new ClawCtlProgress("Stopping the gateway service."),
+                        _ => Gateway.GatewayRuntime
+                            .Create(options, runtime.Paths, runtime, log)
+                            .Controller
+                            .StopAsync(runtime.HelperPath, cancellationToken))
                         .ConfigureAwait(false);
                     return WriteResult(new GatewayCommandResult(
                         "stop",
@@ -958,21 +1032,13 @@ internal static class Program
                     Gateway.GatewayController controller = Gateway.GatewayRuntime
                         .Create(options, runtime.Paths, runtime, log, clock)
                         .Controller;
-                    (bool useColor, IDisposable? restore) = PrepareColor();
-                    Gateway.GatewayRestartResult result;
-                    using (restore)
-                    {
-                        result = await ClawCtlConsole.NarrateAsync(
-                            output,
-                            useColor,
-                            narrate: !outputOptions.Json,
-                            Gateway.GatewayStartProgress.StoppingFirst,
-                            progress => controller.RestartAsync(
-                                runtime.HelperPath,
-                                cancellationToken,
-                                progress))
-                            .ConfigureAwait(false);
-                    }
+                    Gateway.GatewayRestartResult result = await NarrateOperationAsync(
+                        Gateway.GatewayStartProgress.StoppingFirst,
+                        progress => controller.RestartAsync(
+                            runtime.HelperPath,
+                            cancellationToken,
+                            progress))
+                        .ConfigureAwait(false);
 
                     if (result.Start is null)
                     {
@@ -986,6 +1052,47 @@ internal static class Program
 
                     return WriteGatewayStartResult("restart", result.Start);
                 },
+                CompanionPrepare = async (port, checkOnly, restoreToken, cancellationToken) =>
+                {
+                    try
+                    {
+                        string? token = restoreToken
+                            ? await (readInputLine ?? ReadRedirectedInputLineAsync)(cancellationToken)
+                                .ConfigureAwait(false)
+                            : null;
+                        if (restoreToken && string.IsNullOrEmpty(token))
+                        {
+                            throw new Session.SessionException(
+                                "Companion did not provide a token on standard input.");
+                        }
+                        Session.SessionRuntime runtime = GetSessionRuntime();
+                        Session.SessionRecord record = await runtime.StartForExecutionAsync(cancellationToken)
+                            .ConfigureAwait(false);
+                        using Session.ISessionLockHandle handle = runtime.AcquireLifecycleLock();
+                        record = runtime.RequireSetup();
+                        string applicationDirectory = options.RequirePackagedApplicationDirectory();
+                        string? nativeRoot = runtime.GetAgentNativeRoot();
+                        OpenClaw.SessionProtocol.SessionCompanionConfigResult result =
+                            await runtime.Executor.ConfigureCompanionAsync(
+                                record,
+                                runtime.RequireStagedHelper(record),
+                                runtime.RequireAgentNodePath(options.RequirePackagedNodeArchivePath()),
+                                applicationDirectory,
+                                port,
+                                nativeRoot,
+                                nativeRoot is null ? null : ResolveNativeRedirectPreloadPath(),
+                                CompanionEnvironment(applicationDirectory, nativeRoot),
+                                checkOnly,
+                                token,
+                                cancellationToken).ConfigureAwait(false);
+                        return WriteResult(new CompanionPrepareResult(0, result.Port, result.Token));
+                    }
+                    catch (Session.SessionException exception) when (outputOptions.Json)
+                    {
+                        log($"Companion Gateway preparation failed: {DiagnosticFailure.Describe(exception)}");
+                        return WriteResult(new CompanionPrepareResult(1, Error: exception.Message));
+                    }
+                }
             },
             outputOptions);
 
@@ -1009,6 +1116,60 @@ internal static class Program
             .Parse(args, ClawCtlCommandLine.CreateParserConfiguration())
             .InvokeAsync(configuration)
             .ConfigureAwait(false);
+    }
+
+    private static async Task<string?> ReadRedirectedInputLineAsync(
+        CancellationToken cancellationToken)
+    {
+        if (!Console.IsInputRedirected)
+        {
+            throw new Session.SessionException(
+                "'--restore-token-stdin' requires redirected standard input.");
+        }
+
+        Stream input = Console.OpenStandardInput();
+        return await ReadInputLineAsync(input, Console.InputEncoding, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    [SuppressMessage(
+        "Reliability",
+        "CA2000:Dispose objects before losing scope",
+        Justification =
+            "Cancellation must return without waiting for the Windows console read. " +
+            "The read completion continuation owns and disposes the reader on that path.")]
+    internal static async Task<string?> ReadInputLineAsync(
+        Stream input,
+        Encoding encoding,
+        CancellationToken cancellationToken)
+    {
+        var reader = new StreamReader(
+            input,
+            encoding,
+            detectEncodingFromByteOrderMarks: true,
+            bufferSize: 1024,
+            leaveOpen: false);
+        Task<string?> read = reader.ReadLineAsync(CancellationToken.None).AsTask();
+        try
+        {
+            return await read.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (read.IsCompleted)
+            {
+                reader.Dispose();
+            }
+            else
+            {
+                _ = read.ContinueWith(
+                    static (_, state) => ((StreamReader)state!).Dispose(),
+                    reader,
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
+        }
     }
 
     internal static Task LaunchBrowserAsync(

@@ -117,6 +117,48 @@ public sealed class MxcCliSessionClientTests
         Assert.Contains("9", exception.Message, StringComparison.Ordinal);
     }
 
+    // An executor that crashes mid-response leaves no envelope to name the
+    // failure; its exit code, diagnostics, and raw output are all that remain.
+    [Fact]
+    public async Task UninterpretableExecutorOutputKeepsTheEvidenceOfWhatHappened()
+    {
+        var client = new MxcCliSessionClient(
+            Runtime,
+            new RecordingInvoker(
+                standardOutput: "thread 'main' panicked at isolation_session.rs",
+                exitCode: -1073740791,
+                standardError: "fatal runtime error"));
+
+        MxcException exception = await Assert.ThrowsAsync<MxcException>(
+            () => client.StartAsync(SandboxId, null, CancellationToken.None));
+
+        Assert.Equal(MxcErrorCode.ProtocolViolation, exception.Code);
+        Assert.Contains("(exit code -1073740791)", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            "Executor diagnostics: fatal runtime error",
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Executor output: thread 'main' panicked at isolation_session.rs",
+            exception.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RunawayExecutorOutputIsBoundedInTheFailure()
+    {
+        string output = new('x', 10_000);
+        var client = new MxcCliSessionClient(
+            Runtime,
+            new RecordingInvoker(standardOutput: output, exitCode: 1));
+
+        MxcException exception = await Assert.ThrowsAsync<MxcException>(
+            () => client.StartAsync(SandboxId, null, CancellationToken.None));
+
+        Assert.Contains("... (10000 characters)", exception.Message, StringComparison.Ordinal);
+        Assert.True(exception.Message.Length < 1_000, exception.Message);
+    }
+
     [Fact]
     public async Task ExecutionForwardsTheCommandsOwnOutputAndExitCode()
     {

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <!-- This file is opt-in: callers must explicitly select tests\coverage.runsettings. -->
+      <DataCollector friendlyName="Code Coverage">
+        <Configuration>
+          <Format>Cobertura</Format>
+          <CodeCoverage>
+            <!-- Limit instrumentation to the product assemblies; Launcher and SessionHost use shipped assembly names. -->
+            <ModulePaths>
+              <Include>
+                <ModulePath>.*\\(openclaw|openclaw-session-host|OpenClaw\.SessionProtocol)\.dll$</ModulePath>
+              </Include>
+            </ModulePaths>
+            <!-- Exclude generator-emitted code without hiding compiler-generated async and iterator behavior. -->
+            <Attributes>
+              <Exclude>
+                <Attribute>^System\.CodeDom\.Compiler\.GeneratedCodeAttribute$</Attribute>
+                <Attribute>^System\.Diagnostics\.CodeAnalysis\.ExcludeFromCodeCoverageAttribute$</Attribute>
+              </Exclude>
+            </Attributes>
+            <!-- Exclude compiler-generated files and intermediate obj sources from attribution. -->
+            <Sources>
+              <Exclude>
+                <Source>.*\\obj\\.*</Source>
+                <Source>.*\.g\.cs$</Source>
+              </Exclude>
+            </Sources>
+          </CodeCoverage>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>

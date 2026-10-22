@@ -49,6 +49,10 @@ internal static class ClawCtlConsole
         string? literalLine = null;
         switch (result)
         {
+            case CompanionPrepareResult companion:
+                literalLine = companion.Error ??
+                    $"Companion Gateway configuration is ready on port {companion.Port}.";
+                break;
             case SetupCommandResult setup:
                 WriteSetup(view, setup);
                 break;
@@ -442,8 +446,7 @@ internal static class ClawCtlConsole
     }
 
     private static bool IsInteractiveConsole(TextWriter output) =>
-        (ReferenceEquals(output, Console.Out) || ReferenceEquals(output, Console.Error)) &&
-        WindowsHostConsole.Instance.IsInteractive;
+        WindowsHostConsole.Instance.IsInteractiveOutput(output);
 
     private static void WriteProgressLine(TextWriter output, string message) =>
         output.WriteLine($"{new string(' ', Indent)}{message}");
@@ -974,6 +977,12 @@ internal static class ClawCtlConsole
             ColorSystem = useColor ? ColorSystemSupport.TrueColor : ColorSystemSupport.NoColors,
             Interactive = interaction,
             Out = new AnsiConsoleOutput(target),
+
+            // The callers already resolved color, interactivity, width, and
+            // Unicode, including the CI policy. Spectre's default CI enrichers
+            // would re-decide from ambient variables such as GITHUB_ACTIONS and
+            // TF_BUILD, forcing ANSI on and live rendering off after the fact.
+            Enrichment = new ProfileEnrichment { UseDefaultEnrichers = false },
         });
         console.Profile.Width = width;
         console.Profile.Capabilities.Unicode = unicode;

@@ -229,9 +229,14 @@ foreach ($markdownFile in $markdownFiles) {
             $targetFile = $markdownFile
             if (-not [string]::IsNullOrEmpty($pathPart)) {
                 $relativePath = $pathPart -replace '\\', '/'
-                $targetFile = [IO.Path]::GetFullPath(
+                # GetRelativePath normalizes both paths the same way; GetFullPath
+                # alone expands 8.3 short names (for example RUNNER~1 on hosted
+                # runners) that the resolved root keeps, so slicing by the
+                # root's length misreads valid targets.
+                $targetFile = [IO.Path]::GetRelativePath(
+                    $RepositoryRoot,
                     (Join-Path (Split-Path -Parent $fullPath) $relativePath)
-                ).Substring($RepositoryRoot.Length).TrimStart('\', '/') -replace '\\', '/'
+                ) -replace '\\', '/'
                 if (-not $trackedSet.Contains($targetFile)) {
                     Add-Finding -Findings $findings -File $markdownFile -Line ($index + 1) `
                         -Rule 'relative-link' -Message "Broken relative link target '$target'."

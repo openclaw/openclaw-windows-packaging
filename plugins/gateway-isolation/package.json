@@ -2,7 +2,7 @@
   "name": "@openclaw/gateway-isolation",
   "version": "2026.8.2",
   "private": true,
-  "description": "Read-only Windows Gateway isolation status",
+  "description": "Windows Gateway isolation status and agent guidance",
   "type": "module",
   "scripts": {
     "test": "node --test index.test.js"

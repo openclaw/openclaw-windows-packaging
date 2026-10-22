@@ -34,11 +34,16 @@ public sealed class ClawCtlParserDefaultsTests : IDisposable
     }
 
     // A readable file holding a valid command is the case that would succeed if
-    // expansion were ever re-enabled, so it is the one worth asserting on.
-    [Fact]
-    public async Task ResponseFileTokenIsRejectedRatherThanExpanded()
+    // expansion were ever re-enabled, so it is the one worth asserting on. A
+    // missing file must fail the same way, as an argument rather than a crash.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ResponseFileTokenIsRejectedRatherThanExpanded(bool responseFileExists)
     {
-        string responseFile = CreateResponseFile("commands.rsp", "setup");
+        string responseFile = responseFileExists
+            ? CreateResponseFile("commands.rsp", "setup")
+            : Path.Combine(_testDirectory, "absent.rsp");
 
         (int exitCode, string output) =
             await RunAsync($"@{responseFile}").ConfigureAwait(true);
@@ -48,16 +53,6 @@ public sealed class ClawCtlParserDefaultsTests : IDisposable
             "package is ready",
             output,
             StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task ResponseFileTokenForAMissingFileIsAlsoJustAnArgument()
-    {
-        string missing = Path.Combine(_testDirectory, "absent.rsp");
-
-        (int exitCode, _) = await RunAsync($"@{missing}").ConfigureAwait(true);
-
-        Assert.Equal(1, exitCode);
     }
 
     // Completion is a parse-time query. It must never start the readiness

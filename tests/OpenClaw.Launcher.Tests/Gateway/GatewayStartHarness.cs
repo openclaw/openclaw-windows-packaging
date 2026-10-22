@@ -15,9 +15,11 @@ internal sealed class GatewayStartHarness : IDisposable
     private const string SandboxId = "iso:sandbox1";
 
     private readonly string _root = TestDirectory.Create();
+    private readonly int? _port;
 
-    public GatewayStartHarness()
+    public GatewayStartHarness(int? port = null)
     {
+        _port = port;
         Start = new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero);
         Clock = new AdvancingTimeProvider(Start);
         new SessionStateStore(Path.Combine(_root, "session.json")).Write(new SessionRecord
@@ -41,8 +43,15 @@ internal sealed class GatewayStartHarness : IDisposable
     public GatewayStateStore Store => new(Path.Combine(_root, "gateway.json"));
 
     public Task<GatewayStartResult> StartAsync(
-        IProgress<GatewayStartProgress>? progress = null) =>
-        CreateController().StartAsync("helper.exe", CancellationToken.None, progress);
+        IProgress<GatewayStartProgress>? progress = null,
+        CancellationToken cancellationToken = default) =>
+        CreateController().StartAsync("helper.exe", cancellationToken, progress);
+
+    public Task<GatewayStatusReport> GetStatusAsync() =>
+        CreateController().GetStatusAsync("helper.exe", CancellationToken.None);
+
+    public Task<GatewayStopResult> StopAsync() =>
+        CreateController().StopAsync("helper.exe", CancellationToken.None);
 
     public Task<GatewayRestartResult> RestartAsync(
         IProgress<GatewayStartProgress>? progress = null) =>
@@ -89,7 +98,7 @@ internal sealed class GatewayStartHarness : IDisposable
                 HelperPath: Path.Combine(_root, "openclaw-session-host.exe"),
                 NodePath: @"C:\Program Files\nodejs\node.exe",
                 ApplicationDirectory: Path.Combine(_root, "app"),
-                Port: null)),
+                Port: _port)),
             _ => { },
             () => sessions.GetRecordedStatus().Record
                 ?? throw new SessionException("Run setup."),

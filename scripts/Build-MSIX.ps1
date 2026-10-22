@@ -16,10 +16,15 @@ param(
     [ValidatePattern('^[0-9a-fA-F]{40}$')]
     [string]$SourceCommit,
 
+    [ValidateSet('Store', 'Sideload')]
+    [string]$IdentityChannel = 'Store',
+
     [switch]$SourceTreeDirty,
 
     [Parameter(Mandatory)]
-    [string]$OutputDirectory
+    [string]$OutputDirectory,
+
+    [string]$SideloadOutputDirectory
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,9 +48,43 @@ if (
 ) {
     throw 'The package manifest identity does not match release policy.'
 }
-$packageIdentityName = [string]$policy.packageIdentityName
-$packageFamilyName = [string]$policy.packageFamilyName
-$publisher = [string]$policy.publisher
+function Get-PackageIdentity {
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('Store', 'Sideload')]
+        [string]$Channel
+    )
+
+    $identity = if ($Channel -eq 'Sideload') {
+        $policy.sideloadPackageIdentity
+    }
+    else {
+        [pscustomobject]@{
+            name = $policy.packageIdentityName
+            familyName = $policy.packageFamilyName
+            publisher = $policy.publisher
+        }
+    }
+    if (
+        [string]::IsNullOrWhiteSpace([string]$identity.name) -or
+        [string]::IsNullOrWhiteSpace([string]$identity.familyName) -or
+        [string]::IsNullOrWhiteSpace([string]$identity.publisher)
+    ) {
+        throw "The $Channel package identity is incomplete in release policy."
+    }
+
+    $identity
+}
+$selectedIdentity = Get-PackageIdentity -Channel $IdentityChannel
+$packageIdentityName = [string]$selectedIdentity.name
+$packageFamilyName = [string]$selectedIdentity.familyName
+$publisher = [string]$selectedIdentity.publisher
+if ($SideloadOutputDirectory -and $IdentityChannel -ne 'Store') {
+    throw 'SideloadOutputDirectory requires IdentityChannel Store.'
+}
+$msbuildPublisher = & (
+    Join-Path $PSScriptRoot 'ConvertTo-MSBuildPropertyValue.ps1'
+) -Value $publisher
 
 function Invoke-CheckedCommand {
     param(
@@ -195,6 +234,152 @@ function Add-VswhereToPath {
     $env:Path = "$vswhereDirectory;$env:Path"
 }
 
+function Resolve-MakeAppx {
+    $command = Get-Command `
+        MakeAppx.exe `
+        -CommandType Application `
+        -ErrorAction SilentlyContinue
+    if ($null -ne $command) {
+        return $command.Source
+    }
+
+    $windowsKits = Join-Path `
+        ${env:ProgramFiles(x86)} `
+        'Windows Kits\10\bin'
+    $candidate = Get-ChildItem `
+        -LiteralPath $windowsKits `
+        -Filter MakeAppx.exe `
+        -File `
+        -Recurse `
+        -ErrorAction SilentlyContinue |
+        Where-Object { $_.Directory.Name -eq 'x64' } |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+    if ($null -eq $candidate) {
+        throw 'MakeAppx.exe was not found in PATH or the Windows 10 SDK.'
+    }
+
+    $candidate.FullName
+}
+
+function New-SideloadIdentityVariant {
+    param(
+        [Parameter(Mandatory)]
+        [string]$SourcePath,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter(Mandatory)]
+        [string]$LayoutPath
+    )
+
+    $makeAppx = Resolve-MakeAppx
+    Invoke-CheckedCommand `
+        -FailureMessage 'MakeAppx.exe failed to unpack the Store MSIX.' `
+        -Command {
+            & $makeAppx unpack /v /o /p $SourcePath /d $LayoutPath
+        }
+
+    $variantIdentity = Get-PackageIdentity -Channel Sideload
+    $variantManifestPath = Join-Path $LayoutPath 'AppxManifest.xml'
+    [xml]$variantManifest = Get-Content `
+        -LiteralPath $variantManifestPath `
+        -Raw
+    $variantManifest.Package.Identity.Name = [string]$variantIdentity.name
+    $variantManifest.Package.Identity.Publisher = [string]$variantIdentity.publisher
+    $writerSettings = [Xml.XmlWriterSettings]::new()
+    $writerSettings.Encoding = [Text.UTF8Encoding]::new($false)
+    $writerSettings.Indent = $false
+    $writer = [Xml.XmlWriter]::Create($variantManifestPath, $writerSettings)
+    try {
+        $variantManifest.Save($writer)
+    }
+    finally {
+        $writer.Dispose()
+    }
+
+    Invoke-CheckedCommand `
+        -FailureMessage 'MakeAppx.exe failed to pack the sideload MSIX.' `
+        -Command {
+            & $makeAppx pack /v /o /d $LayoutPath /p $OutputPath
+        }
+    if (-not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) {
+        throw 'MakeAppx.exe completed without producing the sideload MSIX.'
+    }
+}
+
+function Get-MSIXIdentityVariantEvidence {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    $files = [System.Collections.Generic.Dictionary[string, string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase
+    )
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($Path)
+    try {
+        $manifest = $null
+        foreach ($entry in $archive.Entries) {
+            if ([string]::IsNullOrEmpty($entry.Name)) {
+                continue
+            }
+
+            $decodedPath = [Uri]::UnescapeDataString($entry.FullName)
+            if ($decodedPath -ieq 'AppxManifest.xml') {
+                $stream = $entry.Open()
+                $reader = [IO.StreamReader]::new($stream)
+                try {
+                    [xml]$manifest = $reader.ReadToEnd()
+                }
+                finally {
+                    $reader.Dispose()
+                    $stream.Dispose()
+                }
+                continue
+            }
+            if ($decodedPath -iin @(
+                'AppxBlockMap.xml',
+                'AppxSignature.p7x',
+                '[Content_Types].xml'
+            )) {
+                continue
+            }
+            if ($files.ContainsKey($decodedPath)) {
+                throw "The MSIX contains a duplicate decoded path: $decodedPath"
+            }
+
+            $stream = $entry.Open()
+            $sha256 = [Security.Cryptography.SHA256]::Create()
+            try {
+                $files.Add(
+                    $decodedPath,
+                    [Convert]::ToHexString(
+                        $sha256.ComputeHash($stream)
+                    ).ToLowerInvariant()
+                )
+            }
+            finally {
+                $sha256.Dispose()
+                $stream.Dispose()
+            }
+        }
+        if ($null -eq $manifest) {
+            throw 'The MSIX does not contain AppxManifest.xml.'
+        }
+
+        [pscustomobject]@{
+            Files = $files
+            Manifest = $manifest
+        }
+    }
+    finally {
+        $archive.Dispose()
+    }
+}
+
 Test-PackageVersion
 
 $PayloadDirectory = (Resolve-Path -LiteralPath $PayloadDirectory).Path
@@ -251,16 +436,11 @@ $nodeArchiveTarget = Join-Path `
     $expectedNodeArchiveName
 New-Item -Path $openClawContent -ItemType Directory -Force | Out-Null
 
-if (
-    [IO.Path]::GetFullPath($payloadApplication) -ne
-    [IO.Path]::GetFullPath($applicationTarget)
-) {
-    Remove-DirectoryIfPresent -Path $applicationTarget
-    Copy-Item `
-        -LiteralPath $payloadApplication `
-        -Destination $applicationTarget `
-        -Recurse
-}
+# The payload directory belongs to the caller and must stay unmodified, so it
+# is always copied; the PDB removal below changes only that copy.
+& (Join-Path $PSScriptRoot 'Copy-PayloadTree.ps1') `
+    -Source $payloadApplication `
+    -Destination $applicationTarget
 
 New-Item -Path $runtimeTargetDirectory -ItemType Directory -Force | Out-Null
 if (-not $NodeArchivePath) {
@@ -371,8 +551,19 @@ $workRoot = Join-Path `
     $temporaryRoot `
     "openclaw-msix-$Architecture-$([guid]::NewGuid().ToString('N'))"
 $msixBuildDirectory = Join-Path $workRoot 'appx'
+$outputDirectories = @($OutputDirectory)
+if ($SideloadOutputDirectory) {
+    if (
+        [IO.Path]::GetFullPath($SideloadOutputDirectory) -eq
+        [IO.Path]::GetFullPath($OutputDirectory)
+    ) {
+        throw 'Store and sideload output directories must be different.'
+    }
+    $outputDirectories += $SideloadOutputDirectory
+}
+$directoriesToCreate = @($msixBuildDirectory) + $outputDirectories
 New-Item `
-    -Path $msixBuildDirectory, $OutputDirectory `
+    -Path $directoriesToCreate `
     -ItemType Directory `
     -Force |
     Out-Null
@@ -443,6 +634,8 @@ try {
                 "-p:AssemblyVersion=$PackageVersion" `
                 "-p:FileVersion=$PackageVersion" `
                 "-p:PackageIdentityVersion=$PackageVersion" `
+                "-p:PackageIdentityName=$packageIdentityName" `
+                "-p:PackageIdentityPublisher=$msbuildPublisher" `
                 "-p:ClawCtlPackageVersion=$PackageVersion" `
                 "-p:ClawCtlPackageCommit=$($SourceCommit.ToLowerInvariant())" `
                 "-p:ClawCtlPayloadVersion=$([string]$payloadInfo.packageVersion)" `
@@ -574,6 +767,17 @@ try {
             $manifestStream.Dispose()
         }
 
+        $builtIdentity = $manifest.Package.Identity
+        if (
+            $null -eq $builtIdentity -or
+            [string]$builtIdentity.Name -cne $packageIdentityName -or
+            [string]$builtIdentity.Publisher -cne $publisher -or
+            [string]$builtIdentity.ProcessorArchitecture -cne $Architecture -or
+            [string]$builtIdentity.Version -cne $PackageVersion
+        ) {
+            throw "The built $IdentityChannel MSIX manifest identity is unexpected."
+        }
+
         $aliasExtension = @(
             $manifest.SelectNodes(
                 "//*[local-name()='Extension' and @Category='windows.appExecutionAlias']"
@@ -666,6 +870,7 @@ try {
         archive = $msixName
         sha256 = $msixHash
         signed = $false
+        identityChannel = $IdentityChannel.ToLowerInvariant()
         packageVersion = $PackageVersion
         packageIdentityName = $packageIdentityName
         packageFamilyName = $packageFamilyName
@@ -676,6 +881,77 @@ try {
             -Encoding utf8
 
     Write-Host "Created unsigned MSIX: $msixPath"
+
+    if ($SideloadOutputDirectory) {
+        $sideloadMsixPath = Join-Path $SideloadOutputDirectory $msixName
+        $sideloadLayout = Join-Path $workRoot 'sideload-layout'
+        New-SideloadIdentityVariant `
+            -SourcePath $msixPath `
+            -OutputPath $sideloadMsixPath `
+            -LayoutPath $sideloadLayout
+
+        $storeEvidence = Get-MSIXIdentityVariantEvidence -Path $msixPath
+        $sideloadEvidence = Get-MSIXIdentityVariantEvidence `
+            -Path $sideloadMsixPath
+        if ($storeEvidence.Files.Count -ne $sideloadEvidence.Files.Count) {
+            throw 'The sideload MSIX payload differs from the Store MSIX payload.'
+        }
+        foreach ($entryPath in $storeEvidence.Files.Keys) {
+            if (
+                -not $sideloadEvidence.Files.ContainsKey($entryPath) -or
+                $sideloadEvidence.Files[$entryPath] -cne
+                $storeEvidence.Files[$entryPath]
+            ) {
+                throw "The sideload MSIX changed package content: $entryPath"
+            }
+        }
+
+        $sideloadIdentity = Get-PackageIdentity -Channel Sideload
+        $builtSideloadIdentity = $sideloadEvidence.Manifest.Package.Identity
+        if (
+            $null -eq $builtSideloadIdentity -or
+            [string]$builtSideloadIdentity.Name -cne
+            [string]$sideloadIdentity.name -or
+            [string]$builtSideloadIdentity.Publisher -cne
+            [string]$sideloadIdentity.publisher -or
+            [string]$builtSideloadIdentity.ProcessorArchitecture -cne
+            $Architecture -or
+            [string]$builtSideloadIdentity.Version -cne $PackageVersion
+        ) {
+            throw 'The built Sideload MSIX manifest identity is unexpected.'
+        }
+
+        $builtSideloadIdentity.Name = [string]$storeEvidence.Manifest.Package.Identity.Name
+        $builtSideloadIdentity.Publisher = `
+            [string]$storeEvidence.Manifest.Package.Identity.Publisher
+        if (
+            $sideloadEvidence.Manifest.OuterXml -cne
+            $storeEvidence.Manifest.OuterXml
+        ) {
+            throw 'The sideload MSIX changed manifest content beyond its identity.'
+        }
+
+        $sideloadHash = (
+            Get-FileHash -LiteralPath $sideloadMsixPath -Algorithm SHA256
+        ).Hash.ToLowerInvariant()
+        $sideloadMetadata = Get-Content `
+            -LiteralPath (Join-Path $OutputDirectory 'msix-metadata.json') `
+            -Raw |
+            ConvertFrom-Json
+        $sideloadMetadata.sha256 = $sideloadHash
+        $sideloadMetadata.identityChannel = 'sideload'
+        $sideloadMetadata.packageIdentityName = [string]$sideloadIdentity.name
+        $sideloadMetadata.packageFamilyName = [string]$sideloadIdentity.familyName
+        $sideloadMetadata.publisher = [string]$sideloadIdentity.publisher
+        $sideloadMetadata | ConvertTo-Json |
+            Set-Content `
+                -LiteralPath (
+                    Join-Path $SideloadOutputDirectory 'msix-metadata.json'
+                ) `
+                -Encoding utf8
+
+        Write-Host "Created unsigned sideload MSIX: $sideloadMsixPath"
+    }
 }
 finally {
     Remove-DirectoryIfPresent -Path $workRoot
