@@ -915,6 +915,54 @@ public sealed class StateTransferScenarioTests : IDisposable
     }
 
     [Fact]
+    public async Task RecoveryCopiesAnExistingWorkspaceBeforeTreatingItAsAbsent()
+    {
+        _application.WorkspaceIsLazy = true;
+        StateTransferCoordinator coordinator = await PrepareAsync();
+        WriteProfile(Current, "current");
+        WriteProfile(Old, "old");
+
+        StateArchiveCommandResult result = await coordinator.RecoverAsync(
+            new RecoverOptions(Old, null, false, true), CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("old-workspace", File.ReadAllText(Path.Combine(Current, "Work", "notes.txt")));
+    }
+
+    [Fact]
+    public async Task RecoveryToleratesAWorkspaceThatWasNeverCreated()
+    {
+        _application.WorkspaceIsLazy = true;
+        StateTransferCoordinator coordinator = await PrepareAsync();
+        WriteProfile(Current, "current");
+        WriteProfile(Old, "old");
+        Directory.Delete(Path.Combine(Old, "Work"), recursive: true);
+
+        StateArchiveCommandResult result = await coordinator.RecoverAsync(
+            new RecoverOptions(Old, null, false, true), CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("old-history", File.ReadAllText(Path.Combine(Current, ".openclaw", "history.txt")));
+    }
+
+    [Fact]
+    public async Task RecoveryStillBlocksOnAnAbsentDependencyTheHelperDoesNotCallOptional()
+    {
+        StateTransferCoordinator coordinator = await PrepareAsync();
+        WriteProfile(Current, "current");
+        WriteProfile(Old, "old");
+        Directory.Delete(Path.Combine(Old, "Work"), recursive: true);
+        Dictionary<string, string> before = Data(Current);
+
+        StateArchiveCommandResult result = await coordinator.RecoverAsync(
+            new RecoverOptions(Old, null, false, true), CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("could not be resolved", result.Error, StringComparison.Ordinal);
+        Assert.Equal(before, Data(Current));
+    }
+
+    [Fact]
     public async Task LockedOfflineSourceCannotBeCapturedOrStopTheGateway()
     {
         StateTransferCoordinator coordinator = await PrepareAsync();

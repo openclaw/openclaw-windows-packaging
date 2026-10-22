@@ -61,6 +61,7 @@ internal sealed partial class StateTransferCoordinator
                 _ = await source.CopyAsync(
                     [Path.Combine(source.ProfilePath, ".openclaw")], snapshot, operation,
                     cancellationToken).ConfigureAwait(false);
+                HashSet<string> looked = new(StringComparer.OrdinalIgnoreCase);
                 for (int pass = 0; pass < 10000; pass++)
                 {
                     SessionStateTransferRequest request = CreateRequest(runtime, SessionStateTransferAction.Recover) with
@@ -68,6 +69,7 @@ internal sealed partial class StateTransferCoordinator
                         SourceProfile = source.ProfilePath,
                         SourceDirectory = snapshot,
                         SourceSha256 = StateTransferFiles.Digest(snapshot),
+                        ResolvedSources = [.. looked],
                         DryRun = options.DryRun
                     };
                     string archivePath = Path.Combine(operation.WorkspacePath, $"state-archive-{request.RequestId}.tar.gz");
@@ -77,9 +79,14 @@ internal sealed partial class StateTransferCoordinator
                             runtime, record, operation, request, cancellationToken).ConfigureAwait(false);
                         if (recovered.Phase == "needs-source")
                         {
+                            bool undiscovered = recovered.RequiredSources.Any(path => !looked.Contains(path));
                             int copied = await source.CopyAsync(
                                 recovered.RequiredSources, snapshot, operation, cancellationToken).ConfigureAwait(false);
-                            if (copied == 0)
+                            looked.UnionWith(recovered.RequiredSources);
+
+                            // A path the profile does not contain is reported once; the helper then decides whether
+                            // that absence is a missing dependency or a lazily created directory.
+                            if (copied == 0 && !undiscovered)
                             {
                                 throw new SessionException("A required recovery dependency could not be resolved inside the source profile.");
                             }

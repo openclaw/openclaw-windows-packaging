@@ -34,6 +34,12 @@ public sealed record SessionStateTransferRequest
     public string? SourceProfile { get; init; }
     public string? SourceDirectory { get; init; }
     public string? SourceSha256 { get; init; }
+
+    /// <summary>
+    /// Paths the host has already looked for in the actual source profile during recovery.
+    /// Only these may be treated as absent; anything else is still undiscovered.
+    /// </summary>
+    public IReadOnlyList<string>? ResolvedSources { get; init; }
     public string? ProtectionArchive { get; init; }
     public string? ProtectionSha256 { get; init; }
     public bool DryRun { get; init; }
@@ -138,6 +144,11 @@ public static class SessionStateTransferProtocol
             RequireAbsolutePath(request.SourceProfile, "source profile");
             RequireAbsolutePath(request.SourceDirectory, "source staging directory");
             RequireHash(request.SourceSha256);
+            if (request.ResolvedSources is { } resolved &&
+                (resolved.Count > 10000 || resolved.Any(string.IsNullOrWhiteSpace)))
+            {
+                throw new SessionLaunchException("The resolved recovery sources are invalid.");
+            }
         }
         return request;
     }

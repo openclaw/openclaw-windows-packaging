@@ -10,6 +10,12 @@ namespace OpenClaw.Launcher.Tests.StateTransfer;
 internal sealed class ArchiveFixtureApplication : IStateArchiveApplication
 {
     public IReadOnlyList<string> AdditionalDependencies { get; set; } = [];
+
+    /// <summary>
+    /// Mirrors the production adapter: a configured workspace that is absent from the shadow is only
+    /// dropped once the host reports having looked for it in the actual source profile.
+    /// </summary>
+    public bool WorkspaceIsLazy { get; set; }
     public List<string> CapturedProfiles { get; } = [];
     public byte[]? CapturedWal { get; private set; }
     public Action<string>? BeforeCapture { get; set; }
@@ -22,7 +28,7 @@ internal sealed class ArchiveFixtureApplication : IStateArchiveApplication
         List<StateTransferAsset> assets = [
             new("state", Path.Combine(profile, ".openclaw"), @"snapshot/payload/state")
         ];
-        if (Workspace(profile) is { } workspace &&
+        if (Workspace(profile) is { } workspace && Directory.Exists(workspace) &&
             !workspace.StartsWith(Path.Combine(profile, ".openclaw") + "\\", StringComparison.OrdinalIgnoreCase))
         {
             assets.Add(new StateTransferAsset("workspace", workspace, @"snapshot/payload/workspace"));
@@ -53,9 +59,15 @@ internal sealed class ArchiveFixtureApplication : IStateArchiveApplication
             manifest.RootElement.GetProperty("profile").GetString());
     }
 
-    public IReadOnlyList<string> RequiredSources(string profile, string previousProfile) =>
+    public IReadOnlyList<string> RequiredSources(
+        string profile, string previousProfile, IReadOnlyList<string>? resolvedSources = null) =>
         Workspace(profile) is { } workspace
-            ? [workspace, .. AdditionalDependencies]
+            ? WorkspaceIsLazy &&
+                (resolvedSources is null ||
+                    resolvedSources.Contains(workspace, StringComparer.OrdinalIgnoreCase)) &&
+                !Directory.Exists(Path.Combine(profile, Path.GetRelativePath(previousProfile, workspace)))
+                ? AdditionalDependencies
+                : [workspace, .. AdditionalDependencies]
             : AdditionalDependencies;
 
     public void RebaseConfiguration(string profile, string previousProfile, string currentProfile)

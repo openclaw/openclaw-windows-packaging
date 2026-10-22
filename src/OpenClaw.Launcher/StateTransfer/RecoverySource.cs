@@ -55,6 +55,11 @@ internal sealed class RecoverySource : IDisposable
             {
                 continue;
             }
+            // The profile may genuinely lack a configured directory; the helper decides whether that matters.
+            if (!File.Exists(absolute) && !Directory.Exists(absolute))
+            {
+                continue;
+            }
             try
             {
                 TrustedPath.EnsureNoReparsePoints(ProfilePath, absolute);

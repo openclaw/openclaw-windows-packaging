@@ -155,7 +155,8 @@ public sealed class SessionStateTransferTests : IDisposable
         public StateArchiveApplicationResult Extract(string profile, string archive, string destination) =>
             throw new InvalidOperationException("Capture must not extract.");
 
-        public IReadOnlyList<string> RequiredSources(string profile, string previousProfile) =>
+        public IReadOnlyList<string> RequiredSources(
+        string profile, string previousProfile, IReadOnlyList<string>? resolvedSources = null) =>
             throw new InvalidOperationException("Capture must not read configuration dependencies.");
 
         public void RebaseConfiguration(string profile, string previousProfile, string currentProfile) =>

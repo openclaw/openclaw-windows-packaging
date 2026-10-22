@@ -397,7 +397,8 @@ internal sealed class SessionStateTransfer
             }
             CreatePrivateStaging(snapshot);
             StateTransferFiles.Copy(source, snapshot);
-            IReadOnlyList<string> required = _application.RequiredSources(snapshot, request.SourceProfile);
+            IReadOnlyList<string> required = _application.RequiredSources(
+                snapshot, request.SourceProfile, request.ResolvedSources ?? []);
             List<string> missing = [];
             foreach (string path in required)
             {

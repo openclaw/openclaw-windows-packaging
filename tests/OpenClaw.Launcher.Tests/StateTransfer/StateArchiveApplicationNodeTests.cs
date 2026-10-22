@@ -378,6 +378,36 @@ public sealed class StateArchiveApplicationNodeTests : IDisposable
         """, registry).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     [Fact]
+    public void AWorkspaceIsOnlyOptionalOnceTheHostHasLookedForItInTheSourceProfile()
+    {
+        File.WriteAllText(Config, new JsonObject
+        {
+            ["agents"] = new JsonObject
+            {
+                ["entries"] = new JsonObject
+                {
+                    ["main"] = new JsonObject { ["workspace"] = Path.Combine(Original, "LateWork") }
+                }
+            }
+        }.ToJsonString());
+        StateArchiveApplication application = Create();
+        string work = Path.Combine(Original, "LateWork");
+
+        // Recovery's partial shadow cannot show whether the workspace exists, so it is required until looked for.
+        Assert.Contains(work, application.RequiredSources(Staged, Original, []));
+        Assert.Contains(work, application.RequiredSources(Staged, Original, [Path.Combine(Original, "Other")]));
+        // Archive restore sees the full extraction, so a lazily created workspace is simply absent.
+        Assert.DoesNotContain(work, application.RequiredSources(Staged, Original));
+        // The host looked and the source profile truly never had one.
+        Assert.DoesNotContain(work, application.RequiredSources(Staged, Original, [work.ToUpperInvariant()]));
+
+        // Once the host has copied an existing workspace, it must stay required for every flow.
+        Directory.CreateDirectory(Path.Combine(Staged, "LateWork"));
+        Assert.Contains(work, application.RequiredSources(Staged, Original));
+        Assert.Contains(work, application.RequiredSources(Staged, Original, [work]));
+    }
+
+    [Fact]
     public void KeyedAgentEntriesAreRelocatedWithTheProfile()
     {
         // The main agent's default workspace is written to the configuration before upstream creates it.

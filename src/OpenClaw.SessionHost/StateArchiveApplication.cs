@@ -13,7 +13,8 @@ internal interface IStateArchiveApplication
 {
     StateArchiveApplicationResult Capture(string profile, string output, bool dryRun);
     StateArchiveApplicationResult Extract(string profile, string archive, string destination);
-    IReadOnlyList<string> RequiredSources(string profile, string previousProfile);
+    IReadOnlyList<string> RequiredSources(
+        string profile, string previousProfile, IReadOnlyList<string>? resolvedSources = null);
     void RebaseConfiguration(string profile, string previousProfile, string currentProfile);
 }
 
@@ -65,9 +66,11 @@ internal sealed class StateArchiveApplication : IStateArchiveApplication
             ReadSourceProfile(metadata.RootElement));
     }
 
-    public IReadOnlyList<string> RequiredSources(string profile, string previousProfile)
+    public IReadOnlyList<string> RequiredSources(
+        string profile, string previousProfile, IReadOnlyList<string>? resolvedSources = null)
     {
-        using JsonDocument document = ConfigurationOperation(profile, previousProfile, profile, "inspect");
+        using JsonDocument document = ConfigurationOperation(
+            profile, previousProfile, profile, "inspect", resolvedSources);
         return [.. document.RootElement.GetProperty("requiredSources").EnumerateArray()
             .Select(value => value.GetString() ??
                 throw new SessionLaunchException("A required configuration dependency has no path."))];
@@ -85,7 +88,8 @@ internal sealed class StateArchiveApplication : IStateArchiveApplication
         string profile,
         string previousProfile,
         string currentProfile,
-        string mode)
+        string mode,
+        IReadOnlyList<string>? resolvedSources = null)
     {
         const string expression = """
             import { resolve, relative, isAbsolute, join, dirname, sep } from "node:path";
@@ -95,7 +99,11 @@ internal sealed class StateArchiveApplication : IStateArchiveApplication
             import { pathToFileURL } from "node:url";
             class StateOperationError extends Error {}
             try {
-            const [app, physicalHome, previousHome, currentHome, mode] = process.argv.slice(1);
+            const [app, physicalHome, previousHome, currentHome, mode, resolvedJson] = process.argv.slice(1);
+            // null: the profile is complete (an archive), so every absent lazy directory is truly absent.
+            // A list: recovery discovery, where only paths the host already looked for may be absent.
+            const resolved = JSON.parse(resolvedJson);
+            const looked = resolved === null ? null : new Set(resolved.map((value) => value.toLowerCase()));
             const expectedPath = join(physicalHome, ".openclaw", "openclaw.json");
             const JSON5 = createRequire(join(app, "package.json"))("json5");
             const sdk = (name) => pathToFileURL(resolve(app, "dist", "plugin-sdk", `${name}.js`)).href;
@@ -121,7 +129,8 @@ internal sealed class StateArchiveApplication : IStateArchiveApplication
               suffix(previousHome, absolute);
               // Upstream writes default workspace and agent directories into the configuration
               // before it creates them, so an absent one is nothing to carry, not a missing dependency.
-              if (!optional || existsSync(physical(absolute))) required.add(absolute);
+              if (!optional || (looked !== null && !looked.has(absolute.toLowerCase())) ||
+                  existsSync(physical(absolute))) required.add(absolute);
               return absolute;
             };
             const physical = (absolute) => join(physicalHome, suffix(previousHome, absolute));
@@ -284,9 +293,15 @@ internal sealed class StateArchiveApplication : IStateArchiveApplication
             profile,
             ["--input-type=module", "--eval", expression,
                 _request.ApplicationDirectory!, profile, previousProfile, currentProfile,
-                mode],
+                mode, EncodeResolved(resolvedSources)],
             nodeExpression: true);
     }
+
+    // Hand-built so no reflection-based serializer is needed under NativeAOT.
+    private static string EncodeResolved(IReadOnlyList<string>? resolvedSources) =>
+        resolvedSources is null
+            ? "null"
+            : "[" + string.Join(",", resolvedSources.Select(path => $"\"{System.Text.Encodings.Web.JavaScriptEncoder.Default.Encode(path)}\"")) + "]";
 
     private JsonDocument Run(
         string profile,
