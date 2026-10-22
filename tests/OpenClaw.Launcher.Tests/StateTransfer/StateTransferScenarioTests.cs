@@ -963,6 +963,53 @@ public sealed class StateTransferScenarioTests : IDisposable
     }
 
     [Fact]
+    public async Task RecoveryDoesNotReadAnUnreadableWorkspaceAsNeverCreated()
+    {
+        _application.WorkspaceIsLazy = true;
+        StateTransferCoordinator coordinator = await PrepareAsync();
+        WriteProfile(Current, "current");
+        WriteProfile(Old, "old");
+        Dictionary<string, string> before = Data(Current);
+        string moved = Path.Combine(Old, "Sub", "Work");
+        Directory.CreateDirectory(moved);
+        string config = Path.Combine(Old, ".openclaw", "openclaw.json");
+        File.WriteAllText(config, File.ReadAllText(config).Replace(
+            JsonSerializer.Serialize(Path.Combine(Old, "Work"))[1..^1], JsonSerializer.Serialize(moved)[1..^1],
+            StringComparison.Ordinal));
+        var profile = new DirectoryInfo(Path.Combine(Old, "Sub"));
+        var workspace = new DirectoryInfo(moved);
+        SecurityIdentifier self = WindowsIdentity.GetCurrent().User!;
+        DirectorySecurity profileSecurity = profile.GetAccessControl();
+        DirectorySecurity workspaceSecurity = workspace.GetAccessControl();
+        FileSystemAccessRule hideProfileListing = new(
+            self, FileSystemRights.ListDirectory, InheritanceFlags.None, PropagationFlags.None, AccessControlType.Deny);
+        FileSystemAccessRule hideWorkspaceAttributes = new(
+            self, FileSystemRights.ReadAttributes, InheritanceFlags.None, PropagationFlags.None, AccessControlType.Deny);
+        profileSecurity.AddAccessRule(hideProfileListing);
+        workspaceSecurity.AddAccessRule(hideWorkspaceAttributes);
+        workspace.SetAccessControl(workspaceSecurity);
+        profile.SetAccessControl(profileSecurity);
+        StateArchiveCommandResult result;
+        try
+        {
+            result = await coordinator.RecoverAsync(
+                new RecoverOptions(Old, null, false, true), CancellationToken.None);
+        }
+        finally
+        {
+            profileSecurity.RemoveAccessRule(hideProfileListing);
+            workspaceSecurity.RemoveAccessRule(hideWorkspaceAttributes);
+            profile.SetAccessControl(profileSecurity);
+            workspace.SetAccessControl(workspaceSecurity);
+        }
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("not readable", result.Error, StringComparison.Ordinal);
+        Assert.Equal(before, Data(Current));
+        Assert.Empty(Store.List());
+    }
+
+    [Fact]
     public async Task LockedOfflineSourceCannotBeCapturedOrStopTheGateway()
     {
         StateTransferCoordinator coordinator = await PrepareAsync();

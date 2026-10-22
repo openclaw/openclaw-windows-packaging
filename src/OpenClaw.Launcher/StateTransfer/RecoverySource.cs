@@ -56,14 +56,19 @@ internal sealed class RecoverySource : IDisposable
                 continue;
             }
             // The profile may genuinely lack a configured directory; the helper decides whether that matters.
-            if (!File.Exists(absolute) && !Directory.Exists(absolute))
-            {
-                continue;
-            }
+            // Only a definite not-found counts as absent: an access error must surface, never read as absence.
             try
             {
+                FileAttributes attributes;
+                try
+                {
+                    attributes = File.GetAttributes(absolute);
+                }
+                catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
+                {
+                    continue;
+                }
                 TrustedPath.EnsureNoReparsePoints(ProfilePath, absolute);
-                FileAttributes attributes = File.GetAttributes(absolute);
                 List<string> entries = [absolute];
                 if ((attributes & FileAttributes.Directory) != 0)
                 {
