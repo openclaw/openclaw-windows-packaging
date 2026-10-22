@@ -107,7 +107,7 @@ internal sealed class StateArchiveApplication : IStateArchiveApplication
                 throw new StateOperationError("external-dependency");
               return result;
             };
-            const sourcePath = (value, base = previousHome) => {
+            const sourcePath = (value, base = previousHome, optional = false) => {
               if (typeof value !== "string" || !value.trim() || value.includes("${"))
                 throw new StateOperationError("unresolved-dependency");
               let absolute = value === "~" ? previousHome :
@@ -119,21 +119,23 @@ internal sealed class StateArchiveApplication : IStateArchiveApplication
                   absolute = join(previousHome, inPhysical);
               }
               suffix(previousHome, absolute);
-              required.add(absolute);
+              // Upstream writes default workspace and agent directories into the configuration
+              // before it creates them, so an absent one is nothing to carry, not a missing dependency.
+              if (!optional || existsSync(physical(absolute))) required.add(absolute);
               return absolute;
             };
             const physical = (absolute) => join(physicalHome, suffix(previousHome, absolute));
-            const rebase = (value, base = previousHome) => {
-              const absolute = sourcePath(value, base);
+            const rebase = (value, base = previousHome, optional = false) => {
+              const absolute = sourcePath(value, base, optional);
               return isAbsolute(value) ? join(currentHome, suffix(previousHome, absolute)) : value;
             };
-            const property = (object, key, base) => {
+            const property = (object, key, base, optional = false) => {
               if (object?.[key] !== undefined) {
                 const value = object[key];
                 if (typeof value !== "string" || (!isAbsolute(value) &&
                     value !== "~" && !value.startsWith("~/") && !value.startsWith("~\\")))
                   throw new StateOperationError("unresolved-dependency");
-                object[key] = rebase(value, base);
+                object[key] = rebase(value, base, optional);
               }
             };
             const paths = (object, key) => {
@@ -153,6 +155,10 @@ internal sealed class StateArchiveApplication : IStateArchiveApplication
             ]);
             // Keyed maps whose entries are named by the user: the key is not part of the schema path.
             const mapScopes = new Set(["plugins.installs", "agents.entries"]);
+            const lazyDirectories = new Set([
+              "agents.defaults.workspace", "agents.list.*.workspace", "agents.list.*.agentDir",
+              "agents.entries.*.workspace", "agents.entries.*.agentDir",
+            ]);
             const arrayPaths = new Set(["skills.load.extraDirs", "plugins.load.paths"]);
             const visit = async (draft, base, scope = "") => {
               if (!draft || typeof draft !== "object") return;
@@ -166,7 +172,7 @@ internal sealed class StateArchiveApplication : IStateArchiveApplication
                 if (key === "$include") continue;
                 const childScope = mapScopes.has(scope) ? `${scope}.*` :
                   scope ? `${scope}.${key}` : key;
-                if (scalarPaths.has(childScope)) property(draft, key);
+                if (scalarPaths.has(childScope)) property(draft, key, undefined, lazyDirectories.has(childScope));
                 if (arrayPaths.has(childScope)) paths(draft, key);
                 if (Array.isArray(value)) {
                   for (const child of value) if (child && typeof child === "object")

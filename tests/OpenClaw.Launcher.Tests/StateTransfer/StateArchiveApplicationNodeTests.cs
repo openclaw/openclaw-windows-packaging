@@ -380,7 +380,8 @@ public sealed class StateArchiveApplicationNodeTests : IDisposable
     [Fact]
     public void KeyedAgentEntriesAreRelocatedWithTheProfile()
     {
-        foreach (string directory in new[] { ".openclaw\\workspace", "CustomWork", "CustomAgent" })
+        // The main agent's default workspace is written to the configuration before upstream creates it.
+        foreach (string directory in new[] { "CustomWork", "CustomAgent" })
         {
             Directory.CreateDirectory(Path.Combine(Staged, directory));
         }
@@ -413,7 +414,7 @@ public sealed class StateArchiveApplicationNodeTests : IDisposable
 
         Assert.Contains(Path.Combine(Original, "CustomWork"), sources);
         Assert.Contains(Path.Combine(Original, "CustomAgent"), sources);
-        Assert.Contains(Path.Combine(Original, ".openclaw", "workspace"), sources);
+        Assert.DoesNotContain(Path.Combine(Original, ".openclaw", "workspace"), sources);
         JsonNode entries = JsonNode.Parse(File.ReadAllText(Config))!["agents"]!["entries"]!;
         Assert.Equal(Path.Combine(Target, ".openclaw", "workspace"), entries["main"]!["workspace"]!.GetValue<string>());
         Assert.Equal(Path.Combine(Target, "CustomWork"), entries["custom"]!["workspace"]!.GetValue<string>());
@@ -425,6 +426,8 @@ public sealed class StateArchiveApplicationNodeTests : IDisposable
     public void EffectiveSdkConfigurationAlsoContributesRequiredDependencies()
     {
         WriteConfiguration(Path.Combine(Original, "Work"));
+        // Only directories that exist in the profile are dependencies; absent ones are created lazily.
+        Directory.CreateDirectory(Path.Combine(Staged, "CustomAgent"));
         string effective = Path.Combine(_root, "effective.json");
         File.WriteAllText(effective, new JsonObject
         {
