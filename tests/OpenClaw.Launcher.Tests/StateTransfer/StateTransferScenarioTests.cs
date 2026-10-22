@@ -372,7 +372,7 @@ public sealed class StateTransferScenarioTests : IDisposable
         };
 
         SessionLaunchException attached = Assert.Throws<SessionLaunchException>(
-            () => new SessionProcessLauncher(Access.EnterReader).Run(launch));
+            () => new SessionProcessLauncher(enterState: Access.EnterReader).Run(launch));
         Assert.Contains("activation is pending", attached.Message, StringComparison.OrdinalIgnoreCase);
         SessionLaunchRequest detached = launch with
         {
@@ -412,7 +412,7 @@ public sealed class StateTransferScenarioTests : IDisposable
             new RestoreOptions(null, false, true, true), CancellationToken.None);
 
         Assert.Equal(0, rollback.ExitCode);
-        Assert.Equal(0, new SessionProcessLauncher(Access.EnterReader).Run(launch));
+        Assert.Equal(0, new SessionProcessLauncher(enterState: Access.EnterReader).Run(launch));
         Assert.True(File.Exists(marker));
         using IDisposable maintenance = Access.EnterMaintenance();
     }
