@@ -199,6 +199,45 @@ internal sealed class StateArchiveApplication : IStateArchiveApplication
               for (const [path, { draft }] of documents)
                 await writeFile(physical(path), JSON.stringify(draft, null, 2) + "\n");
             };
+            // The global registry stores a custom agent's database as an absolute path.
+            // A path inside the previous profile must follow the profile, or the upstream
+            // producer would stat (or capture) the abandoned original instead of this copy.
+            // State-relative rows already move with the state directory and are left alone.
+            const relocateAgentDatabases = async () => {
+              const registry = join(physicalHome, ".openclaw", "state", "openclaw.sqlite");
+              if (!existsSync(registry)) return;
+              const { DatabaseSync } = await import("node:sqlite");
+              const database = new DatabaseSync(registry);
+              try {
+                const table = database.prepare(
+                  "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_databases'").get();
+                if (!table) return;
+                database.exec("BEGIN IMMEDIATE");
+                try {
+                  const move = database.prepare(
+                    "UPDATE OR REPLACE agent_databases SET path = ? WHERE agent_id = ? AND path = ?");
+                  for (const row of database.prepare("SELECT agent_id, path FROM agent_databases").all()) {
+                    if (typeof row.path !== "string" || !isAbsolute(row.path)) continue;
+                    let absolute = resolve(row.path);
+                    const inPhysical = relative(physicalHome, absolute);
+                    if (!isAbsolute(inPhysical) && inPhysical !== ".." && !inPhysical.startsWith(`..${sep}`))
+                      absolute = join(previousHome, inPhysical);
+                    const inPrevious = relative(previousHome, absolute);
+                    if (isAbsolute(inPrevious) || inPrevious === ".." || inPrevious.startsWith(`..${sep}`)) continue;
+                    const target = join(currentHome, inPrevious);
+                    if (target !== row.path) move.run(target, row.agent_id, row.path);
+                  }
+                  database.exec("COMMIT");
+                } catch (error) {
+                  database.exec("ROLLBACK");
+                  throw error;
+                }
+              } catch (error) {
+                throw error instanceof StateOperationError ? error : new StateOperationError("invalid-registry");
+              } finally {
+                database.close();
+              }
+            };
             if (mode === "inspect" && !missing()) {
               await writeDocuments();
               const snapshot = await readSnapshot();
@@ -218,6 +257,7 @@ internal sealed class StateArchiveApplication : IStateArchiveApplication
               // Included files must be relocated before the upstream loader can resolve them.
               // All writes are in task-owned staging, never the original account's profile.
               await writeDocuments();
+              await relocateAgentDatabases();
               if (currentHome === physicalHome) {
                 const snapshot = await readSnapshot();
                 if (snapshot.exists) await mutate();
@@ -328,6 +368,7 @@ internal sealed class StateArchiveApplication : IStateArchiveApplication
                     "external-dependency" => "Recovery requires a configuration, workspace, plugin, skill, or agent path outside the profile.",
                     "unresolved-dependency" => "A configured path is relative, environment-dependent, or otherwise unresolvable for automatic recovery.",
                     "missing-dependency" => "Recovery is missing a required profile-contained dependency.",
+                    "invalid-registry" => "The agent database registry in the profile could not be relocated.",
                     _ => "The recovery configuration is invalid, unreadable, or unsupported by the bundled SDK."
                 };
             }

@@ -258,6 +258,144 @@ public sealed class StateArchiveApplicationNodeTests : IDisposable
     }
 
     [Fact]
+    public void RegisteredCustomAgentDatabaseFollowsTheProfileThroughBothRebases()
+    {
+        string customDatabase = Path.Combine(Staged, "CustomAgent", "agent.sqlite");
+        string registry = Path.Combine(Staged, ".openclaw", "state", "openclaw.sqlite");
+        string external = Path.Combine(_root, "elsewhere", "external.sqlite");
+        Directory.CreateDirectory(Path.GetDirectoryName(customDatabase)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(registry)!);
+        File.WriteAllText(Config, new JsonObject
+        {
+            ["gateway"] = new JsonObject { ["mode"] = "local" },
+            ["agents"] = new JsonObject
+            {
+                ["list"] = new JsonArray(new JsonObject
+                {
+                    ["id"] = "custom",
+                    ["agentDir"] = Path.Combine(Original, "CustomAgent")
+                })
+            }
+        }.ToJsonString());
+        RunSqlite(customDatabase, """
+            CREATE TABLE sessions (id TEXT PRIMARY KEY, note TEXT NOT NULL) STRICT;
+            INSERT INTO sessions VALUES ('s1', 'custom-agent-row');
+            """);
+        RunNode("""
+            import { DatabaseSync } from "node:sqlite";
+            const database = new DatabaseSync(process.argv[1]);
+            database.exec(`CREATE TABLE agent_databases (
+              agent_id TEXT NOT NULL, path TEXT NOT NULL, schema_version INTEGER NOT NULL,
+              last_seen_at INTEGER NOT NULL, size_bytes INTEGER, PRIMARY KEY (agent_id, path)) STRICT`);
+            const insert = database.prepare("INSERT INTO agent_databases VALUES (?, ?, 1, ?, 0)");
+            insert.run("main", "agents/main/agent/openclaw-agent.sqlite", 1);
+            insert.run("custom", process.argv[2], 2);
+            insert.run("external", process.argv[3], 3);
+            database.close();
+            """, registry, Path.Combine(Original, "CustomAgent", "agent.sqlite"), external);
+        StateArchiveApplication application = Create();
+
+        application.RebaseConfiguration(Staged, Original, Staged);
+
+        Assert.Equal(
+            [
+                "custom|" + customDatabase,
+                "external|" + external,
+                "main|agents/main/agent/openclaw-agent.sqlite"
+            ],
+            ReadRegistry(registry));
+        // The registered locator now resolves to a real, readable custom-agent database.
+        Assert.Equal("custom-agent-row", ReadSingle(customDatabase, "SELECT note FROM sessions"));
+
+        application.RebaseConfiguration(Staged, Staged, Target);
+
+        Assert.Equal(
+            [
+                "custom|" + Path.Combine(Target, "CustomAgent", "agent.sqlite"),
+                "external|" + external,
+                "main|agents/main/agent/openclaw-agent.sqlite"
+            ],
+            ReadRegistry(registry));
+        Assert.False(Directory.Exists(Original));
+    }
+
+    [Fact]
+    public void ARegistryWithoutAgentDatabasesIsLeftUntouched()
+    {
+        string registry = Path.Combine(Staged, ".openclaw", "state", "openclaw.sqlite");
+        Directory.CreateDirectory(Path.GetDirectoryName(registry)!);
+        RunSqlite(registry, "CREATE TABLE unrelated (value TEXT NOT NULL) STRICT; INSERT INTO unrelated VALUES ('kept');");
+        WriteConfiguration(Path.Combine(Original, "Work"));
+
+        Create().RebaseConfiguration(Staged, Original, Staged);
+
+        Assert.Equal("kept", ReadSingle(registry, "SELECT value FROM unrelated"));
+    }
+
+    [Fact]
+    public void AnUnreadableRegistryBlocksWithAnActionableMessage()
+    {
+        string registry = Path.Combine(Staged, ".openclaw", "state", "openclaw.sqlite");
+        Directory.CreateDirectory(Path.GetDirectoryName(registry)!);
+        File.WriteAllText(registry, "this is not a sqlite database, and is longer than the header check");
+        WriteConfiguration(Path.Combine(Original, "Work"));
+
+        SessionLaunchException failure = Assert.Throws<SessionLaunchException>(() =>
+            Create().RebaseConfiguration(Staged, Original, Staged));
+
+        Assert.Contains("agent database registry", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("No source or live state was changed", failure.Message, StringComparison.Ordinal);
+    }
+
+    private static string FindNode() => (Environment.GetEnvironmentVariable("PATH") ?? "")
+        .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+        .Select(directory => Path.Combine(directory.Trim('"'), "node.exe"))
+        .First(File.Exists);
+
+    private static string RunNode(string script, params string[] arguments)
+    {
+        System.Diagnostics.ProcessStartInfo start = new(FindNode())
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        };
+        start.ArgumentList.Add("--input-type=module");
+        start.ArgumentList.Add("--eval");
+        start.ArgumentList.Add(script);
+        foreach (string argument in arguments)
+        {
+            start.ArgumentList.Add(argument);
+        }
+        using System.Diagnostics.Process process = System.Diagnostics.Process.Start(start)!;
+        Task<string> error = process.StandardError.ReadToEndAsync();
+        string output = process.StandardOutput.ReadToEnd();
+        Assert.True(process.WaitForExit(TimeSpan.FromSeconds(30)), "node did not exit");
+        Assert.True(process.ExitCode == 0, error.GetAwaiter().GetResult());
+        return output.TrimEnd();
+    }
+
+    private static void RunSqlite(string database, string sql) => RunNode("""
+        import { DatabaseSync } from "node:sqlite";
+        const database = new DatabaseSync(process.argv[1]);
+        database.exec(process.argv[2]);
+        database.close();
+        """, database, sql);
+
+    private static string ReadSingle(string database, string query) => RunNode("""
+        import { DatabaseSync } from "node:sqlite";
+        const database = new DatabaseSync(process.argv[1], { readOnly: true });
+        console.log(Object.values(database.prepare(process.argv[2]).get())[0]);
+        """, database, query);
+
+    private static string[] ReadRegistry(string registry) => RunNode("""
+        import { DatabaseSync } from "node:sqlite";
+        const database = new DatabaseSync(process.argv[1], { readOnly: true });
+        for (const row of database.prepare("SELECT agent_id, path FROM agent_databases ORDER BY agent_id").all())
+          console.log(`${row.agent_id}|${row.path}`);
+        """, registry).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    [Fact]
     public void EffectiveSdkConfigurationAlsoContributesRequiredDependencies()
     {
         WriteConfiguration(Path.Combine(Original, "Work"));
