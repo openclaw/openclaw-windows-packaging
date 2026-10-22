@@ -673,6 +673,39 @@ jobs:
             throw "Unable to download $env:BASELINE_RELEASE_TAG upgrade baseline."
           }
 
+      - name: Prepare fresh Store delivery state
+        if: ${{ matrix.transition_mode == 'store-in-place' }}
+        timeout-minutes: 2
+        shell: pwsh
+        env:
+          STORE_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:STORE_RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:RUNNER_OS -cne 'Windows') {
+            throw 'Store delivery preparation requires a disposable GitHub-hosted Windows runner.'
+          }
+          # Hosted images can retain WU configuration that Store rejects with
+          # ConfigChanged (0x80244007). Start fresh before the single install.
+          $preparationError = $null
+          try {
+            Stop-Service -Name wuauserv -Force
+            $cache = Join-Path $env:SystemRoot 'SoftwareDistribution'
+            if (Test-Path -LiteralPath $cache) {
+              Rename-Item -LiteralPath $cache -NewName 'SoftwareDistribution.openclaw-store-baseline'
+            }
+          }
+          catch {
+            $preparationError = $_
+            throw
+          }
+          finally {
+            try { Start-Service -Name wuauserv }
+            catch {
+              if ($null -eq $preparationError) { throw }
+              Write-Warning "Windows Update restart also failed: $($_.Exception.Message)"
+            }
+          }
+
       - name: Test package transition
         shell: pwsh
         env:

@@ -222,3 +222,93 @@ Assert-WorkflowClassification `
     -SigningMode unsigned `
     -ExpectedVersioning $false
 Write-Host 'Workflow dispatch classification contracts passed.'
+
+# Run the real Store preparation step against a fake Windows directory and
+# service operations. Never change the test host's service or update state.
+$storeStep = [regex]::Match(
+    $workflow,
+    '(?ms)^      - name: Prepare fresh Store delivery state\r?\n' +
+        '.*?^        run: \|\r?\n' +
+        '(?<script>(?:^ {10}[^\r\n]*\r?\n|^\r?\n)+)'
+)
+if (-not $storeStep.Success) { throw 'Unable to locate Store preparation.' }
+$storeScript = [scriptblock]::Create(
+    [regex]::Replace($storeStep.Groups['script'].Value, '(?m)^ {10}', '')
+)
+
+function Assert-StorePreparation {
+    param([string]$Scenario)
+
+    $root = Join-Path ([IO.Path]::GetTempPath()) "openclaw-store-state-$([guid]::NewGuid().ToString('N'))"
+    $saved = @{}
+    foreach ($name in @('SystemRoot', 'RUNNER_OS', 'STORE_RUNNER_ENVIRONMENT')) {
+        $saved[$name] = [Environment]::GetEnvironmentVariable($name)
+    }
+    $calls = [Collections.Generic.List[string]]::new()
+    function Stop-Service {
+        param([string]$Name, [switch]$Force)
+        if ($Name -cne 'wuauserv' -or -not $Force) { throw 'Unexpected service stop.' }
+        $calls.Add('stop')
+        if ($Scenario -in @('stop-failure', 'both-services-fail')) { throw 'Fixture stop failure.' }
+    }
+    function Start-Service {
+        param([string]$Name)
+        if ($Name -cne 'wuauserv') { throw 'Unexpected service start.' }
+        $calls.Add('start')
+        if ($Scenario -in @('start-failure', 'both-services-fail')) { throw 'Fixture start failure.' }
+    }
+    try {
+        New-Item -Path $root -ItemType Directory | Out-Null
+        $env:SystemRoot = $root
+        $env:RUNNER_OS = if ($Scenario -ceq 'wrong-os') { 'Linux' } else { 'Windows' }
+        $env:STORE_RUNNER_ENVIRONMENT = if ($Scenario -ceq 'self-hosted') { 'self-hosted' } else { 'github-hosted' }
+        $cache = Join-Path $root 'SoftwareDistribution'
+        $retained = Join-Path $root 'SoftwareDistribution.openclaw-store-baseline'
+        if ($Scenario -cne 'absent-cache') {
+            New-Item -Path $cache -ItemType Directory | Out-Null
+            [IO.File]::WriteAllText((Join-Path $cache 'state'), 'stale-configuration')
+        }
+        if ($Scenario -ceq 'rename-failure') {
+            New-Item -Path $retained -ItemType Directory | Out-Null
+        }
+        $failure = $null
+        try { & $storeScript }
+        catch { $failure = $_ }
+        if ($Scenario -in @('self-hosted', 'wrong-os')) {
+            if ($null -eq $failure -or $failure.Exception.Message -notmatch 'disposable' -or $calls.Count -ne 0) {
+                throw 'An unsupported runner was not rejected before mutation.'
+            }
+        }
+        else {
+            if (($calls -join ',') -cne 'stop,start') { throw 'Service lifecycle was not preserved.' }
+            if ($Scenario -ceq 'start-failure') {
+                if ($null -eq $failure -or $failure.Exception.Message -cne 'Fixture start failure.') {
+                    throw 'Restart failure was not propagated.'
+                }
+            }
+            elseif ($Scenario -in @('stop-failure', 'rename-failure', 'both-services-fail')) {
+                if ($null -eq $failure -or -not (Test-Path -LiteralPath (Join-Path $cache 'state'))) {
+                    throw 'Preparation failure was swallowed or original state lost.'
+                }
+                if ($Scenario -ceq 'both-services-fail' -and $failure.Exception.Message -cne 'Fixture stop failure.') {
+                    throw 'Restart failure replaced the original preparation failure.'
+                }
+            }
+            else {
+                if ($null -ne $failure) { throw $failure }
+                if (Test-Path -LiteralPath $cache) { throw 'Stale cache is still active.' }
+                if ($Scenario -ceq 'stale-cache' -and [IO.File]::ReadAllText((Join-Path $retained 'state')) -cne 'stale-configuration') {
+                    throw 'The previous cache was not retained.'
+                }
+            }
+        }
+    }
+    finally {
+        foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+        Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+foreach ($scenario in @('stale-cache', 'absent-cache', 'self-hosted', 'wrong-os', 'stop-failure', 'rename-failure', 'start-failure', 'both-services-fail')) {
+    Assert-StorePreparation $scenario
+}
+Write-Host 'Store runner preparation: 8 scenarios passed.'
