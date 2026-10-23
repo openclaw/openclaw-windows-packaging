@@ -108,7 +108,11 @@ internal static class SessionSupervisor
 
         // The shared launcher creates suspended, assigns the job, then resumes.
         // Assigning after Process.Start leaves a window for orphan descendants.
-        using WindowsKillOnCloseJob job = WindowsKillOnCloseJob.Create();
+        // Published by name so a stop that kills this supervisor can still pin and drain the gateway tree;
+        // otherwise the kill releases the state lease while the tree is still dying.
+        using Process self = Process.GetCurrentProcess();
+        using WindowsKillOnCloseJob job = WindowsKillOnCloseJob.Create(WindowsKillOnCloseJob.GatewayJobName(
+            self.Id, self.StartTime.ToUniversalTime().Ticks));
         using var input = new FileStream("NUL", FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         using Process process = job.StartProcess(startInfo, input.SafeFileHandle, log.SafeFileHandle, log.SafeFileHandle);
 

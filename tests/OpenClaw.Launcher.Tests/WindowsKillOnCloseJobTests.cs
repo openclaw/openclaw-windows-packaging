@@ -63,6 +63,33 @@ public sealed class WindowsKillOnCloseJobTests
     }
 
     [Fact]
+    public void TerminateAndWaitStopsNestedDescendants()
+    {
+        using WindowsKillOnCloseJob job = WindowsKillOnCloseJob.Create();
+        using var stdin = new AnonymousPipeServerStream(PipeDirection.Out, HandleInheritability.None);
+        using Process parent = job.StartProcess(
+            new ProcessStartInfo
+            {
+                FileName = Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+                UseShellExecute = false,
+                ArgumentList = { "/d", "/c", "start", "/b", "cmd.exe", "/d", "/c", "set", "/p", "line=", "&", "set", "/p", "line=" }
+            },
+            stdin.ClientSafePipeHandle, output: null, standardError: null);
+        stdin.DisposeLocalCopyOfClientHandle();
+        Stopwatch wait = Stopwatch.StartNew();
+        while (job.ActiveProcessCount < 2 && wait.Elapsed < TimeSpan.FromSeconds(10))
+        {
+            Thread.Sleep(10);
+        }
+        Assert.True(job.ActiveProcessCount >= 2);
+
+        job.TerminateAndWait(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(0, job.ActiveProcessCount);
+        Assert.True(parent.HasExited);
+    }
+
+    [Fact]
     public async Task FastExitRetainsExitCodeAfterDelayedObservation()
     {
         using WindowsKillOnCloseJob job = WindowsKillOnCloseJob.Create();

@@ -429,9 +429,14 @@ existing readers must finish before maintenance can obtain exclusive access.
 A separate worker lease prevents rollback while an activation worker remains
 alive. Kernel-released leases provide liveness without trusting a reusable PID.
 The helpers own child process trees in kill-on-close jobs so a lease cannot end
-while their descendants keep writing; disposing such a job terminates it and
-waits until no member remains, and a member that outlives termination fails the
-operation instead of releasing the lease. Inspection and diagnostics remain
+while their descendants keep writing; disposing such a job closes admission, pins
+every member by handle, terminates it, and waits on each pinned handle (not job
+accounting) before the lease is released. A member that outlives termination
+fails the operation; the state leases still unwind with that error, which is
+deliberate fail-closed behavior rather than an unkillable process blocking every
+later maintenance operation. The supervised gateway's job is published under a
+name bound to its supervisor, so a stop that kills the supervisor still waits out
+the whole gateway tree before it reports success. Inspection and diagnostics remain
 available when activation is pending. Successful activation or explicit
 rollback clears intent; an unreadable journal fails closed. Finalized state
 remains finalized if deleting disposable transaction data or a private recovery

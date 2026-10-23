@@ -198,6 +198,10 @@ internal sealed class SessionProcessLauncher(
             process.ExitCode, capturedOutput, capturedError);
     }
 
+    // Fail-closed, by decision: when the tree cannot be confirmed gone the operation fails loudly, but the state
+    // leases held by the caller still unwind with this exception, so a later maintenance operation is not blocked
+    // forever by an unkillable process. The failure is not silent and names the unconfirmed tree; it is documented
+    // in the pull request as a known limitation rather than papered over with a surviving lease owner.
     private static void ThrowIfUnconfirmed(WindowsKillOnCloseJob job)
     {
         if (!job.ExitConfirmed)
