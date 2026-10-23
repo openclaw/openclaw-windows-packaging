@@ -196,11 +196,22 @@ internal static class Program
 
                         using (restore)
                         {
-                            ClawCtlConsole.WriteUnexpectedFailure(
-                                error,
-                                command,
-                                exception.Message,
-                                useColor);
+                            if (exception is Session.InteractiveLogonRequiredException)
+                            {
+                                ClawCtlConsole.WriteActionableFailure(
+                                    error,
+                                    command,
+                                    exception.Message,
+                                    useColor);
+                            }
+                            else
+                            {
+                                ClawCtlConsole.WriteUnexpectedFailure(
+                                    error,
+                                    command,
+                                    exception.Message,
+                                    useColor);
+                            }
                         }
                     }, "standard error");
                 }

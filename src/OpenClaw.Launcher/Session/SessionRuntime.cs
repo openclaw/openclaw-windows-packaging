@@ -31,7 +31,8 @@ internal sealed class SessionRuntime
         HostPaths paths,
         SetupStateStore setupState,
         GatewayStateStore gatewayState,
-        ISessionLock lifecycleLock)
+        ISessionLock lifecycleLock,
+        Func<bool?> isInteractiveLogon)
     {
         Coordinator = coordinator;
         Executor = executor;
@@ -42,7 +43,10 @@ internal sealed class SessionRuntime
         SetupState = setupState;
         GatewayState = gatewayState;
         LifecycleLock = lifecycleLock;
+        _isInteractiveLogon = isInteractiveLogon;
     }
+
+    private readonly Func<bool?> _isInteractiveLogon;
 
     public SessionCoordinator Coordinator { get; }
 
@@ -80,9 +84,19 @@ internal sealed class SessionRuntime
         }
         catch (MxcException exception) when (exception.Code == MxcErrorCode.RuntimeUnavailable)
         {
+            if (IsActivationAccessDenied(exception) && _isInteractiveLogon() == false)
+            {
+                throw SessionSupportPolicy.NonInteractiveLogon(exception);
+            }
+
             throw new SessionCapabilityUnavailableException(exception.Message, exception);
         }
     }
+
+    private const string AccessDeniedNativeCode = "0x80070005";
+
+    private static bool IsActivationAccessDenied(MxcException exception) =>
+        string.Equals(exception.NativeCode, AccessDeniedNativeCode, StringComparison.OrdinalIgnoreCase);
 
     public string StageHelper(SessionRecord record)
     {
@@ -113,7 +127,8 @@ internal sealed class SessionRuntime
         string baseDirectory,
         Action<string> log,
         IMxcSessionClient? backend = null,
-        ISessionLock? lifecycleLock = null)
+        ISessionLock? lifecycleLock = null,
+        Func<bool?>? isInteractiveLogon = null)
     {
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(log);
@@ -150,7 +165,8 @@ internal sealed class SessionRuntime
             new SetupStateStore(paths.SetupStatePath),
             new GatewayStateStore(paths.GatewayStatePath),
             lifecycleLock ??
-                new NamedSessionLock(paths.SessionStatePath + "_Installation"));
+                new NamedSessionLock(paths.SessionStatePath + "_Installation"),
+            isInteractiveLogon ?? WindowsLogon.IsInteractive);
 
     }
 

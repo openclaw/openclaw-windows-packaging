@@ -366,6 +366,53 @@ public sealed class ProgramStartupTests : IDisposable
             Error = error
         };
 
+    // Over SSH the new logon guidance rendered, but clawctl still appended
+    // "This shouldn't happen. Please report it", inviting bug reports for a
+    // refusal the user fixes by opening a desktop terminal.
+    [Fact]
+    public async Task NonInteractiveLogonRefusalIsNotReportedAsADefect()
+    {
+        string baseDirectory = Path.Combine(_testDirectory, "package");
+        Directory.CreateDirectory(Path.Combine(baseDirectory, "app"));
+        await File.WriteAllTextAsync(
+            Path.Combine(baseDirectory, "app", "openclaw.mjs"),
+            "fixture");
+        string helperPath = SessionRuntime.ResolveHelperPath(baseDirectory);
+        Directory.CreateDirectory(Path.GetDirectoryName(helperPath)!);
+        await File.WriteAllTextAsync(helperPath, "fixture");
+        var backend = new FakeMxcSessionClient();
+        SessionRuntime runtime = SessionRuntime.Create(
+            HostPaths.ForRoot(Path.Combine(_testDirectory, "state"), "OpenClaw.Gateway_startup"),
+            () => throw new InvalidOperationException("The test supplies its backend."),
+            baseDirectory,
+            _ => { },
+            backend);
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        HostStartup startup = new()
+        {
+            Entrypoint = HostEntrypoint.Control,
+            CreateDiagnostics = () => HostDiagnosticLog.Create(
+                Path.Combine(_testDirectory, "logs", "openclaw.log")),
+            BaseDirectory = baseDirectory,
+            Output = output,
+            Error = error,
+            InstallationLifecycle = new SupportedHostLifecycle(
+                runtime,
+                SessionSupportPolicy.NonInteractiveLogon())
+        };
+
+        int exitCode = await Program.RunAsync(["setup", "--no-color"], startup);
+
+        Assert.Equal(1, exitCode);
+        string text = error.ToString();
+        Assert.Contains("interactive", text, StringComparison.Ordinal);
+        Assert.Contains("desktop session", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("shouldn't happen", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("collect-logs", text, StringComparison.Ordinal);
+        Assert.Empty(backend.Calls);
+    }
+
     // A field report arrived as "Unhandled failure: MxcException" and nothing
     // else: setup had provisioned the session and MXC refused to start it, but
     // the bundle named neither the backend's error nor the build it ran on.
@@ -463,14 +510,15 @@ public sealed class ProgramStartupTests : IDisposable
     /// Reports the host as supported and supplies the runtime under test.
     /// Setup must fail before anything else here is reached.
     /// </summary>
-    private sealed class SupportedHostLifecycle(SessionRuntime runtime)
+    private sealed class SupportedHostLifecycle(SessionRuntime runtime, Exception? supportFailure = null)
         : IInstallationLifecycle
     {
         public SessionRuntime CreateRuntime(Action<string> log) => runtime;
 
         public Task EnsureSessionSupportedAsync(
             Action<string> log,
-            CancellationToken cancellationToken) => Task.CompletedTask;
+            CancellationToken cancellationToken) =>
+            supportFailure is null ? Task.CompletedTask : Task.FromException(supportFailure);
 
         public PackageRuntimeMetadata ValidatePackageRuntime(
             HostOptions options,

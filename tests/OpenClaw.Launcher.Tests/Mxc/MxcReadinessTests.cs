@@ -90,6 +90,27 @@ public sealed class MxcReadinessTests : IDisposable
     }
 
     [Fact]
+    public async Task UnavailableProbeFromANonInteractiveLogonIsRefusedForTheLogon()
+    {
+        string runtimeDirectory = StageRuntime();
+
+        MxcReadinessReport report = await MxcReadiness.ProbeAsync(
+            RuntimeAt(runtimeDirectory),
+            () => new MxcHostBuild(29683, 1000),
+            BackendReports(available: false),
+            CancellationToken.None,
+            () => false);
+
+        Assert.Contains("caller logon non-interactive", report.Describe(), StringComparison.Ordinal);
+        OpenClaw.Launcher.Session.InteractiveLogonRequiredException failure =
+            Assert.Throws<OpenClaw.Launcher.Session.InteractiveLogonRequiredException>(
+                () => OpenClaw.Launcher.Session.SessionSupportPolicy.EnsureSupported(
+                    "OpenClaw.Gateway_abc123",
+                    report));
+        Assert.Contains("interactive sign-in", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task BackendProbeOverridesAnOtherwiseUnsupportedBuild()
     {
         string runtimeDirectory = StageRuntime();

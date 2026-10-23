@@ -12,6 +12,7 @@ public sealed class ProgramTests : IDisposable
 {
     private readonly string _testDirectory = TestDirectory.Create();
     private FakeMxcSessionClient? _lastSessionBackend;
+    private bool? _interactiveLogon = true;
 
     [Fact]
     public async Task AgentForwardsEveryArgumentIntoTheSession()
@@ -1197,6 +1198,47 @@ public sealed class ProgramTests : IDisposable
 
         Assert.Contains("not available", failure.Message, StringComparison.Ordinal);
     }
+
+    // An SSH or remoting shell has no INTERACTIVE group, and the Windows
+    // IsolationSession broker refuses its COM activation with access denied.
+    // That surfaced as "This shouldn't happen" and was misread as an elevation
+    // defect; the user needs to be told to use a desktop terminal instead.
+    [Fact]
+    public async Task NonInteractiveActivationDenialNamesTheLogonInsteadOfAnUnexpectedFailure()
+    {
+        SessionRuntime runtime = await SetUpSessionAsync();
+        _interactiveLogon = false;
+        _lastSessionBackend!.StartFailure = ActivationAccessDenied();
+
+        InteractiveLogonRequiredException failure =
+            await Assert.ThrowsAsync<InteractiveLogonRequiredException>(
+                () => RunAgentOnSupportedHostAsync(runtime));
+
+        Assert.Contains("interactive sign-in", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("desktop session", failure.Message, StringComparison.Ordinal);
+        Assert.Same(_lastSessionBackend.StartFailure, failure.InnerException);
+    }
+
+    [Fact]
+    public async Task InteractiveActivationDenialStaysAnUnexpectedCapabilityFailure()
+    {
+        SessionRuntime runtime = await SetUpSessionAsync();
+        _lastSessionBackend!.StartFailure = ActivationAccessDenied();
+
+        SessionCapabilityUnavailableException failure =
+            await Assert.ThrowsAsync<SessionCapabilityUnavailableException>(
+                () => RunAgentOnSupportedHostAsync(runtime));
+
+        Assert.Contains("Access is denied", failure.Message, StringComparison.Ordinal);
+    }
+
+    private static MxcException ActivationAccessDenied() =>
+        new(
+            MxcErrorCode.RuntimeUnavailable,
+            "IsolationSession runtime API activation failed: Access is denied. (native code 0x80070005)",
+            "BackendUnavailable",
+            operation: "IsoSessionOps.ActivateInstance",
+            nativeCode: "0x80070005");
 
     [Fact]
     public async Task TeardownRequiresForceBeforeRemovingTheSession()
@@ -3274,7 +3316,8 @@ public sealed class ProgramTests : IDisposable
             () => throw new InvalidOperationException("The test backend must be supplied."),
             baseDirectory,
             _ => { },
-            backend);
+            backend,
+            isInteractiveLogon: () => _interactiveLogon);
     }
 
     private static void ConfigureGatewayLaunch(

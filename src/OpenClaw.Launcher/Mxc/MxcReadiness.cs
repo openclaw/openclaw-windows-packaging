@@ -47,7 +47,8 @@ internal sealed record MxcReadinessReport(
     MxcHostBuild? HostBuild,
     MxcSupportEvidence SupportEvidence,
     MxcBackendProbe? BackendProbe = null,
-    string? BackendProbeFailureReason = null)
+    string? BackendProbeFailureReason = null,
+    bool? InteractiveLogon = null)
 {
     public bool RuntimeAvailable => RuntimeUnavailableReason is null;
 
@@ -71,7 +72,10 @@ internal sealed record MxcReadinessReport(
         return $"{HostSupport} from {SupportEvidence} evidence; host build " +
             $"{HostBuild?.ToString() ?? "unknown"}; runtime {runtime}; backend probe {probe}" +
             (BackendProbe?.NativeVersion is { Length: > 0 } nativeVersion
-                ? $"; native version {nativeVersion}" : string.Empty);
+                ? $"; native version {nativeVersion}" : string.Empty) +
+            (InteractiveLogon is { } interactive
+                ? $"; caller logon {(interactive ? "interactive" : "non-interactive")}"
+                : string.Empty);
     }
 }
 
@@ -110,7 +114,8 @@ internal static class MxcReadiness
             MxcRuntimeLocator.Locate,
             WindowsHostBuild.TryRead,
             MxcSdkSessionClient.ProbeBackendAsync,
-            cancellationToken);
+            cancellationToken,
+            WindowsLogon.IsInteractive);
 
     [SuppressMessage(
         "Design",
@@ -126,7 +131,8 @@ internal static class MxcReadiness
         Func<MxcRuntimeLocation> locateRuntime,
         Func<MxcHostBuild?> readHostBuild,
         Func<MxcRuntimeLocation, CancellationToken, Task<MxcBackendProbe>> probeBackend,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<bool?>? readInteractiveLogon = null)
     {
         string? runtimeDirectory = null;
         MxcRuntimeProvenance? provenance = null;
@@ -196,7 +202,8 @@ internal static class MxcReadiness
             hostBuild,
             evidence,
             backendProbe,
-            probeFailure);
+            probeFailure,
+            readInteractiveLogon?.Invoke());
     }
 
     private static MxcHostSupport Classify(MxcHostBuild? hostBuild)
@@ -216,6 +223,35 @@ internal static class MxcReadiness
         return hostBuild.UpdateBuildRevision >= MinimumHostBuild.UpdateBuildRevision
             ? MxcHostSupport.Supported
             : MxcHostSupport.Unsupported;
+    }
+}
+
+/// <summary>
+/// Whether this process runs under an interactive Windows logon.
+/// </summary>
+/// <remarks>
+/// The Windows IsolationSession broker grants COM launch and activation only
+/// to INTERACTIVE and SYSTEM, so a process without the INTERACTIVE group (SSH,
+/// PowerShell remoting, a service, or a scheduled task that runs whether the
+/// user is signed in or not) is refused with E_ACCESSDENIED before any session
+/// call, and the SDK's backend probe then reports the backend as unavailable.
+/// Elevation does not matter: an elevated desktop terminal is interactive.
+/// The fact only explains that refusal; Windows owns the decision.
+/// </remarks>
+internal static class WindowsLogon
+{
+    private const string InteractiveSid = "S-1-5-4";
+
+    public static bool? IsInteractive()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return null;
+        }
+
+        using System.Security.Principal.WindowsIdentity identity =
+            System.Security.Principal.WindowsIdentity.GetCurrent();
+        return identity.Groups?.Any(group => group.Value == InteractiveSid) ?? false;
     }
 }
 

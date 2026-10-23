@@ -61,6 +61,27 @@ public sealed class SessionSupportPolicyTests
         AssertRecommendsNewerWindows(exception);
     }
 
+    // The probe's activation is refused for a non-interactive logon (SSH,
+    // remoting) on a fully supported build; "install a newer Windows" sent
+    // users chasing updates they already had.
+    [Fact]
+    public void ProbeUnavailableFromANonInteractiveLogonNamesTheLogonNotTheBuild()
+    {
+        InteractiveLogonRequiredException exception = Assert.Throws<InteractiveLogonRequiredException>(
+            () => SessionSupportPolicy.EnsureSupported(
+                PackageFamilyName,
+                Ready(backendAvailable: false) with { InteractiveLogon = false }));
+
+        Assert.Contains("interactive sign-in", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("newer version of Windows", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NonInteractiveLogonOnAnAvailableBackendIsAccepted() =>
+        SessionSupportPolicy.EnsureSupported(
+            PackageFamilyName,
+            Ready() with { InteractiveLogon = false });
+
     [Fact]
     public void UnsupportedBuildWithoutAProbeFails()
     {

@@ -44,6 +44,28 @@ internal sealed class SessionCapabilityUnavailableException : SessionException
 }
 
 /// <summary>
+/// Windows refused the isolated session because this process does not run
+/// under an interactive logon. The user can act on it, so it is reported as
+/// an expected refusal rather than a defect.
+/// </summary>
+internal sealed class InteractiveLogonRequiredException : SessionException
+{
+    public InteractiveLogonRequiredException()
+    {
+    }
+
+    public InteractiveLogonRequiredException(string message)
+        : base(message)
+    {
+    }
+
+    public InteractiveLogonRequiredException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+/// <summary>
 /// The recorded session exists but cannot be used, and replacing it silently
 /// would risk abandoning a live backend session.
 /// </summary>

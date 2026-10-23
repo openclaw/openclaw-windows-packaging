@@ -345,7 +345,26 @@ internal static class ClawCtlConsole
         TextWriter error,
         string command,
         string message,
-        bool useColor = false)
+        bool useColor = false) =>
+        WriteFailure(error, command, message, useColor, reportIssue: true);
+
+    /// <summary>
+    /// Renders a failure the user can act on from its message alone, so it
+    /// does not ask them to report a defect.
+    /// </summary>
+    internal static void WriteActionableFailure(
+        TextWriter error,
+        string command,
+        string message,
+        bool useColor = false) =>
+        WriteFailure(error, command, message, useColor, reportIssue: false);
+
+    private static void WriteFailure(
+        TextWriter error,
+        string command,
+        string message,
+        bool useColor,
+        bool reportIssue)
     {
         ArgumentNullException.ThrowIfNull(error);
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
@@ -356,8 +375,12 @@ internal static class ClawCtlConsole
             command,
             ResolveWidth(error));
         view.Note(message);
-        view.Blank();
-        view.IssueGuidance();
+        if (reportIssue)
+        {
+            view.Blank();
+            view.IssueGuidance();
+        }
+
         Render(error, view.Build(), useColor, view.Unicode);
     }
 
