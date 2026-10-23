@@ -70,6 +70,10 @@ function Get-SubmissionMetadata {
         } else {
             $metadata[$name] = if ($null -eq $property) { $null } else { ConvertTo-CanonicalValue $property.Value }
         }
+        if ($name -eq 'Pricing' -and $null -ne $metadata[$name]) {
+            # Partner Center owns this read-only account capability, not the submission's prices.
+            $metadata[$name].Remove('isAdvancedPricingModel')
+        }
     }
     return $metadata
 }

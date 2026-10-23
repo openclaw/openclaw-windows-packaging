@@ -32,7 +32,7 @@ function New-Submission([string]$Id) {
     [pscustomobject]@{
         Id = $Id
         ApplicationCategory = [pscustomobject]@{ category = 'Productivity' }
-        Pricing = [pscustomobject]@{ priceId = 'Free'; trialPeriod = 'NoFreeTrial' }
+        Pricing = [pscustomobject]@{ priceId = 'Free'; trialPeriod = 'NoFreeTrial'; isAdvancedPricingModel = $true }
         Visibility = 'Public'
         TargetPublishMode = 'Immediate'
         TargetPublishDate = $null
@@ -291,6 +291,42 @@ try {
     $global:OpenClawStoreTest_serverFields = $true
     $global:OpenClawStoreTest_published.PSObject.Properties.Remove('TargetPublishDate')
     Invoke-Submission
+
+    foreach ($pricingMutation in @(
+        { param($Draft) $Draft.Pricing.isAdvancedPricingModel = $false },
+        { param($Draft) $Draft.Pricing.PSObject.Properties.Remove('isAdvancedPricingModel') }
+    )) {
+        Reset-Fixture
+        $global:OpenClawStoreTest_metadataMutationAfterUpload = $pricingMutation
+        Invoke-Submission
+        $evidence = Get-Content -LiteralPath (Join-Path $testRoot 'evidence.json') -Raw | ConvertFrom-Json
+        if ($null -ne $global:OpenClawStoreTest_pendingId -or
+            @($global:OpenClawStoreTest_calls | Where-Object { $_ -match '/Commit$' }).Count -ne 1 -or
+            [string]$evidence.publishedMetadataSha256 -cne [string]$evidence.draftMetadataSha256) {
+            throw 'A server-owned pricing capability change prevented the otherwise unchanged submission.'
+        }
+    }
+
+    Reset-Fixture
+    $global:OpenClawStoreTest_metadataMutationAfterUpload = {
+        param($Draft)
+        $Draft.Pricing.priceId = 'Tier2'
+    }
+    Assert-Fails -MessagePattern '^The Store draft did not preserve published product metadata\. Changed fields: Pricing\.priceId\.$' -Action { Invoke-Submission }
+    if ($null -ne $global:OpenClawStoreTest_pendingId -or $global:OpenClawStoreTest_calls -match '/Commit$') {
+        throw 'A changed base price allowed a commit or left the owned draft behind.'
+    }
+
+    Reset-Fixture
+    $global:OpenClawStoreTest_published.Pricing | Add-Member marketSpecificPricings ([pscustomobject]@{ US = 'Free'; CA = 'Free' })
+    $global:OpenClawStoreTest_metadataMutationAfterUpload = {
+        param($Draft)
+        $Draft.Pricing.marketSpecificPricings.US = 'Tier2'
+    }
+    Assert-Fails -MessagePattern '^The Store draft did not preserve published product metadata\. Changed fields: Pricing\.marketSpecificPricings\.US\.$' -Action { Invoke-Submission }
+    if ($null -ne $global:OpenClawStoreTest_pendingId -or $global:OpenClawStoreTest_calls -match '/Commit$') {
+        throw 'A changed market price allowed a commit or left the owned draft behind.'
+    }
 
     Reset-Fixture
     $global:OpenClawStoreTest_pendingId = 'human-draft'
