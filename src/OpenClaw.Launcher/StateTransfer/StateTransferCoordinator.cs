@@ -68,7 +68,8 @@ internal sealed partial class StateTransferCoordinator
                 {
                     throw new SessionException("The agent did not return a verified backup archive.");
                 }
-                return new StateArchiveCommandResult("backup", 0, result);
+                // A dry run creates no archive, so it is a preview, not a completed backup.
+                return new StateArchiveCommandResult("backup", 0, options.DryRun ? result with { Phase = "preview" } : result);
             }
             finally
             {

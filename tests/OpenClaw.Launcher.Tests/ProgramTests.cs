@@ -3107,6 +3107,55 @@ public sealed class ProgramTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BackupDryRunIsReportedAsAPreviewBecauseNoArchiveIsCreated(bool json)
+    {
+        SessionRuntime runtime = await SetUpSessionAsync().ConfigureAwait(true);
+        var backend = Assert.IsType<FakeMxcSessionClient>(runtime.Backend);
+        using var output = new StringWriter();
+        using var errors = new StringWriter();
+        backend.ExecuteBehavior = _ =>
+        {
+            string requestPath = Directory.GetFiles(
+                backend.Metadata!.EphemeralWorkspacePath, "state-transfer-*.json", SearchOption.AllDirectories)
+                .Single(path => !path.EndsWith(".result.json", StringComparison.Ordinal));
+            SessionStateTransferRequest request =
+                SessionStateTransferProtocol.ReadRequest(File.ReadAllText(requestPath));
+            // The guest's dry-run capture reports its inventory without an archive or a phase.
+            File.WriteAllText(
+                SessionLaunchProtocol.ResultPathFor(requestPath),
+                SessionStateTransferProtocol.SerializeResult(new SessionStateTransferResult
+                {
+                    RequestId = request.RequestId,
+                    ProfileDirectory = Path.Combine(_testDirectory, "current-profile")
+                }));
+            return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
+        };
+        List<string> arguments = ["backup", "--dry-run"];
+        if (json)
+        {
+            arguments.Add("--json");
+        }
+
+        int exitCode = await Program.RunControlAsync(
+            CreateSetupOptions(Path.Combine(_testDirectory, "app")),
+            arguments, _ => { }, output, errors, new StubbedRecoveryLifecycle(runtime),
+            archiveDirectory: Path.Combine(_testDirectory, "archives")).ConfigureAwait(true);
+
+        Assert.Equal(0, exitCode);
+        if (json)
+        {
+            using JsonDocument result = JsonDocument.Parse(output.ToString());
+            Assert.Equal("preview", result.RootElement.GetProperty("stateTransfer").GetProperty("phase").GetString());
+        }
+        else
+        {
+            Assert.Contains("preview", output.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("complete", output.ToString(), StringComparison.Ordinal);
+        }
+    }
     // Narration and the JSON document are separate streams, and a structured
     // run narrates nothing on either, so a caller parsing standard output and
     // collecting standard error sees only the document.
