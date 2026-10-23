@@ -74,8 +74,7 @@ internal sealed class WindowsInvocationJob : IInvocationLifetime
         string owner = identity.User!.Value;
         string id = Guid.NewGuid().ToString("N");
         string name = NamePrefix + id;
-        using var jobSecurity = new ObjectSecurity(
-            $"D:P(A;;GA;;;{owner})(A;;0x0005;;;{agentSid})");
+        using var jobSecurity = new ObjectSecurity(AccessDescriptor(owner, agentSid, 0x0005));
         SafeFileHandle? job = null;
         EventWaitHandle? stopping = null;
         EventWaitHandle? completed = null;
@@ -315,7 +314,7 @@ internal sealed class WindowsInvocationJob : IInvocationLifetime
 
     private static EventWaitHandle CreateEvent(string name, string owner, string agentSid, uint access)
     {
-        using var security = new ObjectSecurity($"D:P(A;;GA;;;{owner})(A;;0x{access:X8};;;{agentSid})");
+        using var security = new ObjectSecurity(AccessDescriptor(owner, agentSid, access));
         SafeWaitHandle handle = CreateEventW(ref security.Attributes, true, false, name);
         if (handle.IsInvalid)
         {
@@ -328,6 +327,15 @@ internal sealed class WindowsInvocationJob : IInvocationLifetime
 
     private static Win32Exception Failure(string operation) =>
         new(Marshal.GetLastWin32Error(), $"Unable to {operation}.");
+
+    // An unlabeled object takes its creator's integrity level, so an elevated
+    // launcher would stamp High no-write-up on the job and events and the
+    // Medium-integrity agent could not assign itself or signal them. The DACL
+    // already limits access to the owner and the agent; the explicit Medium
+    // label keeps the integrity check from overriding it. Lowering a label to
+    // at most the caller's own level needs no privilege.
+    internal static string AccessDescriptor(string owner, string agentSid, uint agentAccess) =>
+        $"D:P(A;;GA;;;{owner})(A;;0x{agentAccess:X8};;;{agentSid})S:(ML;;NW;;;ME)";
 
     [StructLayout(LayoutKind.Sequential)]
     private struct SecurityAttributes
