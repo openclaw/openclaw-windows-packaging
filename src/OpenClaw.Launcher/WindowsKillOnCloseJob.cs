@@ -28,6 +28,7 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
     private const int ErrorInvalidParameter = 87;
     private const int ErrorMoreData = 234;
     private const int ErrorFileNotFound = 2;
+    private const int ErrorAlreadyExists = 183;
     private const uint JobObjectSetAttributes = 0x0002;
     private const uint JobObjectQuery = 0x0004;
     private const uint JobObjectTerminate = 0x0008;
@@ -71,11 +72,17 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
     public static WindowsKillOnCloseJob Create(string? name = null)
     {
         SafeJobHandle handle = CreateJobObjectW(IntPtr.Zero, name);
+        int createError = Marshal.GetLastWin32Error();
         if (handle.IsInvalid)
         {
-            throw new Win32Exception(
-                Marshal.GetLastWin32Error(),
-                "Unable to create the OpenClaw process job.");
+            throw new Win32Exception(createError, "Unable to create the OpenClaw process job.");
+        }
+        if (name is not null && createError == ErrorAlreadyExists)
+        {
+            // Creating an existing named job succeeds and returns it; a pre-existing one was made by someone
+            // else, so configuring it or assigning the gateway would hand them control of that gateway.
+            handle.Dispose();
+            throw new Win32Exception(createError, "The OpenClaw process job name is already in use.");
         }
 
         try

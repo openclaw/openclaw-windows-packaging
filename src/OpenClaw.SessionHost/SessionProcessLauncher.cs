@@ -207,7 +207,7 @@ internal sealed class SessionProcessLauncher(
         if (!job.ExitConfirmed)
         {
             throw new SessionLaunchException(
-                "The launched process tree did not exit, so its state access was not released.");
+                "The launched process tree could not be confirmed to have exited; its state access was released anyway, so stop its writers before running maintenance.");
         }
     }
 

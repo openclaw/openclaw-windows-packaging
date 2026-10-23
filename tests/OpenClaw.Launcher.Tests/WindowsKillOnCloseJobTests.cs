@@ -90,6 +90,17 @@ public sealed class WindowsKillOnCloseJobTests
     }
 
     [Fact]
+    public void ANamedJobSomeoneElseAlreadyCreatedIsRefusedInsteadOfAdopted()
+    {
+        string name = WindowsKillOnCloseJob.GatewayJobName(Environment.ProcessId, DateTime.UtcNow.Ticks);
+        using WindowsKillOnCloseJob first = WindowsKillOnCloseJob.Create(name);
+
+        Assert.Throws<System.ComponentModel.Win32Exception>(() => WindowsKillOnCloseJob.Create(name));
+        using WindowsKillOnCloseJob? opened = WindowsKillOnCloseJob.TryOpen(name);
+        Assert.NotNull(opened);
+    }
+
+    [Fact]
     public async Task FastExitRetainsExitCodeAfterDelayedObservation()
     {
         using WindowsKillOnCloseJob job = WindowsKillOnCloseJob.Create();
