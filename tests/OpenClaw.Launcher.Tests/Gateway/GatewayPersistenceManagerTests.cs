@@ -31,7 +31,8 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
     private GatewayPersistenceManager CreateManager(
         Func<string, string?>? resolveUserSid = null,
         Action<string>? deleteFile = null,
-        Action<string>? log = null) =>
+        Action<string>? log = null,
+        IWindowsScriptHostSettingsReader? scriptHostSettings = null) =>
         new(
             _scheduler,
             new GatewayPersistenceOptions(
@@ -41,7 +42,8 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
                 StartupFolderPath: StartupFolder,
                 WorkingDirectory: StateRoot,
                 ScriptHostPath: @"C:\Windows\System32\wscript.exe",
-                DeleteFile: deleteFile),
+                DeleteFile: deleteFile,
+                ScriptHostSettings: scriptHostSettings),
             log,
             resolveUserSid: resolveUserSid);
 
@@ -838,6 +840,206 @@ public sealed class GatewayPersistenceManagerTests : IDisposable
         Assert.Equal("user-owned file", await File.ReadAllTextAsync(legacyFallback));
         Assert.False(File.Exists(LauncherPath));
         Assert.False(File.Exists(ActivationScriptPath));
+    }
+
+    [Fact]
+    public async Task AnUnownedLegacyFallbackCmdDoesNotMakeTheInstalledFallbackNeedAttention()
+    {
+        // Registration is refused, so the Startup-folder WSF is the lane. A CMD
+        // with the legacy name that this installation did not generate is the
+        // user's file: install preserves it, so status must not demand a
+        // reinstall that cannot remove it.
+        _scheduler.RegisterResult = GatewayTaskOperation.Failure("Access is denied.");
+        GatewayPersistenceManager manager = CreateManager();
+        Directory.CreateDirectory(StartupFolder);
+        string unowned = Path.ChangeExtension(manager.FallbackPath, ".cmd");
+        const string userContent = "@echo off\r\nrem a user's own startup helper\r\n";
+        await File.WriteAllTextAsync(unowned, userContent);
+
+        GatewayPersistenceInstallResult install = await manager.InstallAsync(CancellationToken.None);
+        GatewayPersistenceStatus status = await manager.GetStatusAsync(CancellationToken.None);
+
+        Assert.Equal(GatewayPersistenceState.Ready, install.State);
+        Assert.Equal(GatewayPersistenceState.Ready, status.State);
+        Assert.Equal(GatewayPersistenceLane.StartupFolderFallback, status.Lane);
+        Assert.Equal(userContent, await File.ReadAllTextAsync(unowned));
+    }
+
+    [Fact]
+    public async Task AGeneratedLegacyFallbackCmdIsReportedThenRemovedByAFallbackInstall()
+    {
+        _scheduler.RegisterResult = GatewayTaskOperation.Failure("Access is denied.");
+        GatewayPersistenceManager manager = CreateManager();
+        Directory.CreateDirectory(StartupFolder);
+        string legacy = Path.ChangeExtension(manager.FallbackPath, ".cmd");
+        await File.WriteAllTextAsync(legacy, GatewayLauncherScript.Marker);
+
+        GatewayPersistenceStatus before = await manager.GetStatusAsync(CancellationToken.None);
+        GatewayPersistenceInstallResult install = await manager.InstallAsync(CancellationToken.None);
+        GatewayPersistenceStatus after = await manager.GetStatusAsync(CancellationToken.None);
+
+        Assert.Equal(GatewayPersistenceState.ActionRequired, before.State);
+        Assert.Equal(GatewayPersistenceManager.RepairCommand, before.Remediation);
+        Assert.Equal(GatewayPersistenceState.Ready, install.State);
+        Assert.False(File.Exists(legacy));
+        Assert.Equal(GatewayPersistenceState.Ready, after.State);
+    }
+
+    private const string MachineEnabledSetting =
+        @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Script Host\Settings\Enabled";
+
+    private const string UserEnabledSetting =
+        @"HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows Script Host\Settings\Enabled";
+
+    [Fact]
+    public async Task ADisabledScriptHostMakesAnInstalledTaskNeedAttention()
+    {
+        FakeWindowsScriptHostSettings settings = new();
+        GatewayPersistenceManager manager = CreateManager(scriptHostSettings: settings);
+        await manager.InstallAsync(CancellationToken.None);
+        Assert.Equal(
+            GatewayPersistenceState.Ready,
+            (await manager.GetStatusAsync(CancellationToken.None)).State);
+
+        settings.Set(WindowsScriptHostSettingsScope.Machine, "Enabled", 0);
+        int callsBefore = _scheduler.Calls.Count;
+        GatewayPersistenceStatus status = await manager.GetStatusAsync(CancellationToken.None);
+
+        Assert.Equal(GatewayPersistenceState.ActionRequired, status.State);
+        Assert.Equal(GatewayPersistenceLane.TaskScheduler, status.Lane);
+        Assert.Contains("Windows Script Host is disabled", status.Message, StringComparison.Ordinal);
+        Assert.Contains(MachineEnabledSetting, status.Detail, StringComparison.Ordinal);
+        Assert.Equal(GatewayPersistenceManager.RepairCommand, status.Remediation);
+        // Reading status never registers, deletes or runs anything.
+        Assert.All(
+            _scheduler.Calls.Skip(callsBefore),
+            call => Assert.StartsWith("query:", call, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ADisabledScriptHostMakesAnInstalledFallbackNeedAttention()
+    {
+        _scheduler.RegisterResult = GatewayTaskOperation.Failure("Access is denied.");
+        FakeWindowsScriptHostSettings settings = new();
+        GatewayPersistenceManager manager = CreateManager(scriptHostSettings: settings);
+        Assert.Equal(
+            GatewayPersistenceState.Ready,
+            (await manager.InstallAsync(CancellationToken.None)).State);
+
+        settings.Set(WindowsScriptHostSettingsScope.User, "Enabled", 0);
+        GatewayPersistenceStatus status = await manager.GetStatusAsync(CancellationToken.None);
+
+        Assert.Equal(GatewayPersistenceState.ActionRequired, status.State);
+        Assert.Equal(GatewayPersistenceLane.StartupFolderFallback, status.Lane);
+        Assert.Contains(UserEnabledSetting, status.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task InstallRegistersAndWritesNothingWhileScriptHostIsDisabled()
+    {
+        // wscript shows a blocking dialog at every sign-in while the host is
+        // disabled, so a task or Startup file would be worse than no recovery.
+        FakeWindowsScriptHostSettings settings = new();
+        settings.Set(WindowsScriptHostSettingsScope.Machine, "Enabled", 0);
+        GatewayPersistenceManager manager = CreateManager(scriptHostSettings: settings);
+
+        GatewayPersistenceInstallResult install = await manager.InstallAsync(CancellationToken.None);
+        GatewayPersistenceStatus status = await manager.GetStatusAsync(CancellationToken.None);
+
+        // Install does not fail, so setup can finish; the warning names the
+        // blocker, and status agrees that recovery needs attention.
+        Assert.Equal(GatewayPersistenceState.Ready, install.State);
+        Assert.Equal(GatewayPersistenceLane.None, install.Lane);
+        Assert.False(install.Changed);
+        Assert.Contains(MachineEnabledSetting, install.Warning, StringComparison.Ordinal);
+        Assert.Contains("Group Policy", install.Warning, StringComparison.Ordinal);
+        Assert.Contains(GatewayPersistenceManager.RepairCommand, install.Warning, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            _scheduler.Calls,
+            call => !call.StartsWith("query:", StringComparison.Ordinal));
+        Assert.False(Directory.Exists(StateRoot));
+        Assert.False(Directory.Exists(StartupFolder));
+        Assert.Equal(GatewayPersistenceState.ActionRequired, status.State);
+        Assert.Equal(GatewayPersistenceLane.None, status.Lane);
+        Assert.Equal(install.Warning, status.Detail);
+    }
+
+    [Fact]
+    public async Task InstallLeavesAPreviousGenerationUntouchedWhileScriptHostIsDisabled()
+    {
+        FakeWindowsScriptHostSettings settings = new();
+        settings.Set(WindowsScriptHostSettingsScope.User, "Enabled", 0);
+        GatewayPersistenceManager manager = CreateManager(scriptHostSettings: settings);
+        Directory.CreateDirectory(StateRoot);
+        Directory.CreateDirectory(StartupFolder);
+        string legacyLauncher = Path.ChangeExtension(LauncherPath, ".cmd");
+        string legacyFallback = Path.ChangeExtension(manager.FallbackPath, ".cmd");
+        await File.WriteAllTextAsync(legacyLauncher, GatewayLauncherScript.Marker);
+        await File.WriteAllTextAsync(legacyFallback, GatewayLauncherScript.Marker);
+        GatewayTaskProbe legacyTask = GatewayTaskProbe.Present(DesiredSnapshot() with
+        {
+            Command = @"C:\Windows\System32\cmd.exe",
+            Arguments = $"/d /c \"\"{legacyLauncher}\"\""
+        });
+        _scheduler.Probe = legacyTask;
+
+        GatewayPersistenceInstallResult install = await manager.InstallAsync(CancellationToken.None);
+        GatewayPersistenceStatus status = await manager.GetStatusAsync(CancellationToken.None);
+
+        // The old console launcher still runs, so its task and files stay as
+        // they were rather than being migrated onto a script host that is off.
+        Assert.Equal(GatewayPersistenceState.Ready, install.State);
+        Assert.Contains(UserEnabledSetting, install.Warning, StringComparison.Ordinal);
+        Assert.Equal(legacyTask, _scheduler.Probe);
+        Assert.DoesNotContain(
+            _scheduler.Calls,
+            call => !call.StartsWith("query:", StringComparison.Ordinal));
+        Assert.Equal(GatewayLauncherScript.Marker, await File.ReadAllTextAsync(legacyLauncher));
+        Assert.Equal(GatewayLauncherScript.Marker, await File.ReadAllTextAsync(legacyFallback));
+        Assert.False(File.Exists(LauncherPath));
+        Assert.False(File.Exists(manager.FallbackPath));
+        // The previous generation keeps its own finding and gains the prerequisite.
+        Assert.Equal(GatewayPersistenceState.ActionRequired, status.State);
+        Assert.Contains("task runs a different command", status.Detail, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(UserEnabledSetting, status.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AnEnabledScriptHostLeavesRecoveryReady()
+    {
+        FakeWindowsScriptHostSettings settings = new();
+        settings.Set(WindowsScriptHostSettingsScope.Machine, "Enabled", 1);
+        settings.Set(WindowsScriptHostSettingsScope.User, "Enabled", 1);
+        GatewayPersistenceManager manager = CreateManager(scriptHostSettings: settings);
+
+        GatewayPersistenceInstallResult install = await manager.InstallAsync(CancellationToken.None);
+        GatewayPersistenceStatus status = await manager.GetStatusAsync(CancellationToken.None);
+
+        Assert.Equal(GatewayPersistenceState.Ready, install.State);
+        Assert.Null(install.Warning);
+        Assert.Equal(GatewayPersistenceState.Ready, status.State);
+    }
+
+    [Fact]
+    public async Task ADisabledScriptHostIsReportedWhenNothingIsConfiguredButNotWhenUnreadable()
+    {
+        // Install registers nothing while the host is disabled, so a machine
+        // with no recovery needs attention too and agrees with setup. An
+        // unreadable task stays unknown rather than guessed in either direction.
+        FakeWindowsScriptHostSettings settings = new();
+        settings.Set(WindowsScriptHostSettingsScope.Machine, "Enabled", 0);
+        GatewayPersistenceManager manager = CreateManager(scriptHostSettings: settings);
+
+        GatewayPersistenceStatus notConfigured = await manager.GetStatusAsync(CancellationToken.None);
+
+        Assert.Equal(GatewayPersistenceState.ActionRequired, notConfigured.State);
+        Assert.Equal(GatewayPersistenceLane.None, notConfigured.Lane);
+        Assert.Contains(MachineEnabledSetting, notConfigured.Detail, StringComparison.Ordinal);
+
+        _scheduler.Probe = GatewayTaskProbe.Unreadable("Access is denied.");
+        Assert.Equal(
+            GatewayPersistenceState.Unknown,
+            (await manager.GetStatusAsync(CancellationToken.None)).State);
     }
 
     [Fact]

@@ -2279,6 +2279,88 @@ public sealed class ProgramTests : IDisposable
     }
 
     [Fact]
+    public async Task SetupCompletesAndFlagsRecoveryThatNeedsAttention()
+    {
+        string applicationDirectory = await CreateApplicationAsync().ConfigureAwait(true);
+        SessionRuntime runtime = CreateSessionRuntime();
+        var scheduler = new Gateway.FakeGatewayTaskScheduler();
+        var lifecycle = new FailingFreshLifecycle(runtime)
+        {
+            RecoveryResult = await InstallRecoveryWithScriptHostDisabledAsync(scheduler)
+                .ConfigureAwait(true)
+        };
+        using var output = new StringWriter();
+
+        int exitCode = await Program.RunControlAsync(
+            CreateSetupOptions(applicationDirectory),
+            ["setup"],
+            _ => { },
+            output,
+            TextWriter.Null,
+            installationLifecycle: lifecycle);
+
+        string text = FlattenRenderedText(output.ToString());
+        Assert.True(exitCode == 0, text);
+        Assert.Equal(SetupPhase.Ready, runtime.SetupState.Read(runtime.ApplicationId).Record!.Phase);
+        Assert.Contains("needs attention", text, StringComparison.Ordinal);
+        Assert.Contains("Windows Script Host", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("the gateway starts when you sign in", text, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            scheduler.Calls,
+            call => !call.StartsWith("query:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task SetupJsonStaysSuccessfulAndReportsRecoveryAsActionRequired()
+    {
+        string applicationDirectory = await CreateApplicationAsync().ConfigureAwait(true);
+        var lifecycle = new FailingFreshLifecycle(CreateSessionRuntime())
+        {
+            RecoveryResult = await InstallRecoveryWithScriptHostDisabledAsync(
+                new Gateway.FakeGatewayTaskScheduler()).ConfigureAwait(true)
+        };
+        using var output = new StringWriter();
+
+        int exitCode = await Program.RunControlAsync(
+            CreateSetupOptions(applicationDirectory),
+            ["setup", "--json"],
+            _ => { },
+            output,
+            TextWriter.Null,
+            installationLifecycle: lifecycle);
+
+        Assert.True(exitCode == 0, output.ToString());
+        using JsonDocument document = JsonDocument.Parse(output.ToString());
+        JsonElement root = document.RootElement;
+        Assert.True(root.GetProperty("ok").GetBoolean());
+        Assert.Equal(
+            "action-required",
+            root.GetProperty("recovery").GetProperty("state").GetString());
+    }
+
+    // The real manager and a fake scheduler produce the install result, so
+    // setup is exercised with exactly what install returns while the script
+    // host is disabled, and nothing touches the host's registry or scheduler.
+    private async Task<GatewayPersistenceInstallResult> InstallRecoveryWithScriptHostDisabledAsync(
+        Gateway.FakeGatewayTaskScheduler scheduler)
+    {
+        var settings = new Gateway.FakeWindowsScriptHostSettings();
+        settings.Set(WindowsScriptHostSettingsScope.Machine, "Enabled", 0);
+        string state = Path.Combine(_testDirectory, "recovery-state");
+        var manager = new GatewayPersistenceManager(
+            scheduler,
+            new GatewayPersistenceOptions(
+                UserSid: "S-1-5-21-1",
+                PackageFamilyName: "OpenClaw.Gateway_test",
+                LauncherPath: Path.Combine(state, "gateway-launcher.js"),
+                StartupFolderPath: Path.Combine(_testDirectory, "recovery-startup"),
+                WorkingDirectory: state,
+                ScriptHostPath: @"C:\Windows\System32\wscript.exe",
+                ScriptHostSettings: settings));
+        return await manager.InstallAsync(CancellationToken.None).ConfigureAwait(false);
+    }
+
+    [Fact]
     public async Task ConcurrentFreshSetupReportsBusyWithoutStartingAnotherReset()
     {
         string applicationDirectory = await CreateApplicationAsync().ConfigureAwait(true);

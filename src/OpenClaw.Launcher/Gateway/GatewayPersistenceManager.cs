@@ -23,6 +23,9 @@ internal sealed class GatewayPersistenceManager
     /// <summary>The command a reported problem tells the user to run.</summary>
     public const string RepairCommand = "clawctl setup";
 
+    private const string ScriptHostDisabledMessage =
+        "Windows Script Host is disabled, so logon recovery cannot run.";
+
     private readonly IGatewayTaskScheduler _scheduler;
     private readonly GatewayPersistenceOptions _options;
     private readonly GatewayTaskIdentity _identity;
@@ -71,6 +74,36 @@ internal sealed class GatewayPersistenceManager
     public async Task<GatewayPersistenceStatus> GetStatusAsync(
         CancellationToken cancellationToken)
     {
+        GatewayPersistenceStatus status = await ReadStatusAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (status.State == GatewayPersistenceState.Unknown ||
+            FindDisabledScriptHostSetting() is not { } disabledBy)
+        {
+            return status;
+        }
+
+        // With the script host disabled, install registers nothing, so a machine
+        // with no recovery is reported as needing attention too: status and
+        // setup then agree, and status exits nonzero until the host is enabled.
+        // A finding that already needs attention keeps its own message, such as a
+        // previous console launcher that still works, and gains the prerequisite.
+        return status.State == GatewayPersistenceState.ActionRequired
+            ? status with { Detail = Combine(status.Detail, DescribeDisabledScriptHost(disabledBy)) }
+            : status with
+            {
+                State = GatewayPersistenceState.ActionRequired,
+                Message = ScriptHostDisabledMessage,
+                Detail = DescribeDisabledScriptHost(disabledBy),
+                Remediation = RepairCommand
+            };
+    }
+
+    // Reads the task and files only. Install verifies a fresh registration with
+    // this: it already checked the script host, and a verification failure
+    // should describe the registration, not the registry.
+    private async Task<GatewayPersistenceStatus> ReadStatusAsync(
+        CancellationToken cancellationToken)
+    {
         GatewayTaskProbe probe = await _scheduler.QueryAsync(
             _identity.Name,
             cancellationToken).ConfigureAwait(false);
@@ -90,7 +123,7 @@ internal sealed class GatewayPersistenceManager
 
         if (probe.Presence == GatewayTaskPresence.Missing)
         {
-            if (File.Exists(Path.ChangeExtension(FallbackPath, ".cmd")))
+            if (OwnsLegacyFallback())
             {
                 return new GatewayPersistenceStatus(
                     GatewayPersistenceState.ActionRequired,
@@ -148,6 +181,20 @@ internal sealed class GatewayPersistenceManager
     public async Task<GatewayPersistenceInstallResult> InstallAsync(
         CancellationToken cancellationToken)
     {
+        // Registering the wscript lane while Windows Script Host is disabled
+        // makes the task show a blocking dialog at every sign-in. Register and
+        // write nothing, leave any previous generation as it is, and let setup
+        // complete with a warning; status reports the same condition.
+        if (FindDisabledScriptHostSetting() is { } disabledBy)
+        {
+            return new GatewayPersistenceInstallResult(
+                GatewayPersistenceState.Ready,
+                GatewayPersistenceLane.None,
+                "Logon recovery was not configured because Windows Script Host is disabled.",
+                Changed: false,
+                Warning: DescribeDisabledScriptHost(disabledBy));
+        }
+
         bool changed;
         try
         {
@@ -211,7 +258,7 @@ internal sealed class GatewayPersistenceManager
             _log($"Registered the logon task '{_identity.Name}'.");
             // A successful schtasks write is not evidence that its normalized
             // principal and trigger match. Keep any fallback until read-back proves it.
-            GatewayPersistenceStatus verified = await GetStatusAsync(cancellationToken)
+            GatewayPersistenceStatus verified = await ReadStatusAsync(cancellationToken)
                 .ConfigureAwait(false);
             if (verified.State != GatewayPersistenceState.Ready ||
                 verified.Lane != GatewayPersistenceLane.TaskScheduler)
@@ -306,6 +353,35 @@ internal sealed class GatewayPersistenceManager
             Detail = Combine(result.Detail, detail),
             Remediation = detail is null ? result.Remediation : RepairCommand
         };
+    }
+
+    // Status offers the same command after the value changes: setup is
+    // idempotent, and it is the only command that configures recovery. The
+    // registry is only read; changing it is the user's or the administrator's
+    // decision.
+    private static string DescribeDisabledScriptHost(string setting) =>
+        $"'{setting}' is 0, and logon recovery runs through Windows Script Host " +
+        "(wscript.exe). While it is disabled, setup does not register logon " +
+        "recovery, and a registered wscript task shows a blocking dialog at " +
+        "sign-in instead of starting the gateway. Set the value to 1 or remove " +
+        "it (the machine-wide value needs an administrator and may be set by " +
+        $"Group Policy or other management), then run '{RepairCommand}' to " +
+        "configure logon recovery. OpenClaw does not change it.";
+
+    private string? FindDisabledScriptHostSetting()
+    {
+        if (_options.ScriptHostSettings is null)
+        {
+            return null;
+        }
+
+        string? setting = WindowsScriptHostPolicy.FindDisablingSetting(_options.ScriptHostSettings);
+        if (setting is not null)
+        {
+            _log($"Windows Script Host is disabled by '{setting}'.");
+        }
+
+        return setting;
     }
 
     private GatewayGeneratedFileRemoval RemoveLegacyFiles()
@@ -530,14 +606,34 @@ internal sealed class GatewayPersistenceManager
     private GatewayGeneratedFileRemoval RemoveActivationScript() =>
         RemoveGeneratedFile(ActivationScriptPath);
 
+    // The one ownership test: only a file carrying a generator marker is ours.
+    // Status and removal share it so they cannot disagree about a legacy file.
+    private static bool IsGenerated(string path) =>
+        File.Exists(path) &&
+        GatewayLauncherScript.LooksGenerated(File.ReadAllText(path));
+
+    // An unreadable legacy file is treated as owned: install reports the same
+    // file as a failed cleanup, so status and install stay consistent.
+    private bool OwnsLegacyFallback()
+    {
+        try
+        {
+            return IsGenerated(Path.ChangeExtension(FallbackPath, ".cmd"));
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            return true;
+        }
+    }
+
     private GatewayGeneratedFileRemoval RemoveGeneratedFile(string path)
     {
         // Only a file this installation generated is deleted. A same-named file
         // someone else placed there is left alone.
         try
         {
-            if (!File.Exists(path) ||
-                !GatewayLauncherScript.LooksGenerated(File.ReadAllText(path)))
+            if (!IsGenerated(path))
             {
                 return new GatewayGeneratedFileRemoval(false, null);
             }

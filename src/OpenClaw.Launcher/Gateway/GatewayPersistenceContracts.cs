@@ -44,13 +44,19 @@ internal sealed record GatewayPersistenceStatus(
     string? Detail = null,
     string? Remediation = null);
 
+/// <summary>
+/// The outcome of an explicit recovery install. <c>Warning</c> is set when
+/// recovery is registered, so setup may complete, but it cannot run until the
+/// user acts; status reports the same condition as action required.
+/// </summary>
 internal sealed record GatewayPersistenceInstallResult(
     GatewayPersistenceState State,
     GatewayPersistenceLane Lane,
     string Message,
     bool Changed,
     string? Detail = null,
-    string? Remediation = null);
+    string? Remediation = null,
+    string? Warning = null);
 
 internal sealed record GatewayPersistenceRemovalResult(
     bool Succeeded,
@@ -87,6 +93,10 @@ internal sealed record GatewayPersistenceRemovalResult(
 /// <param name="LogonTriggerUserSid">
 /// The interactive user whose logon starts recovery. Defaults to <paramref name="UserSid"/>.
 /// </param>
+/// <param name="ScriptHostSettings">
+/// Reads the Windows Script Host enablement settings that both recovery lanes
+/// depend on. When omitted, the host is not checked.
+/// </param>
 internal sealed record GatewayPersistenceOptions(
     string UserSid,
     string PackageFamilyName,
@@ -95,4 +105,5 @@ internal sealed record GatewayPersistenceOptions(
     string WorkingDirectory,
     string ScriptHostPath,
     Action<string>? DeleteFile = null,
-    string? LogonTriggerUserSid = null);
+    string? LogonTriggerUserSid = null,
+    IWindowsScriptHostSettingsReader? ScriptHostSettings = null);

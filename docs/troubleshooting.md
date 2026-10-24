@@ -247,16 +247,45 @@ clawctl setup
 
 Without `--fresh`, setup reuses the recorded session and keeps its data and
 gateway settings. It replaces the old logon action and removes generated legacy
-Startup-folder files. If Windows refuses to replace an existing task, setup
-retains that task's previous recovery files and reports that further action is
-required, even when it creates a new Startup-folder fallback. Resolve the
-reported permission failure and rerun `clawctl setup` to finish migration.
+Startup-folder files. Only files that carry OpenClaw's generated marker count as
+legacy recovery: a same-named CMD file you created is left in place, and status
+does not ask for a reinstall on its account. If Windows refuses to replace an
+existing task, setup retains that task's previous recovery files and reports that
+further action is required, even when it creates a new Startup-folder fallback.
+Resolve the reported permission failure and rerun `clawctl setup` to finish
+migration.
 After a successful migration, future recovery runs without a terminal. If recovery
 fails, run `clawctl gateway-service start` interactively for the error and
 collect logs with `clawctl collect-logs`. For failures before `clawctl` starts,
 check the logon task's last-run result in Task Scheduler, the package's
 execution-alias registration, and whether Windows Script Host and JScript
 are enabled. Background recovery requires those Windows components.
+
+## Logon recovery reports that Windows Script Host is disabled
+
+**Check.** `clawctl status` reports recovery as needing attention (and exits 1),
+and `clawctl setup` finishes with exit 0 but shows its Recovery line as needing
+attention. The automatic setup that a first `openclaw` runs prints the same
+Recovery section on standard error after its progress lines, and the command
+still runs. Each names the registry value that turns the host off:
+`HKEY_LOCAL_MACHINE` or `HKEY_CURRENT_USER`, under
+`SOFTWARE\Microsoft\Windows Script Host\Settings`, value `Enabled` set to `0`.
+Both recovery lanes run through `wscript.exe`. With the host disabled, Windows
+shows a blocking "Windows Script Host" dialog at sign-in and the logon task never
+finishes, so setup registers neither the logon task nor the Startup-folder file,
+writes no launcher, and leaves an existing previous registration exactly as it
+was. If recovery from this package is already registered and the host is disabled
+later, status reports it the same way and changes nothing. OpenClaw itself still
+works: start the gateway yourself with `clawctl gateway-service start`. A
+machine-wide `IgnoreUserSettings` other than `0` makes Windows Script Host
+disregard the per-user value. The check reads the native registry view only,
+because recovery runs the system `wscript.exe`.
+
+**Fix.** Set the named value to `1` or remove it. The machine-wide value needs
+an administrator and may be set by Group Policy or other management. OpenClaw
+only reads these settings and never changes them. Afterward, run
+`clawctl setup` to configure logon recovery; `clawctl collect-logs` includes the
+host log that records which value was found.
 
 ## Automatic gateway start failed after `openclaw`
 

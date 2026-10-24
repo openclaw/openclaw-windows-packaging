@@ -201,7 +201,7 @@ internal static class ClawCtlJson
                 : new ClawCtlJsonRuntime(result.NodeVersion),
             Recovery: result.Recovery is null
                 ? null
-                : new ClawCtlJsonRecovery(DescribeRecovery(result.Recovery.State)),
+                : new ClawCtlJsonRecovery(DescribeSetupRecovery(result.Recovery)),
             Warning: result.Warning is null
                 ? null
                 : new ClawCtlJsonWarning(
@@ -400,6 +400,13 @@ internal static class ClawCtlJson
                         _ => "unknown"
                     },
                 NormalizeOptionalMessage(readiness.Detail));
+
+    // A registered recovery that cannot run yet still completes setup, so the
+    // document stays successful while its recovery state matches status.
+    private static string DescribeSetupRecovery(GatewayPersistenceInstallResult recovery) =>
+        recovery is { State: GatewayPersistenceState.Ready, Warning: not null }
+            ? DescribeRecovery(GatewayPersistenceState.ActionRequired)
+            : DescribeRecovery(recovery.State);
 
     private static string DescribeRecovery(GatewayPersistenceState state) =>
         state switch

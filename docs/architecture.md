@@ -280,7 +280,15 @@ session and keeping its data and gateway settings. Successful setup and teardown
 remove only marked legacy files. If an existing task cannot be replaced,
 fallback setup retains its previous recovery files and
 reports that migration still requires action. Windows Script Host
-and its JScript engine must be available for this recovery lane.
+and its JScript engine must be available for this recovery lane. Status and
+install read the `Enabled` setting under `SOFTWARE\Microsoft\Windows Script Host\Settings`
+(machine and user, honoring a machine-wide `IgnoreUserSettings`) through a
+read-only registry seam; they never write it. When it is `0`, wscript would show
+a blocking dialog at every sign-in, so install registers and writes nothing and
+leaves any previous registration as it was, returning a successful result with a
+warning that setup renders as a Recovery line needing attention. Status reports
+action required, including when nothing is configured, so status, install and
+setup agree.
 
 The real control command is `gateway-service`, not `gateway`. The configured
 port is distinct from the upstream default. The launcher does not force the

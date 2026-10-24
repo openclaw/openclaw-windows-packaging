@@ -28,8 +28,11 @@ internal static class GatewayLauncherScript
         ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
         ArgumentException.ThrowIfNullOrWhiteSpace(activationScriptPath);
 
+        // Windows PowerShell exits 0 for a missing script unless the error
+        // action is Stop, so an absent activation script would otherwise look
+        // like a successful logon task run while nothing started.
         string encodedCommand = Convert.ToBase64String(Encoding.Unicode.GetBytes(
-            $"& '{QuotePowerShell(activationScriptPath)}'; exit $LASTEXITCODE"));
+            $"$ErrorActionPreference = 'Stop'; & '{QuotePowerShell(activationScriptPath)}'; exit $LASTEXITCODE"));
 
         // WScript has no console. Run hidden and wait so both persistence lanes
         // retain the recovery command's exit status rather than reporting spawn success.
