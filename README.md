@@ -928,20 +928,24 @@ signature verification fails closed when it does not.
 |---|---|
 | OpenClaw application files | Read-only MSIX package `app` directory |
 | Bundled Node.js archive | Read-only MSIX package `runtime` directory |
-| Extracted Node.js runtime | `%LOCALAPPDATA%\Packages\<package-family>\LocalState\OpenClaw\NodeJS\node-v<version>-win-<architecture>` |
+| Node.js runtime used by OpenClaw | `%LOCALAPPDATA%\OpenClawGatewayMSIX\agent-node\node-v<version>-win-<architecture>` (isolated agent account) |
 | Staged native dependency packages | `%LOCALAPPDATA%\OpenClawGatewayMSIX\agent-native\<content-id>` (agent account) |
-| OpenClaw configuration and user state | `%USERPROFILE%\.openclaw` |
+| OpenClaw configuration and user state | `%USERPROFILE%\.openclaw` (isolated session's agent account) |
 | Retained manual/recovery archives | `%USERPROFILE%\.openclaw-backups` (invoking user) |
 | Pre-restore protection | `%USERPROFILE%\.openclaw-backups\before-restore` (invoking user) |
 | Activation journal and staging | `%LOCALAPPDATA%\OpenClawGatewayMSIX\state-transfer` (agent account) |
 | Launcher diagnostics | `%LOCALAPPDATA%\Packages\<package-family>\LocalState\OpenClawGatewayMSIX\Logs\openclaw.log` |
 
 OpenClaw application files are owned and serviced by Windows as part of the
-immutable MSIX installation. OpenClaw user state remains outside the package.
-Updating or removing the MSIX does not automatically delete that state or stop
-a running Gateway. Use OpenClaw's documented
-[`openclaw uninstall`](https://docs.openclaw.ai/install/uninstall) flow before
-removing the MSIX.
+immutable MSIX installation. By default, OpenClaw's configuration and user
+state live in the isolated session's agent profile, not the invoking user's
+profile or the package's LocalState. `clawctl teardown --force` stops the
+Gateway, removes its persistence mechanisms, and deprovisions the recorded
+session; deprovisioning removes the agent profile and workspace. Save any data
+you need before teardown or package removal; the repository does not guarantee
+that Windows retains the agent profile when the MSIX is removed. The upstream
+[`openclaw uninstall`](https://docs.openclaw.ai/install/uninstall) flow does
+not replace this package-specific teardown.
 
 ## Integrity and isolation boundary
 
@@ -957,9 +961,10 @@ archive validation before requesting signing credentials.
 
 At runtime, Windows' MSIX package integrity and read-only enforcement remains
 the trust boundary for the application and archive. `clawctl setup` extracts
-the archive into versioned package LocalState; `openclaw` launches the packaged
-`app\openclaw.mjs` directly with that extracted executable. Neither command
-hashes or walks the expanded application inventory.
+the archive into the isolated agent account's local application data and
+records its executable and archive. `openclaw` runs the packaged
+`app\openclaw.mjs` with that recorded executable inside the recorded session.
+Neither command hashes or walks the expanded application inventory.
 
 Native dependency staging does not move that boundary. The copies live in the
 agent's own profile, which already holds the extracted Node.js runtime and is
@@ -968,11 +973,12 @@ the guest-writable shared workspace. Application code continues to execute from
 the immutable package, and redirection is gated on a staged file existing, so a
 package that was not staged resolves exactly as before.
 
-The longer-term design is to run the Gateway payload in a dedicated isolated
-agent session rather than the interactive session where the human user is
-logged in. This will provide a boundary similar in purpose to running the
-Gateway in WSL, using the forthcoming isolated-session capabilities. That
-isolation is not provided by the current MSIX implementation.
+The Gateway currently runs inside the installation's isolated agent session,
+not the interactive account where the human user is logged in. `clawctl setup`
+provisions and records that session. `openclaw` provisions it only when the
+setup marker is absent, then starts the recorded session; degraded setup or
+session state remains an explicit `clawctl setup` or `clawctl teardown`
+recovery path. This isolation is part of the current MSIX implementation.
 
 ## Contributors
 

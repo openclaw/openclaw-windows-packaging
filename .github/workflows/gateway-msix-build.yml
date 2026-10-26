@@ -45,6 +45,7 @@ permissions:
 # No cache-mode override: inherit the caller's explicit service-enforced cap.
 env:
   PACKAGING_ROOT: .
+  NODE_VERSION: 24.22.1
 
 jobs:
   build-package:
@@ -92,7 +93,8 @@ jobs:
             -ReuseSnapshot
           $cacheKey = .\scripts\Get-OpenClawCacheKey.ps1 `
             -Layer package `
-            -Commit $source.resolvedCommit
+            -Commit $source.resolvedCommit `
+            -NodeVersion $env:NODE_VERSION
           $releaseIdentitySource = if ($null -ne $source.PSObject.Properties['releaseIdentitySource']) {
             $source.releaseIdentitySource
           }
@@ -159,6 +161,7 @@ jobs:
         if: ${{ steps.package-cache.outputs.cache-hit != 'true' }}
         uses: ./.github/actions/setup-node-env
         with:
+          node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
           install-deps: "false"
 
