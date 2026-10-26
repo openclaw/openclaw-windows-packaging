@@ -20,23 +20,6 @@ internal enum SetupEnsureOutcome
 }
 
 /// <summary>
-/// The result of <see cref="SetupOrchestrator.EnsureAsync"/>: what the call
-/// did, and what the launch that triggered it must still tell the user.
-/// </summary>
-/// <param name="Outcome">What the call did.</param>
-/// <param name="RecoveryNeedingAttention">
-/// The recovery result when setup completed but logon recovery could not be
-/// configured, so the launch succeeds without sign-in recovery until the user
-/// acts. <see langword="null"/> when recovery needs nothing from the user.
-/// </param>
-internal sealed record SetupEnsureResult(
-    SetupEnsureOutcome Outcome,
-    GatewayPersistenceInstallResult? RecoveryNeedingAttention = null)
-{
-    public static SetupEnsureResult Skipped { get; } = new(SetupEnsureOutcome.Skipped);
-}
-
-/// <summary>
 /// The single owner of the setup route.
 /// </summary>
 /// <remarks>
@@ -67,7 +50,7 @@ internal static class SetupOrchestrator
     /// left exactly as it is so that its explicit recovery message survives:
     /// silently reprovisioning would destroy state a user may be mid-recovering.
     /// </remarks>
-    public static async Task<SetupEnsureResult> EnsureAsync(
+    public static async Task<SetupEnsureOutcome> EnsureAsync(
         HostOptions options,
         SessionRuntime runtime,
         IInstallationLifecycle lifecycle,
@@ -84,7 +67,7 @@ internal static class SetupOrchestrator
 
         if (!IsAbsent(runtime.SetupState.Read(runtime.ApplicationId)))
         {
-            return SetupEnsureResult.Skipped;
+            return SetupEnsureOutcome.Skipped;
         }
 
         SetupCommandResult result;
@@ -95,7 +78,7 @@ internal static class SetupOrchestrator
             if (!IsAbsent(runtime.SetupState.Read(runtime.ApplicationId)))
             {
                 log("Setup completed elsewhere while this launch waited for the lifecycle lock.");
-                return SetupEnsureResult.Skipped;
+                return SetupEnsureOutcome.Skipped;
             }
 
             log("No setup record exists; provisioning this installation before launching OpenClaw.");
@@ -120,11 +103,7 @@ internal static class SetupOrchestrator
                 "Run `clawctl setup` to finish preparing OpenClaw.");
         }
 
-        // Setup completes without logon recovery rather than failing, so the
-        // exit code alone does not tell the caller that recovery is not configured.
-        return new SetupEnsureResult(
-            SetupEnsureOutcome.Provisioned,
-            !string.IsNullOrWhiteSpace(result.Recovery?.Warning) ? result.Recovery : null);
+        return SetupEnsureOutcome.Provisioned;
     }
 
     /// <summary>

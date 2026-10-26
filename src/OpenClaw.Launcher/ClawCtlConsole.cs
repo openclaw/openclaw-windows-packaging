@@ -102,23 +102,6 @@ internal static class ClawCtlConsole
         }
     }
 
-    /// <summary>
-    /// Writes only the recovery section of a setup result, for an automatic
-    /// setup whose launch continues with the child's own output.
-    /// </summary>
-    internal static void WriteSetupRecovery(
-        TextWriter output,
-        Gateway.GatewayPersistenceInstallResult recovery,
-        bool useColor = false)
-    {
-        ArgumentNullException.ThrowIfNull(output);
-        ArgumentNullException.ThrowIfNull(recovery);
-
-        var view = new ResultView(SupportsUnicode(output), "setup", ResolveWidth(output));
-        AddSetupRecovery(view, recovery);
-        Render(output, view.Build(), useColor, view.Unicode);
-    }
-
     internal static void WriteGatewayHint(
         TextWriter output,
         bool useColor = false,
@@ -634,7 +617,22 @@ internal static class ClawCtlConsole
 
         if (result.Recovery is not null)
         {
-            AddSetupRecovery(view, result.Recovery);
+            view.Row(
+                "Recovery",
+                result.Recovery.State == Gateway.GatewayPersistenceState.Ready
+                    ? Status(
+                        view,
+                        StatusKind.Success,
+                        "configured",
+                        " - the gateway starts when you sign in")
+                    : Status(
+                        view,
+                        StatusKind.Failure,
+                        DescribeRecoveryState(result.Recovery.State)));
+            if (!string.IsNullOrWhiteSpace(result.Recovery.Detail))
+            {
+                view.Detail(result.Recovery.Detail);
+            }
         }
 
         if (result.SessionReady)
@@ -1002,42 +1000,6 @@ internal static class ClawCtlConsole
             Gateway.GatewayPersistenceState.ActionRequired =>
                 Status(view, StatusKind.Warning, "needs attention"),
             _ => Status(view, StatusKind.Warning, "unknown")
-        };
-
-    // The Recovery row `clawctl setup` prints, shared with the warning an
-    // automatic first-launch setup prints, so one condition has one rendering.
-    private static void AddSetupRecovery(
-        ResultView view,
-        Gateway.GatewayPersistenceInstallResult recovery)
-    {
-        view.Row("Recovery", DescribeSetupRecovery(view, recovery));
-        if (!string.IsNullOrWhiteSpace(recovery.Detail))
-        {
-            view.Detail(recovery.Detail);
-        }
-
-        if (!string.IsNullOrWhiteSpace(recovery.Warning))
-        {
-            view.Detail(recovery.Warning);
-        }
-    }
-
-    // A registered recovery that cannot run yet still lets setup finish, so its
-    // row says so rather than claiming the gateway starts at sign-in.
-    private static Paragraph DescribeSetupRecovery(
-        ResultView view,
-        Gateway.GatewayPersistenceInstallResult recovery) =>
-        recovery switch
-        {
-            { State: Gateway.GatewayPersistenceState.Ready, Warning: not null } =>
-                Status(view, StatusKind.Warning, "needs attention"),
-            { State: Gateway.GatewayPersistenceState.Ready } =>
-                Status(
-                    view,
-                    StatusKind.Success,
-                    "configured",
-                    " - the gateway starts when you sign in"),
-            _ => Status(view, StatusKind.Failure, DescribeRecoveryState(recovery.State))
         };
 
     private static string DescribeRecoveryState(

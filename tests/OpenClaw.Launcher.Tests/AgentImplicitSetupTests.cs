@@ -1,7 +1,6 @@
 using OpenClaw.Launcher.Gateway;
 using OpenClaw.Launcher.Mxc;
 using OpenClaw.Launcher.Session;
-using OpenClaw.Launcher.Tests.Gateway;
 using OpenClaw.Launcher.Tests.Session;
 using OpenClaw.SessionProtocol;
 
@@ -48,62 +47,6 @@ public sealed class AgentImplicitSetupTests : IDisposable
             "Setting up OpenClaw",
             error.ToString(),
             StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task ADisabledScriptHostIsReportedOnStderrAfterSetupAndTheCommandStillRuns()
-    {
-        SessionRuntime runtime = CreateRuntime();
-        var settings = new FakeWindowsScriptHostSettings();
-        settings.Set(WindowsScriptHostSettingsScope.Machine, "Enabled", 0);
-        var lifecycle = new StubLifecycle(runtime, CreateRecoveryManager(settings));
-        var error = new StringWriter();
-        string[] arguments = ["gateway", "status"];
-
-        int exitCode = await RunAgentAsync(
-            runtime, lifecycle, arguments, error, childExitCode: 7)
-            .ConfigureAwait(true);
-
-        Assert.Equal(7, exitCode);
-        Assert.Equal(arguments, ForwardedArguments);
-        Assert.Equal(
-            SetupPhase.Ready,
-            runtime.SetupState.Read(runtime.ApplicationId).Record!.Phase);
-        GatewayPersistenceInstallResult recovery = lifecycle.LastRecovery!;
-        Assert.Equal(GatewayPersistenceState.Ready, recovery.State);
-        Assert.NotNull(recovery.Warning);
-
-        string stderr = error.ToString();
-        const string narration = "Enabling gateway startup at sign-in.";
-        string afterNarration = stderr[(stderr.LastIndexOf(narration, StringComparison.Ordinal) + narration.Length)..];
-        Assert.Contains("needs attention", afterNarration, StringComparison.Ordinal);
-        Assert.Contains("wscript.exe", afterNarration, StringComparison.Ordinal);
-        Assert.Contains(
-            RecoverySectionOfClawCtlSetup(recovery),
-            stderr,
-            StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task AnEnabledScriptHostPrintsNoRecoveryWarningAfterAutomaticSetup()
-    {
-        SessionRuntime runtime = CreateRuntime();
-        var lifecycle = new StubLifecycle(
-            runtime,
-            CreateRecoveryManager(new FakeWindowsScriptHostSettings()));
-        var error = new StringWriter();
-
-        int exitCode = await RunAgentAsync(
-            runtime, lifecycle, ["status"], error, childExitCode: 7)
-            .ConfigureAwait(true);
-
-        Assert.Equal(7, exitCode);
-        Assert.Equal(GatewayPersistenceState.Ready, lifecycle.LastRecovery!.State);
-        Assert.Null(lifecycle.LastRecovery.Warning);
-        string stderr = error.ToString();
-        Assert.Contains("Setting up OpenClaw", stderr, StringComparison.Ordinal);
-        Assert.DoesNotContain("needs attention", stderr, StringComparison.Ordinal);
-        Assert.DoesNotContain("Recovery:", stderr, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -297,46 +240,6 @@ public sealed class AgentImplicitSetupTests : IDisposable
             installationLifecycle: lifecycle);
     }
 
-    /// <summary>
-    /// The real recovery registration over an in-memory scheduler and script
-    /// host settings, so nothing reads or changes this machine's tasks or
-    /// registry.
-    /// </summary>
-    private GatewayPersistenceManager CreateRecoveryManager(
-        IWindowsScriptHostSettingsReader scriptHostSettings)
-    {
-        string stateRoot = Path.Combine(_root, "recovery-state");
-        Directory.CreateDirectory(stateRoot);
-        return new GatewayPersistenceManager(
-            new FakeGatewayTaskScheduler(),
-            new GatewayPersistenceOptions(
-                UserSid: "S-1-5-21-1",
-                PackageFamilyName: "OpenClaw.Gateway_implicit",
-                LauncherPath: Path.Combine(stateRoot, "gateway-launcher.js"),
-                StartupFolderPath: Path.Combine(_root, "startup"),
-                WorkingDirectory: stateRoot,
-                ScriptHostPath: @"C:\Windows\System32\wscript.exe",
-                ScriptHostSettings: scriptHostSettings));
-    }
-
-    /// <summary>
-    /// The lines <c>clawctl setup</c> prints for this recovery result, so the
-    /// launch route can be held to the same rendering.
-    /// </summary>
-    private static string RecoverySectionOfClawCtlSetup(
-        GatewayPersistenceInstallResult recovery)
-    {
-        var setup = new StringWriter();
-        ClawCtlConsole.WriteResult(
-            setup,
-            new SetupCommandResult(0, "app", "24.20.0", recovery, SessionReady: true));
-        return string.Join(
-            Environment.NewLine,
-            setup.ToString().Split(Environment.NewLine)
-                .SkipWhile(line => !line.TrimStart().StartsWith("Recovery:", StringComparison.Ordinal))
-                .TakeWhile(line => !line.TrimStart().StartsWith("Session:", StringComparison.Ordinal)));
-    }
-
     private static Task<MxcReadinessReport> SupportedHost(CancellationToken cancellationToken) =>
         Task.FromResult(new MxcReadinessReport(
             "runtime",
@@ -429,29 +332,22 @@ public sealed class AgentImplicitSetupTests : IDisposable
     /// touches a real scheduled task. Everything the launch route must not use
     /// throws.
     /// </summary>
-    private sealed class StubLifecycle(
-        SessionRuntime runtime,
-        GatewayPersistenceManager? recovery = null) : IInstallationLifecycle
+    private sealed class StubLifecycle(SessionRuntime runtime) : IInstallationLifecycle
     {
         public int RecoveryInstalls { get; private set; }
 
-        public GatewayPersistenceInstallResult? LastRecovery { get; private set; }
-
         public SessionRuntime CreateRuntime(Action<string> log) => runtime;
 
-        public async Task<GatewayPersistenceInstallResult> InstallRecoveryAsync(
+        public Task<GatewayPersistenceInstallResult> InstallRecoveryAsync(
             Action<string> log,
             CancellationToken cancellationToken)
         {
             RecoveryInstalls++;
-            LastRecovery = recovery is null
-                ? new GatewayPersistenceInstallResult(
-                    GatewayPersistenceState.Ready,
-                    GatewayPersistenceLane.TaskScheduler,
-                    "Logon recovery is configured.",
-                    Changed: true)
-                : await recovery.InstallAsync(cancellationToken).ConfigureAwait(false);
-            return LastRecovery;
+            return Task.FromResult(new GatewayPersistenceInstallResult(
+                GatewayPersistenceState.Ready,
+                GatewayPersistenceLane.TaskScheduler,
+                "Logon recovery is configured.",
+                Changed: true));
         }
 
         public Task EnsureSessionSupportedAsync(

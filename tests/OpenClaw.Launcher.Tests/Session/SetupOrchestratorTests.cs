@@ -40,28 +40,6 @@ public sealed class SetupOrchestratorTests : IDisposable
     }
 
     [Fact]
-    public async Task ARecoveryWarningDoesNotStopImplicitSetupFromBeingRecorded()
-    {
-        SessionRuntime runtime = CreateRuntime();
-        var lifecycle = new StubLifecycle
-        {
-            Recovery = new GatewayPersistenceInstallResult(
-                GatewayPersistenceState.Ready,
-                GatewayPersistenceLane.TaskScheduler,
-                "Logon recovery is configured.",
-                Changed: true,
-                Warning: "Windows Script Host is disabled.")
-        };
-
-        SetupEnsureOutcome outcome = await EnsureAsync(runtime, lifecycle).ConfigureAwait(true);
-
-        Assert.Equal(SetupEnsureOutcome.Provisioned, outcome);
-        Assert.Equal(
-            SetupPhase.Ready,
-            runtime.SetupState.Read(runtime.ApplicationId).Record!.Phase);
-    }
-
-    [Fact]
     public async Task ACompletedInstallationIsLeftAloneWithoutDoingAnyWork()
     {
         SessionRuntime runtime = CreateRuntime();
@@ -245,21 +223,20 @@ public sealed class SetupOrchestratorTests : IDisposable
             applicationDirectory);
     }
 
-    private async Task<SetupEnsureOutcome> EnsureAsync(
+    private Task<SetupEnsureOutcome> EnsureAsync(
         HostOptions options,
         string applicationDirectory,
         SessionRuntime runtime,
         StubLifecycle lifecycle)
     {
-        SetupEnsureResult result = await SetupOrchestrator.EnsureAsync(
+        return SetupOrchestrator.EnsureAsync(
             options,
             runtime,
             lifecycle,
             applicationDirectory,
             _ => { },
             new NoProgress(),
-            CancellationToken.None).ConfigureAwait(false);
-        return result.Outcome;
+            CancellationToken.None);
     }
 
     private SessionRuntime CreateRuntime(ISessionLock? lifecycleLock = null)

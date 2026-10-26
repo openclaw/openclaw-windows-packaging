@@ -36,6 +36,8 @@ function New-Fixture {
     [IO.File]::WriteAllText((Join-Path $project 'Program.cs'), 'launcher source')
     New-Item -Path (Join-Path $root 'src\OpenClaw.SessionHost') -ItemType Directory -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $root 'src\OpenClaw.SessionHost\Program.cs'), 'session host source')
+    New-Item -Path (Join-Path $root 'src\OpenClaw.GatewayRecovery') -ItemType Directory -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $root 'src\OpenClaw.GatewayRecovery\Program.cs'), 'sign-in helper source')
     New-Item -Path (Join-Path $root 'src\OpenClaw.SessionProtocol') -ItemType Directory -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $root 'src\OpenClaw.SessionProtocol\Protocol.cs'), 'protocol source')
     [IO.File]::WriteAllText((Join-Path $project 'Package.appxmanifest'), @'
@@ -65,6 +67,16 @@ function New-Fixture {
         <uap5:Extension Category="windows.appExecutionAlias" Executable="openclaw.exe">
           <uap5:AppExecutionAlias>
             <uap5:ExecutionAlias Alias="clawctl.exe" />
+          </uap5:AppExecutionAlias>
+        </uap5:Extension>
+      </Extensions>
+    </Application>
+    <Application Id="GatewayRecovery" Executable="openclaw-gateway-recovery.exe">
+      <uap:VisualElements DisplayName="OpenClaw Gateway" />
+      <Extensions>
+        <uap5:Extension Category="windows.appExecutionAlias" Executable="openclaw-gateway-recovery.exe">
+          <uap5:AppExecutionAlias>
+            <uap5:ExecutionAlias Alias="openclaw-gateway-recovery.exe" />
           </uap5:AppExecutionAlias>
         </uap5:Extension>
       </Extensions>
@@ -183,7 +195,12 @@ function New-Fixture {
                     Join-Path $state.Root 'src\OpenClaw.SessionProtocol\Protocol.cs') -Raw
             ) -join '|'
             $isSessionHost = $project -like '*OpenClaw.SessionHost*'
-            if ($isSessionHost) {
+            if ($project -like '*OpenClaw.GatewayRecovery*') {
+                [IO.File]::WriteAllText(
+                    (Join-Path $output 'openclaw-gateway-recovery.exe'),
+                    "sign-in helper $($state.HostVersion) [$sources]")
+            }
+            elseif ($isSessionHost) {
                 [IO.File]::WriteAllText(
                     (Join-Path $output 'openclaw-session-host.exe'),
                     "session host $($state.HostVersion) [$sources]")
@@ -283,7 +300,7 @@ try {
     $f = New-Fixture
     $first = Invoke-Fixture $f
     Assert-True ($first.Changed -and $f.Downloads -eq 1 -and $f.RuntimeDownloads -eq 1 -and
-        $f.MxcStages -eq 1 -and $f.Publishes -eq 2 -and
+        $f.MxcStages -eq 1 -and $f.Publishes -eq 3 -and
         $f.Registrations -eq 1) 'First deployment did not acquire, build, and register exactly once.'
     Assert-True ($f.Setups -eq 1) 'Deployment did not leave the package runnable by preparing the runtime.'
     Assert-True (
@@ -308,6 +325,9 @@ try {
     Assert-True (
         Test-Path (Join-Path $layout 'session-host\x64\openclaw-session-host.exe')
     ) 'Layout is missing the session host.'
+    Assert-True (
+        Test-Path (Join-Path $layout 'openclaw-gateway-recovery.exe')
+    ) 'Layout is missing the sign-in helper.'
     Assert-True (
         (Get-Content (Join-Path $layout 'dependency-owned-asset.bin') -Raw) -ceq 'dependency asset x64'
     ) 'Layout did not copy an opaque normal publish asset.'
@@ -388,6 +408,7 @@ try {
         'A first deployment did not publish the launcher once with its version.'
     $spLauncher = Join-Path $spFirst.LayoutDirectory 'openclaw.exe'
     $spSessionHost = Join-Path $spFirst.LayoutDirectory 'session-host\x64\openclaw-session-host.exe'
+    $spRecoveryHelper = Join-Path $spFirst.LayoutDirectory 'openclaw-gateway-recovery.exe'
     $sourceEdits = @(
         @{
             Name = 'launcher source'; Binary = $spLauncher; Marker = 'edited launcher source'
@@ -401,6 +422,13 @@ try {
             Apply = {
                 [IO.File]::WriteAllText(
                     (Join-Path $sp.Root 'src\OpenClaw.SessionHost\Program.cs'), 'edited session host source')
+            }
+        }
+        @{
+            Name = 'sign-in helper source'; Binary = $spRecoveryHelper; Marker = 'edited sign-in helper source'
+            Apply = {
+                [IO.File]::WriteAllText(
+                    (Join-Path $sp.Root 'src\OpenClaw.GatewayRecovery\Program.cs'), 'edited sign-in helper source')
             }
         }
         @{
@@ -1161,7 +1189,7 @@ try {
         $pm.Package.Identity.Name -ceq 'OpenClawFoundation.OpenClawGateway-foo' -and
         $pm.Package.Properties.DisplayName -ceq 'OpenClaw Gateway (foo)' -and
         ($patchedTiles -join ',') -ceq 'OpenClaw Gateway (foo)' -and
-        ($patchedAliases -join ',') -ceq 'clawctl-foo.exe,openclaw-foo.exe'
+        ($patchedAliases -join ',') -ceq 'clawctl-foo.exe,openclaw-foo.exe,openclaw-gateway-recovery-foo.exe'
     ) 'The patched manifest does not carry its own identity, display name, and aliases.'
     Assert-True (
         @($p.SetupPackageNames)[0] -ceq 'OpenClawFoundation.OpenClawGateway-foo' -and

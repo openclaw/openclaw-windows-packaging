@@ -1,4 +1,3 @@
-using System.Text;
 using OpenClaw.Launcher.Session;
 
 namespace OpenClaw.Launcher.Gateway;
@@ -8,9 +7,19 @@ namespace OpenClaw.Launcher.Gateway;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Persistence is three files' worth of state: a rewritable launcher script, a
-/// logon task that calls it, and an optional Startup-folder fallback that calls
-/// the same script. Only the task is the intended lane.
+/// Both lanes start the package's windowless sign-in helper through its
+/// package-qualified execution alias, which survives package updates. The
+/// intended lane is a logon task that runs the helper. Only when Task
+/// Scheduler refuses the registration is a Startup-folder shortcut to the same
+/// helper written instead, and that fallback is always reported. Neither lane
+/// runs a script host or a console, and nothing is generated in the state
+/// directory.
+/// </para>
+/// <para>
+/// Earlier generations ran a generated CMD or Windows Script Host launcher.
+/// Their files carry a generator marker; an explicit install removes them once
+/// nothing it could not replace references them, and an uninstall removes them
+/// too. A file without the marker is never treated as recovery.
 /// </para>
 /// <para>
 /// This type never elevates and never repairs behind the user's back. An
@@ -23,8 +32,18 @@ internal sealed class GatewayPersistenceManager
     /// <summary>The command a reported problem tells the user to run.</summary>
     public const string RepairCommand = "clawctl setup";
 
-    private const string ScriptHostDisabledMessage =
-        "Windows Script Host is disabled, so logon recovery cannot run.";
+    /// <summary>The package application that is the windowless sign-in helper.</summary>
+    public const string HelperApplicationId = "GatewayRecovery";
+
+    public const string HelperExecutable = "openclaw-gateway-recovery.exe";
+
+    /// <summary>
+    /// The shortcut's description, which Explorer shows as its comment. Only a
+    /// shortcut carrying it is treated as this installation's, so a same-named
+    /// shortcut someone else made is reported rather than replaced.
+    /// </summary>
+    internal const string StartupLinkDescription =
+        "Starts the OpenClaw gateway when you sign in. (openclaw-gateway-recovery v1)";
 
     private readonly IGatewayTaskScheduler _scheduler;
     private readonly GatewayPersistenceOptions _options;
@@ -40,6 +59,13 @@ internal sealed class GatewayPersistenceManager
     {
         ArgumentNullException.ThrowIfNull(scheduler);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(options.StartupLinks);
+        if (!Path.IsPathFullyQualified(options.HelperPath))
+        {
+            throw new ArgumentException(
+                $"'{options.HelperPath}' is not a fully qualified path.",
+                nameof(options));
+        }
 
         _scheduler = scheduler;
         _options = options;
@@ -48,60 +74,38 @@ internal sealed class GatewayPersistenceManager
             options.UserSid);
         _log = log ?? (_ => { });
         _resolveUserSid = resolveUserSid ?? (_ => null);
-        _ = LauncherPath;
+        _ = LegacyLauncherPath;
         _ = FallbackPath;
     }
 
     public string TaskName => _identity.Name;
 
     /// <summary>
-    /// The Startup-folder file this installation owns. Scoped by package family
-    /// name so the public and internal packages cannot overwrite each other's
-    /// fallback in a folder they both write to.
+    /// The Startup-folder shortcut this installation owns. Scoped by package
+    /// family name so the public and internal packages cannot overwrite each
+    /// other's fallback in a folder they both write to.
     /// </summary>
     public string FallbackPath => ResolveOwnedFilePath(
         _options.StartupFolderPath,
-        $"{GatewayTaskIdentity.DisplayName} {_options.PackageFamilyName}.wsf");
+        $"{GatewayTaskIdentity.DisplayName} {_options.PackageFamilyName}.lnk");
 
-    private string LauncherPath => ResolveOwnedFilePath(
-        _options.WorkingDirectory,
-        _options.LauncherPath);
+    private string LegacyLauncherPath => ResolveOwnedFilePath(
+        _options.StateDirectory,
+        _options.LegacyLauncherPath);
 
-    private string ActivationScriptPath => ResolveOwnedFilePath(
-        _options.WorkingDirectory,
-        Path.ChangeExtension(LauncherPath, ".ps1"));
+    // Every file an earlier generation could have written: the Windows Script
+    // Host launcher, the activation script both generations called, the CMD
+    // launcher, and the Startup-folder WSF and CMD files.
+    private string[] LegacyFiles =>
+    [
+        LegacyLauncherPath,
+        Path.ChangeExtension(LegacyLauncherPath, ".ps1"),
+        Path.ChangeExtension(LegacyLauncherPath, ".cmd"),
+        Path.ChangeExtension(FallbackPath, ".wsf"),
+        Path.ChangeExtension(FallbackPath, ".cmd"),
+    ];
 
     public async Task<GatewayPersistenceStatus> GetStatusAsync(
-        CancellationToken cancellationToken)
-    {
-        GatewayPersistenceStatus status = await ReadStatusAsync(cancellationToken)
-            .ConfigureAwait(false);
-        if (status.State == GatewayPersistenceState.Unknown ||
-            FindDisabledScriptHostSetting() is not { } disabledBy)
-        {
-            return status;
-        }
-
-        // With the script host disabled, install registers nothing, so a machine
-        // with no recovery is reported as needing attention too: status and
-        // setup then agree, and status exits nonzero until the host is enabled.
-        // A finding that already needs attention keeps its own message, such as a
-        // previous console launcher that still works, and gains the prerequisite.
-        return status.State == GatewayPersistenceState.ActionRequired
-            ? status with { Detail = Combine(status.Detail, DescribeDisabledScriptHost(disabledBy)) }
-            : status with
-            {
-                State = GatewayPersistenceState.ActionRequired,
-                Message = ScriptHostDisabledMessage,
-                Detail = DescribeDisabledScriptHost(disabledBy),
-                Remediation = RepairCommand
-            };
-    }
-
-    // Reads the task and files only. Install verifies a fresh registration with
-    // this: it already checked the script host, and a verification failure
-    // should describe the registration, not the registry.
-    private async Task<GatewayPersistenceStatus> ReadStatusAsync(
         CancellationToken cancellationToken)
     {
         GatewayTaskProbe probe = await _scheduler.QueryAsync(
@@ -119,99 +123,33 @@ internal sealed class GatewayPersistenceManager
                 RepairCommand);
         }
 
-        bool fallbackPresent = FallbackMatches() && LauncherMatches();
+        GatewayPersistenceStatus lane = probe.Presence == GatewayTaskPresence.Missing
+            ? DescribeFallback()
+            : DescribeTask(probe.Snapshot!);
 
-        if (probe.Presence == GatewayTaskPresence.Missing)
-        {
-            if (OwnsLegacyFallback())
-            {
-                return new GatewayPersistenceStatus(
-                    GatewayPersistenceState.ActionRequired,
-                    GatewayPersistenceLane.StartupFolderFallback,
-                    "The Startup-folder recovery uses the previous console launcher.",
-                    "Reinstall logon recovery to run it in the background.",
-                    RepairCommand);
-            }
-
-            return fallbackPresent
-                ? new GatewayPersistenceStatus(
-                    GatewayPersistenceState.Ready,
-                    GatewayPersistenceLane.StartupFolderFallback,
-                    "Logon recovery is configured through the Startup folder.",
-                    "The logon task is not registered, so the Startup-folder " +
-                    "fallback is in use. It runs later than the task and only " +
-                    "for interactive sign-ins.",
-                    RepairCommand)
-                : new GatewayPersistenceStatus(
-                    GatewayPersistenceState.NotInstalled,
-                    GatewayPersistenceLane.None,
-                    "Logon recovery is not configured.",
-                    null,
-                    RepairCommand);
-        }
-
-        string? drift = DescribeDrift(probe.Snapshot!);
-        if (drift is not null)
-        {
-            return new GatewayPersistenceStatus(
-                GatewayPersistenceState.ActionRequired,
-                GatewayPersistenceLane.TaskScheduler,
-                "Logon recovery is registered but does not match this installation.",
-                drift,
-                RepairCommand);
-        }
-
-        if (!LauncherMatches())
-        {
-            return new GatewayPersistenceStatus(
-                GatewayPersistenceState.ActionRequired,
-                GatewayPersistenceLane.TaskScheduler,
-                "The logon task is registered but its launcher is missing or modified.",
-                $"'{_options.LauncherPath}' does not contain the expected " +
-                "generated launcher, so the task would not start the gateway.",
-                RepairCommand);
-        }
-
-        return new GatewayPersistenceStatus(
-            GatewayPersistenceState.Ready,
-            GatewayPersistenceLane.TaskScheduler,
-            "Logon recovery is configured.");
+        // Install removes earlier generations' files only once the lane that
+        // replaces them is in place, and reports a removal it could not finish,
+        // so status reports the same leftovers and the same repair.
+        return lane.State is GatewayPersistenceState.Ready or GatewayPersistenceState.NotInstalled &&
+            DescribeLegacyFiles(lane.Lane) is { } legacy
+                ? legacy
+                : lane;
     }
 
     public async Task<GatewayPersistenceInstallResult> InstallAsync(
         CancellationToken cancellationToken)
     {
-        // Registering the wscript lane while Windows Script Host is disabled
-        // makes the task show a blocking dialog at every sign-in. Register and
-        // write nothing, leave any previous generation as it is, and let setup
-        // complete with a warning; status reports the same condition.
-        if (FindDisabledScriptHostSetting() is { } disabledBy)
+        // A task or shortcut naming a missing helper fails at every sign-in
+        // with nothing to show for it, so nothing is registered or written.
+        if (DescribeUnavailableHelper() is { } unavailable)
         {
-            return new GatewayPersistenceInstallResult(
-                GatewayPersistenceState.Ready,
-                GatewayPersistenceLane.None,
-                "Logon recovery was not configured because Windows Script Host is disabled.",
-                Changed: false,
-                Warning: DescribeDisabledScriptHost(disabledBy));
-        }
-
-        bool changed;
-        try
-        {
-            changed = WriteLauncher();
-        }
-        catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException)
-        {
-            _log(
-                $"The gateway launcher '{_options.LauncherPath}' could not be written: " +
-                DiagnosticFailure.Describe(exception));
+            _log($"Logon recovery was not configured: {unavailable}");
             return new GatewayPersistenceInstallResult(
                 GatewayPersistenceState.ActionRequired,
                 GatewayPersistenceLane.None,
-                "The gateway launcher could not be written.",
+                "Logon recovery was not configured because the sign-in helper is unavailable.",
                 Changed: false,
-                $"'{_options.LauncherPath}': {exception.Message}",
+                unavailable,
                 RepairCommand);
         }
 
@@ -230,22 +168,19 @@ internal sealed class GatewayPersistenceManager
                 GatewayPersistenceState.Unknown,
                 GatewayPersistenceLane.None,
                 "Logon recovery could not be read, so it was left unchanged.",
-                changed,
+                Changed: false,
                 probe.Detail,
                 RepairCommand);
         }
 
-        bool alreadyCorrect =
-            probe.Presence == GatewayTaskPresence.Present &&
-            DescribeDrift(probe.Snapshot!) is null;
-
-        if (alreadyCorrect)
+        if (probe.Presence == GatewayTaskPresence.Present &&
+            DescribeDrift(probe.Snapshot!) is null)
         {
             return CompleteMigration(new GatewayPersistenceInstallResult(
                 GatewayPersistenceState.Ready,
                 GatewayPersistenceLane.TaskScheduler,
                 "Logon recovery is configured.",
-                changed));
+                Changed: false));
         }
 
         GatewayTaskOperation registration = await _scheduler.RegisterAsync(
@@ -258,10 +193,9 @@ internal sealed class GatewayPersistenceManager
             _log($"Registered the logon task '{_identity.Name}'.");
             // A successful schtasks write is not evidence that its normalized
             // principal and trigger match. Keep any fallback until read-back proves it.
-            GatewayPersistenceStatus verified = await ReadStatusAsync(cancellationToken)
+            GatewayPersistenceStatus verified = await VerifyRegistrationAsync(cancellationToken)
                 .ConfigureAwait(false);
-            if (verified.State != GatewayPersistenceState.Ready ||
-                verified.Lane != GatewayPersistenceLane.TaskScheduler)
+            if (verified.State != GatewayPersistenceState.Ready)
             {
                 _log($"Registered logon recovery could not be verified: {DiagnosticFailure.SingleLine(verified.Detail ?? verified.Message)}");
                 return new GatewayPersistenceInstallResult(
@@ -274,6 +208,7 @@ internal sealed class GatewayPersistenceManager
                     verified.Detail ?? verified.Message,
                     RepairCommand);
             }
+
             return CompleteMigration(new GatewayPersistenceInstallResult(
                 GatewayPersistenceState.Ready,
                 GatewayPersistenceLane.TaskScheduler,
@@ -287,7 +222,7 @@ internal sealed class GatewayPersistenceManager
         GatewayPersistenceInstallResult fallback = InstallFallback(registration.Detail);
         if (probe.Presence == GatewayTaskPresence.Present)
         {
-            // The unchanged task may still reference the CMD launcher. A new
+            // The unchanged task may still run an earlier launcher. A new
             // fallback cannot retire files that the existing task still uses.
             return fallback with
             {
@@ -298,6 +233,7 @@ internal sealed class GatewayPersistenceManager
                 Remediation = RepairCommand
             };
         }
+
         return CompleteMigration(fallback);
     }
 
@@ -308,31 +244,136 @@ internal sealed class GatewayPersistenceManager
             _identity.Name,
             cancellationToken).ConfigureAwait(false);
 
-        GatewayGeneratedFileRemoval fallback = RemoveFallback();
-        GatewayGeneratedFileRemoval launcher = RemoveLauncher();
-        GatewayGeneratedFileRemoval activationScript = RemoveActivationScript();
+        GatewayGeneratedFileRemoval fallback = RemoveStartupLink();
         GatewayGeneratedFileRemoval legacy = RemoveLegacyFiles();
-        string? detail = Combine(
-            deletion.Detail,
-            Combine(fallback.Detail, launcher.Detail, Combine(activationScript.Detail, legacy.Detail)));
+        string? detail = Combine(deletion.Detail, fallback.Detail, legacy.Detail);
 
         if (!deletion.Succeeded || detail is not null)
         {
             _log($"Logon recovery could not be fully removed: {DiagnosticFailure.SingleLine(detail ?? "no detail was reported.")}");
             return new GatewayPersistenceRemovalResult(
                 Succeeded: false,
-                fallback.Changed || launcher.Changed || activationScript.Changed || legacy.Changed,
+                fallback.Changed || legacy.Changed,
                 "Logon recovery could not be fully removed.",
                 detail);
         }
 
         return new GatewayPersistenceRemovalResult(
             Succeeded: true,
-            fallback.Changed || launcher.Changed || activationScript.Changed || legacy.Changed,
+            fallback.Changed || legacy.Changed,
             "Logon recovery is removed.");
     }
 
-    // Shipped CMD registrations remain recoverable until an explicit install
+    private GatewayPersistenceStatus DescribeTask(GatewayTaskSnapshot snapshot)
+    {
+        if (DescribeDrift(snapshot) is { } drift)
+        {
+            return new GatewayPersistenceStatus(
+                GatewayPersistenceState.ActionRequired,
+                GatewayPersistenceLane.TaskScheduler,
+                "Logon recovery is registered but does not match this installation.",
+                drift,
+                RepairCommand);
+        }
+
+        return DescribeUnavailableHelper() is { } unavailable
+            ? new GatewayPersistenceStatus(
+                GatewayPersistenceState.ActionRequired,
+                GatewayPersistenceLane.TaskScheduler,
+                "The logon task is registered, but the sign-in helper it starts is unavailable.",
+                unavailable,
+                RepairCommand)
+            : new GatewayPersistenceStatus(
+                GatewayPersistenceState.Ready,
+                GatewayPersistenceLane.TaskScheduler,
+                "Logon recovery is configured.");
+    }
+
+    private GatewayPersistenceStatus DescribeFallback()
+    {
+        if (!StartupLinkMatches())
+        {
+            return new GatewayPersistenceStatus(
+                GatewayPersistenceState.NotInstalled,
+                GatewayPersistenceLane.None,
+                "Logon recovery is not configured.",
+                null,
+                RepairCommand);
+        }
+
+        return DescribeUnavailableHelper() is { } unavailable
+            ? new GatewayPersistenceStatus(
+                GatewayPersistenceState.ActionRequired,
+                GatewayPersistenceLane.StartupFolderFallback,
+                "The Startup-folder shortcut is configured, but the sign-in helper it starts is unavailable.",
+                unavailable,
+                RepairCommand)
+            : new GatewayPersistenceStatus(
+                GatewayPersistenceState.Ready,
+                GatewayPersistenceLane.StartupFolderFallback,
+                "Logon recovery is configured through a Startup-folder shortcut.",
+                "The logon task is not registered, so a Startup-folder shortcut starts " +
+                "the gateway. It runs later than the task and only for interactive sign-ins.",
+                RepairCommand);
+    }
+
+    private GatewayPersistenceStatus? DescribeLegacyFiles(GatewayPersistenceLane lane)
+    {
+        List<string> remaining = FindOwnedLegacyFiles();
+        if (remaining.Count == 0)
+        {
+            return null;
+        }
+
+        string files = string.Join(", ", remaining.Select(path => $"'{path}'"));
+        bool runsAtSignIn = remaining.Any(path => Path.GetExtension(path) is ".wsf" ||
+            string.Equals(path, Path.ChangeExtension(FallbackPath, ".cmd"), StringComparison.OrdinalIgnoreCase));
+        return runsAtSignIn
+            ? new GatewayPersistenceStatus(
+                GatewayPersistenceState.ActionRequired,
+                lane == GatewayPersistenceLane.None ? GatewayPersistenceLane.StartupFolderFallback : lane,
+                "An earlier Startup-folder launcher is still installed.",
+                $"{files} {(remaining.Count == 1 ? "is" : "are")} left from an earlier version and " +
+                "can open a console window or a Windows Script Host prompt at sign-in. " +
+                $"Run '{RepairCommand}' to replace it with the windowless sign-in helper.",
+                RepairCommand)
+            : new GatewayPersistenceStatus(
+                GatewayPersistenceState.ActionRequired,
+                lane,
+                "Files from an earlier logon recovery remain.",
+                $"Run '{RepairCommand}' to remove {files}.",
+                RepairCommand);
+    }
+
+    private string? DescribeUnavailableHelper() =>
+        File.Exists(_options.HelperPath)
+            ? null
+            : $"'{_options.HelperPath}' does not exist, so nothing would start the gateway " +
+              "at sign-in. Repair or reinstall the OpenClaw Gateway package, then run " +
+              $"'{RepairCommand}'.";
+
+    private async Task<GatewayPersistenceStatus> VerifyRegistrationAsync(
+        CancellationToken cancellationToken)
+    {
+        GatewayTaskProbe probe = await _scheduler.QueryAsync(
+            _identity.Name,
+            cancellationToken).ConfigureAwait(false);
+        return probe.Presence switch
+        {
+            GatewayTaskPresence.Present => DescribeTask(probe.Snapshot!),
+            GatewayTaskPresence.Unreadable => new GatewayPersistenceStatus(
+                GatewayPersistenceState.Unknown,
+                GatewayPersistenceLane.TaskScheduler,
+                "Logon recovery could not be read.",
+                probe.Detail),
+            _ => new GatewayPersistenceStatus(
+                GatewayPersistenceState.ActionRequired,
+                GatewayPersistenceLane.TaskScheduler,
+                "The registered logon task could not be found.")
+        };
+    }
+
+    // Earlier generations remain recoverable until an explicit install
     // switches the task or fallback. Remove only marked files after that succeeds.
     private GatewayPersistenceInstallResult CompleteMigration(GatewayPersistenceInstallResult result)
     {
@@ -342,7 +383,7 @@ internal sealed class GatewayPersistenceManager
         }
 
         GatewayGeneratedFileRemoval fallback = result.Lane == GatewayPersistenceLane.TaskScheduler
-            ? RemoveFallback()
+            ? RemoveStartupLink()
             : new GatewayGeneratedFileRemoval(false, null);
         GatewayGeneratedFileRemoval legacy = RemoveLegacyFiles();
         string? detail = Combine(fallback.Detail, legacy.Detail);
@@ -355,51 +396,48 @@ internal sealed class GatewayPersistenceManager
         };
     }
 
-    // Status offers the same command after the value changes: setup is
-    // idempotent, and it is the only command that configures recovery. The
-    // registry is only read; changing it is the user's or the administrator's
-    // decision.
-    private static string DescribeDisabledScriptHost(string setting) =>
-        $"'{setting}' is 0, and logon recovery runs through Windows Script Host " +
-        "(wscript.exe). While it is disabled, setup does not register logon " +
-        "recovery, and a registered wscript task shows a blocking dialog at " +
-        "sign-in instead of starting the gateway. Set the value to 1 or remove " +
-        "it (the machine-wide value needs an administrator and may be set by " +
-        $"Group Policy or other management), then run '{RepairCommand}' to " +
-        "configure logon recovery. OpenClaw does not change it.";
-
-    private string? FindDisabledScriptHostSetting()
-    {
-        if (_options.ScriptHostSettings is null)
-        {
-            return null;
-        }
-
-        string? setting = WindowsScriptHostPolicy.FindDisablingSetting(_options.ScriptHostSettings);
-        if (setting is not null)
-        {
-            _log($"Windows Script Host is disabled by '{setting}'.");
-        }
-
-        return setting;
-    }
-
     private GatewayGeneratedFileRemoval RemoveLegacyFiles()
     {
-        GatewayGeneratedFileRemoval launcher =
-            RemoveGeneratedFile(Path.ChangeExtension(LauncherPath, ".cmd"));
-        GatewayGeneratedFileRemoval fallback =
-            RemoveGeneratedFile(Path.ChangeExtension(FallbackPath, ".cmd"));
-        return new GatewayGeneratedFileRemoval(
-            launcher.Changed || fallback.Changed,
-            Combine(launcher.Detail, fallback.Detail));
+        bool changed = false;
+        string? detail = null;
+        foreach (string path in LegacyFiles)
+        {
+            GatewayGeneratedFileRemoval removal = RemoveGeneratedFile(path);
+            changed |= removal.Changed;
+            detail = Combine(detail, removal.Detail);
+        }
+
+        return new GatewayGeneratedFileRemoval(changed, detail);
+    }
+
+    // An unreadable file is treated as owned: install reports the same file
+    // as a failed cleanup, so status and install stay consistent.
+    private List<string> FindOwnedLegacyFiles()
+    {
+        List<string> owned = [];
+        foreach (string path in LegacyFiles)
+        {
+            try
+            {
+                if (IsGenerated(path))
+                {
+                    owned.Add(path);
+                }
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException)
+            {
+                owned.Add(path);
+            }
+        }
+
+        return owned;
     }
 
     private GatewayTaskSnapshot DesiredSnapshot() =>
         GatewayTaskDefinition.CreateSnapshot(
             _options.UserSid,
-            _options.ScriptHostPath,
-            LauncherPath,
+            _options.HelperPath,
             _options.LogonTriggerUserSid);
 
     private string? DescribeDrift(GatewayTaskSnapshot actual)
@@ -477,101 +515,84 @@ internal sealed class GatewayPersistenceManager
 
     private GatewayPersistenceInstallResult InstallFallback(string? taskDetail)
     {
+        // Creating the folder from inside the package would land in the
+        // package's private copy of AppData, which Explorer never reads at
+        // sign-in. Only an existing Startup folder is written to.
+        if (!Directory.Exists(_options.StartupFolderPath))
+        {
+            _log($"The Startup folder '{_options.StartupFolderPath}' does not exist, so no shortcut was written.");
+            return new GatewayPersistenceInstallResult(
+                GatewayPersistenceState.ActionRequired,
+                GatewayPersistenceLane.None,
+                "Logon recovery could not be configured.",
+                Changed: false,
+                Combine(taskDetail, $"The Startup folder '{_options.StartupFolderPath}' does not exist."),
+                RepairCommand);
+        }
+
+        bool changed;
         try
         {
-            Directory.CreateDirectory(_options.StartupFolderPath);
-            WriteGeneratedFile(
-                FallbackPath,
-                GatewayLauncherScript.CreateFallback(_options.LauncherPath));
+            changed = WriteStartupLink();
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException)
         {
             _log(
-                $"The Startup-folder fallback '{FallbackPath}' could not be written: " +
+                $"The Startup-folder shortcut '{FallbackPath}' could not be written: " +
                 DiagnosticFailure.Describe(exception));
             return new GatewayPersistenceInstallResult(
                 GatewayPersistenceState.ActionRequired,
                 GatewayPersistenceLane.None,
                 "Logon recovery could not be configured.",
-                Changed: true,
+                Changed: false,
                 Combine(taskDetail, $"'{FallbackPath}': {exception.Message}"),
                 RepairCommand);
         }
 
-        _log($"Registered the Startup-folder fallback at '{FallbackPath}'.");
+        _log($"Registered the Startup-folder shortcut at '{FallbackPath}'.");
         return new GatewayPersistenceInstallResult(
             GatewayPersistenceState.Ready,
             GatewayPersistenceLane.StartupFolderFallback,
-            "Logon recovery is configured through the Startup folder.",
-            Changed: true,
+            "Logon recovery is configured through a Startup-folder shortcut.",
+            changed,
             Combine(
                 taskDetail,
-                "The logon task could not be registered, so the Startup-folder " +
-                "fallback was used. It runs later than the task and only for " +
-                "interactive sign-ins."),
+                "The logon task could not be registered, so a Startup-folder " +
+                "shortcut starts the gateway instead. It runs later than the task " +
+                "and only for interactive sign-ins."),
             RepairCommand);
     }
 
-    private bool WriteLauncher()
-    {
-        string content = GatewayLauncherScript.Create(
-            _options.WorkingDirectory,
-            ActivationScriptPath);
-        string activationScript =
-            GatewayLauncherScript.CreateActivationScript(_options.PackageFamilyName);
+    private StartupLink DesiredStartupLink() =>
+        new(_options.HelperPath, string.Empty, StartupLinkDescription);
 
-        Directory.CreateDirectory(
-            Path.GetDirectoryName(LauncherPath)
-            ?? throw new InvalidOperationException(
-                $"'{LauncherPath}' has no parent directory."));
-        bool launcherChanged = WriteGeneratedFile(LauncherPath, content);
-        bool activationChanged = WriteGeneratedFile(ActivationScriptPath, activationScript);
-        return launcherChanged || activationChanged;
-    }
-
-    private static bool WriteGeneratedFile(string path, string content)
+    private bool WriteStartupLink()
     {
-        if (File.Exists(path))
+        StartupLink? existing = _options.StartupLinks.Read(FallbackPath);
+        if (existing is not null)
         {
-            string existing = File.ReadAllText(path);
-            if (string.Equals(existing, content, StringComparison.Ordinal))
+            if (Matches(existing))
             {
                 return false;
             }
 
-            if (!GatewayLauncherScript.LooksGenerated(existing))
+            if (!IsOwned(existing))
             {
                 throw new IOException(
-                    $"'{path}' exists but was not generated by OpenClaw.");
+                    $"'{FallbackPath}' exists but was not created by OpenClaw.");
             }
         }
 
-        // WScript reads Unicode scripts with a UTF-16 BOM; UTF-8 paths would be
-        // decoded using the machine's ANSI code page and fail for other alphabets.
-        File.WriteAllText(path, content, Path.GetExtension(path) == ".js"
-            ? Encoding.Unicode
-            : new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        _options.StartupLinks.Write(FallbackPath, DesiredStartupLink());
         return true;
     }
 
-    private bool LauncherMatches()
+    private bool StartupLinkMatches()
     {
         try
         {
-            return File.Exists(LauncherPath) &&
-                   string.Equals(
-                       File.ReadAllText(LauncherPath),
-                       GatewayLauncherScript.Create(
-                           _options.WorkingDirectory,
-                           ActivationScriptPath),
-                       StringComparison.Ordinal) &&
-                   File.Exists(ActivationScriptPath) &&
-                   string.Equals(
-                       File.ReadAllText(ActivationScriptPath),
-                       GatewayLauncherScript.CreateActivationScript(
-                           _options.PackageFamilyName),
-                       StringComparison.Ordinal);
+            return _options.StartupLinks.Read(FallbackPath) is { } link && Matches(link);
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException)
@@ -580,52 +601,46 @@ internal sealed class GatewayPersistenceManager
         }
     }
 
-    private bool FallbackMatches()
+    private bool Matches(StartupLink link) =>
+        IsOwned(link) &&
+        Same(link.TargetPath, _options.HelperPath) &&
+        link.Arguments.Length == 0;
+
+    private static bool IsOwned(StartupLink link) =>
+        string.Equals(link.Description, StartupLinkDescription, StringComparison.Ordinal);
+
+    private GatewayGeneratedFileRemoval RemoveStartupLink()
     {
+        // Only a shortcut this installation created is deleted. One that cannot
+        // be read is reported rather than guessed to be someone else's.
         try
         {
-            return File.Exists(FallbackPath) &&
-                   string.Equals(
-                       File.ReadAllText(FallbackPath),
-                       GatewayLauncherScript.CreateFallback(_options.LauncherPath),
-                       StringComparison.Ordinal);
+            if (_options.StartupLinks.Read(FallbackPath) is not { } link || !IsOwned(link))
+            {
+                return new GatewayGeneratedFileRemoval(false, null);
+            }
+
+            (_options.DeleteFile ?? File.Delete)(FallbackPath);
+            return new GatewayGeneratedFileRemoval(true, null);
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException)
         {
-            return false;
+            _log(
+                $"The Startup-folder shortcut '{FallbackPath}' could not be removed: " +
+                DiagnosticFailure.Describe(exception));
+            return new GatewayGeneratedFileRemoval(
+                false,
+                $"Could not remove the Startup-folder shortcut '{FallbackPath}': {exception.Message}");
         }
     }
 
-    private GatewayGeneratedFileRemoval RemoveFallback() =>
-        RemoveGeneratedFile(FallbackPath);
-
-    private GatewayGeneratedFileRemoval RemoveLauncher() =>
-        RemoveGeneratedFile(LauncherPath);
-
-    private GatewayGeneratedFileRemoval RemoveActivationScript() =>
-        RemoveGeneratedFile(ActivationScriptPath);
-
-    // The one ownership test: only a file carrying a generator marker is ours.
-    // Status and removal share it so they cannot disagree about a legacy file.
+    // The one ownership test for earlier generations' files: only a file
+    // carrying a generator marker is ours. Status and removal share it so they
+    // cannot disagree about a legacy file.
     private static bool IsGenerated(string path) =>
         File.Exists(path) &&
         GatewayLauncherScript.LooksGenerated(File.ReadAllText(path));
-
-    // An unreadable legacy file is treated as owned: install reports the same
-    // file as a failed cleanup, so status and install stay consistent.
-    private bool OwnsLegacyFallback()
-    {
-        try
-        {
-            return IsGenerated(Path.ChangeExtension(FallbackPath, ".cmd"));
-        }
-        catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException)
-        {
-            return true;
-        }
-    }
 
     private GatewayGeneratedFileRemoval RemoveGeneratedFile(string path)
     {
@@ -694,5 +709,4 @@ internal sealed class GatewayPersistenceManager
 
     private static bool Same(string left, string right) =>
         string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
-
 }

@@ -6,6 +6,8 @@
     <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- Source-generated COM for the shell's shortcut object emits pointer code. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <NuGetAuditMode>all</NuGetAuditMode>
     <AssemblyName>openclaw</AssemblyName>
     <RootNamespace>OpenClaw.Launcher</RootNamespace>
@@ -152,6 +154,7 @@
     <MxcRuntimeArchitecture Condition="'$(RuntimeIdentifier)' == 'win-arm64'">arm64</MxcRuntimeArchitecture>
     <MxcRuntimeContentDirectory>$(MSBuildThisFileDirectory)..\..\content\mxc\$(MxcRuntimeArchitecture)\</MxcRuntimeContentDirectory>
     <SessionHostContentDirectory>$(MSBuildThisFileDirectory)..\..\content\session-host\$(MxcRuntimeArchitecture)\</SessionHostContentDirectory>
+    <GatewayRecoveryContentDirectory>$(MSBuildThisFileDirectory)..\..\content\gateway-recovery\$(MxcRuntimeArchitecture)\</GatewayRecoveryContentDirectory>
   </PropertyGroup>
 
   <ItemGroup>
@@ -178,6 +181,10 @@
              Exclude="$(SessionHostContentDirectory)**\*.pdb;$(SessionHostContentDirectory)**\*.xml"
              Link="session-host\$(MxcRuntimeArchitecture)\%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" />
+    <!-- The sign-in helper sits beside openclaw.exe at the package root. -->
+    <Content Include="$(GatewayRecoveryContentDirectory)openclaw-gateway-recovery.exe"
+             Link="openclaw-gateway-recovery.exe"
+             CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <Target Name="ValidatePackagingContent"
@@ -197,6 +204,8 @@
            Text="Missing the MXC SDK redistribution license." />
     <Error Condition="!Exists('$(SessionHostContentDirectory)openclaw-session-host.exe')"
            Text="Missing the published isolated-session guest helper. scripts\Build-MSIX.ps1 stages it for $(MxcRuntimeArchitecture)." />
+    <Error Condition="!Exists('$(GatewayRecoveryContentDirectory)openclaw-gateway-recovery.exe')"
+           Text="Missing the published windowless sign-in helper. scripts\Build-MSIX.ps1 stages it for $(MxcRuntimeArchitecture)." />
   </Target>
 
   <Target Name="FinalizeNativeAotPackagePayload"

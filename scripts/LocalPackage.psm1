@@ -20,6 +20,7 @@ function Get-LocalPackageIdentity {
             DisplayName = ''
             AgentCommand = 'openclaw'
             ControlCommand = 'clawctl'
+            RecoveryCommand = 'openclaw-gateway-recovery'
             StateDirectory = 'artifacts\local-package'
         }
     }
@@ -30,7 +31,7 @@ function Get-LocalPackageIdentity {
         )
     }
 
-    # The suffix becomes part of the package name, both execution aliases, and
+    # The suffix becomes part of the package name, every execution alias, and
     # a state directory. Package names are limited to 50 characters, which
     # leaves 15 after the base name and separator.
     $normalized = $Patch.ToLowerInvariant()
@@ -47,6 +48,7 @@ function Get-LocalPackageIdentity {
         DisplayName = "OpenClaw Gateway ($normalized)"
         AgentCommand = "openclaw-$normalized"
         ControlCommand = "clawctl-$normalized"
+        RecoveryCommand = "openclaw-gateway-recovery-$normalized"
         StateDirectory = "artifacts\local-package\patches\$normalized"
     }
 }
@@ -558,6 +560,7 @@ function New-LocalPackageLayout {
         [string]$RepositoryRoot,
         [string]$HostExecutable,
         [string]$SessionHostExecutable,
+        [string]$RecoveryHelperExecutable,
         [string]$PayloadDirectory,
         [string]$RuntimeArchive,
         [string]$Architecture,
@@ -587,6 +590,7 @@ function New-LocalPackageLayout {
         $aliases = @{
             'openclaw.exe' = "$($Identity.AgentCommand).exe"
             'clawctl.exe' = "$($Identity.ControlCommand).exe"
+            'openclaw-gateway-recovery.exe' = "$($Identity.RecoveryCommand).exe"
         }
         foreach ($alias in $manifest.SelectNodes("//*[local-name()='ExecutionAlias']")) {
             $current = $alias.GetAttribute('Alias')
@@ -599,6 +603,8 @@ function New-LocalPackageLayout {
     $manifest.Save($manifestPath)
 
     Copy-Item -LiteralPath $HostExecutable -Destination (Join-Path $LayoutDirectory 'openclaw.exe') -Force
+    Copy-Item -LiteralPath $RecoveryHelperExecutable `
+        -Destination (Join-Path $LayoutDirectory 'openclaw-gateway-recovery.exe') -Force
     $nodeScripts = Join-Path $LayoutDirectory 'node'
     if (Test-Path -LiteralPath $nodeScripts) { Remove-Item -LiteralPath $nodeScripts -Recurse -Force }
     Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'src\OpenClaw.Launcher\node') `
@@ -712,11 +718,12 @@ function Get-LocalPackageFileInventory {
 function Get-LocalPackageSourceInventory {
     param([string]$RepositoryRoot)
 
-    # The checkout files the launcher and session-host publishes read. Each
-    # project's bin and obj hold build output that every publish rewrites, so
-    # hashing them would make every deployment look changed.
+    # The checkout files the launcher, session-host, and sign-in helper
+    # publishes read. Each project's bin and obj hold build output that every
+    # publish rewrites, so hashing them would make every deployment look changed.
     $projectFiles = foreach ($project in @(
-        'OpenClaw.Launcher', 'OpenClaw.SessionHost', 'OpenClaw.SessionProtocol'
+        'OpenClaw.GatewayRecovery', 'OpenClaw.Launcher', 'OpenClaw.SessionHost',
+        'OpenClaw.SessionProtocol'
     )) {
         foreach ($entry in Get-ChildItem -LiteralPath (Join-Path $RepositoryRoot "src\$project") -Force) {
             if ($entry.PSIsContainer -and $entry.Name -in @('bin', 'obj')) { continue }
@@ -754,6 +761,7 @@ function Test-LocalPackageLayout {
     foreach ($relative in @(
         'AppxManifest.xml',
         'openclaw.exe',
+        'openclaw-gateway-recovery.exe',
         "runtime\$RuntimeArchiveName",
         "session-host\$Architecture\openclaw-session-host.exe",
         'mxc-runtime.json',
@@ -1264,6 +1272,11 @@ function Invoke-LocalPackageDeployment {
             & $services.Publish (Join-Path $root 'src\OpenClaw.SessionHost\OpenClaw.SessionHost.csproj') `
                 $Architecture $sessionHostDirectory $null
         } | Out-Null
+        $recoveryHelperDirectory = Join-Path $stateRoot 'gateway-recovery'
+        Invoke-LocalPackagePhase $progress 'Build sign-in helper (NativeAOT)' {
+            & $services.Publish (Join-Path $root 'src\OpenClaw.GatewayRecovery\OpenClaw.GatewayRecovery.csproj') `
+                $Architecture $recoveryHelperDirectory $null
+        } | Out-Null
         $hostExecutable = Join-Path $hostDirectory 'openclaw.exe'
         if (-not (& $services.TestPath $hostExecutable)) {
             throw "The publish did not produce $hostExecutable."
@@ -1271,6 +1284,10 @@ function Invoke-LocalPackageDeployment {
         $sessionHostExecutable = Join-Path $sessionHostDirectory 'openclaw-session-host.exe'
         if (-not (& $services.TestPath $sessionHostExecutable)) {
             throw "The publish did not produce $sessionHostExecutable."
+        }
+        $recoveryHelperExecutable = Join-Path $recoveryHelperDirectory 'openclaw-gateway-recovery.exe'
+        if (-not (& $services.TestPath $recoveryHelperExecutable)) {
+            throw "The publish did not produce $recoveryHelperExecutable."
         }
         Invoke-LocalPackagePhase $progress 'Stage MXC SDK license and metadata' {
             & $services.StageMxcMetadata $root $Architecture $hostDirectory
@@ -1292,6 +1309,7 @@ function Invoke-LocalPackageDeployment {
                 (Get-FileHash -LiteralPath $hostExecutable -Algorithm SHA256).Hash
                 $sessionHostInfo.Length.ToString()
                 $sessionHostHash
+                (Get-FileHash -LiteralPath $recoveryHelperExecutable -Algorithm SHA256).Hash
                 $manifestHash
             ) + $imageHashes + $nodeScriptHashes)
         }
@@ -1328,6 +1346,7 @@ function Invoke-LocalPackageDeployment {
         $manifestPath = Invoke-LocalPackagePhase $progress 'Assemble layout' {
             New-LocalPackageLayout -LayoutDirectory $layoutDirectory -RepositoryRoot $root `
                 -HostExecutable $hostExecutable -SessionHostExecutable $sessionHostExecutable `
+                -RecoveryHelperExecutable $recoveryHelperExecutable `
                 -PayloadDirectory $payload.Directory `
                 -RuntimeArchive $runtimeArchive -Architecture $Architecture -Version $version `
                 -Identity $identity

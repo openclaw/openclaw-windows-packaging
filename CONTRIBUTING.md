@@ -344,9 +344,10 @@ bypassable, and required CI checks remain authoritative.
   lifetime, and a held root is left whole for a later setup.
 - Keep x64 and ARM64 behavior synchronized across the workflow matrix, scripts,
   project runtime identifiers, manifest content, and signing validation.
-- Restore `src\OpenClaw.SessionHost\OpenClaw.SessionHost.csproj` separately
+- Restore `src\OpenClaw.SessionHost\OpenClaw.SessionHost.csproj` and
+  `src\OpenClaw.GatewayRecovery\OpenClaw.GatewayRecovery.csproj` separately
   with the target runtime and `PublishAot=true` before `Build-MSIX.ps1`
-  publishes it with `--no-restore`; the ordinary solution restore is not
+  publishes them with `--no-restore`; the ordinary solution restore is not
   sufficient.
 - Do not add a packaging-side Node.js version pin or support range. The
   selected upstream toolchain owns the version; package composition supplies

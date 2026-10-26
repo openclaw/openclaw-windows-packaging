@@ -446,7 +446,7 @@ internal static class Program
                 out restore));
         using (restore)
         {
-            Session.SetupEnsureResult ensured = await ClawCtlConsole.NarrateAsync(
+            _ = await ClawCtlConsole.NarrateAsync(
                 errorWriter,
                 useColor,
                 narrate: true,
@@ -459,14 +459,6 @@ internal static class Program
                     log,
                     progress,
                     CancellationToken.None)).ConfigureAwait(false);
-
-            // The launch continues, so the only chance to say that sign-in
-            // recovery was not configured is here, after the narration that
-            // announced it.
-            if (ensured.RecoveryNeedingAttention is { } recovery)
-            {
-                ClawCtlConsole.WriteSetupRecovery(errorWriter, recovery, useColor);
-            }
         }
     }
 
