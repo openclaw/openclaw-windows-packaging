@@ -35,18 +35,25 @@ try {
     $payloadScript = Join-Path $testRoot 'Build-Payload.ps1'
     Set-Content -LiteralPath $payloadScript -Value 'Write-Output first'
 
-    $packageA = & $scriptPath -Layer package -Commit $commitA
-    $packageARepeat = & $scriptPath -Layer package -Commit $commitA
+    $packageA = & $scriptPath -Layer package -Commit $commitA -NodeVersion 24.22.1
+    $packageARepeat = & $scriptPath -Layer package -Commit $commitA -NodeVersion 24.22.1
     if ($packageA -cne $packageARepeat) {
         throw 'The same package inputs did not produce a stable cache key.'
     }
 
-    $packageB = & $scriptPath -Layer package -Commit $commitB
+    $packageB = & $scriptPath -Layer package -Commit $commitB -NodeVersion 24.22.1
     Assert-NotEqual $packageA $packageB 'distinct commits'
+
+    $packageBeforeRuntimeUpdate = & $scriptPath `
+        -Layer package `
+        -Commit $commitA `
+        -NodeVersion 24.21.0
+    Assert-NotEqual $packageA $packageBeforeRuntimeUpdate 'distinct build Node versions'
 
     $legacyPackage = & $scriptPath `
         -Layer package `
         -Commit $commitA `
+        -NodeVersion 24.22.1 `
         -FormatVersion 1
     Assert-NotEqual $packageA $legacyPackage 'pre-boundary package cache invalidation'
 

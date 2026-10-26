@@ -31,15 +31,16 @@ if ($normalizedCommit -notmatch '^[0-9a-f]{40}$') {
     throw "Commit '$Commit' must be a full 40-character hexadecimal SHA."
 }
 
+if ($NodeVersion -notmatch '^\d+\.\d+\.\d+$') {
+    throw "NodeVersion '$NodeVersion' must contain three numeric components."
+}
+
 if ($Layer -eq 'package') {
-    return "openclaw-package-v$FormatVersion-$normalizedCommit"
+    return "openclaw-package-v$FormatVersion-$normalizedCommit-node-$NodeVersion"
 }
 
 if ([string]::IsNullOrWhiteSpace($Architecture)) {
     throw 'Architecture is required for a payload cache key.'
-}
-if ($NodeVersion -notmatch '^\d+\.\d+\.\d+$') {
-    throw "NodeVersion '$NodeVersion' must contain three numeric components."
 }
 $normalizedPackageSha256 = $PackageSha256.Trim().ToLowerInvariant()
 if ($normalizedPackageSha256 -notmatch '^[0-9a-f]{64}$') {
