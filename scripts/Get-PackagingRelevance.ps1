@@ -27,6 +27,7 @@ $documentationPathPattern = '^(?:.*\.md|docs/.*|LICENSE)$'
 # every other local deployment can use the equivalent successful main payload.
 $payloadArtifactPaths = @(
     '.github/workflows/gateway-msix.yml'
+    '.github/workflows/gateway-msix-build.yml'
     'release-policy.json'
     'scripts/Build-Payload.ps1'
     'scripts/Copy-PayloadTree.ps1'
@@ -44,6 +45,7 @@ $bundleBuildPaths = @(
 )
 $versioningPaths = @(
     '.github/workflows/gateway-msix.yml'
+    '.github/workflows/gateway-msix-build.yml'
     'release-policy.json'
     'scripts/Sign-TestMSIX.ps1'
     'scripts/OpenClawSource.ps1'
@@ -56,6 +58,9 @@ $versioningPaths = @(
     'scripts/Test-MSIXUpgrade.ps1'
     'scripts/Test-MSIXUpgradeMatrix.Tests.ps1'
     'scripts/Test-WorkflowSigningConfiguration.ps1'
+    'scripts/Select-WorkflowBuild.ps1'
+    'scripts/Assert-WorkflowJobResults.ps1'
+    'scripts/Test-WorkflowJobResults.Tests.ps1'
     'scripts/msix-upgrade-baselines.json'
 )
 

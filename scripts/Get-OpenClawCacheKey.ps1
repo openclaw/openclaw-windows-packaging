@@ -19,7 +19,8 @@ param(
     ),
 
     [ValidateRange(1, 999)]
-    [int]$FormatVersion = 1
+    # Only caches produced behind the scoped-token boundary use this namespace.
+    [int]$FormatVersion = 2
 )
 
 Set-StrictMode -Version Latest

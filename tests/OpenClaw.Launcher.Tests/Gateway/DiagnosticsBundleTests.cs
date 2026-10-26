@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.IO.Compression;
 using System.Text;
-using System.Text.Json;
 using OpenClaw.Launcher.Gateway;
 using OpenClaw.Launcher.Mxc;
 using OpenClaw.Launcher.Session;
@@ -332,28 +331,20 @@ public sealed class DiagnosticsBundleTests : IDisposable
                 StringComparison.Ordinal));
     }
 
-    // A failure note quotes the failure's full detail. For a malformed MXC
-    // response, that detail includes the executor's raw output and
-    // diagnostics. Notes reach the manifest and the command's console and
-    // JSON result, so they must be redacted like collected file text.
+    // Failure detail can contain credential-shaped text. Notes reach the
+    // manifest and command result, so they need the same redaction.
     [Fact]
     public async Task CredentialsInAFailureNoteAreRedactedEverywhereTheNoteGoes()
     {
         string workspace = Path.Combine(_root, "shared");
         Directory.CreateDirectory(workspace);
-        var executor = new MalformedStartExecutor(
+        var executor = new FailedStartClient(
             workspace,
             malformedOutput: "thread 'main' panicked: Authorization: Bearer ghu_verysecretvalue",
             executorDiagnostics: "fatal: OPENAI_API_KEY=ghu_othersecretvalue");
         (GatewayRuntime runtime, _, SessionRuntime session) = CreateRuntime(
             workspace,
-            new MxcCliSessionClient(
-                new MxcRuntimeLocation(
-                    Path.Combine(_root, "mxc"),
-                    Path.Combine(_root, "mxc", "wxc-exec.exe"),
-                    Path.Combine(_root, "mxc", "plm.exe"),
-                    null),
-                executor));
+            executor);
         SessionRecord record = await session.Coordinator.EnsureStartedAsync(CancellationToken.None);
         session.StageHelper(record);
         string bundlePath = Path.Combine(_root, "malformed.zip");
@@ -369,7 +360,7 @@ public sealed class DiagnosticsBundleTests : IDisposable
             candidate => candidate.StartsWith(
                 "Agent-side logs could not be collected (MxcException:",
                 StringComparison.Ordinal));
-        Assert.Contains("[code ProtocolViolation]", note, StringComparison.Ordinal);
+        Assert.Contains("[code BackendError; backend code BackendError]", note, StringComparison.Ordinal);
         Assert.Contains(
             $"Executor diagnostics: fatal: OPENAI_API_KEY={DiagnosticsRedactor.Placeholder}",
             note,
@@ -467,6 +458,39 @@ public sealed class DiagnosticsBundleTests : IDisposable
         Assert.Contains("--output", exception.Message, StringComparison.Ordinal);
     }
 
+    // A failure after CreateNew, such as a full disk while the archive is
+    // written, used to be reported as "already exists" because the new zip
+    // was already on disk. Only the create collision uses that message.
+    [Fact]
+    public async Task AnIoExceptionAfterTheBundleIsCreatedKeepsItsOwnMessage()
+    {
+        (GatewayRuntime runtime, HostPaths paths, _) = CreateRuntime();
+        Directory.CreateDirectory(Path.GetDirectoryName(paths.LogPath)!);
+        await File.WriteAllTextAsync(paths.LogPath, "host evidence");
+        string bundlePath = Path.Combine(_root, "late.zip");
+
+        IOException exception = await Assert.ThrowsAsync<IOException>(
+            () => runtime.CollectLogsAsync(
+                bundlePath,
+                environment: null,
+                new ThrowingProgress(new IOException("There is not enough space on the disk.")),
+                CancellationToken.None));
+
+        Assert.Contains("not enough space", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("already exists", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("--output", exception.Message, StringComparison.Ordinal);
+        Assert.True(File.Exists(bundlePath));
+    }
+
+    private sealed class ThrowingProgress(Exception exception) : IProgress<ClawCtlProgress>
+    {
+        public void Report(ClawCtlProgress value)
+        {
+            _ = value;
+            throw exception;
+        }
+    }
+
     public void Dispose()
     {
         Directory.Delete(_root, recursive: true);
@@ -515,38 +539,40 @@ public sealed class DiagnosticsBundleTests : IDisposable
         return (runtime, paths, session);
     }
 
-    /// <summary>
-    /// Answers MXC lifecycle phases with fixed envelopes, standing in for the
-    /// executor process so the real client and its wire parsing run. The
-    /// first start succeeds and every later one prints malformed output.
-    /// </summary>
-    private sealed class MalformedStartExecutor(
+    private sealed class FailedStartClient(
         string workspace,
         string malformedOutput,
-        string executorDiagnostics) : IMxcExecutorInvoker
+        string executorDiagnostics) : IMxcSessionClient
     {
         private int _starts;
 
-        public Task<MxcExecutorOutcome> InvokeAsync(
-            MxcExecutorInvocation invocation,
-            CancellationToken cancellationToken)
+        public Task<MxcProvisionResult> ProvisionAsync(
+            MxcProvisionRequest request, CancellationToken cancellationToken) =>
+            Task.FromResult(new MxcProvisionResult(
+                MxcSandboxId.Parse("iso:fixture"),
+                new MxcProvisionMetadata("agent_1", "S-1-5-21-0-0-0-1001", workspace)));
+
+        public Task StartAsync(MxcSandboxId sandboxId, CancellationToken cancellationToken)
         {
-            string phase = MxcWireProtocol.DecodeConfig(invocation.Arguments[1]).Phase!;
-            MxcExecutorOutcome outcome = phase switch
-            {
-                MxcWireProtocol.ProvisionPhase => new MxcExecutorOutcome(
-                    0,
-                    "{\"result\":{\"sandboxId\":\"iso:fixture\",\"metadata\":{" +
-                    "\"agentUserName\":\"agent_1\",\"agentUserSid\":\"S-1-5-21-0-0-0-1001\"," +
-                    "\"ephemeralWorkspacePath\":" + JsonSerializer.Serialize(workspace) + "}}}",
-                    string.Empty),
-                MxcWireProtocol.StartPhase when Interlocked.Increment(ref _starts) == 1 =>
-                    new MxcExecutorOutcome(0, """{"result":{}}""", string.Empty),
-                MxcWireProtocol.StartPhase =>
-                    new MxcExecutorOutcome(1, malformedOutput, executorDiagnostics),
-                _ => throw new InvalidOperationException($"Unexpected MXC phase '{phase}'.")
-            };
-            return Task.FromResult(outcome);
+            return Interlocked.Increment(ref _starts) == 1 ? Task.CompletedTask :
+                Task.FromException(new MxcException(
+                    MxcErrorCode.BackendError,
+                    $"Executor diagnostics: {executorDiagnostics} Executor output: {malformedOutput}",
+                    "BackendError"));
         }
+
+        public Task<MxcExecutionResult> ExecuteAsync(
+            MxcSandboxId sandboxId, MxcExecutionRequest request, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<int> ExecuteAttachedAsync(
+            MxcSandboxId sandboxId, MxcExecutionRequest request, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task StopAsync(MxcSandboxId sandboxId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task DeprovisionAsync(MxcSandboxId sandboxId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 }

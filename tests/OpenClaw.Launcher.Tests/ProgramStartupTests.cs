@@ -2,6 +2,7 @@ using System.Text;
 using OpenClaw.Launcher.Gateway;
 using OpenClaw.Launcher.Mxc;
 using OpenClaw.Launcher.Session;
+using OpenClaw.Launcher.Tests.Session;
 
 namespace OpenClaw.Launcher.Tests;
 
@@ -169,6 +170,50 @@ public sealed class ProgramStartupTests : IDisposable
     }
 
     [Theory]
+    [InlineData("backup", false)]
+    [InlineData("backup", true)]
+    [InlineData("restore", false)]
+    [InlineData("restore", true)]
+    [InlineData("recover", false)]
+    [InlineData("recover", true)]
+    public async Task StateCommandStartupFailurePreservesHumanAndJsonCommandNames(
+        string command,
+        bool json)
+    {
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        HostStartup startup = new()
+        {
+            Entrypoint = HostEntrypoint.Control,
+            CreateDiagnostics = () => HostDiagnosticLog.Create(
+                Path.Combine(_testDirectory, "logs", $"{Guid.NewGuid():N}.log")),
+            BaseDirectory = _testDirectory,
+            Output = output,
+            Error = error,
+            ReadEnvironment = _ => throw new InvalidOperationException("fixture startup failure")
+        };
+
+        int exitCode = await Program.RunAsync(json ? [command, "--json"] : [command], startup);
+
+        Assert.Equal(1, exitCode);
+        if (json)
+        {
+            using System.Text.Json.JsonDocument document =
+                System.Text.Json.JsonDocument.Parse(output.ToString());
+            Assert.Equal(command, document.RootElement.GetProperty("command").GetString());
+            Assert.Equal("fixture startup failure",
+                document.RootElement.GetProperty("error").GetProperty("message").GetString());
+            Assert.Empty(error.ToString());
+        }
+        else
+        {
+            Assert.Empty(output.ToString());
+            Assert.Contains($"clawctl {command}", error.ToString(), StringComparison.Ordinal);
+            Assert.Contains("fixture startup failure", error.ToString(), StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
     [InlineData("--json=true", true)]
     [InlineData("--json:true", true)]
     [InlineData("--json false", false)]
@@ -321,6 +366,53 @@ public sealed class ProgramStartupTests : IDisposable
             Error = error
         };
 
+    // Over SSH the new logon guidance rendered, but clawctl still appended
+    // "This shouldn't happen. Please report it", inviting bug reports for a
+    // refusal the user fixes by opening a desktop terminal.
+    [Fact]
+    public async Task NonInteractiveLogonRefusalIsNotReportedAsADefect()
+    {
+        string baseDirectory = Path.Combine(_testDirectory, "package");
+        Directory.CreateDirectory(Path.Combine(baseDirectory, "app"));
+        await File.WriteAllTextAsync(
+            Path.Combine(baseDirectory, "app", "openclaw.mjs"),
+            "fixture");
+        string helperPath = SessionRuntime.ResolveHelperPath(baseDirectory);
+        Directory.CreateDirectory(Path.GetDirectoryName(helperPath)!);
+        await File.WriteAllTextAsync(helperPath, "fixture");
+        var backend = new FakeMxcSessionClient();
+        SessionRuntime runtime = SessionRuntime.Create(
+            HostPaths.ForRoot(Path.Combine(_testDirectory, "state"), "OpenClaw.Gateway_startup"),
+            () => throw new InvalidOperationException("The test supplies its backend."),
+            baseDirectory,
+            _ => { },
+            backend);
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        HostStartup startup = new()
+        {
+            Entrypoint = HostEntrypoint.Control,
+            CreateDiagnostics = () => HostDiagnosticLog.Create(
+                Path.Combine(_testDirectory, "logs", "openclaw.log")),
+            BaseDirectory = baseDirectory,
+            Output = output,
+            Error = error,
+            InstallationLifecycle = new SupportedHostLifecycle(
+                runtime,
+                SessionSupportPolicy.NonInteractiveLogon())
+        };
+
+        int exitCode = await Program.RunAsync(["setup", "--no-color"], startup);
+
+        Assert.Equal(1, exitCode);
+        string text = error.ToString();
+        Assert.Contains("interactive", text, StringComparison.Ordinal);
+        Assert.Contains("desktop session", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("shouldn't happen", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("collect-logs", text, StringComparison.Ordinal);
+        Assert.Empty(backend.Calls);
+    }
+
     // A field report arrived as "Unhandled failure: MxcException" and nothing
     // else: setup had provisioned the session and MXC refused to start it, but
     // the bundle named neither the backend's error nor the build it ran on.
@@ -336,30 +428,23 @@ public sealed class ProgramStartupTests : IDisposable
         Directory.CreateDirectory(Path.GetDirectoryName(helperPath)!);
         await File.WriteAllTextAsync(helperPath, "fixture");
         string workspace = Path.Combine(_testDirectory, "workspace");
-        var executor = new LifecyclePhaseExecutor(
-            provision:
-                "{\"result\":{\"sandboxId\":\"iso:fixture\",\"metadata\":{\"agentUserName\":\"agent_1\"," +
-                "\"agentUserSid\":\"S-1-5-21-0-0-0-1001\",\"ephemeralWorkspacePath\":" +
-                System.Text.Json.JsonSerializer.Serialize(workspace) +
-                "}}}",
-            start:
-                """
-                {"error":{"code":"backend_error","message":"The session could not be started.",
-                "operation":"IsoSessionOps.StartSessionAsync","nativeCode":"0x80040233",
-                "remediation":"Start it from an interactive session."}}
-                """);
+        var backend = new FakeMxcSessionClient
+        {
+            Metadata = new MxcProvisionMetadata("agent_1", "S-1-5-21-0-0-0-1001", workspace),
+            StartFailure = new MxcException(
+                MxcErrorCode.BackendError,
+                "The session could not be started. Start it from an interactive session. (native code 0x80040233)",
+                "BackendError",
+                operation: "IsoSessionOps.StartSessionAsync",
+                nativeCode: "0x80040233",
+                remediation: "Start it from an interactive session.")
+        };
         SessionRuntime runtime = SessionRuntime.Create(
             HostPaths.ForRoot(Path.Combine(_testDirectory, "state"), "OpenClaw.Gateway_startup"),
             () => throw new InvalidOperationException("The test supplies its backend."),
             baseDirectory,
             _ => { },
-            new MxcCliSessionClient(
-                new MxcRuntimeLocation(
-                    Path.Combine(baseDirectory, "mxc"),
-                    Path.Combine(baseDirectory, "mxc", "wxc-exec.exe"),
-                    Path.Combine(baseDirectory, "mxc", "plm.exe"),
-                    null),
-                executor));
+            backend);
         using var output = new StringWriter();
         using var error = new StringWriter();
         string logPath = Path.Combine(_testDirectory, "logs", "openclaw.log");
@@ -374,7 +459,7 @@ public sealed class ProgramStartupTests : IDisposable
             ReadEnvironment = _ => new HostEnvironment(
                 "10.0.26340.9212 (X64 OS, X64 process)",
                 "OpenClaw.Gateway_2026.9.4.1003_x64__fixture",
-                "@microsoft/mxc-sdk 0.8.0 x64, wire 0.6.0-alpha",
+                "Microsoft.Mxc.Sdk 1.0.0 x64, contract 1.0.0",
                 "24.20.0",
                 ".NET fixture")
         };
@@ -382,7 +467,7 @@ public sealed class ProgramStartupTests : IDisposable
         int exitCode = await Program.RunAsync(["setup"], startup);
 
         Assert.Equal(1, exitCode);
-        Assert.Equal(["provision", "start"], executor.Phases);
+        Assert.Equal(["provision", "start:iso:sandbox1"], backend.Calls);
         string log = await File.ReadAllTextAsync(logPath);
         Assert.Contains(
             "Environment: Windows 10.0.26340.9212 (X64 OS, X64 process); " +
@@ -390,14 +475,15 @@ public sealed class ProgramStartupTests : IDisposable
             $"{ClawCtlBuildMetadata.PackageVersion} (commit {ClawCtlBuildMetadata.PackageCommit}); " +
             $"OpenClaw payload {ClawCtlBuildMetadata.PayloadVersion} " +
             $"(commit {ClawCtlBuildMetadata.PayloadCommit}); " +
-            "MXC @microsoft/mxc-sdk 0.8.0 x64, wire 0.6.0-alpha; Node.js 24.20.0; .NET fixture",
+            "MXC Microsoft.Mxc.Sdk 1.0.0 x64, contract 1.0.0; Node.js 24.20.0; .NET fixture",
             log,
             StringComparison.Ordinal);
         Assert.Contains(
             "Unhandled failure: MxcException: The session could not be started. " +
             "Start it from an interactive session. (native code 0x80040233) " +
-            "[code BackendError; backend code backend_error; " +
-            "operation IsoSessionOps.StartSessionAsync]",
+            "[code BackendError; backend code BackendError; " +
+            "operation IsoSessionOps.StartSessionAsync; native code 0x80040233; " +
+            "remediation Start it from an interactive session.]",
             log,
             StringComparison.Ordinal);
         Assert.Matches(@"\r?\n   at ", log);
@@ -421,44 +507,18 @@ public sealed class ProgramStartupTests : IDisposable
     }
 
     /// <summary>
-    /// Answers each MXC lifecycle phase with a fixed envelope, standing in for
-    /// the executor process so the real client and wire parsing run.
-    /// </summary>
-    private sealed class LifecyclePhaseExecutor(string provision, string start)
-        : IMxcExecutorInvoker
-    {
-        public List<string> Phases { get; } = [];
-
-        public Task<MxcExecutorOutcome> InvokeAsync(
-            MxcExecutorInvocation invocation,
-            CancellationToken cancellationToken)
-        {
-            string phase = MxcWireProtocol.DecodeConfig(invocation.Arguments[1]).Phase!;
-            Phases.Add(phase);
-            return Task.FromResult(new MxcExecutorOutcome(
-                phase == MxcWireProtocol.StartPhase ? 1 : 0,
-                phase switch
-                {
-                    MxcWireProtocol.ProvisionPhase => provision,
-                    MxcWireProtocol.StartPhase => start,
-                    _ => throw new InvalidOperationException($"Unexpected MXC phase '{phase}'.")
-                },
-                string.Empty));
-        }
-    }
-
-    /// <summary>
     /// Reports the host as supported and supplies the runtime under test.
     /// Setup must fail before anything else here is reached.
     /// </summary>
-    private sealed class SupportedHostLifecycle(SessionRuntime runtime)
+    private sealed class SupportedHostLifecycle(SessionRuntime runtime, Exception? supportFailure = null)
         : IInstallationLifecycle
     {
         public SessionRuntime CreateRuntime(Action<string> log) => runtime;
 
         public Task EnsureSessionSupportedAsync(
             Action<string> log,
-            CancellationToken cancellationToken) => Task.CompletedTask;
+            CancellationToken cancellationToken) =>
+            supportFailure is null ? Task.CompletedTask : Task.FromException(supportFailure);
 
         public PackageRuntimeMetadata ValidatePackageRuntime(
             HostOptions options,

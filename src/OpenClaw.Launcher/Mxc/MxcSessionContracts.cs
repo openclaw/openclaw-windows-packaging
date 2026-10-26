@@ -6,7 +6,8 @@ namespace OpenClaw.Launcher.Mxc;
 internal sealed record MxcBackendProbe(
     bool IsolationSessionAvailable,
     string? Tier,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    string? NativeVersion = null);
 
 /// <summary>
 /// The MXC containment backend this package uses. Only IsolationSession is
@@ -168,8 +169,7 @@ internal sealed record MxcProvisionRequest(string AppId);
 
 internal sealed record MxcProvisionResult(
     MxcSandboxId SandboxId,
-    MxcProvisionMetadata? Metadata,
-    string? CorrelationVector);
+    MxcProvisionMetadata? Metadata);
 
 /// <summary>
 /// A command to run inside a started sandbox.
@@ -179,7 +179,13 @@ internal sealed record MxcProvisionResult(
 /// arbitrary OpenClaw arguments must never be interpolated here. Callers launch
 /// a controlled guest helper and pass real arguments as request data.
 /// </remarks>
-internal sealed record MxcExecutionRequest(string CommandLine);
+internal sealed record MxcExecutionRequest(string CommandLine)
+{
+    public Action? ProcessCreated { get; init; }
+    // Release invocation-owned descendants before joining inherited output EOF.
+    public Action? ForegroundExited { get; init; }
+    public Action? CancelInvocation { get; init; }
+}
 
 internal sealed record MxcExecutionResult(
     int ExitCode,
@@ -187,9 +193,8 @@ internal sealed record MxcExecutionResult(
     string StandardError);
 
 /// <summary>
-/// The MXC lifecycle operations this package requires, shaped after the
-/// upcoming <c>Microsoft.Mxc.Sdk</c> state-aware API so the published SDK can
-/// replace the transport without changing session or gateway behavior.
+/// The package-owned lifecycle boundary. The official SDK implements the
+/// backend contract; package ownership and recovery remain with its callers.
 /// </summary>
 internal interface IMxcSessionClient
 {
@@ -199,40 +204,33 @@ internal interface IMxcSessionClient
 
     Task StartAsync(
         MxcSandboxId sandboxId,
-        string? correlationVector,
         CancellationToken cancellationToken);
 
     Task<MxcExecutionResult> ExecuteAsync(
         MxcSandboxId sandboxId,
         MxcExecutionRequest request,
-        string? correlationVector,
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// Runs a command with the caller's console attached, returning its exit
-    /// code. Nothing is captured.
+    /// Streams a foreground command to the caller's terminal or redirected
+    /// standard streams, returning its exit code without capturing output.
     /// </summary>
     /// <remarks>
     /// Interactive OpenClaw requires this: a buffered execution only returns
     /// after the child exits, so prompts would never reach the terminal and
-    /// typed input would never reach the child. Because nothing is captured, a
-    /// dispatch failure cannot be read back as a structured envelope, and the
-    /// caller must establish the outcome from the guest helper's control
-    /// result instead.
+    /// typed input would never reach the child. The guest helper's correlated
+    /// result distinguishes an application exit from a command that never ran.
     /// </remarks>
     Task<int> ExecuteAttachedAsync(
         MxcSandboxId sandboxId,
         MxcExecutionRequest request,
-        string? correlationVector,
         CancellationToken cancellationToken);
 
     Task StopAsync(
         MxcSandboxId sandboxId,
-        string? correlationVector,
         CancellationToken cancellationToken);
 
     Task DeprovisionAsync(
         MxcSandboxId sandboxId,
-        string? correlationVector,
         CancellationToken cancellationToken);
 }

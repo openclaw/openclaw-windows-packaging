@@ -130,7 +130,11 @@ it enabled.
 | `clawctl completion` | Write PowerShell completion for both `clawctl` and `openclaw` to standard output. Source it for the current shell, or use `--install` to add a marked block to the current-user PowerShell profile. |
 | `clawctl completion --install [--profile <path>]` | Atomically update the selected profile (or the current-user PowerShell profile) with a marked loader that sources completion from the currently installed `clawctl` package whenever a new shell starts. Package updates therefore take effect without rewriting the profile. The trusted upstream script is also cached in host LocalState, and `clawctl pwsh` safely projects it into the current isolated workspace. `--uninstall` removes the marked profile block and invalidates the host cache so later agent shells do not load a stale projection. |
 | `clawctl setup --fresh [--force]` | Remove this installation's owned session and package-local state, then run setup again. Without `--force`, incomplete external cleanup stops before local state is erased. `--force` is valid only with `--fresh`; it preserves an explicit warning when cleanup of owned external resources cannot be confirmed, but still stops if bounded local deletion fails. |
-| `clawctl status` | Report the recorded isolated session, agent account and shared folder, installed Node.js runtime, gateway, sign-in recovery, and file-only config readiness when the gateway is not running. It asks the backend to start the recorded provision as its status probe, so it is not a passive diagnostic, but it does not provision a replacement or start the gateway. Use `clawctl gateway-service status` to inspect the gateway alone. |
+| `clawctl status` | Report the recorded isolated session, agent account and shared folder, installed Node.js runtime, gateway, sign-in recovery, pending state activation, and file-only config readiness when safe to inspect. It asks the backend to start the recorded provision as its status probe, so it is not a passive diagnostic, but it does not provision a replacement or start the gateway. Use `clawctl gateway-service status` to inspect the gateway alone. |
+| `clawctl backup [<archive>]` | Capture and verify full OpenClaw state inside the recorded agent session, then retain a non-overwriting `.tar.gz` archive. `--dry-run` previews the upstream inventory; `--list` lists retained archives without requiring setup or a live backend. |
+| `clawctl restore [<archive>] [--yes]` | Verify and prepare an archive, retain verified current-state protection, then activate profile-contained data in the current agent. Without a path, select the newest manual/recovery archive. `--dry-run` previews mappings without changing live data; the gateway remains stopped after activation. |
+| `clawctl restore --rollback [--yes]` | Roll back the current agent's recorded interrupted activation. Refuses active writers, changed target ownership, and invalid journals rather than guessing what to delete. |
+| `clawctl recover <profile> [--output <archive>] [--yes]` | Rescue an explicitly named offline agent profile into the current recorded agent through a retained verified recovery archive. Preserve the source profile and Windows/session identity. `--dry-run` checks source access, dependencies, and target availability without publishing or activating. |
 | `clawctl open` | Open the running managed gateway's Control UI in the default browser. Requires completed `clawctl setup` and an already-running gateway; it probes those prerequisites and fails rather than starting the gateway. Packaged OpenClaw resolves the endpoint, TLS, Control UI base path, and authenticated one-time browser handoff. Authenticated URLs and tokens are not printed. |
 | `clawctl teardown --force` | Confirm deletion, then stop and deprovision the owned session and remove its data and setup state. The MSIX remains installed. |
 | `clawctl pwsh` | Open an interactive PowerShell session inside the agent session. |
@@ -138,7 +142,7 @@ it enabled.
 | `clawctl pwsh --file <path> [-- <arguments>]` | Run an agent-visible PowerShell script and return its exit code. Relative paths start in the shared folder reported by `clawctl status`; use `--` before script arguments that begin with `-`. |
 | `clawctl collect-logs [--output <path>]` | Create a redacted host-and-agent diagnostics ZIP. See [Copilot diagnostics investigation](docs/troubleshooting.md#investigating-a-bundle-with-copilot-cli). |
 | `clawctl gateway-service start` | Start the OpenClaw gateway in the isolated session and wait for it to listen. Requires setup. |
-| `clawctl gateway-service status` | Inspect the gateway without starting it. When the gateway is not running, it may start/probe only the already-recorded isolated session to report file-only config readiness; it never provisions a replacement or starts the gateway. |
+| `clawctl gateway-service status` | Inspect the gateway without starting it. It may start/probe only the already-recorded isolated session to inspect activation state and, when the gateway is not running and activation is not pending, file-only config readiness; it never provisions a replacement or starts the gateway. |
 | `clawctl gateway-service stop` | Stop the gateway while retaining the session and its data. |
 | `clawctl gateway-service restart` | Stop the gateway and start it again as one lifecycle operation. If the stop cannot be verified, it retains the gateway record and does not start a replacement. If no gateway is running, it starts one. |
 | `clawctl companion prepare --port <port> --json` | Prepare the agent account's Gateway for the Windows Companion app after `clawctl setup`. Read its effective upstream configuration, including JSON5 and `$include` values. Return a complete local token configuration unchanged, initialize an absent Gateway, or fill missing port/token values in a compatible local Gateway. A partially configured Gateway without local mode, password authentication, and agent-side profile/Gateway overrides require explicit recovery. Concurrent configuration changes fail rather than being overwritten. The JSON response includes `companion.port` and `companion.token`, so keep it private. |
@@ -176,7 +180,12 @@ When the gateway is not confirmed running, status JSON includes an optional
 `gateway.readiness` object with `state`, stable `reason`, and failure `detail`
 where applicable. The readiness states are `absent`, `not-ready`,
 `startup-eligible`, `unavailable`, and `unknown`. A running gateway omits this
-object and incurs no config-readiness probe.
+object and incurs no config-readiness probe. Both `clawctl status` and
+`clawctl gateway-service status` report `stateTransfer` when they can inspect
+the current agent's activation journal. Pending or unavailable activation
+inspection makes status fail and suppresses a misleading config-readiness
+classification. A pending or unreadable journal blocks new state writers;
+unavailable inspection is not proof that the state is ready.
 
 The package-qualified `clawctl status --json` identifies the Companion
 integration as `integration.kind: "isolated-session"` and
@@ -197,6 +206,75 @@ the `NO_COLOR` environment variable, redirected output, and CI disable color;
 `FORCE_COLOR` enables it for redirected output or CI unless color was
 explicitly disabled. JSON output never contains terminal escape sequences.
 
+### Backing up and recovering agent data
+
+Backups contain configuration, credentials, persistent history/state, and
+workspaces selected by bundled OpenClaw. They are **not encrypted**. Store them
+privately; a recovery archive is not a redacted diagnostics bundle.
+New retained archives, including temporary publication and pre-restore
+protection, grant access only to the invoking user, SYSTEM, and administrators.
+State-transfer exchanges and runtime scratch use a private workspace shared
+with the recorded agent. This does not encrypt archives, change existing
+archive permissions, or protect them from administrators.
+
+```powershell
+clawctl backup
+clawctl backup --list
+clawctl restore "C:\Backups\openclaw.tar.gz" --dry-run
+clawctl restore "C:\Backups\openclaw.tar.gz" --yes
+```
+
+Default archives live in the **invoking user's**
+`%USERPROFILE%\.openclaw-backups`, outside package cleanup. Pre-restore
+protection lives in its `before-restore` subdirectory and is not selected by
+bare `restore`. Existing files are never overwritten and no archives are
+pruned automatically. An empty current target reports that there was no prior
+state to protect.
+
+Normal backup does not stop the gateway. Upstream produces canonical SQLite
+snapshots, but this is not one globally atomic snapshot of every file while
+other writers run. Stop the gateway and let other agent commands finish before
+backing up when you need a quiescent recovery point.
+
+To rescue a stranded profile after a new agent has already been set up:
+
+```powershell
+clawctl recover "C:\Users\A1-B2" --dry-run
+clawctl recover "C:\Users\A1-B2" --yes
+clawctl status
+```
+
+`recover` reads only the explicit source and its required profile-contained
+dependencies. It transports an offline copy, including SQLite WAL data, into
+current-agent staging and asks bundled OpenClaw to produce the verified
+archive. It then uses the same activation path as `restore`. The original
+profile is not repaired, deleted, or made accessible through ACL changes.
+Locked source files require you to stop their writers; access denial requires
+an explicitly elevated retry.
+
+Automatic activation supports Windows profile-contained state only.
+External or unresolvable configuration, workspace, plugin, skill, and custom
+agent dependencies block it. Reparse points and Windows path collisions are
+rejected. Agent `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`,
+and `OPENCLAW_PROFILE` overrides must be removed before transfer. Setup is
+required; these commands never provision or replace a session implicitly.
+
+Replacement requires interactive confirmation or `--yes`; JSON and redirected
+execution never prompt. Verification, protection, and writer checks still
+apply with `--yes`. New `openclaw`, agent PowerShell, detached gateway, and
+configuration-writing operations refuse a pending activation. On interruption:
+
+```powershell
+clawctl status
+clawctl restore --rollback --yes
+```
+
+The retained archives remain available even when activation fails. Review
+restored approvals, delivery/deduplication state, and plugin dependencies
+before `clawctl gateway-service start`. OS-bound credentials are not portable;
+provider reauthentication or channel relinking may be necessary. See
+[recovery troubleshooting](docs/troubleshooting.md#state-transfer-is-blocked-or-interrupted).
+
 ### Starting the gateway
 
 `clawctl gateway-service start` waits for the gateway to bind rather than
@@ -209,7 +287,14 @@ document.
 
 The wait has a fixed budget. A gateway still coming up when the budget is spent
 is reported as starting rather than failed, and `clawctl gateway-service status`
-will show it once it binds.
+will show it once it binds. For `start` and `restart`, an accepted supervised
+launch whose process identity is verified but has no listener after 90 seconds
+returns exit code 0; JSON reports `ok: true` and `gateway.state: "starting"`.
+This acknowledges the owned launch, not readiness: it reports no port, URL, or
+listener ownership. Clients must continue bounded status polling and verify a
+running listener before using the Gateway or sending credentials. A failed
+inspection, exited process, or conflicting listener does not receive this
+acknowledgement.
 
 `clawctl` reports the gateway port only when it can identify that listener
 unambiguously:
@@ -347,9 +432,10 @@ update does not remove a running process's runtime.
 `.github\workflows\gateway-msix.yml` selects **stable** whenever a new packaging
 run starts: the exact `stableVersion` when `release-policy.json` pins one,
 otherwise public npm `openclaw@latest`. The resolver checks the exact
-published version, its annotated upstream tag and target commit, and the source
-package version before building. Git tag and commit signatures are not required;
-official publication uses the same stable selection and validates its recorded
+published version, its GitHub-verified signed annotated upstream tag and target
+commit, and the source package version before building. A missing or invalid tag
+signature stops source selection; commit signatures are not required.
+Official publication uses the same stable selection and validates its recorded
 commit and version before signing. There is no automatic fallback to another
 version or channel; extended-stable and named prereleases are rejected.
 Source selection also checks the MSIX release-version rules before building:
@@ -364,9 +450,10 @@ Package and payload metadata record the resolved source commit and version.
 For a one-time source override in any signing mode, provide an OpenClaw tag,
 branch, or full commit SHA in the manual `openclaw_ref` input. Empty means follow
 stable. The resolver records the ref's exact commit and package version once;
-retries use that immutable snapshot even if a branch later moves. Release modes
-also capture the unmodified stable selector as the MSIX and GitHub release
-identity source, so a hotfix payload does not create a second version owner.
+retries use that immutable snapshot even if a branch later moves.
+Release-candidate modes (`test`, `store`, and `official`) also capture the
+unmodified stable selector as the MSIX and GitHub release identity source, so a
+hotfix payload does not create a second version owner.
 The override payload version may equal or precede that stable identity, but may
 not be newer.
 For a one-run rollback of the bundled payload in any signing mode, set
@@ -374,8 +461,8 @@ For a one-run rollback of the bundled payload in any signing mode, set
 while the MSIX and GitHub release identity continue from the unmodified stable
 selector above so the package remains an upgrade. Both sources are verified and
 captured in the immutable snapshot. The workflow rejects an override that is not
-older than the release-identity source. Unsigned and test runs reject combining
-it with `openclaw_ref`; Store and official runs preserve a full-SHA
+older than the release-identity source. Unsigned runs reject combining it with
+`openclaw_ref`; test, Store, and official runs preserve a full-SHA
 `openclaw_ref` as an assertion that the version resolved to the intended commit.
 If compatibility requires an older known-good stable release, a reviewed
 `stableVersion` field in `release-policy.json` can pin its exact version, for
@@ -385,7 +472,9 @@ it is not automatic fallback.
 For `store` and `official`, `openclaw_ref` selects the payload source while the
 reviewed stable policy still owns release identity. Before authorization, the
 workflow restores the same run's payload and release-identity snapshot and
-checks its requested ref, workflow run ID, packaging commit, and signing mode.
+checks its requested ref, workflow run ID, packaging commit, signing mode,
+workflow ref, event, and Git ref. Missing or incompatible snapshot context
+requires a new run.
 When `gateway_version` selects the payload instead, `openclaw_ref` may only be a
 full SHA and must match that release. The workflow does not resolve the moving
 branch or stable channel again.
@@ -407,13 +496,31 @@ the launcher derives its runtime version and LocalState path from the bundled
 archive name. There is no separate packaging-side Node.js version pin or
 runtime-support policy.
 
-Non-official workflows cache the packed OpenClaw tarball by its resolved
+Unsigned/test builds restore the packed OpenClaw tarball cache by its resolved
 upstream commit. They also cache each architecture's Windows dependency tree by
 the resolved commit, tarball SHA-256, Node.js version, and payload-build script.
 A tarball cache hit still verifies the recorded version, commit and SHA-256; a
 dependency-tree hit still runs every payload validation and smoke test.
-Official-signing workflows bypass
+Store and official workflows bypass
 both caches and always rebuild upstream source and Windows dependencies.
+
+Source preflight selects one of two callers of
+`.github\workflows\gateway-msix-build.yml`. For payload builds, only validated stable selection
+from the packaging workflow on `main` grants `cache-mode: write`.
+Unsigned/test overrides (including overrides dispatched from `main`),
+non-main dispatches, and pull requests use `cache-mode: read`. They can
+restore eligible caches but cannot save them. This caller-scoped token cap
+also covers setup-dotnet's NuGet cache and caches nested in upstream actions
+or build scripts; changing an environment variable cannot increase it.
+Signing and publication jobs use `cache-mode: none`.
+
+Package and payload caches use a new namespace that excludes pre-boundary
+entries. Versioning PRs exercise write/restore with synthetic bytes and attempt
+read-token writes after overriding the client's mode, including a direct
+service request from the reusable build job. The cache-boundary cutover still requires coordinated legacy main-cache
+invalidation and cold/warm CI proof before trusting existing cache contents.
+Local policy tests do not prove GitHub's token enforcement or fresh CodeQL
+results; see [release process](docs/release-process.md#cache-boundary-cutover).
 
 The payload artifact records the requested ref and resolved upstream commit in
 `payload-metadata.json`. That build-only file is not embedded in the MSIX.
@@ -612,7 +719,11 @@ for naming rules, limits, and recovery.
 
 The command is idempotent: re-running with nothing changed reports that the
 package is already up to date and does nothing, and re-running after a source
-or payload change rebuilds only what changed. The expanded application is
+or payload change rebuilds only what changed and updates registration in place.
+Ordinary redeployment, including `-Force`, never unregisters the package first.
+Windows package removal can delete the isolated agent account and profile even
+when packaged app-data preservation is requested, so retain a verified backup
+before any explicit replacement or unregister operation. The expanded application is
 linked into the layout rather than copied, so repeat runs neither re-download
 nor duplicate hundreds of megabytes.
 
@@ -622,11 +733,11 @@ nor duplicate hundreds of megabytes.
 | `-PayloadRunId <id>` | Use a specific successful workflow run, reusing a matching cached payload |
 | `-PayloadDirectory <path>` | Read a prepared payload directly, with no GitHub access and no modification; pass it on every run |
 | `-Architecture x64` / `arm64` | Select the architecture; it must be runnable on this device |
-| `-ReplaceExistingInstall` | Remove a conflicting MSIX-installed package first (see below) |
+| `-ReplaceExistingInstall` | Explicitly remove an installed or development registration first; can delete its isolated profile (see below) |
 | `-SkipSetup` | Register without extracting the Node.js runtime |
 | `-Force` | Re-register even when nothing changed |
 | `-Patch <name>` | Register a side-by-side `OpenClawFoundation.OpenClawGateway-<name>` identity run as `openclaw-<name>` and `clawctl-<name>`; recommended for iteration |
-| `-Unregister` | Remove the local registration, preserving app data and caches; pass the same `-Patch` to remove a patch |
+| `-Unregister` | Remove the local registration and keep build caches; app-data preservation does not protect the isolated profile. Finish teardown or retain a backup first; pass the same `-Patch` to remove a patch |
 
 **Requires Developer Mode**, which the script checks before doing any work.
 
@@ -662,9 +773,10 @@ validation. Manual runs support four modes:
 
 - `unsigned` follows stable or an `openclaw_ref` override and publishes unsigned
   MSIX packages;
-- `test` uses the same source-selection rules and publishes MSIX packages signed with a
-  temporary self-signed certificate plus the public `.cer` needed for local
-  installation;
+- `test` uses the same source-selection rules, derives the release-candidate
+  version, and runs the installed-upgrade matrix without release authorization
+  or Azure credentials. It publishes MSIX packages signed with a temporary
+  self-signed certificate plus the public `.cer` needed for local installation;
 - `store` follows stable, an `openclaw_ref` override, or an older payload pinned
   with `gateway_version`,
   may run only from `main`, and retains an unsigned Partner Center submission bundle for 90 days;
@@ -675,6 +787,10 @@ validation. Manual runs support four modes:
 
 Following stable does not automatically sign or publish a new Gateway release;
 publication still requires a manual workflow dispatch.
+Manual `store` and `official` runs require their own successful installed-upgrade
+matrix before authorization. A new upstream stable release needs no throwaway
+pull request to obtain current-source proof; use `test` mode for an optional
+preflight. `unsigned` dispatches keep development versions and skip that matrix.
 
 Official signing uses the protected `release-signing` environment, Azure OIDC,
 and the existing OpenClaw Artifact Signing account and certificate profile.
@@ -742,8 +858,9 @@ The signed `v0.0.0.0` and `v0.0.0.1` proof releases and the latest signed
 sideload release retain the `OpenClaw.Gateway` identity and remain immutable
 upgrade baselines. Partner Center requires the reserved
 `OpenClawFoundation.OpenClawGateway` identity, so Windows cannot update those
-packages in place or retain their packaged LocalState. Pull requests that
-change release policy download the hash-pinned standalone x64 and recommended
+packages in place or retain their packaged LocalState. Versioning/source-selection
+pull requests and manual `test`, `store`, and `official` runs download the
+hash-pinned standalone x64 and recommended
 `.msixbundle` assets, install each one on a clean GitHub-hosted Windows runner,
 verify the legacy identity, remove it, install the Store candidate through the
 same delivery format, and prove that Windows registered the reserved package
@@ -814,6 +931,9 @@ signature verification fails closed when it does not.
 | Extracted Node.js runtime | `%LOCALAPPDATA%\Packages\<package-family>\LocalState\OpenClaw\NodeJS\node-v<version>-win-<architecture>` |
 | Staged native dependency packages | `%LOCALAPPDATA%\OpenClawGatewayMSIX\agent-native\<content-id>` (agent account) |
 | OpenClaw configuration and user state | `%USERPROFILE%\.openclaw` |
+| Retained manual/recovery archives | `%USERPROFILE%\.openclaw-backups` (invoking user) |
+| Pre-restore protection | `%USERPROFILE%\.openclaw-backups\before-restore` (invoking user) |
+| Activation journal and staging | `%LOCALAPPDATA%\OpenClawGatewayMSIX\state-transfer` (agent account) |
 | Launcher diagnostics | `%LOCALAPPDATA%\Packages\<package-family>\LocalState\OpenClawGatewayMSIX\Logs\openclaw.log` |
 
 OpenClaw application files are owned and serviced by Windows as part of the

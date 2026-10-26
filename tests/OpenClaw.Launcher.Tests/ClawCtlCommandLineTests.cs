@@ -2,6 +2,7 @@ using System.CommandLine;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using OpenClaw.Launcher.Gateway;
 
 namespace OpenClaw.Launcher.Tests;
 
@@ -106,9 +107,40 @@ public sealed class ClawCtlCommandLineTests
                 ClawCtlCommandLine.CompletionCommandName,
                 "pwsh",
                 "gateway-service",
-                "companion"
+                "companion",
+                "backup",
+                "restore",
+                "recover"
             ],
             root.Subcommands.Select(command => command.Name));
+    }
+
+    [Fact]
+    public async Task RecoveryRemediationInvokesSetupWithoutResettingTheInstallation()
+    {
+        SetupOptions? requestedSetup = null;
+        RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
+        {
+            Setup = (options, _) =>
+            {
+                requestedSetup = options;
+                return Task.FromResult(0);
+            },
+            Status = _ => Task.FromResult(1),
+            CollectLogs = (_, _) => Task.FromResult(1),
+            Teardown = (_, _) => Task.FromResult(1),
+            PowerShell = (_, _) => Task.FromResult(1),
+            GatewayStart = (_, _) => Task.FromResult(1),
+            GatewayStatus = _ => Task.FromResult(1),
+            GatewayStop = _ => Task.FromResult(1),
+            GatewayRestart = _ => Task.FromResult(1)
+        });
+
+        int exitCode = await root.Parse(
+            [.. GatewayPersistenceManager.RepairCommand.Split(' ').Skip(1)]).InvokeAsync();
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(new SetupOptions(Fresh: false, Force: false), requestedSetup);
     }
 
     [Fact]

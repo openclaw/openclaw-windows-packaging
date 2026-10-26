@@ -6,6 +6,9 @@ namespace OpenClaw.Launcher;
 
 internal sealed record ClawCtlHandlers
 {
+    public Func<BackupOptions, CancellationToken, Task<int>>? Backup { get; init; }
+    public Func<RestoreOptions, CancellationToken, Task<int>>? Restore { get; init; }
+    public Func<RecoverOptions, CancellationToken, Task<int>>? Recover { get; init; }
     public required Func<SetupOptions, CancellationToken, Task<int>> Setup { get; init; }
     public required Func<CancellationToken, Task<int>> Status { get; init; }
     public required Func<string?, CancellationToken, Task<int>> CollectLogs { get; init; }
@@ -22,6 +25,9 @@ internal sealed record ClawCtlHandlers
 }
 
 internal sealed record SetupOptions(bool Fresh, bool Force);
+internal sealed record BackupOptions(string? Path, bool List, bool DryRun);
+internal sealed record RestoreOptions(string? Path, bool DryRun, bool Yes, bool Rollback);
+internal sealed record RecoverOptions(string Profile, string? Output, bool DryRun, bool Yes);
 internal sealed record CompletionOptions(bool Install, bool Uninstall, string? ProfilePath);
 internal sealed record PowerShellOptions(
     string? Command,
@@ -41,7 +47,7 @@ internal sealed class ClawCtlOutputOptions
 // without parsing them.
 // Keep the curated command references in plugins/gateway-isolation/index.js and
 // index.test.js synchronized when exposed commands or their descriptions change.
-internal static class ClawCtlCommandLine
+internal static partial class ClawCtlCommandLine
 {
     public const string SetupCommandName = "setup";
     public const string StatusCommandName = "status";
@@ -403,6 +409,7 @@ internal static class ClawCtlCommandLine
         };
         root.Options.Add(rootJson);
         root.Options.Add(noColor);
+        AddStateArchiveCommands(root, handlers, outputOptions, rootJson, noColor);
 
         // Bare `clawctl` is a discovery request, not a usage error, so the root
         // prints help and succeeds instead of reporting a missing command.

@@ -558,7 +558,6 @@ function New-LocalPackageLayout {
         [string]$RepositoryRoot,
         [string]$HostExecutable,
         [string]$SessionHostExecutable,
-        [string]$MxcRuntimeDirectory,
         [string]$PayloadDirectory,
         [string]$RuntimeArchive,
         [string]$Architecture,
@@ -659,13 +658,10 @@ function New-LocalPackageLayout {
         -Destination (Join-Path $sessionHost 'openclaw-session-host.exe') `
         -Force
 
-    $mxc = Join-Path (Join-Path $LayoutDirectory 'mxc') $Architecture
-    if (Test-Path -LiteralPath $mxc) {
-        Remove-Item -LiteralPath $mxc -Recurse -Force
-    }
-    New-Item -Path $mxc -ItemType Directory -Force | Out-Null
-    foreach ($item in Get-ChildItem -LiteralPath $MxcRuntimeDirectory -Force) {
-        Copy-Item -LiteralPath $item.FullName -Destination $mxc -Recurse -Force
+    foreach ($asset in Get-ChildItem -LiteralPath (Split-Path $HostExecutable -Parent) -Force) {
+        if ($asset.Name -eq 'openclaw.exe' -or $asset.Name -eq 'node' -or
+            $asset.Extension -in @('.pdb', '.xml')) { continue }
+        Copy-Item -LiteralPath $asset.FullName -Destination $LayoutDirectory -Recurse -Force
     }
 
     return $manifestPath
@@ -734,7 +730,7 @@ function Get-LocalPackageSourceInventory {
             }
         }
     }
-    $buildFiles = foreach ($name in @('Directory.Build.props', 'Directory.Packages.props', 'global.json')) {
+    $buildFiles =     foreach ($name in @('Directory.Build.props', 'Directory.Packages.props', 'global.json')) {
         $path = Join-Path $RepositoryRoot $name
         if (Test-Path -LiteralPath $path -PathType Leaf) {
             "$name`:$((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash)"
@@ -760,9 +756,8 @@ function Test-LocalPackageLayout {
         'openclaw.exe',
         "runtime\$RuntimeArchiveName",
         "session-host\$Architecture\openclaw-session-host.exe",
-        "mxc\$Architecture\wxc-exec.exe",
-        "mxc\$Architecture\plm.exe",
-        "mxc\$Architecture\mxc-runtime.json",
+        'mxc-runtime.json',
+        'mxc-LICENSE.md',
         'node\native-redirect.mjs'
     )) {
         if (-not (Test-Path -LiteralPath (Join-Path $LayoutDirectory $relative) -PathType Leaf)) {
@@ -883,12 +878,11 @@ function Get-LocalPackageOperations {
             finally { $archive.Dispose() }
             return $null
         }
-        StageMxcRuntime = {
-            param($repositoryRoot, $architecture, $output)
-            & (Join-Path $repositoryRoot 'scripts\Get-MxcRuntime.ps1') `
+        StageMxcMetadata = {
+            param($repositoryRoot, $architecture, $published)
+            return & (Join-Path $repositoryRoot 'scripts\Get-MxcSdkMetadata.ps1') `
                 -Architecture $architecture `
-                -OutputDirectory $output
-            return $null
+                -OutputDirectory $published
         }
         CheckoutCommit = { Get-LocalPackageCheckoutCommit }
         Publish = {
@@ -1051,10 +1045,13 @@ function Remove-LocalPackageRegistration {
     }
     foreach ($registration in $registrations) {
         $installed = $registration.Package
-        # Development-mode packages allow preserving app data, so unregistering
-        # does not throw away the extracted Node.js runtime.
+        Write-Warning (
+            'Unregistering can remove the MXC-owned agent account and profile. ' +
+            'App-data preservation does not protect isolated-session data; ' +
+            'finish teardown or retain a verified backup first.'
+        )
         & $services.RemovePackage $installed.PackageFullName $true | Out-Null
-        Write-Host "Unregistered $($installed.PackageFullName); its app data was preserved."
+        Write-Host "Unregistered $($installed.PackageFullName); app-data preservation was requested."
     }
     $statePath = Join-Path $state 'state.json'
     if (Test-Path -LiteralPath $statePath) { Remove-Item -LiteralPath $statePath -Force }
@@ -1216,19 +1213,8 @@ function Invoke-LocalPackageDeployment {
             Resolve-LocalPackageRuntime -RuntimeDirectory (Join-Path $stateRoot 'runtime') `
                 -Architecture $Architecture -NodeVersion $payload.NodeVersion -Operations $services
         }
-        $mxcRuntimeDirectory = Join-Path $stateRoot 'mxc'
-        Invoke-LocalPackagePhase $progress 'Stage MXC runtime' {
-            & $services.StageMxcRuntime $root $Architecture $mxcRuntimeDirectory
-        } | Out-Null
         $manifestSource = Join-Path $root 'src\OpenClaw.Launcher\Package.appxmanifest'
         $manifestHash = (Get-FileHash -LiteralPath $manifestSource -Algorithm SHA256).Hash
-        $mxcHashes = @(
-            Get-ChildItem -LiteralPath $mxcRuntimeDirectory -File -Recurse |
-                Sort-Object FullName |
-                ForEach-Object {
-                    "$($_.Name):$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
-                }
-        )
         $imageHashes = @(
             Get-ChildItem -LiteralPath (Join-Path $root 'src\OpenClaw.Launcher\Images') -File -Recurse |
                 Sort-Object FullName |
@@ -1250,7 +1236,7 @@ function Invoke-LocalPackageDeployment {
             $publishMetadata.PayloadVersion
             $publishMetadata.PayloadCommit
             $manifestHash
-        ) + $imageHashes + $nodeScriptHashes + $mxcHashes +
+        ) + $imageHashes + $nodeScriptHashes +
             (Get-LocalPackageSourceInventory -RepositoryRoot $root))
         $setupSatisfied = $SkipSetup -or ($null -ne $previous -and $previous['setupComplete'] -eq $true)
         $registrationCurrent = -not $Force -and $null -ne $previous -and $null -ne $installed -and
@@ -1286,6 +1272,9 @@ function Invoke-LocalPackageDeployment {
         if (-not (& $services.TestPath $sessionHostExecutable)) {
             throw "The publish did not produce $sessionHostExecutable."
         }
+        Invoke-LocalPackagePhase $progress 'Stage MXC SDK license and metadata' {
+            & $services.StageMxcMetadata $root $Architecture $hostDirectory
+        } | Out-Null
 
         $sessionHostInfo = Get-Item -LiteralPath $sessionHostExecutable
         $sessionHostHash = (
@@ -1304,10 +1293,12 @@ function Invoke-LocalPackageDeployment {
                 $sessionHostInfo.Length.ToString()
                 $sessionHostHash
                 $manifestHash
-            ) + $imageHashes + $nodeScriptHashes + $mxcHashes)
+            ) + $imageHashes + $nodeScriptHashes)
         }
         $fingerprint = & $outputFingerprint
-        if ($registrationCurrent -and $previous['fingerprint'] -eq $fingerprint) {
+        if (
+            $registrationCurrent -and $previous['fingerprint'] -eq $fingerprint
+        ) {
             $total.Stop()
             Write-Host "`nAlready up to date: $($installed.PackageFullName)"
             Write-Host ('Total {0:0.00}s. Use -Force to re-register anyway.' -f $total.Elapsed.TotalSeconds)
@@ -1337,17 +1328,18 @@ function Invoke-LocalPackageDeployment {
         $manifestPath = Invoke-LocalPackagePhase $progress 'Assemble layout' {
             New-LocalPackageLayout -LayoutDirectory $layoutDirectory -RepositoryRoot $root `
                 -HostExecutable $hostExecutable -SessionHostExecutable $sessionHostExecutable `
-                -MxcRuntimeDirectory $mxcRuntimeDirectory -PayloadDirectory $payload.Directory `
+                -PayloadDirectory $payload.Directory `
                 -RuntimeArchive $runtimeArchive -Architecture $Architecture -Version $version `
                 -Identity $identity
         }
         Invoke-LocalPackagePhase $progress 'Register package' {
-            # Re-registering over an existing development registration does not
-            # reliably repair one whose layout was deleted or damaged: the
-            # package still reports Status Ok while its aliases fail with "The
-            # process has no package identity". Removing first, preserving app
-            # data, makes registration deterministic and self-healing.
-            if ($null -ne $installed -and $installed.IsDevelopmentMode) {
+            # Windows may delete the MXC-owned profile on unregister even when
+            # packaged app data is preserved. Ordinary updates stay in place.
+            if ($null -ne $installed -and $installed.IsDevelopmentMode -and $ReplaceExistingInstall) {
+                Write-Warning (
+                    'Explicitly replacing this development registration can ' +
+                    'remove its isolated agent account and profile.'
+                )
                 & $services.RemovePackage $installed.PackageFullName $true | Out-Null
             }
             & $services.RegisterPackage $manifestPath

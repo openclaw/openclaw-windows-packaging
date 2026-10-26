@@ -65,7 +65,7 @@ internal sealed partial class GatewayRuntime
                 paths.GatewayLauncherPath,
                 GetStartupFolderPath(),
                 paths.StateRoot,
-                Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+                Path.Combine(Environment.SystemDirectory, "wscript.exe"),
                 LogonTriggerUserSid: logonUserSid),
             log,
             ResolveUserSid);
@@ -149,7 +149,7 @@ internal sealed partial class GatewayRuntime
         ArgumentNullException.ThrowIfNull(log);
 
         return new GatewayRuntime(
-            CreateController(options, paths, session, log),
+            CreateController(options, paths, session, log, clock),
             session.HelperPath,
             paths,
             session,
@@ -180,7 +180,8 @@ internal sealed partial class GatewayRuntime
         HostOptions options,
         HostPaths paths,
         SessionRuntime session,
-        Action<string> log)
+        Action<string> log,
+        TimeProvider? clock = null)
     {
         var configuration = new GatewayConfigurationStore(paths.GatewayConfigurationPath);
         Task<GatewayStartRequest> CreateRequestAsync(CancellationToken cancellationToken)
@@ -219,7 +220,8 @@ internal sealed partial class GatewayRuntime
             CreateRequestAsync,
             log,
             session.RequireSetup,
-            session.LifecycleLock);
+            session.LifecycleLock,
+            clock);
 
         // The gateway is a long-lived Node.js process that loads the same
         // native addons as a foreground launch, so it needs the same redirect.

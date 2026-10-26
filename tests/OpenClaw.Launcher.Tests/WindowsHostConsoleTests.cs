@@ -144,6 +144,40 @@ public sealed class WindowsHostConsoleTests
         Assert.False(console.IsInteractiveOutput(new StringWriter()));
     }
 
+    [Fact]
+    public void TerminalPreparationEnablesRawVtInputAndRestoresEveryMode()
+    {
+        var native = new FakeConsoleNativeApi { InputMode = 0x17, OutputMode = 0x20 };
+        var console = new WindowsHostConsole(native);
+        Assert.True(new WindowsMxcHostStdio(console).IsTerminal);
+        using (console.Capture(_ => { }))
+        {
+            console.PrepareTerminal();
+            Assert.Equal(0x210u, native.InputMode);
+            Assert.Equal(0x25u, native.OutputMode);
+            Assert.Equal(new Microsoft.Mxc.Sdk.V1.MxcPtySize(24, 80), console.ReadTerminalSize());
+        }
+        Assert.Equal(0x17u, native.InputMode);
+        Assert.Equal(0x20u, native.OutputMode);
+    }
+
+    [Theory]
+    [InlineData(0u)]
+    [InlineData(1u)]
+    [InlineData(2u)]
+    [InlineData(3u)]
+    public void NonConsoleStderrPreventsMergedTerminalExecution(uint fileType)
+    {
+        var native = new FakeConsoleNativeApi
+        {
+            ErrorIsConsole = false,
+            ErrorFileType = fileType
+        };
+        var console = new WindowsHostConsole(native);
+        Assert.False(new WindowsMxcHostStdio(console).IsTerminal);
+        Assert.Empty(native.SetModes);
+    }
+
     private sealed class FakeConsoleNativeApi : IConsoleNativeApi
     {
         public uint InputMode { get; set; }
@@ -152,6 +186,7 @@ public sealed class WindowsHostConsoleTests
         public uint OutputCodePage { get; set; }
         public bool OutputIsConsole { get; set; } = true;
         public bool ErrorIsConsole { get; set; } = true;
+        public uint ErrorFileType { get; set; } = 2;
         public List<string> Writes { get; } = [];
         public List<(nint Handle, uint Mode)> SetModes { get; } = [];
         public List<uint> SetCodePages { get; } = [];
@@ -163,6 +198,8 @@ public sealed class WindowsHostConsoleTests
             0xFFFFFFF4 => 3,
             _ => 0
         };
+
+        public uint GetFileType(nint handle) => handle == 3 ? ErrorFileType : 2;
 
         public bool GetConsoleMode(nint handle, out uint mode)
         {
@@ -211,6 +248,13 @@ public sealed class WindowsHostConsoleTests
         {
             Writes.Add(text);
             return true;
+        }
+
+        public bool GetSize(nint handle, out short rows, out short columns)
+        {
+            rows = 24;
+            columns = 80;
+            return OutputIsConsole;
         }
 
     }

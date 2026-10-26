@@ -6,8 +6,6 @@ public sealed class MxcReadinessTests : IDisposable
 {
     private readonly string _testDirectory = TestDirectory.Create();
 
-    private static string? NoEnvironment(string name) => null;
-
     /// <summary>
     /// Stands in for a host whose backend detector cannot run, which is the
     /// case whenever the runtime itself is missing.
@@ -29,42 +27,30 @@ public sealed class MxcReadinessTests : IDisposable
         string runtimeDirectory = Path.Combine(_testDirectory, "runtime");
         Directory.CreateDirectory(runtimeDirectory);
         File.WriteAllText(
-            Path.Combine(runtimeDirectory, MxcRuntimeLocator.ExecutorFileName),
-            string.Empty);
-        File.WriteAllText(
-            Path.Combine(
-                runtimeDirectory,
-                MxcRuntimeLocator.PackageLifecycleFileName),
-            string.Empty);
-        File.WriteAllText(
             Path.Combine(runtimeDirectory, MxcRuntimeLocator.ProvenanceFileName),
             """
-            {"package":"@microsoft/mxc-sdk","version":"0.8.0","architecture":"x64"}
+            {"package":"Microsoft.Mxc.Sdk","version":"1.0.1","architecture":"x64"}
             """);
         return runtimeDirectory;
     }
 
-    private static Func<string, string?> RuntimeAt(string runtimeDirectory) =>
-        name => name == MxcRuntimeLocator.RuntimeDirectoryVariable
-            ? runtimeDirectory
-            : null;
+    private static Func<MxcRuntimeLocation> RuntimeAt(string runtimeDirectory) =>
+        () => MxcRuntimeLocator.Locate(runtimeDirectory);
 
     [Fact]
     public async Task ProbeReportsAMissingRuntimeWithoutFailing()
     {
         MxcReadinessReport report = await MxcReadiness.ProbeAsync(
-            _testDirectory,
-            NoEnvironment,
+            RuntimeAt(_testDirectory),
             () => new MxcHostBuild(27000, 1),
             BackendUnreachable,
             CancellationToken.None);
 
         Assert.False(report.RuntimeAvailable);
         Assert.NotNull(report.RuntimeUnavailableReason);
-        Assert.Null(report.RuntimeDirectory);
+        Assert.Equal(_testDirectory, report.RuntimeDirectory);
 
-        // Without the runtime the backend cannot be asked, so support falls
-        // back to the documented build minimum and says so.
+        // SDK API failure leaves only host-build evidence.
         Assert.Equal(MxcHostSupport.Supported, report.HostSupport);
         Assert.Equal(MxcSupportEvidence.HostBuild, report.SupportEvidence);
     }
@@ -75,7 +61,6 @@ public sealed class MxcReadinessTests : IDisposable
         string runtimeDirectory = StageRuntime();
 
         MxcReadinessReport report = await MxcReadiness.ProbeAsync(
-            _testDirectory,
             RuntimeAt(runtimeDirectory),
             () => MxcReadiness.MinimumHostBuild,
             BackendReports(available: true),
@@ -83,7 +68,7 @@ public sealed class MxcReadinessTests : IDisposable
 
         Assert.True(report.RuntimeAvailable);
         Assert.Equal(runtimeDirectory, report.RuntimeDirectory);
-        Assert.Equal("0.8.0", report.Provenance?.Version);
+        Assert.Equal("1.0.1", report.Provenance?.Version);
     }
 
     [Fact]
@@ -95,7 +80,6 @@ public sealed class MxcReadinessTests : IDisposable
         string runtimeDirectory = StageRuntime();
 
         MxcReadinessReport report = await MxcReadiness.ProbeAsync(
-            _testDirectory,
             RuntimeAt(runtimeDirectory),
             () => new MxcHostBuild(27000, 1),
             BackendReports(available: false),
@@ -106,12 +90,32 @@ public sealed class MxcReadinessTests : IDisposable
     }
 
     [Fact]
+    public async Task UnavailableProbeFromANonInteractiveLogonIsRefusedForTheLogon()
+    {
+        string runtimeDirectory = StageRuntime();
+
+        MxcReadinessReport report = await MxcReadiness.ProbeAsync(
+            RuntimeAt(runtimeDirectory),
+            () => new MxcHostBuild(29683, 1000),
+            BackendReports(available: false),
+            CancellationToken.None,
+            () => false);
+
+        Assert.Contains("caller logon non-interactive", report.Describe(), StringComparison.Ordinal);
+        OpenClaw.Launcher.Session.InteractiveLogonRequiredException failure =
+            Assert.Throws<OpenClaw.Launcher.Session.InteractiveLogonRequiredException>(
+                () => OpenClaw.Launcher.Session.SessionSupportPolicy.EnsureSupported(
+                    "OpenClaw.Gateway_abc123",
+                    report));
+        Assert.Contains("interactive sign-in", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task BackendProbeOverridesAnOtherwiseUnsupportedBuild()
     {
         string runtimeDirectory = StageRuntime();
 
         MxcReadinessReport report = await MxcReadiness.ProbeAsync(
-            _testDirectory,
             RuntimeAt(runtimeDirectory),
             () => new MxcHostBuild(19045, 1),
             BackendReports(available: true),
@@ -127,7 +131,6 @@ public sealed class MxcReadinessTests : IDisposable
         string runtimeDirectory = StageRuntime();
 
         MxcReadinessReport report = await MxcReadiness.ProbeAsync(
-            _testDirectory,
             RuntimeAt(runtimeDirectory),
             () => new MxcHostBuild(27000, 1),
             (_, _) => throw new InvalidOperationException("executor crashed"),
@@ -150,8 +153,7 @@ public sealed class MxcReadinessTests : IDisposable
         string expectedName)
     {
         MxcReadinessReport report = await MxcReadiness.ProbeAsync(
-            _testDirectory,
-            NoEnvironment,
+            RuntimeAt(_testDirectory),
             () => new MxcHostBuild(build, updateBuildRevision),
             BackendUnreachable,
             CancellationToken.None);
@@ -165,8 +167,7 @@ public sealed class MxcReadinessTests : IDisposable
         // Reporting unsupported would tell a capable machine's user that
         // isolated sessions can never work there.
         MxcReadinessReport report = await MxcReadiness.ProbeAsync(
-            _testDirectory,
-            NoEnvironment,
+            RuntimeAt(_testDirectory),
             () => null,
             BackendUnreachable,
             CancellationToken.None);
@@ -180,8 +181,7 @@ public sealed class MxcReadinessTests : IDisposable
     public async Task ProbeDoesNotCreateOrModifyAnything()
     {
         await MxcReadiness.ProbeAsync(
-            _testDirectory,
-            NoEnvironment,
+            RuntimeAt(_testDirectory),
             () => null,
             BackendUnreachable,
             CancellationToken.None);
@@ -215,7 +215,7 @@ public sealed class MxcReadinessTests : IDisposable
     {
         var report = new MxcReadinessReport(
             @"C:\package\mxc\x64",
-            new MxcRuntimeProvenance("@microsoft/mxc-sdk", "0.8.0", "x64"),
+            new MxcRuntimeProvenance("Microsoft.Mxc.Sdk", "1.0.0", "x64"),
             null,
             MxcHostSupport.Supported,
             null,
@@ -224,7 +224,7 @@ public sealed class MxcReadinessTests : IDisposable
 
         Assert.Equal(
             "Supported from BackendProbe evidence; host build unknown; " +
-            "runtime @microsoft/mxc-sdk 0.8.0 x64; backend probe isolation sessions " +
+            "runtime Microsoft.Mxc.Sdk 1.0.0 x64; backend probe isolation sessions " +
             "available, tier unreported, warnings none",
             report.Describe());
     }

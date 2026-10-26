@@ -47,7 +47,8 @@ public sealed class SessionSupervisorTests : IDisposable
     {
         string requestPath = SessionSupervisor.RequestPathFor(StatusPath);
         File.WriteAllText(requestPath, SessionLaunchProtocol.SerializeRequest(request));
-        return SessionSupervisor.Run(requestPath, File.ReadAllText, File.WriteAllText);
+        return SessionSupervisor.Run(requestPath, File.ReadAllText, File.WriteAllText,
+            new SessionStateAccess(Path.Combine(_root, "state-access")).EnterReader);
     }
 
     private string ReadLog()
@@ -193,7 +194,8 @@ public sealed class SessionSupervisorTests : IDisposable
         string requestPath = SessionSupervisor.RequestPathFor(StatusPath);
         File.WriteAllText(requestPath, "{ not json");
 
-        int exitCode = SessionSupervisor.Run(requestPath, File.ReadAllText, File.WriteAllText);
+        int exitCode = SessionSupervisor.Run(requestPath, File.ReadAllText, File.WriteAllText,
+            new SessionStateAccess(Path.Combine(_root, "state-access")).EnterReader);
 
         Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode, exitCode);
         Assert.False(File.Exists(LogPath));

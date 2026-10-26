@@ -18,25 +18,71 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
     private const uint JobObjectLimitKillOnJobClose = 0x00002000;
     private const uint StartfUseStdHandles = 0x00000100;
     private const int JobObjectExtendedLimitInformationClass = 9;
+    private const int JobObjectBasicAccountingInformationClass = 1;
+    private const int JobObjectBasicProcessIdListClass = 3;
+    private const uint JobObjectLimitActiveProcess = 0x00000008;
+    private const uint ProcessSynchronize = 0x00100000;
+    private const uint ProcessQueryLimitedInformation = 0x00001000;
+    private const uint WaitObject0 = 0;
+    private const uint WaitTimeout = 0x102;
+    private const int ErrorInvalidParameter = 87;
+    private const int ErrorMoreData = 234;
+    private const int ErrorFileNotFound = 2;
+    private const int ErrorAlreadyExists = 183;
+    private const uint JobObjectSetAttributes = 0x0002;
+    private const uint JobObjectQuery = 0x0004;
+    private const uint JobObjectTerminate = 0x0008;
     private const int StandardInputHandle = -10;
     private const int StandardOutputHandle = -11;
     private const int StandardErrorHandle = -12;
     private readonly SafeJobHandle _handle;
     private static readonly SearchValues<char> QuoteCharacters = SearchValues.Create(" \t\r\n\v\"");
 
-    private WindowsKillOnCloseJob(SafeJobHandle handle)
+    private readonly bool _owned;
+
+    private WindowsKillOnCloseJob(SafeJobHandle handle, bool owned = true)
     {
         _handle = handle;
+        _owned = owned;
     }
 
-    public static WindowsKillOnCloseJob Create()
+    /// <summary>The name a supervised gateway's job is published under, bound to that supervisor's identity.</summary>
+    public static string GatewayJobName(int processId, long startTimeUtcTicks) =>
+        $@"Global\OpenClaw.Gateway.{processId}.{startTimeUtcTicks}";
+
+    /// <summary>
+    /// Opens another process's named job for query and termination, or returns null when none exists.
+    /// </summary>
+    public static WindowsKillOnCloseJob? TryOpen(string name)
     {
-        SafeJobHandle handle = CreateJobObjectW(IntPtr.Zero, null);
+        SafeJobHandle handle = OpenJobObjectW(JobObjectSetAttributes | JobObjectQuery | JobObjectTerminate, false, name);
         if (handle.IsInvalid)
         {
-            throw new Win32Exception(
-                Marshal.GetLastWin32Error(),
-                "Unable to create the OpenClaw process job.");
+            int error = Marshal.GetLastWin32Error();
+            handle.Dispose();
+            if (error == ErrorFileNotFound)
+            {
+                return null;
+            }
+            throw new Win32Exception(error, "Unable to open the OpenClaw process job.");
+        }
+        return new WindowsKillOnCloseJob(handle, owned: false);
+    }
+
+    public static WindowsKillOnCloseJob Create(string? name = null)
+    {
+        SafeJobHandle handle = CreateJobObjectW(IntPtr.Zero, name);
+        int createError = Marshal.GetLastWin32Error();
+        if (handle.IsInvalid)
+        {
+            throw new Win32Exception(createError, "Unable to create the OpenClaw process job.");
+        }
+        if (name is not null && createError == ErrorAlreadyExists)
+        {
+            // Creating an existing named job succeeds and returns it; a pre-existing one was made by someone
+            // else, so configuring it or assigning the gateway would hand them control of that gateway.
+            handle.Dispose();
+            throw new Win32Exception(createError, "The OpenClaw process job name is already in use.");
         }
 
         try
@@ -194,8 +240,201 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
         }
     }
 
-    public void Dispose() => _handle.Dispose();
+    private static readonly TimeSpan DisposeExitBudget = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// Whether disposal observed the job empty. False only if a member outlived termination.
+    /// </summary>
+    public bool ExitConfirmed { get; private set; } = true;
+
+    /// <summary>
+    /// Terminates every process in the job and releases it only once none remain.
+    /// </summary>
+    /// <remarks>
+    /// Closing a kill-on-close job requests termination but does not wait for it, and a descendant that
+    /// closed or redirected its streams is invisible to pipe draining. Callers that release a lease the
+    /// processes depended on must check <see cref="ExitConfirmed"/> after disposal.
+    /// </remarks>
+    public void Dispose()
+    {
+        if (_handle.IsClosed)
+        {
+            return;
+        }
+        if (!_owned)
+        {
+            // A borrowed view of another process's job never terminates it implicitly.
+            _handle.Dispose();
+            return;
+        }
+        try
+        {
+            TerminateAndWait(DisposeExitBudget);
+        }
+        catch (Exception exception) when (exception is TimeoutException or Win32Exception)
+        {
+            ExitConfirmed = false;
+        }
+        finally
+        {
+            _handle.Dispose();
+        }
+    }
+
+    /// <summary>The number of processes still alive in the job, descendants included.</summary>
+    public int ActiveProcessCount
+    {
+        get
+        {
+            if (!QueryInformationJobObject(
+                    _handle, JobObjectBasicAccountingInformationClass, out JobObjectBasicAccountingInformation information,
+                    (uint)Marshal.SizeOf<JobObjectBasicAccountingInformation>(), IntPtr.Zero))
+            {
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(), "Unable to query the OpenClaw process job.");
+            }
+            return checked((int)information.ActiveProcesses);
+        }
+    }
+
+    /// <summary>
+    /// Terminates every process in the job and returns only once each member's own process handle is signaled.
+    /// </summary>
+    /// <remarks>
+    /// Job accounting reaching zero is not proof of exit: a member can still be tearing down after it is
+    /// no longer counted. Admission is closed first so a finite membership snapshot is complete, every member
+    /// is pinned by handle (so a reused process ID cannot be mistaken for it), and only then is the job
+    /// terminated and each pinned handle waited.
+    /// </remarks>
+    public void TerminateAndWait(TimeSpan timeout)
+    {
+        Stopwatch elapsed = Stopwatch.StartNew();
+        CloseAdmission();
+        List<SafeProcessHandle> pinned = [];
+        try
+        {
+            foreach (nuint processId in ReadMemberIds())
+            {
+                SafeProcessHandle member = OpenProcess(ProcessSynchronize | ProcessQueryLimitedInformation, false, (uint)processId);
+                if (member.IsInvalid)
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    member.Dispose();
+                    // Only an invalid ID identifies a member that already exited.
+                    if (error == ErrorInvalidParameter)
+                    {
+                        continue;
+                    }
+                    throw new Win32Exception(error, "Unable to pin an OpenClaw process job member.");
+                }
+                if (!IsProcessInJob(member, _handle, out bool inJob))
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    member.Dispose();
+                    throw new Win32Exception(error, "Unable to verify an OpenClaw process job member.");
+                }
+                if (!inJob)
+                {
+                    member.Dispose();
+                    continue;
+                }
+                pinned.Add(member);
+            }
+            if (!TerminateJobObject(_handle, 1))
+            {
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(), "Unable to terminate the OpenClaw process job.");
+            }
+            foreach (SafeProcessHandle member in pinned)
+            {
+                int remaining = (int)Math.Max(0, (timeout - elapsed.Elapsed).TotalMilliseconds);
+                uint wait = WaitForSingleObject(member, (uint)remaining);
+                if (wait == WaitTimeout)
+                {
+                    throw new TimeoutException("An OpenClaw process job member did not exit after termination.");
+                }
+                if (wait != WaitObject0)
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Unable to wait for an OpenClaw process job member.");
+                }
+            }
+            while (ActiveProcessCount != 0)
+            {
+                if (elapsed.Elapsed >= timeout)
+                {
+                    throw new TimeoutException("The OpenClaw process job did not empty after termination.");
+                }
+                Thread.Sleep(5);
+            }
+        }
+        finally
+        {
+            foreach (SafeProcessHandle member in pinned)
+            {
+                member.Dispose();
+            }
+        }
+    }
+
+    private void CloseAdmission()
+    {
+        var information = new JobObjectExtendedLimitInformation
+        {
+            BasicLimitInformation = new JobObjectBasicLimitInformation
+            {
+                LimitFlags = JobObjectLimitKillOnJobClose | JobObjectLimitActiveProcess,
+                ActiveProcessLimit = 1
+            }
+        };
+        int size = Marshal.SizeOf<JobObjectExtendedLimitInformation>();
+        IntPtr buffer = Marshal.AllocHGlobal(size);
+        try
+        {
+            Marshal.StructureToPtr(information, buffer, fDeleteOld: false);
+            if (!SetInformationJobObject(_handle, JobObjectExtendedLimitInformationClass, buffer, (uint)size))
+            {
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(), "Unable to close OpenClaw process job admission.");
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    private List<nuint> ReadMemberIds()
+    {
+        int capacity = 64;
+        while (true)
+        {
+            int size = 2 * sizeof(uint) + capacity * IntPtr.Size;
+            IntPtr buffer = Marshal.AllocHGlobal(size);
+            try
+            {
+                if (QueryInformationJobObjectBuffer(_handle, JobObjectBasicProcessIdListClass, buffer, (uint)size, IntPtr.Zero))
+                {
+                    int count = Marshal.ReadInt32(buffer, sizeof(uint));
+                    List<nuint> ids = new(count);
+                    for (int index = 0; index < count; index++)
+                    {
+                        ids.Add((nuint)Marshal.ReadIntPtr(buffer, 2 * sizeof(uint) + (index * IntPtr.Size)));
+                    }
+                    return ids;
+                }
+                int error = Marshal.GetLastWin32Error();
+                if (error != ErrorMoreData)
+                {
+                    throw new Win32Exception(error, "Unable to list OpenClaw process job members.");
+                }
+                capacity *= 4;
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
+        }
+    }
     private static SafeFileHandle? DuplicateForChild(SafeHandle? handle, int standardHandle)
     {
         using var borrowed = new SafeFileHandle(GetStdHandle(standardHandle), ownsHandle: false);
@@ -372,6 +611,9 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
     }
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeJobHandle OpenJobObjectW(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, string name);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern SafeJobHandle CreateJobObjectW(
         IntPtr jobAttributes,
         string? name);
@@ -383,6 +625,52 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
         int informationClass,
         IntPtr information,
         uint informationLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryInformationJobObject(
+        SafeJobHandle job,
+        int informationClass,
+        out JobObjectBasicAccountingInformation information,
+        uint informationLength,
+        IntPtr returnLength);
+
+    [DllImport("kernel32.dll", EntryPoint = "QueryInformationJobObject", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryInformationJobObjectBuffer(
+        SafeJobHandle job,
+        int informationClass,
+        IntPtr information,
+        uint informationLength,
+        IntPtr returnLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern SafeProcessHandle OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsProcessInJob(
+        SafeProcessHandle process, SafeJobHandle job, [MarshalAs(UnmanagedType.Bool)] out bool result);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(SafeProcessHandle handle, uint milliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool TerminateJobObject(SafeJobHandle job, uint exitCode);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JobObjectBasicAccountingInformation
+    {
+        public long TotalUserTime;
+        public long TotalKernelTime;
+        public long ThisPeriodTotalUserTime;
+        public long ThisPeriodTotalKernelTime;
+        public uint TotalPageFaultCount;
+        public uint TotalProcesses;
+        public uint ActiveProcesses;
+        public uint TotalTerminatedProcesses;
+    }
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

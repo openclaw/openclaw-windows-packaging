@@ -123,7 +123,7 @@ when available rather than assuming current `main` behaved identically:
 | [MXC](https://github.com/microsoft/mxc) | `README.md`, `docs\`, [isolation-session backend](https://github.com/microsoft/mxc/tree/main/src/backends/isolation_session), and [executor tools](https://github.com/microsoft/mxc/tree/main/src/tools); Windows session/backend/executor errors. Distinguish SDK/runtime version from wire schema and OS support. |
 | [Windows Node and Companion](https://github.com/openclaw/openclaw-windows-node) | Root instructions, `README.md`, and `src\`; consult only when evidence implicates Companion handoff or Windows-node behavior. Its client state/logs are not automatically included in this package's ZIP. |
 
-`release-policy.json`, `mxc-runtime.lock.json`, and
+`release-policy.json`, `Directory.Packages.props`, and
 `.github\workflows\gateway-msix.yml` describe packaging inputs/publication.
 Read them at the recorded packaging commit. Do not apply unrelated private
 Clawstaller/ADO or managed-WSL architecture to this public package.

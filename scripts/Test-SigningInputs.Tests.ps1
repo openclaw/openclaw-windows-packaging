@@ -52,6 +52,18 @@ $suiteRoot = Join-Path $env:TEMP (
 $canonicalRoot = Join-Path $suiteRoot 'canonical'
 $testRoot = Join-Path $suiteRoot 'case'
 $sourcePath = Join-Path $suiteRoot 'source-resolution.json'
+$validationRoot = Join-Path $suiteRoot 'validation-source'
+$validationScripts = Join-Path $validationRoot 'scripts'
+New-Item -Path $validationScripts -ItemType Directory -Force | Out-Null
+foreach ($name in @(
+    'Test-SigningInputs.ps1', 'Get-WorkflowSource.ps1',
+    'Get-MSIXReleaseIdentity.ps1', 'OpenClawSource.ps1'
+)) {
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) `
+        -Destination (Join-Path $validationScripts $name)
+}
+Copy-Item -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'Directory.Packages.props') `
+    -Destination (Join-Path $validationRoot 'Directory.Packages.props')
 $source = [ordered]@{
     repository = $policy.repository
     requestedRef = 'stable'
@@ -65,6 +77,9 @@ $source = [ordered]@{
     workflowRunId = '123456'
     packagingCommit = $packagingCommit
     signingMode = 'official'
+    workflowRef = 'openclaw/openclaw-windows-packaging/.github/workflows/gateway-msix.yml@refs/heads/main'
+    githubRef = 'refs/heads/main'
+    eventName = 'workflow_dispatch'
 }
 
 function Save-TestSource {
@@ -232,41 +247,13 @@ function New-TestArtifact {
         Get-FileHash -LiteralPath $nodeRuntimePath -Algorithm SHA256
     ).Hash.ToLowerInvariant()
 
-    $mxcRuntimeVersion = '0.8.0'
-    $mxcRuntimeDirectory = Join-Path $staging "mxc\$Architecture"
-    New-Item -Path $mxcRuntimeDirectory -ItemType Directory -Force | Out-Null
-    [IO.File]::WriteAllText(
-        (Join-Path $mxcRuntimeDirectory 'wxc-exec.exe'),
-        "executor-$Architecture")
-    [IO.File]::WriteAllText(
-        (Join-Path $mxcRuntimeDirectory 'plm.exe'),
-        "plm-$Architecture")
-    [IO.File]::WriteAllText(
-        (Join-Path $mxcRuntimeDirectory 'LICENSE.md'),
-        'fixture license')
-    [IO.File]::WriteAllText(
-        (Join-Path $mxcRuntimeDirectory 'mxc-runtime.json'),
-        "{`"version`":`"$mxcRuntimeVersion`",`"architecture`":`"$Architecture`"}")
-    $mxcRuntimeFiles = @(
-        Get-ChildItem -LiteralPath $mxcRuntimeDirectory -File -Recurse |
-            ForEach-Object {
-                [ordered]@{
-                    path = (
-                        [IO.Path]::GetRelativePath(
-                            $mxcRuntimeDirectory,
-                            $_.FullName
-                        )
-                    ).Replace('\', '/')
-                    length = $_.Length
-                    sha256 = (
-                        Get-FileHash `
-                            -LiteralPath $_.FullName `
-                            -Algorithm SHA256
-                    ).Hash.ToLowerInvariant()
-                }
-            } |
-            Sort-Object path
-    )
+    $mxcRuntimeVersion = '1.0.1'
+    [IO.File]::WriteAllText((Join-Path $staging 'mxc-LICENSE.md'), 'fixture license')
+    [IO.File]::WriteAllText((Join-Path $staging 'mxc-runtime.json'), (@{
+        package = 'Microsoft.Mxc.Sdk'
+        version = $mxcRuntimeVersion
+        architecture = $Architecture
+    } | ConvertTo-Json))
 
     $sessionHostDirectory = Join-Path $staging "session-host\$Architecture"
     New-Item -Path $sessionHostDirectory -ItemType Directory -Force | Out-Null
@@ -316,7 +303,7 @@ function New-TestArtifact {
         nodeRuntimeArchive = $nodeRuntimeArchive
         nodeRuntimeSha256 = $nodeRuntimeHash
         mxcRuntimeVersion = $mxcRuntimeVersion
-        mxcRuntimeFiles = $mxcRuntimeFiles
+        mxcRuntimePackage = 'Microsoft.Mxc.Sdk'
         sessionHostFiles = $sessionHostFiles
         architecture = $Architecture
         archive = $msixName
@@ -374,7 +361,7 @@ function Invoke-PolicyValidation {
         }
     }
 
-    & (Join-Path $PSScriptRoot 'Test-SigningInputs.ps1') `
+    & (Join-Path $validationScripts 'Test-SigningInputs.ps1') `
         -ArtifactsDirectory $Root `
         -PolicyPath $policyPath `
         -BundlePath (Join-Path $Root 'bundle\OpenClawGateway.msixbundle') `
@@ -384,6 +371,8 @@ function Invoke-PolicyValidation {
         -RequestedRef $RequestedRef `
         -GatewayVersion $GatewayVersion `
         -PackagingCommit $packagingCommit `
+        -WorkflowRef 'openclaw/openclaw-windows-packaging/.github/workflows/gateway-msix.yml@refs/heads/main' `
+        -GitHubRef 'refs/heads/main' -EventName 'workflow_dispatch' `
         -IdentityChannel $IdentityChannel
 }
 
@@ -814,9 +803,12 @@ try {
         }
 
     Reset-TestArtifacts
-    foreach ($field in @('workflowRunId', 'packagingCommit', 'signingMode')) {
+    foreach ($field in @('workflowRunId', 'packagingCommit', 'signingMode', 'workflowRef', 'githubRef', 'eventName')) {
         $original = $source[$field]
-        $source[$field] = @{ workflowRunId = '999'; packagingCommit = 'e' * 40; signingMode = 'unsigned' }[$field]
+        $source[$field] = @{
+            workflowRunId = '999'; packagingCommit = 'e' * 40; signingMode = 'unsigned'
+            workflowRef = 'foreign/workflow@refs/heads/main'; githubRef = 'refs/heads/topic'; eventName = 'push'
+        }[$field]
         Save-TestSource
         Assert-Fails -MessagePattern "unexpected workflow identity: $field" -Action {
             Invoke-PolicyValidation -Root $testRoot
@@ -837,24 +829,21 @@ try {
     Reset-TestArtifacts
     Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
         param($Expanded)
-        Set-Content `
-            -LiteralPath (Join-Path $Expanded 'mxc\x64\wxc-exec.exe') `
-            -Value 'tampered' `
-            -Encoding utf8
+        Remove-Item -LiteralPath (
+            Join-Path $Expanded 'mxc-runtime.json'
+        )
     }
     Assert-Fails `
-        -MessagePattern 'MXC runtime file is invalid' `
+        -MessagePattern "Expected one 'mxc-runtime.json' entry; found 0" `
         -Action { Invoke-PolicyValidation -Root $testRoot }
 
     Reset-TestArtifacts
     Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
         param($Expanded)
-        Remove-Item -LiteralPath (
-            Join-Path $Expanded 'mxc\x64\mxc-runtime.json'
-        )
+        Remove-Item -LiteralPath (Join-Path $Expanded 'mxc-LICENSE.md')
     }
     Assert-Fails `
-        -MessagePattern "Expected one 'mxc/x64/mxc-runtime.json' entry; found 0" `
+        -MessagePattern "Expected one 'mxc-LICENSE.md' entry; found 0" `
         -Action { Invoke-PolicyValidation -Root $testRoot }
 
     Reset-TestArtifacts

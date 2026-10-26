@@ -26,47 +26,6 @@ function Assert-Fails {
     throw "Expected failure matching '$Pattern'."
 }
 
-function Test-ProductionMxcStageAdapterIgnoresStaleNativeExitState {
-    $fixture = Join-Path $testRoot "mxc adapter $([guid]::NewGuid().ToString('N'))"
-    $scripts = Join-Path $fixture 'scripts'
-    $output = Join-Path $fixture 'staged'
-    New-Item -Path $scripts -ItemType Directory -Force | Out-Null
-    New-Item -Path $output -ItemType Directory -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Get-MxcRuntime.ps1') `
-        -Destination (Join-Path $scripts 'Get-MxcRuntime.ps1')
-
-    $runtimeFile = Join-Path $output 'fixture.bin'
-    [IO.File]::WriteAllText($runtimeFile, 'cached runtime')
-    [IO.File]::WriteAllText((Join-Path $output 'mxc-runtime.json'), '{}')
-    $sha = (Get-FileHash -LiteralPath $runtimeFile -Algorithm SHA256).Hash.ToLowerInvariant()
-    $length = (Get-Item -LiteralPath $runtimeFile).Length
-    $lock = @{
-        version = 'test'
-        architectures = @{
-            x64 = @{
-                files = @(@{
-                    stagedPath = 'fixture.bin'
-                    archivePath = 'package/fixture.bin'
-                    length = $length
-                    sha256 = $sha
-                })
-            }
-        }
-        licenseFiles = @()
-    } | ConvertTo-Json -Depth 8
-    [IO.File]::WriteAllText((Join-Path $fixture 'mxc-runtime.lock.json'), $lock)
-
-    $module = Get-Module LocalPackage
-    $adapter = & $module { (Get-LocalPackageOperations).StageMxcRuntime }
-    & $env:ComSpec /d /c 'exit 23'
-    Assert-True ($LASTEXITCODE -eq 23) 'The test must establish stale native failure state.'
-
-    & $adapter $fixture 'x64' $output
-    Assert-True ((Test-Path -LiteralPath $runtimeFile -PathType Leaf)) `
-        'Cached MXC staging should succeed regardless of prior native exit state.'
-    $global:LASTEXITCODE = 0
-}
-
 function New-Fixture {
     $root = Join-Path $testRoot "repo with spaces $([guid]::NewGuid().ToString('N'))"
     $project = Join-Path $root 'src\OpenClaw.Launcher'
@@ -141,6 +100,8 @@ function New-Fixture {
         SetupFailure = $false
         Removals = @()
         PreserveFlags = @()
+        Profiles = @{}
+        ProfileSequence = 0
         PublishMetadata = $null
         LauncherPublishes = @()
         Commit = '1111111111111111111111111111111111111111'
@@ -187,14 +148,11 @@ function New-Fixture {
             return $null
         }.GetNewClosure()
         TestArchive = { param($path, $expectedRoot) return $null }
-        StageMxcRuntime = {
+        StageMxcMetadata = {
             param($repositoryRoot, $architecture, $output)
             $state.MxcStages++
-            New-Item -Path $output -ItemType Directory -Force | Out-Null
-            [IO.File]::WriteAllText((Join-Path $output 'wxc-exec.exe'), 'fixture executor')
-            [IO.File]::WriteAllText((Join-Path $output 'plm.exe'), 'fixture lifecycle')
             [IO.File]::WriteAllText((Join-Path $output 'mxc-runtime.json'), '{}')
-            return $null
+            [IO.File]::WriteAllText((Join-Path $output 'mxc-LICENSE.md'), 'fixture SDK license')
         }.GetNewClosure()
         CheckoutCommit = { $state.Commit }.GetNewClosure()
         Publish = {
@@ -240,6 +198,8 @@ function New-Fixture {
                 [IO.File]::WriteAllText(
                     (Join-Path $output 'openclaw.exe'),
                     "host $($state.HostVersion) [$sources] $identity")
+                [IO.File]::WriteAllText(
+                    (Join-Path $output 'dependency-owned-asset.bin'), "dependency asset $architecture")
             }
             return $null
         }.GetNewClosure()
@@ -276,6 +236,15 @@ function New-Fixture {
             param($packageFullName, $preserveData)
             $state.Removals += $packageFullName
             $state.PreserveFlags += [bool]$preserveData
+            $removed = @($state.Installed) |
+                Where-Object { $null -ne $_ -and $_.PackageFullName -eq $packageFullName } |
+                Select-Object -First 1
+            if ($null -ne $removed -and $state.Profiles.ContainsKey($removed.PackageFamilyName)) {
+                # MXC-owned profiles do not survive package removal's app-data flag.
+                $profile = $state.Profiles[$removed.PackageFamilyName]
+                Remove-Item -LiteralPath $profile.Path -Recurse -Force
+                $state.Profiles.Remove($removed.PackageFamilyName)
+            }
             $state.Installed = @(
                 @($state.Installed) |
                     Where-Object { $null -ne $_ -and $_.PackageFullName -ne $packageFullName }
@@ -289,6 +258,15 @@ function New-Fixture {
             $state.SetupPackageNames += $packageName
             $state.SetupPackageFamilyNames += $packageFamilyName
             if ($state.SetupFailure) { throw 'clawctl setup failed (exit 1).' }
+            if (-not $state.Profiles.ContainsKey($packageFamilyName)) {
+                $state.ProfileSequence++
+                $profile = Join-Path $state.Root "profiles\$packageFamilyName"
+                New-Item -Path $profile -ItemType Directory -Force | Out-Null
+                $state.Profiles[$packageFamilyName] = @{
+                    Identity = "fixture-agent-$($state.ProfileSequence)"
+                    Path = $profile
+                }
+            }
             return $null
         }.GetNewClosure()
     }
@@ -331,14 +309,12 @@ try {
         Test-Path (Join-Path $layout 'session-host\x64\openclaw-session-host.exe')
     ) 'Layout is missing the session host.'
     Assert-True (
-        Test-Path (Join-Path $layout 'mxc\x64\wxc-exec.exe')
-    ) 'Layout is missing the MXC executor.'
+        (Get-Content (Join-Path $layout 'dependency-owned-asset.bin') -Raw) -ceq 'dependency asset x64'
+    ) 'Layout did not copy an opaque normal publish asset.'
     Assert-True (
-        Test-Path (Join-Path $layout 'mxc\x64\plm.exe')
-    ) 'Layout is missing the MXC lifecycle tool.'
-    Assert-True (
-        Test-Path (Join-Path $layout 'mxc\x64\mxc-runtime.json')
-    ) 'Layout is missing MXC provenance.'
+        (Test-Path (Join-Path $layout 'mxc-runtime.json')) -and
+        (Test-Path (Join-Path $layout 'mxc-LICENSE.md'))
+    ) 'Layout omitted SDK API metadata or the redistribution notice.'
     Assert-True (Test-Path (Join-Path $layout 'Images\StoreLogo.png')) 'Layout is missing package images.'
     Assert-True (@(Get-ChildItem (Join-Path $layout 'runtime') -File).Name -eq 'node-v24.20.0-win-x64.zip') 'Layout is missing the bundled Node.js runtime.'
     [xml]$m = Get-Content (Join-Path $layout 'AppxManifest.xml') -Raw
@@ -351,12 +327,36 @@ try {
     Assert-True (-not $second.Changed) 'A no-change re-run reported work.'
     Assert-True ($f.Registrations -eq 1 -and $f.Downloads -eq 1 -and $f.RuntimeDownloads -eq 1) 'A no-change re-run re-registered or re-downloaded.'
     Assert-True ($second.Version -eq $first.Version) 'A no-change re-run altered the version.'
+    $profileFamily = @($f.SetupPackageFamilyNames)[0]
+    $profileIdentity = $f.Profiles[$profileFamily].Identity
+    $profileCanary = Join-Path $f.Profiles[$profileFamily].Path 'workspace-data.txt'
+    [IO.File]::WriteAllText($profileCanary, 'authenticated workspace state')
     $forced = Invoke-Fixture $f @{ Force = $true }
     Assert-True ($forced.Changed -and $f.Registrations -eq 2) '-Force did not re-register.'
     Assert-True ([version]$forced.Version -gt [version]$first.Version) 'Re-registration did not advance the version.'
-    # Registering over a damaged development registration does not repair it, so
-    # the previous one must be removed first, preserving app data.
-    Assert-True (@($f.Removals).Count -eq 1 -and @($f.PreserveFlags)[0] -eq $true) 'Re-registration did not first remove the existing development registration.'
+    Assert-True (
+        $f.Profiles[$profileFamily].Identity -eq $profileIdentity -and
+        (Test-Path -LiteralPath $profileCanary -PathType Leaf) -and
+        [IO.File]::ReadAllText($profileCanary) -ceq 'authenticated workspace state'
+    ) 'Ordinary re-registration replaced the isolated account or erased its workspace.'
+    Assert-True (@($f.Removals).Count -eq 0) 'Ordinary re-registration unregistered the package.'
+
+    $replacement = New-Fixture
+    $replacementFirst = Invoke-Fixture $replacement
+    $replacementFamily = @($replacement.SetupPackageFamilyNames)[0]
+    $replacementIdentity = $replacement.Profiles[$replacementFamily].Identity
+    $replacementCanary = Join-Path $replacement.Profiles[$replacementFamily].Path 'discarded-data.txt'
+    [IO.File]::WriteAllText($replacementCanary, 'explicitly disposable')
+    $replaced = Invoke-Fixture $replacement @{ Force = $true; ReplaceExistingInstall = $true }
+    Assert-True (
+        $replaced.Changed -and
+        $replacement.Profiles[$replacementFamily].Identity -ne $replacementIdentity -and
+        -not (Test-Path -LiteralPath $replacementCanary)
+    ) 'Explicit replacement did not exercise removal of the old isolated profile.'
+    Assert-True (
+        @($replacement.Removals).Count -eq 1 -and
+        $replacement.Removals[0] -eq $replacementFirst.PackageFullName
+    ) 'Explicit replacement removed an unrelated registration.'
 
     # A changed launcher must reach the registered package even when it changed
     # through an input the deployment does not hash, such as an SDK update. The
@@ -506,8 +506,8 @@ try {
 
     # A checkout that deployed before build-input fingerprints existed has a
     # state record without one. Its first deployment must take the ordinary
-    # changed-deployment path, removing the registration with its app data
-    # preserved exactly as a source change does, and then settle.
+    # changed-deployment path, updating in place exactly as a source change does,
+    # and then settle.
     $delta = {
         param($state, $before)
         [pscustomobject]@{
@@ -552,14 +552,12 @@ try {
         ($upgradeDelta.LauncherPublishes -join ',') -eq $upgraded.Version
     ) 'A prior state record did not redeploy once with a new version.'
     Assert-True (
-        ($upgradeDelta.Removals -join ',') -eq $priorDeployment.PackageFullName -and
-        ($controlDelta.Removals -join ',') -eq $controlPrior.PackageFullName -and
-        ($upgradeDelta.PreserveFlags -join ',') -eq ($controlDelta.PreserveFlags -join ',') -and
-        ($upgradeDelta.PreserveFlags -join ',') -eq 'True' -and
+        @($upgradeDelta.Removals).Count -eq 0 -and
+        @($controlDelta.Removals).Count -eq 0 -and
         $upgradeDelta.Registrations -eq $controlDelta.Registrations -and $upgradeDelta.Registrations -eq 1 -and
         $upgradeDelta.Setups -eq $controlDelta.Setups -and $upgradeDelta.Setups -eq 1 -and
         $controlChanged.Changed
-    ) 'Upgrading a prior state record did not use the same registration, removal, and app-data path as a changed deployment.'
+    ) 'Upgrading a prior state record did not use the same non-removing registration path as a changed deployment.'
     Assert-True (
         (Get-Content -LiteralPath $priorStatePath -Raw | ConvertFrom-Json -AsHashtable).ContainsKey('inputFingerprint')
     ) 'The upgraded deployment did not record its build inputs.'
@@ -1120,7 +1118,6 @@ try {
         [IO.Path]::GetFullPath($mine.LayoutDirectory).TrimEnd('\')
     ) 'The aliases still resolve to the other checkout after take-over.'
 
-    Test-ProductionMxcStageAdapterIgnoresStaleNativeExitState
 
     # A patched identity registers beside the base package under its own name,
     # aliases, display name, and state root. Base and legacy registrations that
@@ -1284,7 +1281,7 @@ try {
         $native.PreflightArchitectures.Count -eq 1 -and
         $native.PreflightArchitectures[0] -ceq 'arm64' -and
         $nativeManifest.Package.Identity.ProcessorArchitecture -eq 'arm64' -and
-        (Test-Path -LiteralPath (Join-Path $nativeLayout 'mxc\arm64\wxc-exec.exe'))
+        (Get-Content -LiteralPath (Join-Path $nativeLayout 'dependency-owned-asset.bin') -Raw) -ceq 'dependency asset arm64'
     ) 'An omitted -Architecture did not deploy the native architecture.'
     Remove-LocalPackageRegistration -RepositoryRoot $native.Root -Operations $native.Operations
     Assert-True (

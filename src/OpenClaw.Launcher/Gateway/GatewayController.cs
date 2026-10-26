@@ -32,6 +32,8 @@ internal enum GatewayState
     /// beside a healthy one.
     /// </summary>
     Unknown,
+
+    /// <summary>An owned supervised launch was accepted but has no listener yet.</summary>
     Starting,
 }
 
@@ -375,10 +377,12 @@ internal sealed class GatewayController
 
         SessionInspectResult observed = await WaitForListenerAsync(
             session, record, helperPath, progress, cancellationToken).ConfigureAwait(false);
-        GatewayState resultState = observed.IsOwnedAndHealthy ? GatewayState.Running
-            : observed.Error is not null ? GatewayState.Unknown
-            : observed.ProcessFound && observed.StartTimeMatches ? GatewayState.Starting
-            : GatewayState.Stopped;
+        GatewayState resultState = observed.Error is not null ? GatewayState.Unknown
+            : observed.SupervisorState == SessionSupervisorStatus.ExitedState ? GatewayState.Stopped
+            : observed.IsOwnedAndHealthy ? GatewayState.Running
+            : !(observed.ProcessFound && observed.StartTimeMatches) ? GatewayState.Stopped
+            : observed.PortListening || observed.ListeningPorts is { Count: > 0 } ? GatewayState.Unhealthy
+            : GatewayState.Starting;
 
         if (observed.ListeningPorts is { Count: > 0 })
         {
@@ -406,9 +410,10 @@ internal sealed class GatewayController
             {
                 GatewayState.Running => $"The gateway is running on {DescribePorts(record)}.",
                 GatewayState.Starting =>
-                    "The gateway process started but is not listening yet. It may still be " +
-                    "coming up; run `clawctl gateway-service status` to check again.",
+                    "The supervised gateway launch was accepted, but the gateway is not listening yet. " +
+                    "Run `clawctl gateway-service status` to check again.",
                 GatewayState.Unknown => $"The gateway launch could not be verified: {observed.Error}",
+                GatewayState.Unhealthy => DescribeUnhealthy(record, observed),
                 _ => DescribeExitedDuringStartup(record, observed)
             });
 
@@ -477,6 +482,7 @@ internal sealed class GatewayController
 
             if (observed.IsOwnedAndHealthy ||
                 observed.Error is not null ||
+                observed.SupervisorState == SessionSupervisorStatus.ExitedState ||
                 !(observed.ProcessFound && observed.StartTimeMatches) ||
                 _clock.GetUtcNow() >= deadline)
             {

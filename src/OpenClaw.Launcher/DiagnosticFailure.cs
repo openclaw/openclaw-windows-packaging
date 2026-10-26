@@ -140,6 +140,12 @@ internal static class DiagnosticFailure
                         : null,
                     mxc.Operation is { Length: > 0 } operation
                         ? $"operation {operation}"
+                        : null,
+                    mxc.NativeCode is { Length: > 0 } nativeCode
+                        ? $"native code {nativeCode}"
+                        : null,
+                    mxc.Remediation is { Length: > 0 } remediation
+                        ? $"remediation {SingleLine(remediation)}"
                         : null
                 }.Where(static part => part is not null)),
             SessionStateException state => $"fault {state.Fault}",

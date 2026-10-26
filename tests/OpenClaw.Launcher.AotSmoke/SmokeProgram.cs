@@ -1,6 +1,10 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.IO.Compression;
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
+using System.Reflection.PortableExecutable;
 using System.Text.Json;
 using OpenClaw.Launcher.Gateway;
 using OpenClaw.Launcher.Mxc;
@@ -24,8 +28,10 @@ namespace OpenClaw.Launcher.AotSmoke;
 // diagnostic log is created at an explicit path the driver owns, the writers are
 // in-memory, and the Node and launch delegates cannot start a real process.
 // Nothing here reads or writes the user's profile.
-internal static class SmokeProgram
+internal static partial class SmokeProgram
 {
+    private const string RuntimeImageScenario = "corrupt runtime image repair survives NativeAOT";
+
     [SuppressMessage(
         "Design",
         "CA1031:Do not catch general exception types",
@@ -34,7 +40,7 @@ internal static class SmokeProgram
             "any exception type must be reported as a failed check with a " +
             "nonzero exit code, not crash the driver and hide the remaining " +
             "scenarios.")]
-    private static async Task<int> Main()
+    private static async Task<int> Main(string[] args)
     {
         (string Name, Func<Task> RunAsync)[] scenarios =
         [
@@ -55,10 +61,19 @@ internal static class SmokeProgram
             ("version JSON survives NativeAOT", VersionJsonIsStructuredAsync),
             ("Companion JSON survives NativeAOT", CompanionJsonIsStructured),
             ("Companion snapshot and patch survive NativeAOT", CompanionSnapshotAndPatchAreStructured),
+            ("state-transfer commands survive NativeAOT", StateTransferCommandsAsync),
+            ("state-transfer startup failures identify their command", StateTransferFailureNamesCommandAsync),
+            ("state activation and rollback survive NativeAOT", StateActivationAndRollback),
+            ("private state archives survive NativeAOT", PrivateStateArchivesAsync),
+            ("invalid runtime images repair before launch", InvalidRuntimeImageRepairs),
             ("Spectre renders clawctl output under NativeAOT", SpectreOutputRenders),
             ("gateway narration survives NativeAOT", GatewayNarrationRenders),
+            ("pending gateway JSON survives NativeAOT", PendingGatewayJsonIsStructured),
             ("Windows logon identity survives NativeAOT", WindowsLogonIdentityWorks),
             ("Windows process identity survives NativeAOT", WindowsProcessIdentityWorks),
+            ("invocation job interop survives NativeAOT", InvocationJobWorks),
+            (RuntimeImageScenario, RuntimeImagePreflightWorks),
+            ("MXC SDK loads and validates requests under NativeAOT", MxcSdkWorksInFreshProcessAsync),
             ("package provenance reads survive NativeAOT", PackageProvenanceReadsBind),
             ("diagnostics redaction survives NativeAOT", DiagnosticsRedactionWorks),
             ("missing application reports diagnostics", MissingApplicationReportsAsync),
@@ -68,6 +83,24 @@ internal static class SmokeProgram
             ("automatic setup opt-out preserves missing-setup failure", AutomaticSetupOptOutPreservesFailureAsync),
             ("gateway-start opt-out writes the gateway hint to stderr", GatewayStartOptOutWritesHintAsync)
         ];
+
+        if (args is ["--runtime-image-preflight-only"])
+        {
+            scenarios = [.. scenarios.Where(scenario =>
+                scenario.Name is "native alias resolves to clawctl" or RuntimeImageScenario)];
+        }
+        else if (args is ["--sdk-native-only"])
+        {
+            scenarios =
+            [
+                ("MXC SDK loads and validates requests under NativeAOT", MxcSdkWorksAsync)
+            ];
+        }
+        else if (args.Length != 0)
+        {
+            Console.Error.WriteLine("Unknown NativeAOT scenario selection.");
+            return 1;
+        }
 
         int failures = 0;
 
@@ -102,6 +135,82 @@ internal static class SmokeProgram
         return 0;
     }
 
+    private static Task InvocationJobWorks()
+    {
+        using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+        using OpenClaw.Launcher.WindowsInvocationJob job =
+            OpenClaw.Launcher.WindowsInvocationJob.Create(identity.User!.Value);
+        job.Stop();
+        return Task.CompletedTask;
+    }
+
+    private static Task RuntimeImagePreflightWorks()
+    {
+        const string version = "24.20.0";
+        string archiveRoot = $"node-v{version}-win-{MxcRuntimeLocator.CurrentArchitectureName()}";
+        string directory = Path.Combine(Path.GetTempPath(), $"clawctl-aot-runtime-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string application = Path.Combine(directory, "app");
+            Directory.CreateDirectory(application);
+            string archivePath = Path.Combine(directory, archiveRoot + ".zip");
+            using (ZipArchive archive = ZipFile.Open(archivePath, ZipArchiveMode.Create))
+            {
+                using var writer = new StreamWriter(
+                    archive.CreateEntry($"{archiveRoot}/node.exe").Open());
+                writer.Write(version);
+            }
+            string requestPath = Path.Combine(directory, "runtime.json");
+            File.WriteAllText(requestPath, SessionRuntimeProtocol.SerializeRequest(
+                new SessionRuntimeInstallRequest
+                {
+                    RequestId = "aot-runtime-image",
+                    ArchivePath = archivePath,
+                    ApplicationDirectory = application,
+                    UpdateUserPath = false
+                }));
+            int Install() => SessionRuntimeInstaller.Run(
+                requestPath, File.ReadAllText, File.WriteAllText,
+                getLocalApplicationData: () => directory,
+                stageNativeModules: (_, _) => null);
+            Assert(Install() == 0, "Initial fixture runtime installation failed.");
+            string executablePath = Path.Combine(
+                directory, "OpenClawGatewayMSIX", "agent-node", archiveRoot, "node.exe");
+            foreach (byte[] invalidImage in new[]
+            {
+                System.Text.Encoding.UTF8.GetBytes("not an executable"),
+                BuildImage(Characteristics.LargeAddressAware),
+                BuildImage(Characteristics.ExecutableImage | Characteristics.Dll)
+            })
+            {
+                File.WriteAllBytes(executablePath, invalidImage);
+                Assert(Install() == 0, "The corrupt runtime was not repaired under NativeAOT.");
+                Assert(File.ReadAllText(executablePath) == version, "The corrupt runtime bytes were retained.");
+                SessionRuntimeInstallResult result = SessionRuntimeProtocol.ReadResult(
+                    File.ReadAllText(SessionLaunchProtocol.ResultPathFor(requestPath)));
+                Assert(result.Version == version && result.Error is null,
+                    "Runtime repair did not report the expected successful result.");
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+        return Task.CompletedTask;
+
+        static byte[] BuildImage(Characteristics characteristics)
+        {
+            var image = new BlobBuilder();
+            var builder = new ManagedPEBuilder(
+                new PEHeaderBuilder(imageCharacteristics: characteristics),
+                new MetadataRootBuilder(new MetadataBuilder()),
+                new BlobBuilder());
+            builder.Serialize(image);
+            return image.ToArray();
+        }
+    }
+
     private static Task WindowsLogonIdentityWorks()
     {
         string id = WindowsLogonSession.GetCurrentId();
@@ -110,6 +219,54 @@ internal static class SmokeProgram
             id.Where(character => character != ':').All(Uri.IsHexDigit),
             $"Unexpected Windows logon identity '{id}'.");
         return Task.CompletedTask;
+    }
+
+    private static async Task MxcSdkWorksInFreshProcessAsync()
+    {
+        var start = new ProcessStartInfo(
+            Environment.ProcessPath ?? throw new InvalidOperationException("Native driver path is unavailable."))
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        start.ArgumentList.Add("--sdk-native-only");
+        using Process child = Process.Start(start)
+            ?? throw new InvalidOperationException("Native SDK child did not start.");
+        Task<string> output = child.StandardOutput.ReadToEndAsync();
+        Task<string> error = child.StandardError.ReadToEndAsync();
+        await child.WaitForExitAsync().ConfigureAwait(false);
+        string stdout = await output.ConfigureAwait(false);
+        string stderr = await error.ConfigureAwait(false);
+        Assert(child.ExitCode == 0, $"Native SDK child failed: {stdout}{stderr}");
+        Assert(!stderr.Contains("could not register the native library resolver", StringComparison.Ordinal),
+            $"SDK initialization polluted stderr: {stderr}");
+    }
+
+    private static async Task MxcSdkWorksAsync()
+    {
+        MxcRuntimeLocation runtime = MxcRuntimeLocator.Locate();
+        MxcBackendProbe probe = await MxcSdkSessionClient.ProbeBackendAsync(
+            runtime, CancellationToken.None).ConfigureAwait(false);
+        Assert(!string.IsNullOrWhiteSpace(probe.NativeVersion), "The native MXC version was not observed.");
+        const string appId = "PFN:OpenClaw.AotSmoke_fixture";
+        Microsoft.Mxc.Sdk.V1.ValidationResult provision = Microsoft.Mxc.Sdk.V1.MxcLifecycle.ValidateProvision(
+            MxcSdkSessionClient.CreateProvisionRequest(appId));
+        Assert(provision.Warnings is not null, "SDK provision validation returned no warning contract.");
+
+        // Validate the frozen legacy ID shape without creating or starting the
+        // synthetic account. Dry runs also exercise the real FFI/JSON boundary.
+        const string payload =
+            """{"version":1,"agentUserName":"openclaw-aot-fixture-not-an-account","appId":"PFN:OpenClaw.AotSmoke_fixture"}""";
+        string encoded = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(payload))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        var id = new Microsoft.Mxc.Sdk.V1.ContainerId("iso:" + encoded);
+        _ = Microsoft.Mxc.Sdk.V1.MxcLifecycle.ValidateStart(id);
+        _ = Microsoft.Mxc.Sdk.V1.MxcLifecycle.ValidateProcess(
+            id, new Microsoft.Mxc.Sdk.V1.ExecutionRequest("echo fixture"));
+        _ = Microsoft.Mxc.Sdk.V1.MxcLifecycle.ValidateStop(id);
+        _ = Microsoft.Mxc.Sdk.V1.MxcLifecycle.ValidateDeprovision(id);
     }
 
     // Read-only native queries exercise the same interop as guest inspection.
@@ -624,6 +781,35 @@ internal static class SmokeProgram
             "The gateway result did not report its URL.");
     }
 
+    private static Task PendingGatewayJsonIsStructured()
+    {
+        foreach (string action in new[] { "start", "restart" })
+        {
+            using var output = new StringWriter();
+            ClawCtlJson.WriteResult(output, new GatewayCommandResult(
+                action,
+                GatewayState.Starting,
+                "The supervised gateway launch was accepted.",
+                null,
+                0));
+            using JsonDocument document = JsonDocument.Parse(output.ToString());
+            JsonElement root = document.RootElement;
+            JsonElement gateway = root.GetProperty("gateway");
+            Assert(root.GetProperty("ok").GetBoolean(), "An accepted launch was reported as failed.");
+            Assert(root.GetProperty("schemaVersion").GetInt32() == 1, "The JSON schema version changed.");
+            Assert(root.GetProperty("command").GetString() == $"gateway-service {action}",
+                "The accepted launch lost its command identity.");
+            Assert(gateway.GetProperty("state").GetString() == "starting",
+                "The pending gateway state did not survive NativeAOT.");
+            Assert(!gateway.TryGetProperty("port", out _) &&
+                !gateway.TryGetProperty("url", out _) &&
+                !gateway.TryGetProperty("ownership", out _) &&
+                !root.TryGetProperty("error", out _),
+                "Pending acceptance claimed readiness or reported an error.");
+        }
+        return Task.CompletedTask;
+    }
+
     private static string StripAnsi(string value)
     {
         var builder = new System.Text.StringBuilder(value.Length);
@@ -889,13 +1075,15 @@ internal static class SmokeProgram
 
         public async Task<int> RunAsync(
             string[] args,
-            Func<string, string?>? readEnvironmentVariable = null)
+            Func<string, string?>? readEnvironmentVariable = null,
+            Func<HostOptions, HostEnvironment>? readEnvironment = null)
         {
             HostStartup startup = new()
             {
                 Entrypoint = _entrypoint,
                 CreateDiagnostics = () => HostDiagnosticLog.Create(LogPath),
                 BaseDirectory = Root,
+                ArchiveDirectory = Path.Combine(Root, "archives"),
                 Output = Output,
                 Error = Error,
                 InstallationLifecycle =
@@ -903,6 +1091,7 @@ internal static class SmokeProgram
                     _lifecycle ??
                     (IInstallationLifecycle)InstallationLifecycle.Production,
                 ReadEnvironmentVariable = readEnvironmentVariable ?? (_ => null),
+                ReadEnvironment = readEnvironment,
                 ProbeReadiness = _agentLifecycle is null
                     ? null
                     : _ => Task.FromResult(new MxcReadinessReport(
@@ -1166,13 +1355,11 @@ internal static class SmokeProgram
                 _provisionCount++;
                 return Task.FromResult(new MxcProvisionResult(
                     MxcSandboxId.Parse($"iso:fixture{_provisionCount}"),
-                    Metadata,
-                    null));
+                    Metadata));
             }
 
             public Task StartAsync(
                 MxcSandboxId sandboxId,
-                string? correlationVector,
                 CancellationToken cancellationToken)
             {
                 Calls.Add("start");
@@ -1182,7 +1369,6 @@ internal static class SmokeProgram
             public Task<MxcExecutionResult> ExecuteAsync(
                 MxcSandboxId sandboxId,
                 MxcExecutionRequest request,
-                string? correlationVector,
                 CancellationToken cancellationToken)
             {
                 Calls.Add("execute");
@@ -1195,7 +1381,6 @@ internal static class SmokeProgram
             public Task<int> ExecuteAttachedAsync(
                 MxcSandboxId sandboxId,
                 MxcExecutionRequest request,
-                string? correlationVector,
                 CancellationToken cancellationToken) =>
                 ExecuteAttachedCoreAsync(request);
 
@@ -1213,12 +1398,10 @@ internal static class SmokeProgram
 
             public Task StopAsync(
                 MxcSandboxId sandboxId,
-                string? correlationVector,
                 CancellationToken cancellationToken) => Task.CompletedTask;
 
             public Task DeprovisionAsync(
                 MxcSandboxId sandboxId,
-                string? correlationVector,
                 CancellationToken cancellationToken) => Task.CompletedTask;
         }
 

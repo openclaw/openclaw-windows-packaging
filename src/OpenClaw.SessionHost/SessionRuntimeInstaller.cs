@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Reflection.PortableExecutable;
 using Microsoft.Win32;
 using OpenClaw.SessionProtocol;
 
@@ -188,6 +189,15 @@ internal static class SessionRuntimeInstaller
     {
         try
         {
+            // Refuse corrupt images before entering the loader, where Process.Start can block before its exit budget.
+            using FileStream image = File.Open(executablePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var executable = new PEReader(image);
+            if (executable.PEHeaders.PEHeader is null ||
+                !executable.PEHeaders.CoffHeader.Characteristics.HasFlag(Characteristics.ExecutableImage) ||
+                executable.PEHeaders.CoffHeader.Characteristics.HasFlag(Characteristics.Dll))
+            {
+                return null;
+            }
             using Process? process = Process.Start(new ProcessStartInfo
             {
                 FileName = executablePath,
@@ -210,7 +220,7 @@ internal static class SessionRuntimeInstaller
         }
         catch (Exception exception) when (
             exception is System.ComponentModel.Win32Exception or
-            InvalidOperationException or IOException or UnauthorizedAccessException)
+            InvalidOperationException or IOException or UnauthorizedAccessException or BadImageFormatException)
         {
             return null;
         }

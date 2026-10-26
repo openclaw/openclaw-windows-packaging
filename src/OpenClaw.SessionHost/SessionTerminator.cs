@@ -80,10 +80,25 @@ internal static class SessionTerminator
 
             // Kill the same verified handle, not a reopened PID. Its job owns
             // descendant lifetime; do not enumerate arbitrary reused child IDs.
+            // Opened before the kill: the supervisor's death does not stop the gateway tree synchronously, and the
+            // state lease the supervisor holds ends with it. Holding the job lets this stop wait out the whole tree.
+            using WindowsKillOnCloseJob? tree = WindowsKillOnCloseJob.TryOpen(
+                WindowsKillOnCloseJob.GatewayJobName(process.Id, process.StartTime.ToUniversalTime().Ticks));
             process.Kill();
             if (!process.WaitForExit(30_000))
             {
                 return new SessionInspectResult { RequestId = request.RequestId, Error = "The gateway did not exit." };
+            }
+            if (tree is not null)
+            {
+                try
+                {
+                    tree.TerminateAndWait(TimeSpan.FromSeconds(30));
+                }
+                catch (TimeoutException)
+                {
+                    return new SessionInspectResult { RequestId = request.RequestId, Error = "The gateway process tree did not exit." };
+                }
             }
         }
         catch (ArgumentException)

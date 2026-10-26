@@ -1,5 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text;
+using System.ComponentModel;
+using Sdk = Microsoft.Mxc.Sdk.V1;
 
 namespace OpenClaw.Launcher;
 
@@ -15,6 +17,7 @@ internal interface IHostConsole
 internal interface IConsoleNativeApi
 {
     nint GetStdHandle(uint standardHandle);
+    uint GetFileType(nint handle);
     bool GetConsoleMode(nint handle, out uint mode);
     bool SetConsoleMode(nint handle, uint mode);
     uint GetConsoleCP();
@@ -22,6 +25,7 @@ internal interface IConsoleNativeApi
     bool SetConsoleCP(uint codePage);
     bool SetConsoleOutputCP(uint codePage);
     bool WriteConsole(nint handle, string text);
+    bool GetSize(nint handle, out short rows, out short columns);
 }
 
 internal interface IConsoleEncoding
@@ -36,6 +40,11 @@ internal sealed class WindowsHostConsole : IHostConsole
     private const uint StdInput = unchecked(0xFFFFFFF6);
     private const uint StdOutput = unchecked(0xFFFFFFF5);
     private const uint StdError = unchecked(0xFFFFFFF4);
+    private const uint FileTypeCharacter = 0x0002;
+    private const uint EnableProcessedInput = 0x0001;
+    private const uint EnableLineInput = 0x0002;
+    private const uint EnableEchoInput = 0x0004;
+    private const uint EnableVirtualTerminalInput = 0x0200;
     private const uint EnableProcessedOutput = 0x0001;
     private const uint EnableVirtualTerminalProcessing = 0x0004;
     private const uint InvalidHandle = unchecked(0xFFFFFFFF);
@@ -57,7 +66,48 @@ internal sealed class WindowsHostConsole : IHostConsole
         _encoding = encoding ?? new ConsoleEncoding();
     }
 
-    public bool IsInteractive => IsInteractiveOutput(Console.Out);
+    public bool IsInteractive => IsConsoleStream(StdOutput);
+
+    internal bool HasTerminalStreams =>
+        new[] { StdInput, StdOutput, StdError }.All(IsConsoleStream);
+
+    private bool IsConsoleStream(uint standard)
+    {
+        nint handle = _native.GetStdHandle(standard);
+        return handle != 0 && handle != InvalidHandle &&
+            _native.GetFileType(handle) == FileTypeCharacter &&
+            _native.GetConsoleMode(handle, out _);
+    }
+
+    internal Sdk.MxcPtySize ReadTerminalSize()
+    {
+        if (!_native.GetSize(_native.GetStdHandle(StdOutput), out short rows, out short columns))
+        {
+            throw new Win32Exception(Marshal.GetLastPInvokeError(), "The terminal size could not be read.");
+        }
+        return new Sdk.MxcPtySize(checked((ushort)rows), checked((ushort)columns));
+    }
+
+    internal void PrepareTerminal()
+    {
+        nint input = _native.GetStdHandle(StdInput);
+        if (!_native.GetConsoleMode(input, out uint mode) ||
+            !_native.SetConsoleMode(
+                input, (mode & ~(EnableProcessedInput | EnableLineInput | EnableEchoInput)) |
+                    EnableVirtualTerminalInput))
+        {
+            throw new Win32Exception(Marshal.GetLastPInvokeError(), "Raw terminal input could not be enabled.");
+        }
+        foreach (uint standard in new[] { StdOutput, StdError })
+        {
+            nint output = _native.GetStdHandle(standard);
+            if (!_native.GetConsoleMode(output, out mode) ||
+                !_native.SetConsoleMode(output, mode | EnableProcessedOutput | EnableVirtualTerminalProcessing))
+            {
+                throw new Win32Exception(Marshal.GetLastPInvokeError(), "Terminal output could not be enabled.");
+            }
+        }
+    }
 
     internal bool IsInteractiveOutput(TextWriter output)
     {
@@ -73,9 +123,7 @@ internal sealed class WindowsHostConsole : IHostConsole
             return false;
         }
 
-        nint handle = _native.GetStdHandle(standardHandle);
-        return handle != 0 && handle != InvalidHandle &&
-            _native.GetConsoleMode(handle, out _);
+        return IsConsoleStream(standardHandle);
     }
 
     public void InitializeUtf8()
@@ -337,6 +385,7 @@ internal sealed class WindowsHostConsole : IHostConsole
     private sealed class ConsoleNativeApi : IConsoleNativeApi
     {
         public nint GetStdHandle(uint standardHandle) => Native.GetStdHandle(standardHandle);
+        public uint GetFileType(nint handle) => Native.GetFileType(handle);
         public bool GetConsoleMode(nint handle, out uint mode) =>
             Native.GetConsoleMode(handle, out mode);
         public bool SetConsoleMode(nint handle, uint mode) =>
@@ -348,6 +397,13 @@ internal sealed class WindowsHostConsole : IHostConsole
             Native.SetConsoleOutputCP(codePage);
         public bool WriteConsole(nint handle, string text) =>
             Native.WriteConsole(handle, text, text.Length, out _, 0);
+        public bool GetSize(nint handle, out short rows, out short columns)
+        {
+            bool read = Native.GetConsoleScreenBufferInfo(handle, out Native.ScreenBufferInfo info);
+            rows = checked((short)(info.Window.Bottom - info.Window.Top + 1));
+            columns = checked((short)(info.Window.Right - info.Window.Left + 1));
+            return read;
+        }
     }
 
     private sealed class ConsoleEncoding : IConsoleEncoding
@@ -367,8 +423,36 @@ internal sealed class WindowsHostConsole : IHostConsole
 
     private static class Native
     {
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct Coordinate
+        {
+            internal short X;
+            internal short Y;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct Rectangle
+        {
+            internal short Left;
+            internal short Top;
+            internal short Right;
+            internal short Bottom;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct ScreenBufferInfo
+        {
+            internal Coordinate Size;
+            internal Coordinate CursorPosition;
+            internal ushort Attributes;
+            internal Rectangle Window;
+            internal Coordinate MaximumSize;
+        }
+
         [DllImport("kernel32.dll", SetLastError = true)]
         internal static extern nint GetStdHandle(uint standardHandle);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        internal static extern uint GetFileType(nint handle);
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool GetConsoleMode(nint handle, out uint mode);
@@ -390,5 +474,8 @@ internal sealed class WindowsHostConsole : IHostConsole
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool WriteConsole(
             nint handle, string text, int chars, out int written, nint reserved);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool GetConsoleScreenBufferInfo(nint handle, out ScreenBufferInfo info);
     }
 }

@@ -7,18 +7,177 @@ as a stable public API.
 ## Runtime boundary and MXC seam
 
 The launcher owns a small session contract in
-`OpenClaw.Launcher\Mxc\IMxcSessionClient`. `MxcCliSessionClient` is the current
-implementation: it invokes the pinned `@microsoft/mxc-sdk` CLI and confines
-its preview wire details to `MxcWireProtocol` and `MxcWireModels`. The rest of
-the launcher depends on the project-owned contract, so the CLI transport can
-be replaced by the official .NET SDK without changing lifecycle, routing, or
-gateway callers.
+`OpenClaw.Launcher\Mxc\IMxcSessionClient`. `MxcSdkSessionClient` is the current
+implementation: it calls the official `Microsoft.Mxc.Sdk` 1.0.1 V1 lifecycle
+and translates typed results and errors. The SDK owns MXC serialization and
+containment; the launcher still owns package identity, recorded sessions,
+recovery, and its guest-helper protocol.
+
+PackageReference and the normal .NET publish pipeline supply runtime assets;
+the SDK owns their loading. Packaging has no custom resolver, native file-set
+preflight, or per-binary integrity manifest. It retains SDK API package/version
+metadata for diagnostics and the MIT redistribution notice. SDK load/entry-point
+failures remain explicit runtime-unavailable errors, not file-presence guesses.
+
+Interactive execution uses the public SDK PTY API and a host console bridge;
+redirected or mixed streams use separate pipes. Every relay belongs to that
+invocation and is joined before disposal. The SDK's asynchronous cancellation
+alone is not a termination guarantee: the adapter requests SDK kill-and-wait, while
+dispatched provision/lifecycle calls finish so their outcome is not lost.
+
+The tagged IsolationSession termination primitive reaches the foreground
+process, not a confirmed invocation tree. The helper's Node.js or PowerShell
+child and backgrounded descendants are not proven stopped by SDK `Kill()`.
+Fixture cancellation flags and a cooperative Ctrl+C exit do not establish that
+stronger guarantee. The branch-local invocation-job prototype below supplies
+additional lifecycle control; SDK cancellation alone remains insufficient.
+Stopping the persistent session is not a substitute because it would disrupt
+unrelated work.
+
+### Branch-local descendant-cancellation prototype
+
+On Windows 26713 with SDK/native runtime 1.0.0, a medium-integrity unpackaged
+host provisioned a disposable IsolationSession without an application ID.
+A standalone x64 NativeAOT helper ran synthetic PowerShell trees under the
+minted agent account in a separate Windows session. No package was registered.
+The legacy `--request` baseline reproduced the defect: SDK `Kill()` followed
+by `WaitAsync()` returned while the helper, workload, child, and grandchild
+remained alive. Releasing the fixture removed those baseline processes.
+
+The prototype's host-owned named job accepted the agent's assignment-only
+handle across that actual token/session boundary. Initial attached/captured
+cancellation and normal-exit observations found no enumerated survivors or
+late sentinel, with an unrelated workload in the same agent session surviving.
+An expanded run then hit `AccessDenied` when the medium host tried to inspect
+guest process exit. That run is inconclusive, not passed. Both runs performed
+exact-ID stop and deprovision; before/after local-account and `Win32_UserProfile`
+snapshots independently verified removal of their minted accounts, profiles,
+temporary directories, and shared workspaces.
+
+The stronger observation fixture grants only query-limited-information and
+synchronization access to the host SID on its synthetic process objects,
+including its helper, and pins those exact handles before cancellation.
+It changes no groups, policy, token privileges, or real-profile objects;
+`AccessDenied` never counts as exit. The local injected-deadline regression
+then failed: the helper handle was signaled, but three workload/child/descendant
+handles were not signaled when execution returned, despite zero job members.
+This exposed an exit-drain gap rather than complete cancellation proof.
+It was not hidden with sleeps, retries, or weaker assertions. A subsequent
+local run confirmed all four processes belonged to their exact invocation job
+before cancellation and that the three failed waits returned `WAIT_TIMEOUT`,
+not `WAIT_FAILED`.
+
+A bounded local admission probe then lowered that job's active-process limit
+to one while its four existing members remained alive. A synchronized new
+child creation failed with Win32 error 1816 and produced no sentinel, while
+the original members and unrelated sibling survived.
+
+The updated candidate keeps a query-only guest coordinator outside the job.
+After the host closes admission, it pins the workload members under the agent
+identity, asks the host to terminate, and waits those exact handles before
+acknowledging drain. Targeted local tests now pass strict exit checks for the
+worker helper, workload, child, descendant, and outside coordinator, plus
+sibling survival. An injected native-spawn delay proves cancellation cannot
+start late work. Deterministic blocked-reader tests prove failed drain is
+reported after both readers are interrupted and joined.
+
+A fresh Windows 26713.1000 run used the standalone x64 NativeAOT helper with
+SDK/native runtime 1.0.0 in one disposable IsolationSession. It disabled all
+host-observer process DACL grants. An independent same-agent witness pinned
+the helper, workload, child, descendant, and outside coordinator for each of
+two concurrent invocations before cancellation. Across attached cancellation,
+captured cancellation, normal completion, an injected deadline, and a
+completion/cancellation race, the first invocation's five handles were signaled
+at return while the sibling's five remained running. Releasing the sibling
+then signaled all five. All five scenarios passed without a late sentinel;
+their 15 raw matrices contain 150 wait observations and no native wait errors.
+Exact-ID stop and deprovision completed, and independent account/profile/path
+snapshots verified the minted account, profile, temporary directories, and
+workspace were gone while pre-existing accounts/profiles remained.
+
+The regression suite also holds an extra job handle through termination,
+rejects cancelled-before-admission launches, and races normal completion
+against cancellation. It uses real helper/workload processes and never
+provisions an account.
+The separately invoked `CancellationPrototypeProbe.RunDisposableAsync` test
+probe requires explicit disposable-session authorization and independent
+before/after account/profile snapshots; it is not an automatic test lane.
+
+This remains a branch-local ordinary-leak prototype, not a hostile-agent
+security boundary or a shipping release. The coordinator's managed quality
+gate passed without warnings or errors, and all 1,318 Release tests passed.
+The full x64 NativeAOT driver passed 33 scenarios and its expected wrong-alias
+negative. Real keyboard/PTY
+cancellation, abrupt host death with a retained handle, installed-package
+execution, and ARM64 execution are not established by this run.
+
+An additional deterministic natural-exit fixture closes admission, takes a real
+exact-job snapshot, then proves a member's natural exit with an independent
+signaled handle before closing the creator/test references and reopening once.
+The OS returned a valid, same-identity, same-job, signaled handle; real error
+87 was not observed. The expiration branch is covered separately through an
+injected native-open seam using that real positive snapshot PID and the fixed
+`PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE` mask.
+
+The coordinator accepts only error 87 in that narrowly controlled context,
+following [.NET 10's matching nonzero-PID handling](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Diagnostics.Process/src/System/Diagnostics/ProcessManager.Windows.cs#L34-L50)
+and the documented [PID lifetime](https://learn.microsoft.com/en-us/windows/win32/procthread/process-handles-and-identifiers).
+Synthetic access-denied, invalid-handle, other-error, reused/nonmember, and
+invalid-PID cases remain failures. This is synthetic failure-path coverage,
+not a claim that the OS expiration error occurred in the real scenarios.
+Every retained process handle still requires signaled exit; the strict
+ten-handle scenarios are unchanged. No inverse NTSTATUS inference or Native
+System Services calls are used. Full PID-reuse stress, hostile same-identity
+manipulation, and the unrun deployment/interactive lanes remain outside the
+observed-flow proof; no universal shipping guarantee is claimed.
+
+After that narrow classification change, the new source again passed the
+managed quality gate, all 1,318 Release tests, the standalone x64 NativeAOT
+publish, and the full 33-scenario native driver with its expected negative.
+A separate fresh natural-rights IsolationSession repeated all five flows with
+the unchanged strict witness: 15 matrices, 150 process-handle waits, no errors,
+no late effects, and sibling survival. Independent exact-ID account/profile/
+temporary-directory/workspace cleanup verification passed. This repeats the
+ordinary-flow proof on the changed source; it does not turn injected error-87
+coverage into an observed native expiration.
+
+The earlier locally packed SDK spike's attached-console API is no longer
+public in V1. Its historical live results do not qualify this SDK version.
+The upstream IsolationSession EOF test remains marked as blocked on a
+platform-held stdin write handle. Closing the SDK writer is attempted, but
+does not establish that an EOF-reading workload will finish on a given OS.
+Real keyboard/Ctrl+C/resize, piped EOF, and legacy-provision upgrade proof
+require a separately authorized disposable Windows environment.
+
+### Local SDK 1.0 qualification
+
+A side-by-side x64 Developer Mode patch was exercised on Windows
+26703.1002. Setup, recorded-session reuse and explicit stale-session recovery,
+packaged OpenClaw execution, PowerShell command/file execution, separate
+streams, Unicode arguments and keyboard input, initial PTY size, Ctrl+C exit
+130, and host-and-session collection passed. A synthetic loopback gateway on
+an allocated port served HTTP health requests and survived helper disposal and
+foreground interruption; start, status, restart, stop, and teardown passed.
+The patch, its accounts/profiles, recovery task, and listener were removed,
+and the existing base registration was unchanged.
+
+This run found and fixed input-reader shutdown cancellation, helper quoting
+after the SDK's PTY startup gate, and guest console encoding. The guest helper
+now initializes attached children with UTF-8 rather than inheriting the
+isolated console's OEM code page.
+
+Piped input arrived, but closing host stdin did not deliver EOF to the reading
+guest; the bounded scenario timed out. The upstream/platform EOF limitation
+remains unqualified. This loose-layout run did not prove real resize events,
+installed MSIX/native redirection, legacy-runtime session replay, installed
+upgrades, or ARM64 execution.
 
 `OpenClaw.SessionProtocol` is separate from that backend seam. It is the
 versioned, launcher-to-guest request/result contract used for execution,
-inspection, runtime installation, and collection. A backend execution request
-uses a controlled `cmd.exe` command line only to start the staged helper; the
-requested executable and argument vector are JSON data rather than interpolated
+inspection, runtime installation, and collection. A backend execution request uses a controlled inner `cmd.exe /d /s /c`
+command line only to start the staged helper. Its explicit quoting works both
+under the SDK's pipe dispatch and after its PTY startup gate; the requested
+executable and argument vector remain JSON data rather than interpolated
 into that command line.
 
 ## Session ownership and routing
@@ -167,10 +326,12 @@ previous start hint instead of automatically starting the gateway.
 
 Agent entrypoint startup captures and restores console state and initializes
 UTF-8 just as the control entrypoint does. Postflight rendering treats
-foreground interactivity and stderr's native console capability separately:
-the app-alias stderr proxy can receive ANSI and the crab glyph without
-supporting `GetConsoleMode`, while a native console still requires successful
-VT enablement.
+foreground interactivity and the selected process stderr writer separately.
+UTF-8 initialization can replace managed console writers; a previously captured
+writer failing a later identity check is not evidence that its native handle
+rejects `GetConsoleMode`. PTY selection uses the raw handle type and console
+mode for all three streams, preserving separate file and pipe output. A native
+console still requires successful VT enablement.
 
 ## Diagnostics and safe collection
 
@@ -206,8 +367,8 @@ setup. The collector does not enumerate arbitrary agent-profile files.
 MXC failures reach the host log with the backend's own evidence: the error
 code, the failing IsolationSession operation (for example
 `IsoSessionOps.StartSessionAsync`), the native status, and any remediation
-text. When the executor produces no interpretable envelope, the failure keeps
-its exit code, executor diagnostics, and a bounded excerpt of its output.
+text. SDK failures retain their typed code, original cause, native status,
+operation, and remediation; workload output is not parsed as an MXC error.
 Both `clawctl setup` and `openclaw` log the evidence behind the support
 decision (host build, runtime provenance, and backend probe result) before
 acting on it, and `clawctl status` logs the MXC failure when the recorded

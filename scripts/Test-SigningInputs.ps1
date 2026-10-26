@@ -24,6 +24,10 @@ param(
     [ValidatePattern('^[0-9a-fA-F]{40}$')]
     [string]$PackagingCommit,
 
+    [Parameter(Mandatory)][string]$WorkflowRef,
+    [Parameter(Mandatory)][string]$GitHubRef,
+    [Parameter(Mandatory)][string]$EventName,
+
     [string]$RequestedRef = '',
 
     [string]$GatewayVersion = '',
@@ -165,6 +169,12 @@ $resolvedArtifactsDirectory = (
 $resolvedPolicyPath = (Resolve-Path -LiteralPath $PolicyPath).Path
 $policy = Get-Content -LiteralPath $resolvedPolicyPath -Raw |
     ConvertFrom-Json
+[xml]$central = Get-Content -LiteralPath (
+    Join-Path (Split-Path $PSScriptRoot -Parent) 'Directory.Packages.props'
+) -Raw
+$mxcVersion = @($central.SelectNodes('//PackageVersion[@Include="Microsoft.Mxc.Sdk"]'))
+if ($mxcVersion.Count -ne 1) { throw 'The central SDK package selection is ambiguous.' }
+$mxcSdkVersion = [string]$mxcVersion[0].Version
 
 if (
     $policy.repository -ne 'https://github.com/openclaw/openclaw' -or
@@ -197,6 +207,7 @@ $source = & (Join-Path $PSScriptRoot 'Get-WorkflowSource.ps1') `
     -OutputPath $SourcePath `
     -WorkflowRunId $WorkflowRunId `
     -PackagingCommit $PackagingCommit `
+    -WorkflowRef $WorkflowRef -GitHubRef $GitHubRef -EventName $EventName `
     -SigningMode $SigningMode `
     -Ref $RequestedRef `
     -GatewayVersion $GatewayVersion `
@@ -252,7 +263,8 @@ foreach ($architecture in @('x64', 'arm64')) {
             "node-v$($metadata.nodeRuntimeVersion)-win-$architecture.zip" -or
         $metadata.nodeRuntimeSha256 -notmatch '^[0-9a-fA-F]{64}$' -or
         [string]::IsNullOrWhiteSpace([string]$metadata.mxcRuntimeVersion) -or
-        @($metadata.mxcRuntimeFiles).Count -eq 0 -or
+        $metadata.mxcRuntimePackage -cne 'Microsoft.Mxc.Sdk' -or
+        $metadata.mxcRuntimeVersion -cne $mxcSdkVersion -or
         @($metadata.sessionHostFiles).Count -eq 0 -or
         $metadata.architecture -ne $architecture -or
         $metadata.archive -ne $msix.Name -or
@@ -336,80 +348,14 @@ foreach ($architecture in @('x64', 'arm64')) {
                 )
             )
 
-        $expectedMxcPaths =
-            [System.Collections.Generic.HashSet[string]]::new(
-                [System.StringComparer]::OrdinalIgnoreCase
-            )
-        $hasMxcExecutor = $false
-        $hasMxcProvenance = $false
-        foreach ($file in @($metadata.mxcRuntimeFiles)) {
-            $relativePath = [string]$file.path
-            $segments = @($relativePath.Split('/'))
-            if (
-                [string]::IsNullOrWhiteSpace($relativePath) -or
-                $relativePath.StartsWith('/') -or
-                [IO.Path]::IsPathRooted($relativePath) -or
-                $relativePath.Contains('\') -or
-                $relativePath.Contains(':') -or
-                $segments -contains '' -or
-                $segments -contains '.' -or
-                $segments -contains '..' -or
-                $file.length -isnot [int64] -or
-                $file.length -lt 0 -or
-                $file.sha256 -notmatch '^[0-9a-fA-F]{64}$'
-            ) {
-                throw "The embedded $architecture MXC runtime inventory is invalid."
-            }
-
-            $packagePath = "mxc/$architecture/$relativePath"
-            if (-not $expectedMxcPaths.Add($packagePath)) {
-                throw (
-                    "The embedded $architecture MXC runtime inventory has " +
-                    'duplicate paths.'
-                )
-            }
-
-            $entry = Get-PackageEntry `
-                -EntriesByPath $entriesByPath `
-                -Path $packagePath
-            if (
-                $entry.Length -ne $file.length -or
-                (Get-PackageEntrySha256 -Entry $entry) -ine $file.sha256
-            ) {
-                throw (
-                    "The embedded $architecture MXC runtime file is invalid: " +
-                    $relativePath
-                )
-            }
-
-            if ($relativePath -ieq 'wxc-exec.exe') {
-                $hasMxcExecutor = $true
-            }
-            if ($relativePath -ieq 'mxc-runtime.json') {
-                $hasMxcProvenance = $true
-            }
-        }
-
-        if (-not $hasMxcExecutor -or -not $hasMxcProvenance) {
-            throw "The embedded $architecture MXC runtime is incomplete."
-        }
-
-        $actualMxcPaths = @(
-            $entriesByPath.Keys |
-                Where-Object {
-                    $_.StartsWith(
-                        "mxc/$architecture/",
-                        [StringComparison]::OrdinalIgnoreCase
-                    )
-                }
-        )
-        if (
-            $actualMxcPaths.Count -ne $expectedMxcPaths.Count -or
-            @($actualMxcPaths | Where-Object {
-                -not $expectedMxcPaths.Contains($_)
-            }).Count -ne 0
-        ) {
-            throw "The embedded $architecture MXC runtime file set is invalid."
+        $notice = Get-PackageEntry -EntriesByPath $entriesByPath -Path 'mxc-LICENSE.md'
+        if ($notice.Length -eq 0) { throw 'The SDK redistribution notice is empty.' }
+        $provenance = Read-ZipEntryText -EntriesByPath $entriesByPath -Path 'mxc-runtime.json' |
+            ConvertFrom-Json
+        if ($provenance.package -cne 'Microsoft.Mxc.Sdk' -or
+            $provenance.version -cne $mxcSdkVersion -or
+            $provenance.architecture -cne $architecture) {
+            throw 'The SDK package metadata does not match the selected API dependency.'
         }
 
         $expectedSessionHostPaths =

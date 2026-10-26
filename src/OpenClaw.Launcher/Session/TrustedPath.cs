@@ -1,8 +1,15 @@
 using Microsoft.Win32.SafeHandles;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 
+#if OPENCLAW_SESSION_HOST
+using SessionException = OpenClaw.SessionProtocol.SessionLaunchException;
+namespace OpenClaw.SessionHost;
+#else
 namespace OpenClaw.Launcher.Session;
+#endif
 
 /// <summary>Rejects path redirection below a caller-established root.</summary>
 internal static partial class TrustedPath
@@ -68,7 +75,7 @@ internal static partial class TrustedPath
             set => stream.Position = value;
         }
 
-        public override void Flush() => stream.Flush();
+        public override void Flush() => stream.Flush(flushToDisk: true);
 
         public override int Read(byte[] buffer, int offset, int count) =>
             stream.Read(buffer, offset, count);
@@ -171,14 +178,17 @@ internal static partial class TrustedPath
         "Reliability",
         "CA2000:Dispose objects before losing scope",
         Justification = "The FileStream constructor takes ownership of the SafeFileHandle.")]
-    public static FileStream OpenRead(string trustedRoot, string candidatePath)
+    public static FileStream OpenRead(
+        string trustedRoot,
+        string candidatePath,
+        bool protectContents = false)
     {
         EnsureNoReparsePoints(trustedRoot, candidatePath);
 
         SafeFileHandle handle = CreateFile(
             candidatePath,
             GenericRead,
-            FileShareRead | FileShareWrite | FileShareDelete,
+            protectContents ? FileShareRead : FileShareRead | FileShareWrite | FileShareDelete,
             IntPtr.Zero,
             OpenExisting,
             FileFlagOpenReparsePoint,
@@ -228,15 +238,20 @@ internal static partial class TrustedPath
         }
     }
 
+    internal static Stream CreateNew(ValidatedDirectory root, string candidatePath) =>
+        CreateNew(root, candidatePath, securityDescriptor: null);
+
+    internal static Stream CreateNewPrivate(ValidatedDirectory root, string candidatePath) =>
+        CreateNew(root, candidatePath, PrivateSecurityDescriptor(directory: false));
+
     [SuppressMessage(
         "Reliability",
         "CA2000:Dispose objects before losing scope",
-        Justification = "The FileStream constructor takes ownership of the SafeFileHandle.")]
-    [SuppressMessage(
-        "Reliability",
-        "CA2000:Dispose objects before losing scope",
-        Justification = "The returned protected stream owns both the file and directory-chain handles.")]
-    internal static Stream CreateNew(ValidatedDirectory root, string candidatePath)
+        Justification = "The returned protected stream owns both the FileStream's SafeFileHandle and directory-chain handles.")]
+    private static ProtectedStream CreateNew(
+        ValidatedDirectory root,
+        string candidatePath,
+        byte[]? securityDescriptor)
     {
         ArgumentNullException.ThrowIfNull(root);
         string? parent = Path.GetDirectoryName(Path.GetFullPath(candidatePath));
@@ -259,7 +274,8 @@ internal static partial class TrustedPath
                 GenericWrite | FileReadAttributes,
                 shareAccess: 0,
                 FileCreate,
-                FileNonDirectoryFile | FileOpenReparsePoint);
+                FileNonDirectoryFile | FileOpenReparsePoint,
+                securityDescriptor);
 
             FileStream? stream = null;
             try
@@ -296,6 +312,67 @@ internal static partial class TrustedPath
         }
     }
 
+    internal static ValidatedDirectory CreatePrivateDirectory(
+        ValidatedDirectory root,
+        string directoryPath,
+        string? participantSid = null)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        string target = Path.GetFullPath(directoryPath);
+        string? parent = Path.GetDirectoryName(target);
+        if (parent is null || !IsBelowRoot(root.FinalPath, target))
+        {
+            throw new SessionException("The private directory resolves outside its trusted root.");
+        }
+        byte[] security = PrivateSecurityDescriptor(directory: true, participantSid);
+        using ProtectedDirectoryChain directories = ProtectDirectoryChain(root, parent, createMissing: true);
+        SafeFileHandle? handle = CreateRelative(
+            directories.Leaf.Handle,
+            Path.GetFileName(target),
+            GenericRead | FileReadAttributes,
+            FileShareRead | FileShareWrite | FileShareDelete,
+            FileCreate,
+            FileDirectoryFile | FileOpenReparsePoint,
+            security);
+        try
+        {
+            if ((File.GetAttributes(handle) & FileAttributes.ReparsePoint) != 0 ||
+                !IsBelowRoot(root.FinalPath, NormalizePath(GetFinalPath(handle))))
+            {
+                throw new SessionException("The private directory escaped its trusted root.");
+            }
+            var result = new ValidatedDirectory(handle, GetIdentity(handle), NormalizePath(GetFinalPath(handle)));
+            handle = null;
+            return result;
+        }
+        finally
+        {
+            handle?.Dispose();
+        }
+    }
+
+    private static byte[] PrivateSecurityDescriptor(bool directory, string? participantSid = null)
+    {
+        using WindowsIdentity identity = WindowsIdentity.GetCurrent();
+        SecurityIdentifier user = identity.User ??
+            throw new SessionException("The current user identity is unavailable for private state storage.");
+        string inheritance = directory ? "OICI" : "";
+        string rules = $"(A;{inheritance};FA;;;SY)(A;{inheritance};FA;;;BA)(A;{inheritance};FA;;;{user.Value})";
+        if (participantSid is not null)
+        {
+            SecurityIdentifier participant = new(participantSid);
+            if (!participant.Equals(user))
+            {
+                rules += $"(A;{inheritance};FA;;;{participant.Value})";
+            }
+        }
+        // Supply the protected DACL at creation; inherited readers must never see archive bytes.
+        RawSecurityDescriptor descriptor = new($"O:{user.Value}D:P{rules}");
+        byte[] binary = new byte[descriptor.BinaryLength];
+        descriptor.GetBinaryForm(binary, 0);
+        return binary;
+    }
+
     [SuppressMessage(
         "Reliability",
         "CA2000:Dispose objects before losing scope",
@@ -323,6 +400,41 @@ internal static partial class TrustedPath
     {
         using ValidatedDirectory? directory = TryOpenValidatedDirectory(path, expectedIdentity: null);
         return directory?.Identity;
+    }
+
+    [SuppressMessage(
+        "Reliability",
+        "CA2000:Dispose objects before losing scope",
+        Justification = "The returned FileStream owns the relative SafeFileHandle.")]
+    internal static FileStream OpenLock(
+        ValidatedDirectory root,
+        string name,
+        bool exclusive)
+    {
+        if (string.IsNullOrWhiteSpace(name) || Path.GetFileName(name) != name)
+        {
+            throw new SessionException("The state-access lock name is invalid.");
+        }
+        SafeFileHandle handle = CreateRelative(
+            root.Handle,
+            name,
+            exclusive ? GenericRead | GenericWrite : GenericRead,
+            exclusive ? 0 : FileShareRead,
+            3, // FILE_OPEN_IF creates the lock once without truncating it.
+            FileNonDirectoryFile | FileOpenReparsePoint);
+        try
+        {
+            if ((File.GetAttributes(handle) & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new SessionException("The state-access lock is a reparse point.");
+            }
+            return new FileStream(handle, exclusive ? FileAccess.ReadWrite : FileAccess.Read);
+        }
+        catch
+        {
+            handle.Dispose();
+            throw;
+        }
     }
 
     internal static ValidatedDirectory? TryOpenValidatedDirectory(
@@ -374,7 +486,8 @@ internal static partial class TrustedPath
     internal static bool TryDeleteOwnedEntry(
         ValidatedDirectory root,
         string candidatePath,
-        bool deleteReparsePointLeaf = false)
+        bool deleteReparsePointLeaf = false,
+        FileIdentity? expectedIdentity = null)
     {
         string? parent = Path.GetDirectoryName(Path.GetFullPath(candidatePath));
         if (string.IsNullOrWhiteSpace(parent))
@@ -407,6 +520,10 @@ internal static partial class TrustedPath
         FileAttributes attributes;
         using (handle)
         {
+            if (expectedIdentity is not null && GetIdentity(handle) != expectedIdentity)
+            {
+                return false;
+            }
             attributes = File.GetAttributes(handle);
             if ((attributes & FileAttributes.ReparsePoint) != 0)
             {
@@ -439,6 +556,10 @@ internal static partial class TrustedPath
                 FileShareRead | FileShareWrite | FileShareDelete,
                 FileOpen,
                 FileOpenReparsePoint);
+            if (expectedIdentity is not null && GetIdentity(deleteHandle) != expectedIdentity)
+            {
+                return false;
+            }
             return MarkForDeletion(deleteHandle);
         }
         catch (IOException)
@@ -597,11 +718,18 @@ internal static partial class TrustedPath
         uint desiredAccess,
         uint shareAccess,
         uint createDisposition,
-        uint createOptions)
+        uint createOptions,
+        byte[]? securityDescriptor = null)
     {
         IntPtr nameBuffer = Marshal.StringToHGlobalUni(name);
+        IntPtr securityBuffer = IntPtr.Zero;
         try
         {
+            if (securityDescriptor is not null)
+            {
+                securityBuffer = Marshal.AllocHGlobal(securityDescriptor.Length);
+                Marshal.Copy(securityDescriptor, 0, securityBuffer, securityDescriptor.Length);
+            }
             var unicodeName = new UnicodeString
             {
                 Length = checked((ushort)(name.Length * sizeof(char))),
@@ -618,7 +746,8 @@ internal static partial class TrustedPath
                     Length = Marshal.SizeOf<ObjectAttributes>(),
                     RootDirectory = parent.DangerousGetHandle(),
                     ObjectName = unicodeNamePointer,
-                    Attributes = ObjectCaseInsensitive
+                    Attributes = ObjectCaseInsensitive,
+                    SecurityDescriptor = securityBuffer
                 };
                 uint status = NtCreateFile(
                     out SafeFileHandle handle,
@@ -651,6 +780,7 @@ internal static partial class TrustedPath
         }
         finally
         {
+            Marshal.FreeHGlobal(securityBuffer);
             Marshal.FreeHGlobal(nameBuffer);
         }
     }
@@ -685,8 +815,11 @@ internal static partial class TrustedPath
         }
 
         const string extendedPathPrefix = @"\\?\";
+        const string extendedUncPrefix = @"\\?\UNC\";
         string value = new(path, 0, checked((int)length));
-        return value.StartsWith(extendedPathPrefix, StringComparison.Ordinal)
+        return value.StartsWith(extendedUncPrefix, StringComparison.OrdinalIgnoreCase)
+            ? @"\\" + value[extendedUncPrefix.Length..]
+            : value.StartsWith(extendedPathPrefix, StringComparison.Ordinal)
             ? value[extendedPathPrefix.Length..]
             : value;
     }
@@ -790,8 +923,28 @@ internal static partial class TrustedPath
         public nuint Information;
     }
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern SafeFileHandle CreateFile(
+    private static SafeFileHandle CreateFile(
+        string fileName,
+        uint desiredAccess,
+        uint shareMode,
+        IntPtr securityAttributes,
+        uint creationDisposition,
+        uint flagsAndAttributes,
+        IntPtr templateFile)
+    {
+        string path = Path.GetFullPath(fileName);
+        if (!path.StartsWith(@"\\?\", StringComparison.Ordinal))
+        {
+            path = path.StartsWith(@"\\", StringComparison.Ordinal)
+                ? @"\\?\UNC\" + path[2..]
+                : @"\\?\" + path;
+        }
+        return CreateFileNative(path, desiredAccess, shareMode, securityAttributes,
+            creationDisposition, flagsAndAttributes, templateFile);
+    }
+
+    [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFileNative(
         string fileName,
         uint desiredAccess,
         uint shareMode,

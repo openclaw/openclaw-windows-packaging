@@ -95,7 +95,7 @@ internal sealed record SessionCommandCaptureResult(
 /// travel as JSON in the shared workspace and are never exposed to that
 /// flattening.
 /// </remarks>
-internal sealed class SessionExecutor
+internal sealed partial class SessionExecutor
 {
     private const int ControlCExitCode = unchecked((int)0xc000013a);
     private const int PortableInterruptedExitCode = 130;
@@ -106,12 +106,14 @@ internal sealed class SessionExecutor
     private readonly Func<string> _createRequestId;
     private readonly Func<SessionRecord, bool> _isCurrentRecord;
     private readonly TimeProvider _clock;
+    private readonly Func<string, IInvocationLifetime> _createInvocationLifetime;
 
     public SessionExecutor(IMxcSessionClient backend, Action<string> log,
         Func<IReadOnlyDictionary<string, string>>? buildEnvironment = null,
         Func<string>? createRequestId = null,
         Func<SessionRecord, bool>? isCurrentRecord = null,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null,
+        Func<string, IInvocationLifetime>? createInvocationLifetime = null)
     {
         ArgumentNullException.ThrowIfNull(backend);
         ArgumentNullException.ThrowIfNull(log);
@@ -121,6 +123,7 @@ internal sealed class SessionExecutor
         _createRequestId = createRequestId ?? (() => Guid.NewGuid().ToString("N"));
         _isCurrentRecord = isCurrentRecord ?? (_ => true);
         _clock = clock ?? TimeProvider.System;
+        _createInvocationLifetime = createInvocationLifetime ?? WindowsInvocationJob.Create;
     }
 
     internal SessionWorkspaceOperation CreateWorkspaceOperation(SessionRecord record) =>
@@ -184,6 +187,8 @@ internal sealed class SessionExecutor
         string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
 
         SessionLaunchRequest launchRequest = CreateLaunchRequest(requestId, request);
+        using IInvocationLifetime job = CreateInvocationLifetime(record);
+        CancellationTokenRegistration cancellation = cancellationToken.Register(job.RequestStop);
 
         try
         {
@@ -192,13 +197,17 @@ internal sealed class SessionExecutor
                 SessionLaunchProtocol.SerializeRequest(launchRequest),
                 cancellationToken).ConfigureAwait(false);
 
-            string commandLine = BuildGuestCommandLine(request.HelperPath, requestPath);
+            string commandLine = BuildGuestCommandLine(request.HelperPath, requestPath, job.Mode);
             _log(startingMessage);
 
             int executorExitCode = await _backend.ExecuteAttachedAsync(
                 record.ToSandboxIdOrThrow(),
-                new MxcExecutionRequest(commandLine),
-                null,
+                new MxcExecutionRequest(commandLine)
+                {
+                    ProcessCreated = () => ConfirmInvocation(job.MarkDispatched),
+                    ForegroundExited = () => ConfirmInvocation(job.ForegroundExited),
+                    CancelInvocation = job.RequestStop
+                },
                 cancellationToken).ConfigureAwait(false);
 
             operation.EnsureCurrent();
@@ -212,6 +221,9 @@ internal sealed class SessionExecutor
         }
         finally
         {
+            // Join the callback before confirming cleanup and releasing its files.
+            await cancellation.DisposeAsync().ConfigureAwait(false);
+            ConfirmInvocation(job.Stop);
             // Only this invocation's files are removed. Concurrent invocations
             // own differently named requests in the same shared workspace.
             operation.Delete(requestPath);
@@ -241,6 +253,8 @@ internal sealed class SessionExecutor
         string requestPath = operation.FilePath("launch", requestId);
         string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
         SessionLaunchRequest launchRequest = CreateLaunchRequest(requestId, request);
+        using IInvocationLifetime job = CreateInvocationLifetime(record);
+        CancellationTokenRegistration cancellation = cancellationToken.Register(job.RequestStop);
 
         try
         {
@@ -252,17 +266,54 @@ internal sealed class SessionExecutor
             _log(startingMessage);
             MxcExecutionResult execution = await ExecuteTimedAsync(
                 record.ToSandboxIdOrThrow(),
-                BuildGuestCommandLine(request.HelperPath, requestPath),
+                BuildGuestCommandLine(request.HelperPath, requestPath, job.Mode),
                 subject,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                () => ConfirmInvocation(job.MarkDispatched),
+                () => ConfirmInvocation(job.ForegroundExited),
+                job.RequestStop).ConfigureAwait(false);
 
             operation.EnsureCurrent();
             return ReadCapturedOutcome(operation, resultPath, execution, requestId, subject);
         }
         finally
         {
+            await cancellation.DisposeAsync().ConfigureAwait(false);
+            ConfirmInvocation(job.Stop);
             operation.Delete(requestPath);
             operation.Delete(resultPath);
+        }
+    }
+
+    private IInvocationLifetime CreateInvocationLifetime(SessionRecord record)
+    {
+        string sid = record.AgentUserSid
+            ?? throw new SessionException("The recorded session has no agent SID.");
+        try
+        {
+            return _createInvocationLifetime(sid);
+        }
+        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or
+            ArgumentException or InvalidOperationException or TimeoutException)
+        {
+            throw new SessionException(
+                $"Unable to prepare the isolated invocation lifetime: {DiagnosticFailure.Describe(exception)}",
+                exception);
+        }
+    }
+
+    private static void ConfirmInvocation(Action operation)
+    {
+        try
+        {
+            operation();
+        }
+        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or
+            InvalidOperationException or TimeoutException)
+        {
+            throw new SessionException(
+                $"The isolated invocation could not confirm process exit: {DiagnosticFailure.Describe(exception)}",
+                exception);
         }
     }
 
@@ -297,7 +348,10 @@ internal sealed class SessionExecutor
         MxcSandboxId sandboxId,
         string commandLine,
         string subject,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action? processCreated = null,
+        Action? foregroundExited = null,
+        Action? cancelInvocation = null)
     {
         long started = _clock.GetTimestamp();
         MxcExecutionResult execution;
@@ -305,8 +359,12 @@ internal sealed class SessionExecutor
         {
             execution = await _backend.ExecuteAsync(
                 sandboxId,
-                new MxcExecutionRequest(commandLine),
-                null,
+                new MxcExecutionRequest(commandLine)
+                {
+                    ProcessCreated = processCreated,
+                    ForegroundExited = foregroundExited,
+                    CancelInvocation = cancelInvocation
+                },
                 cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception)
@@ -770,13 +828,11 @@ internal sealed class SessionExecutor
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The pinned runtime dispatches this string through <c>cmd.exe /c</c>.
-    /// When that string contains more than two quote characters, the command
-    /// processor strips the first and the last one and keeps the rest, so a
-    /// naturally quoted <c>"exe" --request "path"</c> arrives with its
-    /// executable path unquoted and fails at the first space. An outer pair is
-    /// therefore added deliberately: it is the pair that gets sacrificed, and
-    /// the inner quoting survives intact.
+    /// The SDK's pipe path uses <c>cmd.exe /c</c>, while its PTY path appends
+    /// this command after a startup gate. An explicit inner
+    /// <c>cmd.exe /d /s /c</c> consumes the outer quote pair in both cases,
+    /// preserving the helper and request paths without relying on their
+    /// position in the SDK's command line.
     /// </para>
     /// <para>
     /// Both values are paths this package controls, but they are still verified
@@ -791,7 +847,7 @@ internal sealed class SessionExecutor
     {
         Verify(helperPath, nameof(helperPath));
         Verify(requestPath, nameof(requestPath));
-        return $"\"\"{helperPath}\" {option} \"{requestPath}\"\"";
+        return $"cmd.exe /d /s /c \"\"{helperPath}\" {option} \"{requestPath}\"\"";
 
         static void Verify(string value, string name)
         {

@@ -44,11 +44,13 @@ payload rollback. The payload uses that older version, while package and release
 identity continue from the unmodified policy pin or npm latest so the MSIX remains
 an upgrade. Both verified sources are captured and replayed with the immutable
 snapshot; the input does not change release policy and must be older than the
-release-identity source. In Store or official mode, an accompanying full-SHA
+release-identity source. In test, Store, or official mode, an accompanying full-SHA
 `openclaw_ref` remains a commit assertion for that version-selected payload;
 branches and tags cannot be combined with `gateway_version`.
 The workflow also accepts `signing_mode`, whose choices are `unsigned`, `test`,
-`store`, and `official`. Select `store` to authorize and retain an unsigned Partner Center
+`store`, and `official`. Select `test` for a credential-free release-candidate
+preflight, including the installed-upgrade matrix, from any branch. Select `store`
+to authorize and retain an unsigned Partner Center
 submission bundle without signing. Select `official` to retain that Store
 bundle and sign the separate sideload-identity packages for GitHub Releases.
 Following stable does not automatically publish: both modes still require a
@@ -83,12 +85,11 @@ Complete this checklist before dispatch. Merge any needed policy changes to
 4. Review the release-facing pull request titles. The published release notes
    are generated from merged pull request titles; `CONTRIBUTING.md` owns the
    required title format.
-5. Confirm every relevant versioning or source-selection pull request's
-   `test-msix-upgrades` matrix job succeeded
-   and retained its identity-transition or in-place-upgrade evidence. The
-   matrix runs only on pull requests that change versioning inputs or
-   source-selection scripts; it does not run during the later official
-   dispatch.
+5. Confirm relevant packaging changes have passed their pull request checks.
+   A new upstream stable release needs no version-bump or validation-only pull
+   request: the release dispatch runs `test-msix-upgrades` against its own
+   source selection before authorization. Older pull request evidence does not
+   replace that gate.
 6. Do not reuse or alter an accepted GitHub release tag. Update the latest
    production entries in `scripts\msix-upgrade-baselines.json` only in a
    reviewed policy pull request, using the verified digest of an immutable
@@ -99,18 +100,37 @@ those inputs. A `store` or `official` run deliberately bypasses both the upstrea
 cache and the architecture-specific Windows dependency-tree cache, so its
 payload is rebuilt and revalidated.
 
+For a preflight without release authorization or Azure credentials, dispatch
+`signing_mode=test` with the desired source inputs. It uses the derived release
+version and the same installed-upgrade matrix, then retains temporary test-signed
+packages. A later `store` or `official` dispatch repeats that proof against its
+own immutable source snapshot. `unsigned` dispatches and push builds keep
+development versions and skip installed-upgrade validation.
+
 ## Watch the release workflow
 
-The workflow first builds the validated upstream package, then builds the
+The workflow first captures one immutable source snapshot in `source-preflight`.
+It selects exactly one caller: `build-trusted` for main/stable with cache-write
+access, or `build-read-only` for overrides, non-main, and pull requests.
+Both call `.github\workflows\gateway-msix-build.yml`, which inherits the
+caller's service-enforced cache cap without requesting a stronger mode.
+No signing secrets or OIDC capability enter upstream execution.
+The `build` job normalizes outputs and rejects missing, failed, cancelled,
+double, or wrong-route builds, and source identity mismatches.
+Documentation-only pull requests intentionally skip both callers.
+
+The shared workflow builds the validated upstream package, then builds the
 expanded payload and unsigned MSIX separately for both x64 and ARM64. It
 creates Store-identity and sideload-identity packages for each architecture and
 composes a multi-architecture bundle for each channel with
 `scripts\Build-MSIXBundle.ps1`. Both channels use the same validated payload
 and derived package version.
 
-Before publication or Azure credentials, `authorize-signing` runs
+After every `test-msix-upgrades` scenario succeeds, and before publication or
+Azure credentials, `authorize-signing` runs
 `scripts\Test-SigningInputs.ps1`. It restores the same run's source snapshot
-and validates its workflow run ID, packaging commit, and signing mode without
+and validates its workflow run ID, packaging commit, signing mode, workflow
+ref, Git ref, and event without
 resolving latest again. That recorded source supplies the expected upstream
 commit, payload version, and derived release identity. The check validates
 policy-controlled publishers and every Store and sideload package and bundle
@@ -123,12 +143,16 @@ and bundle artifacts; the Store bundle remains unsigned for Partner Center.
 
 Observe these workflow outcomes:
 
+- Exactly one build caller and the normalized `build` job succeed.
 - `build-msix` succeeds for **both** x64 and ARM64.
-- `test-host` and `build-msix-bundle` succeed before `authorize-signing`.
+- `test-host`, `build-msix-bundle`, and all 13 `test-msix-upgrades` scenarios
+  succeed before `authorize-signing`. Missing or skipped required upgrade
+  proof fails the final `Gateway MSIX CI` gate.
 - `authorize-signing` succeeds before Azure login and signing begins.
 - `sign-msix` verifies signatures and refreshes package metadata.
 
-The pull request's upgrade matrix uses
+The upgrade matrix runs for versioning/source-selection pull requests and
+manual `test`, `store`, and `official` dispatches. It uses
 `scripts\Test-MSIXUpgrade.ps1` with the immutable, hash-pinned release fixtures in
 `scripts\msix-upgrade-baselines.json`. It requires an isolated clean Windows
 account per scenario and refuses to run when an OpenClaw Gateway package is
@@ -167,14 +191,14 @@ bundle plus signed x64 and ARM64 standalone MSIX assets.
 
 After publication, verify the release has the derived permanent tag, generated
 notes, three signed sideload assets, and valid signatures. Separately verify
-the run retained its unsigned Store submission bundle. Reconcile the release with the successful
-identity-transition and in-place-upgrade evidence from the relevant pull request.
-That evidence applies to the source it tested; when stable has advanced, record
-the validation gap and obtain current-source upgrade proof before release. Verify the bundle and both
+the run retained its unsigned Store submission bundle and all successful
+identity-transition and in-place-upgrade evidence from that same release run.
+The proof and packages share the run's captured upstream source and derived
+release identity. Verify the bundle and both
 standalone packages are present; the bundle is the multi-architecture delivery,
 while the standalone packages support explicit architecture deployment. Keep
-both the release workflow run and the relevant pull request's evidence available
-as the release record.
+the release workflow run, its immutable source snapshot, and its upgrade
+evidence available as the release record.
 
 ## Failure and rollback boundaries
 
@@ -189,3 +213,42 @@ remove it and reset `msixRevision` to `0` before publishing a new Gateway tag. A
 signing-authorization or upgrade-validation
 failure is a stop condition: correct the reviewed inputs or packaging defect,
 then dispatch a new compliant run rather than publishing partial artifacts.
+
+## Cache-boundary cutover
+
+Versioning PRs exercise the cache service in the PR's own ref: a write-scoped
+job persists synthetic bytes, a read-scoped job restores them and attempts a
+save with a forged client mode, and the reusable build job directly requests
+write authority with its inherited read token. Every read-only reusable build
+runs this direct probe, including manual source overrides from main. The request
+must receive a service policy denial; an unrelated network failure is not passing proof.
+These checks do not establish main's cold/warm cutover or fresh CodeQL results.
+Official/store bypass the explicit package and payload caches, but
+setup-dotnet and nested upstream actions may still use caches under the caller
+cap. Unsigned/test arbitrary-source dispatches remain read-only even on main.
+The `cache_write` input merely avoids explicit save attempts; it is not the
+authorization boundary and cannot grant writes to a read-capped caller.
+
+Package and payload keys use format 2 to exclude their pre-boundary entries.
+Implicit NuGet, upstream, and CodeQL caches still need the coordinated reset.
+Before trusting main caches under the hardened workflow, coordinate an
+authorized activation window: let legacy writers finish, prevent racing
+legacy restores/writes, re-enumerate main-scoped cache IDs, and invalidate only
+the approved IDs (including CodeQL caches). Do not release against legacy
+cache contents during this transition. A cold build costs a full rebuild;
+then verify a warm trusted build reuses caches and an arbitrary-source run
+cannot save, including attempts from upstream subprocesses with altered
+environment. Verify GitHub accepts the workflow keys and propagates the
+caller cap to reusable jobs, including implicit NuGet and upstream caches.
+If it rejects the configuration or enforcement cannot be shown, stop; an
+environment flag or a different cache key is not a substitute boundary.
+
+Run fresh changed-revision CodeQL analysis before deciding alert outcomes.
+Cache alerts remain open unless the fresh scan closes them or separately
+authorized disposition is backed by actual platform denial evidence.
+Cache deletion, dispatch, alert disposition, signing, and publication are
+separate authorized operations, not part of local implementation validation.
+
+## Automated Store submission
+
+See [Microsoft Store submission](microsoft-store.md) for protected OIDC setup, manual submission from an existing release run, automatic activation, and recovery. Automatic submission remains off until the repository variable `MSSTORE_ENABLED` is `true`; the existing release and artifact handoffs are unchanged.

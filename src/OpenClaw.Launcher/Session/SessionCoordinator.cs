@@ -44,6 +44,28 @@ internal sealed class SessionCapabilityUnavailableException : SessionException
 }
 
 /// <summary>
+/// Windows refused the isolated session because this process does not run
+/// under an interactive logon. The user can act on it, so it is reported as
+/// an expected refusal rather than a defect.
+/// </summary>
+internal sealed class InteractiveLogonRequiredException : SessionException
+{
+    public InteractiveLogonRequiredException()
+    {
+    }
+
+    public InteractiveLogonRequiredException(string message)
+        : base(message)
+    {
+    }
+
+    public InteractiveLogonRequiredException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+/// <summary>
 /// The recorded session exists but cannot be used, and replacing it silently
 /// would risk abandoning a live backend session.
 /// </summary>
@@ -348,7 +370,7 @@ internal sealed class SessionCoordinator
                 $"{DiagnosticFailure.Describe(exception)}. Deprovisioning this attempt.");
             try
             {
-                await _backend.DeprovisionAsync(provisioned.SandboxId, null, CancellationToken.None)
+                await _backend.DeprovisionAsync(provisioned.SandboxId, CancellationToken.None)
                     .ConfigureAwait(false);
             }
             catch (MxcException cleanup)
@@ -412,7 +434,7 @@ internal sealed class SessionCoordinator
         }
 
         await _backend
-            .StopAsync(record.ToSandboxIdOrThrow(), null, cancellationToken)
+            .StopAsync(record.ToSandboxIdOrThrow(), cancellationToken)
             .ConfigureAwait(false);
         _log("Stopped the OpenClaw session; its profile and data are retained.");
         return true;
@@ -447,7 +469,7 @@ internal sealed class SessionCoordinator
         string? stopFailure = null;
         try
         {
-            await _backend.StopAsync(sandboxId, null, cancellationToken)
+            await _backend.StopAsync(sandboxId, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (MxcException exception)
@@ -462,7 +484,7 @@ internal sealed class SessionCoordinator
                 DiagnosticFailure.Describe(exception));
         }
 
-        await _backend.DeprovisionAsync(sandboxId, null, cancellationToken)
+        await _backend.DeprovisionAsync(sandboxId, cancellationToken)
             .ConfigureAwait(false);
         _store.Clear();
         _log("Removed the OpenClaw session and its guest profile.");
@@ -493,7 +515,7 @@ internal sealed class SessionCoordinator
         // the backend offers no way to ask whether a session is running, so the
         // only way to guarantee a usable session is to start it.
         await _backend
-            .StartAsync(record.ToSandboxIdOrThrow(), null, cancellationToken)
+            .StartAsync(record.ToSandboxIdOrThrow(), cancellationToken)
             .ConfigureAwait(false);
     }
 

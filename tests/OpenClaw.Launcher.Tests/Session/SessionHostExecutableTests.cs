@@ -43,7 +43,15 @@ public sealed class SessionHostExecutableTests : IDisposable
         return path;
     }
 
-    private static int RunHelper(
+    private string StateDirectory => Path.Combine(_testDirectory, "state-transfer");
+
+    // Windows resolves the profile's local application data from the registry,
+    // so the helper's state gate is redirected through its own override instead
+    // of writing lock files into the developer's real profile.
+    private void IsolateState(ProcessStartInfo startInfo) =>
+        startInfo.Environment["OPENCLAW_SESSION_STATE_DIRECTORY"] = StateDirectory;
+
+    private int RunHelper(
         string requestPath,
         string workingDirectory,
         string mode = "--request")
@@ -55,6 +63,7 @@ public sealed class SessionHostExecutableTests : IDisposable
             RedirectStandardError = true,
             WorkingDirectory = workingDirectory
         };
+        IsolateState(startInfo);
         startInfo.ArgumentList.Add(mode);
         startInfo.ArgumentList.Add(requestPath);
 
@@ -69,6 +78,84 @@ public sealed class SessionHostExecutableTests : IDisposable
     private static SessionLaunchResult ReadResult(string requestPath) =>
         SessionLaunchProtocol.ReadResult(
             File.ReadAllText(SessionLaunchProtocol.ResultPathFor(requestPath)));
+
+    [Fact]
+    public async Task AttachedHelperInitializesUtf8BeforeStartingTheChild()
+    {
+        string requestPath = Path.Combine(_testDirectory, "utf8 request.json");
+        File.WriteAllText(
+            requestPath,
+            SessionLaunchProtocol.SerializeRequest(new SessionLaunchRequest
+            {
+                RequestId = "utf8",
+                Executable = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.System),
+                    "WindowsPowerShell", "v1.0", "powershell.exe"),
+                Arguments =
+                [
+                    "-NoProfile", "-NonInteractive", "-Command",
+                    "[Console]::WriteLine([string][char]0x00e9 + [char]0x4e2d)"
+                ],
+                WorkingDirectory = _testDirectory
+            }));
+        string bootstrapPath = Path.Combine(_testDirectory, "private-console.ps1");
+        File.WriteAllText(bootstrapPath, """
+            param([string]$Helper, [string]$Request)
+            $ErrorActionPreference = 'Stop'
+            Add-Type @'
+            using System.Runtime.InteropServices;
+            public static class FixtureConsole {
+                [DllImport("kernel32.dll")] public static extern uint GetConsoleCP();
+                [DllImport("kernel32.dll")] public static extern bool FreeConsole();
+                [DllImport("kernel32.dll")] public static extern bool AllocConsole();
+                [DllImport("kernel32.dll")] public static extern bool SetConsoleCP(uint page);
+                [DllImport("kernel32.dll")] public static extern bool SetConsoleOutputCP(uint page);
+            }
+            '@
+            if ([FixtureConsole]::GetConsoleCP() -ne 0) {
+                if (-not [FixtureConsole]::FreeConsole()) { throw 'Detaching the fixture console failed.' }
+            }
+            if (-not [FixtureConsole]::AllocConsole()) { throw 'Allocating a private fixture console failed.' }
+            if (-not [FixtureConsole]::SetConsoleCP(437) -or
+                -not [FixtureConsole]::SetConsoleOutputCP(437)) {
+                throw 'Selecting the fixture code page failed.'
+            }
+            $start = [Diagnostics.ProcessStartInfo]::new($Helper)
+            $start.UseShellExecute = $false
+            $start.RedirectStandardOutput = $true
+            $start.RedirectStandardError = $true
+            $start.ArgumentList.Add('--request')
+            $start.ArgumentList.Add($Request)
+            $child = [Diagnostics.Process]::Start($start)
+            try {
+                $child.StandardOutput.BaseStream.CopyTo([Console]::OpenStandardOutput())
+                $child.StandardError.BaseStream.CopyTo([Console]::OpenStandardError())
+                $child.WaitForExit()
+                $code = $child.ExitCode
+            }
+            finally { $child.Dispose() }
+            exit $code
+            """);
+        using Process process = Process.Start(new ProcessStartInfo
+        {
+            FileName = "pwsh.exe",
+            ArgumentList = { "-NoProfile", "-NonInteractive", "-File", bootstrapPath, HelperPath, requestPath },
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = System.Text.Encoding.UTF8
+        }) ?? throw new InvalidOperationException("Starting the private-console fixture failed.");
+        Task<string> output = process.StandardOutput.ReadToEndAsync();
+        Task<string> error = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync().ConfigureAwait(true);
+
+        string stdout = await output.ConfigureAwait(true);
+        string stderr = await error.ConfigureAwait(true);
+        Assert.True(process.ExitCode == 0, $"Private-console fixture failed ({process.ExitCode}): {stderr}");
+        Assert.Empty(stderr);
+        Assert.Equal("\u00e9\u4e2d", stdout.Trim());
+        Assert.True(ReadResult(requestPath).Launched);
+    }
 
     [Fact]
     public void ThePublishedHelperDispatchesConfigReadinessWithoutStartingAChild()
@@ -111,6 +198,10 @@ public sealed class SessionHostExecutableTests : IDisposable
         int exitCode = RunHelper(outerRequestPath, AppContext.BaseDirectory);
 
         Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode, exitCode);
+
+        // The launch went through the state gate, and only through the
+        // fixture's redirected directory.
+        Assert.True(File.Exists(Path.Combine(StateDirectory, "access.lock")));
 
         SessionLaunchResult outer = ReadResult(outerRequestPath);
         Assert.Equal("outer", outer.RequestId);
@@ -201,6 +292,7 @@ public sealed class SessionHostExecutableTests : IDisposable
             RedirectStandardError = true,
             WorkingDirectory = AppContext.BaseDirectory
         };
+        IsolateState(startInfo);
         startInfo.ArgumentList.Add("--request");
         startInfo.ArgumentList.Add(requestPath);
 

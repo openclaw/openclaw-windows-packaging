@@ -33,6 +33,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Mxc.Sdk" GeneratePathProperty="true" />
     <PackageReference Include="Spectre.Console" />
     <PackageReference Include="System.CommandLine" />
   </ItemGroup>
@@ -87,6 +88,7 @@
   <Target Name="GenerateClawCtlBuildMetadata" BeforeTargets="BeforeCompile">
     <PropertyGroup>
       <_BuildMetadataFile>$(IntermediateOutputPath)ClawCtlBuildMetadata.g.cs</_BuildMetadataFile>
+      <_MxcSdkPackageVersion>@(PackageVersion->WithMetadataValue('Identity', 'Microsoft.Mxc.Sdk')->'%(Version)')</_MxcSdkPackageVersion>
     </PropertyGroup>
     <ItemGroup>
       <_BuildMetadataLine Include="// &lt;auto-generated /&gt;" />
@@ -97,6 +99,7 @@
       <_BuildMetadataLine Include="    public const string PackageCommit = &quot;$(ClawCtlPackageCommit)&quot;%3B" />
       <_BuildMetadataLine Include="    public const string PayloadVersion = &quot;$(ClawCtlPayloadVersion)&quot;%3B" />
       <_BuildMetadataLine Include="    public const string PayloadCommit = &quot;$(ClawCtlPayloadCommit)&quot;%3B" />
+      <_BuildMetadataLine Include="    public const string MxcSdkPackageVersion = &quot;$(_MxcSdkPackageVersion)&quot;%3B" />
       <_BuildMetadataLine Include="}" />
     </ItemGroup>
     <MakeDir Directories="$(IntermediateOutputPath)" />
@@ -168,8 +171,8 @@
              Condition="'$(NodeRuntimeArchiveFileName)' != ''"
              Link="runtime\%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="$(MxcRuntimeContentDirectory)**\*"
-             Link="mxc\$(MxcRuntimeArchitecture)\%(RecursiveDir)%(Filename)%(Extension)"
+    <Content Include="$(MxcRuntimeContentDirectory)mxc-runtime.json;$(MxcRuntimeContentDirectory)mxc-LICENSE.md"
+             Link="%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" />
     <Content Include="$(SessionHostContentDirectory)**\*"
              Exclude="$(SessionHostContentDirectory)**\*.pdb;$(SessionHostContentDirectory)**\*.xml"
@@ -187,11 +190,11 @@
     <Error Condition="'$(NodeRuntimeArchiveFileName)' == '' Or !Exists('$(MSBuildThisFileDirectory)..\..\content\openclaw\runtime\$(NodeRuntimeArchiveFileName)')"
            Text="Missing architecture-specific bundled Node.js archive." />
     <Error Condition="'$(MxcRuntimeArchitecture)' == ''"
-           Text="Packaging requires RuntimeIdentifier win-x64 or win-arm64 to select the MXC runtime." />
-    <Error Condition="!Exists('$(MxcRuntimeContentDirectory)wxc-exec.exe')"
-           Text="Missing the staged MXC runtime. Run scripts\Get-MxcRuntime.ps1 -Architecture $(MxcRuntimeArchitecture)." />
+           Text="Packaging requires RuntimeIdentifier win-x64 or win-arm64 to select the session host." />
     <Error Condition="!Exists('$(MxcRuntimeContentDirectory)mxc-runtime.json')"
-           Text="Missing MXC runtime provenance. Run scripts\Get-MxcRuntime.ps1 -Architecture $(MxcRuntimeArchitecture)." />
+           Text="Missing SDK package metadata. Run scripts\Get-MxcSdkMetadata.ps1 -Architecture $(MxcRuntimeArchitecture) -IncludePackagingContent -OutputDirectory $(MxcRuntimeContentDirectory)." />
+    <Error Condition="!Exists('$(MxcRuntimeContentDirectory)mxc-LICENSE.md')"
+           Text="Missing the MXC SDK redistribution license." />
     <Error Condition="!Exists('$(SessionHostContentDirectory)openclaw-session-host.exe')"
            Text="Missing the published isolated-session guest helper. scripts\Build-MSIX.ps1 stages it for $(MxcRuntimeArchitecture)." />
   </Target>

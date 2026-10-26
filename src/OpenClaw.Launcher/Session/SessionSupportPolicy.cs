@@ -59,6 +59,11 @@ internal static class SessionSupportPolicy
 
         if (readiness.BackendProbe is { IsolationSessionAvailable: false })
         {
+            if (readiness.InteractiveLogon == false)
+            {
+                throw NonInteractiveLogon();
+            }
+
             throw Unsupported(
                 "This machine's isolated-session backend reported that it is " +
                 "not available.");
@@ -75,6 +80,26 @@ internal static class SessionSupportPolicy
                     : $"{detail} The backend probe failed: " +
                       readiness.BackendProbeFailureReason);
         }
+    }
+
+    /// <summary>
+    /// The refusal for a process without an interactive Windows logon, which
+    /// Windows does not let activate an isolated session (see
+    /// <see cref="WindowsLogon"/>). It replaces both the "newer Windows"
+    /// verdict the SDK probe implies and the raw access-denied activation error.
+    /// </summary>
+    public static InteractiveLogonRequiredException NonInteractiveLogon(Exception? innerException = null)
+    {
+        const string message =
+            "Windows only starts isolated agent sessions for an interactive " +
+            "sign-in, and this process runs under a non-interactive logon (for " +
+            "example SSH, PowerShell remoting, a service, or a scheduled task " +
+            "set to run whether the user is signed in or not). Run the command " +
+            "from a terminal in your Windows desktop session; an elevated " +
+            "terminal there works too.";
+        return innerException is null
+            ? new InteractiveLogonRequiredException(message)
+            : new InteractiveLogonRequiredException(message, innerException);
     }
 
     private static SessionException Unsupported(string reason) =>

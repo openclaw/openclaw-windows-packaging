@@ -45,13 +45,13 @@ runtime:
 ```
 
 `-Architecture` defaults to the device's native architecture; pass the same
-value to `-Unregister`. An x64 layout registers on an ARM64 device, but its
-`clawctl setup` fails there because the x64 MXC executor exits with
-`0xC000007B`.
+value to `-Unregister`. Prefer the device's native architecture; x64
+emulation on ARM64 needs separate SDK/backend qualification.
 
-The script resolves a payload, stages MXC and the bundled Node.js runtime,
+The script resolves a payload and the bundled Node.js runtime,
 publishes both the NativeAOT `openclaw.exe` launcher and the NativeAOT session
-host, assembles the layout, registers it with `Add-AppxPackage -Register`, and
+host, copies normal publish assets and the SDK redistribution notice, assembles the layout,
+registers it with `Add-AppxPackage -Register`, and
 runs setup through that identity's control application. The patch registers
 beside the base package as `openclaw-pwsh-exec` and `clawctl-pwsh-exec`, so
 iteration never replaces the base `openclaw` and `clawctl` or their app data.
@@ -79,7 +79,7 @@ Use options for a concrete reason:
 | `-RefreshPayload` | A cached payload must be downloaded again; the previous payload remains available until the replacement registers successfully. |
 | `-Force` | You intentionally need to re-register although the recorded inputs have not changed. |
 | `-SkipSetup` | You only need the registration and intentionally want to defer setup. If setup state is absent, the next `openclaw` invocation performs setup automatically unless `CLAWCTL_AUTO_SETUP` suppresses it; run `clawctl setup` when you want to provision or recover explicitly. |
-| `-ReplaceExistingInstall` | You explicitly accept removal of an installed MSIX or a registration owned by another checkout. This is destructive because app data cannot survive the loose/installed transition. |
+| `-ReplaceExistingInstall` | You explicitly accept removal of an installed MSIX, another checkout's registration, or an owned development registration needing destructive repair. Removal can delete the isolated profile; packaged app data also cannot survive a loose/installed transition. |
 | `-Patch <name>` | You are iterating on a change; this is the recommended default. Name it for the work so its commands, app data, and isolated session stay separate from the base package. See [side-by-side patched identities](#side-by-side-patched-identities). |
 
 The command is idempotent, not timestamp-driven. `LocalPackage.psm1` records
@@ -88,12 +88,13 @@ two content-hash fingerprints:
 - The build-input fingerprint covers the launcher, session-host, and protocol
   project files other than `bin` and `obj`, `Directory.Build.props`,
   `Directory.Packages.props`, `global.json`, the checkout commit, the payload
-  identity, and the manifest, images, Node.js scripts, and staged MXC runtime.
+  identity, the manifest, images, and Node.js scripts.
   The package version is compiled into the launcher, so this fingerprint picks
   the version before publishing: a changed deployment publishes the NativeAOT
   launcher once, with the version it registers.
 - The output fingerprint, which includes the SHA-256 hashes of the published
-  launcher and session host, alone decides that the package is current. A
+  launcher and session host, decides that the package is current. SDK runtime
+  assets are opaque publish output, not a separate inspected inventory. A
   publish can refresh timestamps without changing code, so timestamps would
   spuriously redeploy the layout. When the build inputs match but the binaries
   changed anyway, for example after an SDK update, the command rebuilds the
@@ -102,6 +103,15 @@ two content-hash fingerprints:
 With both fingerprints unchanged, the command reports that the package is
 current. Any change to a covered input redeploys with a new version, even an
 edit, such as a comment, that leaves the binaries unchanged.
+
+Ordinary redeployment updates the owned development registration in place,
+including `-Force`; it does not unregister first. Windows can delete the
+MXC-owned agent account and profile during package removal even when
+`-PreserveApplicationData` is used. That flag protects neither the isolated
+profile nor its workspaces. If damaged registration cannot be repaired in
+place, retain a verified backup before explicitly authorizing removal with
+`-ReplaceExistingInstall`; never treat that operation as a state-preserving
+update.
 
 **Never delete `artifacts\local-package` or the checkout while it is
 registered.** The Developer Mode package reads those live files, so either
@@ -198,9 +208,10 @@ clawctl-pwsh-exec teardown --force
 
 Teardown removes the patch's isolated session, its data, any gateway logon
 task, and its setup state. `-Unregister -Patch pwsh-exec` then removes only
-that registration and preserves its app data. If you unregister first, the
-isolated session stays behind; redeploy the same patch to reach it again, then
-tear it down. `-Unregister` without `-Patch` never removes patched
+that registration and requests packaged app-data preservation. Unregistering
+first can delete the isolated agent profile or leave incomplete lifecycle
+resources; do not rely on it to keep the session or data recoverable.
+`-Unregister` without `-Patch` never removes patched
 registrations. To find patches you have not removed, run
 `Get-AppxPackage -Name 'OpenClawFoundation.OpenClawGateway-*'`.
 
@@ -451,6 +462,13 @@ For ordinary managed-code changes, use the contributor quality and test lanes:
 dotnet test .\OpenClaw.Gateway.MSIX.slnx --configuration Release --no-restore
 ```
 
+The branch-local invocation-job prototype's `InvocationCancellationTests`
+exercise real helper/process trees only in temporary fixtures, including
+retained job handles, cancellation, deadlines, and sibling survival.
+They never provision an isolated account. The separately callable disposable
+MXC probe is not part of this lane; running it requires explicit authorization
+and exact-ID cleanup with independent account/profile/workspace verification.
+
 For CodeQL configuration changes, use the
 [CodeQL analysis suite](../CONTRIBUTING.md#codeql-analysis). It requires a CodeQL
 bundle and checks actual source selection; managed and NativeAOT tests do not
@@ -466,9 +484,22 @@ Run PowerShell policy suites by owning surface rather than indiscriminately:
 `Build-Payload.ps1` and `Build-MSIX.ps1`,
 `Test-MSIXReleaseIdentity.Tests.ps1` and
 `Test-WorkflowPackageVersion.Tests.ps1` for release/version identity,
+`Test-OpenClawSource.Tests.ps1` and
+`Test-WorkflowSigningConfiguration.ps1` for source capture, retry context,
+cache routing, and selected-build outcomes,
+`Test-MSIXUpgradeMatrix.Tests.ps1` for parallel upgrade scenario selection,
 `Test-Deploy-LocalPackage.Tests.ps1` for the loose-registration flow, and
 `Test-Sign-TestMSIX.Tests.ps1` for test signing. The Node input suite requires
 Node.js and npm; it uses a dependency-free local fixture.
+
+Cache-boundary checks are offline contracts, not platform proof. The workflow
+grants writes only to main/stable builds; arbitrary-ref unsigned/test dispatch
+remains supported with read-only caches, including when dispatched from main.
+The reusable workflow inherits that cap for explicit, NuGet, and upstream
+caches. Do not deploy or run the installed upgrade harness on a contributor
+account to validate this change. Cache reset, actual denied writes, cold/warm
+builds, and fresh CodeQL analysis remain separately authorized CI lanes; see
+[cache-boundary cutover](release-process.md#cache-boundary-cutover).
 
 The CI host-test job retains Release TRX results and available Debug Cobertura
 coverage data, TRX, and a readable summary in the `gateway-msix-test-results`
@@ -480,12 +511,60 @@ even when tests fail; an artifact-service failure also reports a warning
 without changing the Release test gate, but may leave no artifact. Inspect
 the failed upload step logs in that case.
 
+For state-transfer changes, the focused file/protocol/Node-adapter scenarios
+use fixture-owned old and current profiles; they never modify real agent data:
+
+```powershell
+dotnet test .\tests\OpenClaw.Launcher.Tests\OpenClaw.Launcher.Tests.csproj `
+  --configuration Release --no-restore `
+  --filter "FullyQualifiedName~StateArchive|FullyQualifiedName~StateTransfer"
+node --test .\plugins\gateway-isolation\index.test.js
+```
+
+Shared state-gate, command-tree, status, process-lifetime, or protocol changes
+also require the full Release suite and NativeAOT lane. The focused SQLite
+scenario creates a real committed WAL row, proves it is absent from a
+main-database-only copy, normalizes the private snapshot through its fixture
+boundary, and verifies the restored row and unchanged source digest. Worker
+and process-tree scenarios use kernel leases and explicit pipe synchronization,
+not sleeps or PID-based liveness guesses. SDK and archive fixture results
+prove adapter behavior and transport, not that a particular bundled upstream
+revision produces a canonical SQLite recovery archive.
+
+Private-retention scenarios inspect the actual Windows DACL before the first
+archive byte is read, verify published and automatic-protection access under a
+broadly readable fixture parent, and refuse denied creation without another
+destination. They also exercise private exchange/scratch and normalization
+paths through recovery. Permission fixtures modify only test-owned directories.
+
+Qualify canonical SQLite snapshots, source preservation, path rebasing,
+protection replay, and interrupted activation against the selected bundled
+application using synthetic profiles and injected transport/gateway boundaries.
+Use short, test-owned profile roots comparable to real agent profiles.
+OpenClaw `2026.9.9` archive publication can fail on long Windows output paths
+when its `.openclaw-backup-publish-*` temporary directory extends the path.
+Retain that refusal in the qualification evidence; extended-length launcher
+file access does not establish upstream long-path support.
+
+Real old/new-account ACL and installed-package proof belongs in an explicitly
+authorized disposable Windows account/VM. Do not deploy a patch, recreate
+profiles, or stop real writers on the development user's machine to obtain
+that evidence.
+
 When changing command-line parsing, help, version output, startup, trimming, or
 NativeAOT-sensitive code, also run:
 
 ```powershell
 .\scripts\Test-NativeAotCli.Tests.ps1
 ```
+
+Use `-Architecture arm64` on a host that can execute ARM64 output. The driver
+also loads the actual SDK native unit and dry-runs typed provision and
+legacy-ID lifecycle requests; it never creates an isolated account.
+
+`-RuntimeImagePreflightOnly` selects native alias identity and fixture-owned
+corrupt-runtime repair without SDK discovery or backend calls. It proves that
+focused repair path under NativeAOT, not the full native gate.
 
 JIT build and xUnit results are insufficient: the test host cannot expose the
 native `argv[0]` alias/root-command behavior, and a successful publish does not

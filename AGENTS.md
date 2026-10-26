@@ -6,7 +6,7 @@ The task defines scope and authorization; its chosen workflow owns execution, re
 
 - **One owner per responsibility.** An owner makes a decision or changes authoritative state. Callers consume its operations and recorded facts; adapters translate contracts, and caches or projections derive from the owner with an explicit invalidation lifecycle.
 - **Thin Windows host, upstream OpenClaw.** This repository packages and launches the pinned upstream application; it does not reimplement OpenClaw commands, parse `openclaw` arguments, copy the application payload, or invent a second configuration owner.
-- **One release trust chain.** Upstream revision, Node.js version and archive, MXC runtime lock, application inventory, package identity, payload metadata, signing policy, and x64/ARM64 outputs are coordinated inputs. Change every producer, validator, consumer, test, and document together.
+- **One release trust chain.** Upstream revision, Node.js version and archive, NuGet SDK API dependency selection, application inventory, package identity, payload metadata, signing policy, and x64/ARM64 outputs are coordinated inputs. Change every producer, validator, consumer, test, and document together.
 - **Explicit isolation lifecycle.** `clawctl setup` provisions and records the isolated session. `openclaw` provisions only when the setup marker is absent, then starts that recorded session; every unreadable, incomplete, foreign, newer-schema, preparing, tearing-down, or otherwise degraded state remains an explicit `clawctl setup` or `clawctl teardown` recovery path. Do not add other implicit provisioning or direct execution outside the session.
 
 ## Working agreement
@@ -44,7 +44,8 @@ The task defines scope and authorization; its chosen workflow owns execution, re
 - `clawctl` human output uses the repository's Spectre.Console rendering contract; JSON output is a versioned machine contract. Keep success paths, errors, exit codes, `--no-color`, redirected output, and `FORCE_COLOR` behavior synchronized.
 - Diagnostics stay in packaged LocalState or the documented unpackaged fallback, serialize concurrent appends, redact included text, and exclude credential databases and auth profiles. New diagnostics must not become authorization inputs.
 - The gateway is scheduled, configured, and observed through its existing owners. Do not force upstream's default port or report the recorded default as an observed listening address.
-- MXC archives, Node archives, inventories, metadata, package paths, lengths, and hashes are release trust inputs. Preserve safe unique paths, allowlists, integrity verification, and both architectures.
+- The MXC PackageReference and SDK own their runtime assets and native loading. Do not add packaging-side native resolvers, binary file-set checks, or per-binary pins/inventories. Retain the SDK API/version metadata and required redistribution notice.
+- Node archives, application inventories, metadata, package paths, lengths, and hashes are release trust inputs. Preserve safe unique paths, allowlists, integrity verification, and both architectures.
 - PowerShell scripts fail fast and check `$LASTEXITCODE` after native tools. Do not accept command success as a substitute for validating produced metadata, identity, inventory, or hashes.
 - Comments explain non-obvious ownership, lifecycle, ordering, platform, integrity, or cleanup constraints, not syntax.
 
