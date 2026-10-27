@@ -128,7 +128,11 @@ the isolated agent identity cannot execute a binary directly from another
 package identity's WindowsApps directory. The shared workspace is visible to
 both identities. This is a required execution bridge, not a caching or startup
 optimization; staging verifies the packaged source and reports a staging
-failure rather than silently substituting another executable.
+failure rather than silently substituting another executable. Gateway start
+(including logon recovery) refreshes this versioned helper under the installation
+lifecycle lock before inspecting a retained Gateway process. It reuses the
+configured session without rewriting setup, identity, or profile data. Status
+only requires an already staged helper and never stages one.
 
 Before starting an attached child, the helper initializes its own console's
 input and output to UTF-8. Host-side encoding does not set the isolated

@@ -237,6 +237,7 @@ internal sealed partial class GatewayRuntime
             log,
             session.RequireSetup,
             session.LifecycleLock,
+            record => session.StageHelper(record),
             clock);
 
         // The gateway is a long-lived Node.js process that loads the same

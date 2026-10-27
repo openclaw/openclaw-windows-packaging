@@ -189,6 +189,7 @@ public sealed class GatewayControllerTests : IDisposable
             _log.Add,
             () => sessions.GetRecordedStatus().Record ?? throw new SessionException("Run setup."),
             lifecycleLock ?? new AlwaysFreeLock(),
+            _ => { },
             clock);
     }
 

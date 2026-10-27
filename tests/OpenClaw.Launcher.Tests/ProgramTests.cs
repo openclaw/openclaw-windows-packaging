@@ -2963,7 +2963,8 @@ public sealed class ProgramTests : IDisposable
                 "Teardown must never start the gateway."),
             log,
             runtime.RequireSetup,
-            runtime.LifecycleLock);
+            runtime.LifecycleLock,
+            record => runtime.StageHelper(record));
 
         return new TeardownOrchestrator(
             runtime.LifecycleLock,

@@ -86,6 +86,7 @@ internal sealed class GatewayController
     private readonly GatewayStateStore _store;
     private readonly Func<CancellationToken, Task<GatewayStartRequest>> _startRequestFactory;
     private readonly Func<SessionRecord> _requireSetup;
+    private readonly Action<SessionRecord> _stageHelper;
     private readonly ISessionLock _lifecycleLock;
     private readonly Action<string> _log;
     private readonly TimeProvider _clock;
@@ -98,6 +99,7 @@ internal sealed class GatewayController
         Action<string> log,
         Func<SessionRecord> requireSetup,
         ISessionLock lifecycleLock,
+        Action<SessionRecord> stageHelper,
         TimeProvider? clock = null)
     {
         ArgumentNullException.ThrowIfNull(sessions);
@@ -105,12 +107,14 @@ internal sealed class GatewayController
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(startRequestFactory);
         ArgumentNullException.ThrowIfNull(log);
+        ArgumentNullException.ThrowIfNull(stageHelper);
 
         _sessions = sessions;
         _client = client;
         _store = store;
         _startRequestFactory = startRequestFactory;
         _requireSetup = requireSetup;
+        _stageHelper = stageHelper;
         _lifecycleLock = lifecycleLock;
         _log = log;
         _clock = clock ?? TimeProvider.System;
@@ -287,6 +291,11 @@ internal sealed class GatewayController
         SessionRecord session = await _sessions
             .StartRecordedAsync(cancellationToken)
             .ConfigureAwait(false);
+
+        // Package updates select a new helper version. Refresh only on this
+        // explicit start path, under the lifecycle lock and before inspecting
+        // a retained gateway. Status must not stage files or repair setup.
+        _stageHelper(session);
 
         if (existing.Record is not null)
         {

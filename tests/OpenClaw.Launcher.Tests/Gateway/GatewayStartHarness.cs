@@ -103,6 +103,7 @@ internal sealed class GatewayStartHarness : IDisposable
             () => sessions.GetRecordedStatus().Record
                 ?? throw new SessionException("Run setup."),
             LifecycleLock,
+            _ => { },
             Clock);
     }
 
