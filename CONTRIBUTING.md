@@ -77,7 +77,7 @@ or package version logic:
 .\scripts\Test-WorkflowSigningConfiguration.ps1
 .\scripts\Test-MSIXUpgradeMatrix.Tests.ps1
 .\scripts\Test-WorkflowPackageVersion.Tests.ps1
-.\scripts\Test-Submit-MicrosoftStore.Tests.ps1
+.\scripts\Test-Request-MicrosoftStorePublish.Tests.ps1
 .\scripts\Test-GitHooks.Tests.ps1
 ```
 
@@ -426,6 +426,13 @@ Three project skills in `.github\skills\` support this work:
 | `deslop` | Behavior-neutral cleanup of a branch diff before code review |
 
 ## Pull requests
+
+Release automation, its dependencies, and package identity inputs are owned by
+`@openclaw/release-managers-openclaw` in `.github\CODEOWNERS`. Administrators must
+grant the team explicit write access and enforce code-owner approval on `main`;
+the file alone does not protect changes. Store publication additionally needs the
+central environment and exclusive federation described in the
+[Store cutover guide](docs/microsoft-store.md#activate-the-centralized-publisher).
 
 Use the pull request template. Title the PR
 `type: user-facing description`, where `type` is one of `feat`, `fix`,
