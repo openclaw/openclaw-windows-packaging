@@ -374,10 +374,22 @@ jobs:
 
       - name: Restore source selection for a retry
         if: ${{ github.run_attempt != 1 }}
+        id: restore-source
         uses: actions/download-artifact@v8
         with:
           name: openclaw-source-resolution
           path: ${{ runner.temp }}/openclaw-source
+
+      - name: Explain preflight source snapshot restore failure
+        if: ${{ !cancelled() && steps.restore-source.outcome == 'failure' }}
+        shell: pwsh
+        run: |
+          throw (
+            "The immutable source snapshot artifact 'openclaw-source-resolution' could not be restored for run " +
+            "$env:GITHUB_RUN_ID (attempt $env:GITHUB_RUN_ATTEMPT). " +
+            'Inspect the download step logs. If the original artifact is unavailable, start a new workflow run; ' +
+            'do not re-resolve the source for this retry.'
+          )
 
       - name: Resolve immutable OpenClaw source
         id: resolve
@@ -833,10 +845,22 @@ jobs:
           path: artifacts\sideload\bundle
 
       - name: Download captured source selection
+        id: restore-source
         uses: actions/download-artifact@v8
         with:
           name: openclaw-source-resolution
           path: source-resolution
+
+      - name: Explain signing source snapshot restore failure
+        if: ${{ !cancelled() && steps.restore-source.outcome == 'failure' }}
+        shell: pwsh
+        run: |
+          throw (
+            "The immutable source snapshot artifact 'openclaw-source-resolution' could not be restored for run " +
+            "$env:GITHUB_RUN_ID (attempt $env:GITHUB_RUN_ATTEMPT). " +
+            'Inspect the download step logs. If the original artifact is unavailable, start a new workflow run; ' +
+            'do not re-resolve the source for this retry.'
+          )
 
       - name: Resolve official release metadata
         id: release

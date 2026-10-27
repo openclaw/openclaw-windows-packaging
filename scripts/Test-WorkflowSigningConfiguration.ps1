@@ -125,6 +125,89 @@ Write-Host 'Workflow build selection contracts passed (source/signing contracts 
 $repositoryRoot = Split-Path $PSScriptRoot -Parent
 $workflowPath = Join-Path $repositoryRoot '.github/workflows/gateway-msix.yml'
 $workflow = Get-Content -LiteralPath $workflowPath -Raw
+$buildWorkflowPath = Join-Path $repositoryRoot '.github/workflows/gateway-msix-build.yml'
+$buildWorkflow = Get-Content -LiteralPath $buildWorkflowPath -Raw
+
+function Assert-SourceSnapshotRestoreFailureDiagnostic {
+    param([string]$WorkflowText, [string]$StepName)
+
+    $step = [regex]::Match(
+        $WorkflowText,
+        '(?ms)^      - name: ' + [regex]::Escape($StepName) + '\r?\n' +
+            '        if: (?<condition>[^\r\n]+)\r?\n' +
+            '        shell: pwsh\r?\n' +
+            '        run: \|\r?\n' +
+            '(?<script>(?:^ {10}[^\r\n]*\r?\n|^\r?\n)+)'
+    )
+    if (-not $step.Success) {
+        throw "Unable to locate source restore failure diagnostic: $StepName"
+    }
+
+    $expression = [regex]::Replace(
+        $step.Groups['condition'].Value.Trim(),
+        '^\$\{\{\s*(.*?)\s*\}\}$',
+        '$1'
+    )
+    foreach ($replacement in @(
+            @{ From = '!cancelled()'; To = '$notCancelled' },
+            @{ From = 'steps.restore-source.outcome'; To = '$restoreOutcome' },
+            @{ From = '&&'; To = '-and' },
+            @{ From = '=='; To = '-ceq' }
+        )) {
+        $expression = $expression.Replace($replacement.From, $replacement.To)
+    }
+    if ($expression -match '\$\{\{|\}\}|cancelled\(|steps\.') {
+        throw "Unsupported source restore failure condition: $expression"
+    }
+    $conditionScript = [scriptblock]::Create($expression)
+    foreach ($case in @(
+            @{ NotCancelled = $true; Outcome = 'failure'; Expected = $true },
+            @{ NotCancelled = $true; Outcome = 'success'; Expected = $false },
+            @{ NotCancelled = $true; Outcome = 'skipped'; Expected = $false },
+            @{ NotCancelled = $false; Outcome = 'failure'; Expected = $false }
+        )) {
+        $notCancelled = $case.NotCancelled
+        $restoreOutcome = $case.Outcome
+        if ([bool](& $conditionScript) -ne $case.Expected) {
+            throw "Unexpected source restore failure condition result for $StepName/$($case.Outcome)."
+        }
+    }
+
+    $diagnosticScript = [scriptblock]::Create(
+        [regex]::Replace($step.Groups['script'].Value, '(?m)^ {10}', '')
+    )
+    $savedRunId = [Environment]::GetEnvironmentVariable('GITHUB_RUN_ID')
+    $savedAttempt = [Environment]::GetEnvironmentVariable('GITHUB_RUN_ATTEMPT')
+    try {
+        $env:GITHUB_RUN_ID = '123456'
+        $env:GITHUB_RUN_ATTEMPT = '2'
+        $failure = $null
+        try { & $diagnosticScript | Out-Null }
+        catch { $failure = $_.Exception.Message }
+        if ($failure -notlike '*openclaw-source-resolution*' -or
+            $failure -notlike '*run 123456 (attempt 2)*' -or
+            $failure -notlike '*start a new workflow run*' -or
+            $failure -notlike '*do not re-resolve*') {
+            throw "The source restore diagnostic was not actionable: $failure"
+        }
+    }
+    finally {
+        [Environment]::SetEnvironmentVariable('GITHUB_RUN_ID', $savedRunId)
+        [Environment]::SetEnvironmentVariable('GITHUB_RUN_ATTEMPT', $savedAttempt)
+    }
+}
+
+foreach ($restoreCase in @(
+        @{ Workflow = $workflow; StepName = 'Explain preflight source snapshot restore failure' },
+        @{ Workflow = $buildWorkflow; StepName = 'Explain build source snapshot restore failure' },
+        @{ Workflow = $workflow; StepName = 'Explain signing source snapshot restore failure' }
+    )) {
+    Assert-SourceSnapshotRestoreFailureDiagnostic `
+        -WorkflowText $restoreCase.Workflow `
+        -StepName $restoreCase.StepName
+}
+Write-Host 'Source snapshot restore failures retain job failure and give run-scoped recovery guidance.'
+
 $classificationStep = [regex]::Match(
     $workflow,
     '(?ms)^      - name: Detect packaging changes\r?\n' +
