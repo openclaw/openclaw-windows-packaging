@@ -196,7 +196,8 @@ internal static class Program
 
                         using (restore)
                         {
-                            if (exception is Session.InteractiveLogonRequiredException)
+                            if (exception is Session.InteractiveLogonRequiredException or
+                                Session.UnownedSetupEvidenceException)
                             {
                                 ClawCtlConsole.WriteActionableFailure(
                                     error,

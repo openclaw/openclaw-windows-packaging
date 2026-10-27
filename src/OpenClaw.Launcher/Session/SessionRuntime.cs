@@ -208,8 +208,7 @@ internal sealed class SessionRuntime
         if (session.Fault == SessionStateFault.Missing &&
             SessionCoordinator.MayLocateProvision(setup))
         {
-            throw new SessionException(
-                SessionCoordinator.DescribeUnownedSetupEvidence(SetupState.FilePath));
+            throw new UnownedSetupEvidenceException(SetupState.FilePath);
         }
 
         if (setup.Record.Phase != SetupPhase.Ready)

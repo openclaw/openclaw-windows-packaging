@@ -66,6 +66,28 @@ internal sealed class InteractiveLogonRequiredException : SessionException
 }
 
 /// <summary>
+/// Setup evidence names an isolated session whose ownership record is
+/// missing, so the command refuses rather than replace, clear, or start it.
+/// </summary>
+/// <remarks>
+/// The message names the evidence to preserve and the deliberate recovery,
+/// so it is reported as an expected refusal rather than a defect.
+/// </remarks>
+[SuppressMessage(
+    "Design",
+    "CA1032:Implement standard exception constructors",
+    Justification =
+        "The message must name the surviving setup record and its recovery; " +
+        "a caller-supplied message could omit either.")]
+internal sealed class UnownedSetupEvidenceException : SessionException
+{
+    public UnownedSetupEvidenceException(string setupPath)
+        : base(SessionCoordinator.DescribeUnownedSetupEvidence(setupPath))
+    {
+    }
+}
+
+/// <summary>
 /// The recorded session exists but cannot be used, and replacing it silently
 /// would risk abandoning a live backend session.
 /// </summary>
@@ -463,9 +485,7 @@ internal sealed class SessionCoordinator
         {
             // A surviving marker can locate a lost provision, but cannot authorize
             // backend operations without the complete owned-session record.
-            throw new SessionStateException(
-                SessionStateFault.Missing,
-                DescribeUnownedSetupEvidence(setup.FilePath));
+            throw new UnownedSetupEvidenceException(setup.FilePath);
         }
     }
 

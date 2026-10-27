@@ -3085,12 +3085,54 @@ public sealed class ProgramTests : IDisposable
         var scheduler = new Gateway.FakeGatewayTaskScheduler();
         TeardownOrchestrator orchestrator = CreateTeardownOrchestrator(runtime, _ => { }, scheduler);
 
-        SessionStateException failure = await Assert.ThrowsAsync<SessionStateException>(
+        await Assert.ThrowsAsync<UnownedSetupEvidenceException>(
             () => orchestrator.RunAsync(runtime.HelperPath, force, CancellationToken.None))
             .ConfigureAwait(true);
 
-        Assert.Equal(SessionStateFault.Missing, failure.Fault);
-        Assert.Contains("setup evidence remains", failure.Message, StringComparison.Ordinal);
+        Assert.Empty(backend.Calls);
+        Assert.Empty(scheduler.Calls);
+        Assert.Equal(evidence, await File.ReadAllBytesAsync(runtime.Paths.SetupStatePath).ConfigureAwait(true));
+    }
+
+    // The refusal names the evidence to keep and the deliberate recovery, so
+    // it must not end with "This shouldn't happen. Please report it".
+    [Theory]
+    [InlineData("teardown", "--force")]
+    [InlineData("pwsh", "--command")]
+    public async Task MissingOwnershipRefusalIsNotReportedAsADefect(string command, string option)
+    {
+        SessionRuntime runtime = await SetUpSessionAsync().ConfigureAwait(true);
+        File.Delete(runtime.Paths.SessionStatePath);
+        byte[] evidence = await File.ReadAllBytesAsync(runtime.Paths.SetupStatePath).ConfigureAwait(true);
+        var backend = (FakeMxcSessionClient)runtime.Backend;
+        backend.Calls.Clear();
+        var scheduler = new Gateway.FakeGatewayTaskScheduler();
+        var lifecycle = new FailingFreshLifecycle(runtime)
+        {
+            Teardown = CreateTeardownOrchestrator(runtime, _ => { }, scheduler),
+            ExpectsHeldLock = false
+        };
+        using var error = new StringWriter();
+        HostStartup startup = new()
+        {
+            Entrypoint = HostEntrypoint.Control,
+            CreateDiagnostics = () => HostDiagnosticLog.Create(
+                Path.Combine(_testDirectory, "logs", "openclaw.log")),
+            BaseDirectory = _testDirectory,
+            Output = TextWriter.Null,
+            Error = error,
+            InstallationLifecycle = lifecycle
+        };
+        string[] arguments = option == "--command"
+            ? [command, option, "Get-Date", "--no-color"]
+            : [command, option, "--no-color"];
+
+        int exitCode = await Program.RunAsync(arguments, startup);
+
+        string text = FlattenRenderedText(error.ToString());
+        Assert.Equal(1, exitCode);
+        Assert.Contains("setup evidence remains", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("shouldn't happen", text, StringComparison.Ordinal);
         Assert.Empty(backend.Calls);
         Assert.Empty(scheduler.Calls);
         Assert.Equal(evidence, await File.ReadAllBytesAsync(runtime.Paths.SetupStatePath).ConfigureAwait(true));
@@ -3815,6 +3857,10 @@ public sealed class ProgramTests : IDisposable
 
         public bool TeardownSucceeds { get; init; }
 
+        // Fresh setup holds the lifecycle lock before teardown; `clawctl
+        // teardown` lets the orchestrator acquire it.
+        public bool ExpectsHeldLock { get; init; } = true;
+
         public GatewayPersistenceInstallResult RecoveryResult { get; init; } =
             new(
                 GatewayPersistenceState.Ready,
@@ -3855,10 +3901,12 @@ public sealed class ProgramTests : IDisposable
             Calls.Add("gateway");
             Calls.Add("session");
             TeardownCount++;
-            Assert.True(lockAlreadyHeld);
+            Assert.Equal(ExpectsHeldLock, lockAlreadyHeld);
             if (Teardown is not null)
             {
-                return Teardown.RunUnderLockAsync(runtime.HelperPath, force: true, cancellationToken);
+                return lockAlreadyHeld
+                    ? Teardown.RunUnderLockAsync(runtime.HelperPath, force: true, cancellationToken)
+                    : Teardown.RunAsync(runtime.HelperPath, force: true, cancellationToken);
             }
 
             if (TeardownException is not null)
