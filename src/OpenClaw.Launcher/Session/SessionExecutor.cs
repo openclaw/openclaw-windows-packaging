@@ -82,6 +82,7 @@ internal sealed record SessionCommandRequest(
 /// Captured output from a non-interactive command run in the isolated session.
 /// </summary>
 internal sealed record SessionCommandCaptureResult(
+    int ExitCode,
     string StandardOutput,
     string StandardError);
 
@@ -871,10 +872,9 @@ internal sealed partial class SessionExecutor
     /// Establishes what actually happened from the helper's control result.
     /// </summary>
     /// <remarks>
-    /// The executor's exit code alone is ambiguous. The helper's failure code
-    /// is a value OpenClaw itself can return, and an attached execution
-    /// captures nothing, so a dispatch failure is indistinguishable from an
-    /// application exit without this file.
+    /// The helper returns the child exit code after a launch and its own
+    /// failure code otherwise. Either code can also be returned by OpenClaw,
+    /// so the correlated result is required to interpret the executor outcome.
     /// </remarks>
     private static SessionCommandCaptureResult ReadCapturedOutcome(
         SessionWorkspaceOperation operation,
@@ -923,23 +923,22 @@ internal sealed partial class SessionExecutor
                 (result.Error ?? "no reason was reported."));
         }
 
-        if (execution.ExitCode != 0)
+        if (result.ExitCode is not int childExitCode)
         {
             throw new SessionException(
-                $"The isolated session backend failed to run {subject} " +
-                $"(executor exit code {execution.ExitCode}).");
+                $"The isolated session reported that it launched {subject} without an exit code.");
         }
 
-        if (result.ExitCode is not 0)
+        if (execution.ExitCode != childExitCode)
         {
-            string exitCode = result.ExitCode is int value
-                ? value.ToString(CultureInfo.InvariantCulture)
-                : "no exit code";
             throw new SessionException(
-                $"{subject} exited with code {exitCode}.");
+                $"The isolated session reported {subject} exit code " +
+                $"{childExitCode.ToString(CultureInfo.InvariantCulture)}, but the " +
+                $"executor returned exit code {execution.ExitCode.ToString(CultureInfo.InvariantCulture)}.");
         }
 
         return new SessionCommandCaptureResult(
+            childExitCode,
             execution.StandardOutput,
             execution.StandardError);
     }

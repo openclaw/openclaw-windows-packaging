@@ -315,7 +315,9 @@ rule, with `gateway.port` present only when identified and no URL promised.
 `clawctl open` uses packaged OpenClaw's verified, authenticated browser handoff
 instead of constructing a URL from that port. It does not start or recover the
 gateway: start it first with `clawctl gateway-service start` if the probe says
-it is not running. The command does not print authenticated URLs or tokens.
+it is not running. If the launched dashboard exits nonzero, the command reports
+its exit code and directs you to `clawctl collect-logs` without exposing
+captured output. The command does not print authenticated URLs or tokens.
 
 Help and version requests take precedence over the rest of the command line.
 `clawctl --version bogus` reports the build identity and exits `0` rather than

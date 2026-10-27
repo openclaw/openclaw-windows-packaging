@@ -189,11 +189,14 @@ public sealed class SessionExecutorTests : IDisposable
                 .Single(path => !path.EndsWith(".result.json", StringComparison.Ordinal));
             SessionLaunchRequest request = SessionLaunchProtocol.ReadRequest(
                 File.ReadAllText(requestPath));
+            SessionLaunchResult result = respond(request);
             File.WriteAllText(
                 SessionLaunchProtocol.ResultPathFor(requestPath),
-                SessionLaunchProtocol.SerializeResult(respond(request)));
+                SessionLaunchProtocol.SerializeResult(result));
             return Task.FromResult(execution ?? new MxcExecutionResult(
-                0,
+                result.Launched
+                    ? result.ExitCode ?? 0
+                    : SessionLaunchProtocol.HelperFailureExitCode,
                 "{\"browserUrl\":\"secret\"}",
                 "captured stderr"));
         };
@@ -1049,22 +1052,28 @@ public sealed class SessionExecutorTests : IDisposable
             _log);
     }
 
-    // A slow exchange that then fails is the one most worth finding, so its
-    // duration is recorded before the result is judged.
-    [Fact]
-    public async Task CapturedCommandRecordsItsDurationWhenTheBackendFails()
+    // A slow exchange with contradictory exit evidence is the one most worth
+    // finding, so its duration is recorded before the result is judged.
+    [Theory]
+    [InlineData(0, 23)]
+    [InlineData(1, 0)]
+    [InlineData(1, 64)]
+    [InlineData(64, 1)]
+    public async Task CapturedCommandRejectsInconsistentExitCodesAfterRecordingDuration(
+        int childExitCode,
+        int executorExitCode)
     {
         RespondAsCapturedHelper(
             request => new SessionLaunchResult
             {
                 RequestId = request.RequestId,
                 Launched = true,
-                ExitCode = 0,
+                ExitCode = childExitCode,
             },
-            new MxcExecutionResult(23, "secret", "more secret"),
+            new MxcExecutionResult(executorExitCode, "secret", "more secret"),
             TimeSpan.FromMilliseconds(90000));
 
-        await Assert.ThrowsAsync<SessionException>(
+        SessionException exception = await Assert.ThrowsAsync<SessionException>(
             () => Create().ExecuteCommandCaptureAsync(
                 Record(),
                 CaptureRequest("dashboard", "--json"),
@@ -1072,20 +1081,31 @@ public sealed class SessionExecutorTests : IDisposable
                 "OpenClaw dashboard",
                 CancellationToken.None));
 
+        Assert.Contains(
+            $"reported OpenClaw dashboard exit code {childExitCode}",
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"executor returned exit code {executorExitCode}",
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("backend failed to run", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret", exception.Message, StringComparison.Ordinal);
         Assert.Equal(
             [
                 "Resolving the Control UI handoff in the isolated session.",
-                "OpenClaw dashboard finished in 90000 ms (executor exit 23).",
+                $"OpenClaw dashboard finished in 90000 ms (executor exit {executorExitCode}).",
             ],
             _log);
+        Assert.Empty(Directory.GetFiles(Workspace));
     }
 
-    // The production client throws a structured dispatch failure rather than
-    // returning it, so a slow exchange that fails that way must still be timed.
+    // The production client throws a structured backend failure rather than
+    // returning an executor result, so a slow failed exchange must still be timed.
     // Its message can carry executor stderr, so only the type and MXC
     // classification are recorded, and the caller still sees the original.
     [Fact]
-    public async Task CapturedCommandRecordsItsDurationWhenDispatchThrows()
+    public async Task CapturedCommandPreservesBackendFailureWhenNoCorrelatedResultExists()
     {
         const string marker = "executor-stderr-marker";
         var failure = new MxcException(
@@ -1150,14 +1170,17 @@ public sealed class SessionExecutorTests : IDisposable
         Assert.Empty(Directory.GetFiles(Workspace));
     }
 
-    [Fact]
-    public async Task CapturedCommandRejectsMalformedHelperResult()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(64)]
+    public async Task CapturedCommandRejectsMalformedHelperResult(int executorExitCode)
     {
         _backend.ExecuteBehavior = _ =>
         {
             string requestPath = Directory.GetFiles(Workspace, "launch-*.json").Single();
             File.WriteAllText(SessionLaunchProtocol.ResultPathFor(requestPath), "{");
-            return Task.FromResult(new MxcExecutionResult(0, "secret", string.Empty));
+            return Task.FromResult(new MxcExecutionResult(executorExitCode, "secret", string.Empty));
         };
 
         SessionException exception = await Assert.ThrowsAsync<SessionException>(
@@ -1165,14 +1188,50 @@ public sealed class SessionExecutorTests : IDisposable
                 Record(), CaptureRequest(), "Resolving the dashboard.", "OpenClaw", CancellationToken.None));
 
         Assert.Contains("unreadable launch result", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret", exception.Message, StringComparison.Ordinal);
         Assert.Empty(Directory.GetFiles(Workspace));
     }
 
     [Fact]
-    public async Task CapturedCommandRejectsMissingHelperResult()
+    public async Task CapturedCommandRejectsReplacedSessionBeforeClassifyingChildExit()
+    {
+        bool current = true;
+        RespondAsCapturedHelper(request =>
+        {
+            current = false;
+            return new SessionLaunchResult
+            {
+                RequestId = request.RequestId,
+                Launched = true,
+                ExitCode = 64,
+            };
+        });
+        var executor = new SessionExecutor(
+            _backend,
+            _log.Add,
+            isCurrentRecord: _ => current,
+            createInvocationLifetime: _ => new FakeInvocationLifetime());
+
+        SessionException exception = await Assert.ThrowsAsync<SessionException>(
+            () => executor.ExecuteCommandCaptureAsync(
+                Record(), CaptureRequest(), "Resolving the dashboard.", "OpenClaw", CancellationToken.None));
+
+        Assert.Contains("generation changed", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret", string.Join(Environment.NewLine, _log), StringComparison.Ordinal);
+        Assert.Equal(2, Directory.GetFiles(Workspace, "launch-*.json").Length);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(64)]
+    public async Task CapturedCommandRejectsMissingHelperResult(int executorExitCode)
     {
         _backend.ExecuteBehavior = _ => Task.FromResult(
-            new MxcExecutionResult(0, "secret", "more secret"));
+            new MxcExecutionResult(
+                executorExitCode,
+                "secret",
+                "more secret"));
 
         SessionException exception = await Assert.ThrowsAsync<SessionException>(
             () => Create().ExecuteCommandCaptureAsync(
@@ -1184,13 +1243,43 @@ public sealed class SessionExecutorTests : IDisposable
     }
 
     [Fact]
-    public async Task CapturedCommandRejectsMismatchedHelperResult()
+    public async Task CapturedCommandRejectsLaunchedResultWithoutChildExitCode()
+    {
+        RespondAsCapturedHelper(
+            request => new SessionLaunchResult
+            {
+                RequestId = request.RequestId,
+                Launched = true,
+            },
+            new MxcExecutionResult(
+                SessionLaunchProtocol.HelperFailureExitCode,
+                "secret",
+                "more secret"));
+
+        SessionException exception = await Assert.ThrowsAsync<SessionException>(
+            () => Create().ExecuteCommandCaptureAsync(
+                Record(),
+                CaptureRequest(),
+                "Resolving the dashboard.",
+                "OpenClaw",
+                CancellationToken.None));
+
+        Assert.Contains("launched OpenClaw without an exit code", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(Directory.GetFiles(Workspace));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(64)]
+    public async Task CapturedCommandRejectsMismatchedHelperResult(int exitCode)
     {
         RespondAsCapturedHelper(_ => new SessionLaunchResult
         {
             RequestId = "different-request",
             Launched = true,
-            ExitCode = 0,
+            ExitCode = exitCode,
         });
 
         SessionException exception = await Assert.ThrowsAsync<SessionException>(
@@ -1198,27 +1287,6 @@ public sealed class SessionExecutorTests : IDisposable
                 Record(), CaptureRequest(), "Resolving the dashboard.", "OpenClaw", CancellationToken.None));
 
         Assert.Contains("different request", exception.Message, StringComparison.Ordinal);
-        Assert.Empty(Directory.GetFiles(Workspace));
-    }
-
-    [Fact]
-    public async Task CapturedCommandRejectsBackendFailure()
-    {
-        RespondAsCapturedHelper(
-            request => new SessionLaunchResult
-            {
-                RequestId = request.RequestId,
-                Launched = true,
-                ExitCode = 0,
-            },
-            new MxcExecutionResult(23, "secret", "more secret"));
-
-        SessionException exception = await Assert.ThrowsAsync<SessionException>(
-            () => Create().ExecuteCommandCaptureAsync(
-                Record(), CaptureRequest(), "Resolving the dashboard.", "OpenClaw", CancellationToken.None));
-
-        Assert.Contains("backend failed", exception.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain("secret", exception.Message, StringComparison.Ordinal);
         Assert.Empty(Directory.GetFiles(Workspace));
     }
 
@@ -1237,24 +1305,81 @@ public sealed class SessionExecutorTests : IDisposable
                 Record(), CaptureRequest(), "Resolving the dashboard.", "OpenClaw", CancellationToken.None));
 
         Assert.Contains("could not be started", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("The executable was not found.", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("executor exit 64", string.Join(Environment.NewLine, _log), StringComparison.Ordinal);
         Assert.Empty(Directory.GetFiles(Workspace));
     }
 
     [Fact]
-    public async Task CapturedCommandRejectsChildFailure()
+    public async Task CapturedCommandRejectsUnsupportedResultSchemaBeforeClassifyingChildExit()
     {
-        RespondAsCapturedHelper(request => new SessionLaunchResult
-        {
-            RequestId = request.RequestId,
-            Launched = true,
-            ExitCode = 42,
-        });
+        RespondAsCapturedHelper(
+            request => new SessionLaunchResult
+            {
+                RequestId = request.RequestId,
+                SchemaVersion = SessionLaunchProtocol.CurrentSchemaVersion + 1,
+                Launched = true,
+                ExitCode = 64,
+            },
+            new MxcExecutionResult(64, "secret", "more secret"));
 
         SessionException exception = await Assert.ThrowsAsync<SessionException>(
             () => Create().ExecuteCommandCaptureAsync(
-                Record(), CaptureRequest(), "Resolving the dashboard.", "OpenClaw", CancellationToken.None));
+                Record(),
+                CaptureRequest(),
+                "Resolving the dashboard.",
+                "OpenClaw",
+                CancellationToken.None));
 
-        Assert.Contains("exited with code 42", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("schema version", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(Directory.GetFiles(Workspace));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(42)]
+    [InlineData(64)]
+    public async Task CapturedCommandClassifiesMatchingChildAndExecutorFailuresWithoutLeakingCapture(
+        int exitCode)
+    {
+        const string authenticatedUrl =
+            "https://127.0.0.1/control#token=synthetic-capture-token";
+        const string captureToken = "synthetic-capture-token";
+        const string stderrSecret = "synthetic-stderr-secret";
+        string stdout =
+            $$"""{"ok":false,"reason":"fixture-dashboard-failure","browserUrl":"{{authenticatedUrl}}"}""";
+        string stderr = $"captured={stderrSecret}";
+        RespondAsCapturedHelper(
+            request => new SessionLaunchResult
+            {
+                RequestId = request.RequestId,
+                Launched = true,
+                ExitCode = exitCode,
+            },
+            new MxcExecutionResult(exitCode, stdout, stderr),
+            TimeSpan.FromMilliseconds(1234));
+
+        SessionCommandCaptureResult capture = await Create().ExecuteCommandCaptureAsync(
+            Record(),
+            CaptureRequest("dashboard", "--json"),
+            "Resolving the Control UI handoff in the isolated session.",
+            "OpenClaw dashboard",
+            CancellationToken.None);
+
+        Assert.Equal(exitCode, capture.ExitCode);
+        Assert.Equal(stdout, capture.StandardOutput);
+        Assert.Equal(stderr, capture.StandardError);
+        string logText = string.Join(Environment.NewLine, _log);
+        Assert.DoesNotContain(authenticatedUrl, logText, StringComparison.Ordinal);
+        Assert.DoesNotContain(captureToken, logText, StringComparison.Ordinal);
+        Assert.DoesNotContain(stderrSecret, logText, StringComparison.Ordinal);
+        Assert.Equal(
+            [
+                "Resolving the Control UI handoff in the isolated session.",
+                $"OpenClaw dashboard finished in 1234 ms (executor exit {exitCode}).",
+            ],
+            _log);
         Assert.Empty(Directory.GetFiles(Workspace));
     }
 

@@ -906,6 +906,20 @@ internal static class Program
                                 "OpenClaw dashboard",
                                 cancellationToken)
                             .ConfigureAwait(false);
+                        if (capture.ExitCode != 0)
+                        {
+                            // Captured output can carry the authenticated
+                            // handoff, so only the exit code reaches the
+                            // diagnostic log that collect-logs bundles.
+                            string dashboardExit =
+                                "The OpenClaw dashboard exited with code " +
+                                $"{capture.ExitCode.ToString(CultureInfo.InvariantCulture)}.";
+                            log($"The Control UI cannot be opened: {dashboardExit}");
+                            return new OpenCommandResult(
+                                gateway.State,
+                                $"{dashboardExit} Run `clawctl collect-logs` and review the diagnostics bundle.",
+                                1);
+                        }
                         if (!Gateway.ControlUiHandoffParser.TryParse(
                                 capture.StandardOutput,
                                 gateway.Record?.ObservedPorts ?? [],

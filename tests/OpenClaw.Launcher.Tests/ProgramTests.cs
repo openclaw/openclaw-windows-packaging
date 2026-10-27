@@ -2771,6 +2771,209 @@ public sealed class ProgramTests : IDisposable
     }
 
     [Theory]
+    [InlineData(false, 1)]
+    [InlineData(true, 1)]
+    [InlineData(false, 64)]
+    [InlineData(true, 64)]
+    public async Task OpenReportsDashboardExitWithoutLaunchingBrowserOrLeakingCapture(
+        bool json,
+        int dashboardExitCode)
+    {
+        const string authenticatedUrl =
+            "https://127.0.0.1/control#token=synthetic-dashboard-token";
+        const string dashboardToken = "synthetic-dashboard-token";
+        const string stderrSecret = "synthetic-dashboard-stderr-secret";
+        string standardOutput =
+            $$"""{"ok":false,"reason":"fixture-dashboard-failure","browserUrl":"{{authenticatedUrl}}"}""";
+        string standardError = $"captured={stderrSecret}";
+
+        DashboardExitOpenRun run = await RunOpenAfterDashboardExitAsync(
+            json,
+            dashboardExitCode,
+            standardOutput,
+            standardError);
+
+        string rendered = json ? run.Output : FlattenRenderedText(run.Output);
+        Assert.Equal(1, run.ExitCode);
+        Assert.False(run.BrowserLaunched);
+        if (json)
+        {
+            using JsonDocument result = JsonDocument.Parse(rendered);
+            Assert.False(result.RootElement.GetProperty("ok").GetBoolean());
+            Assert.Equal("open", result.RootElement.GetProperty("command").GetString());
+            Assert.Equal(
+                $"the OpenClaw dashboard exited with code {dashboardExitCode}. " +
+                "Run `clawctl collect-logs` and review the diagnostics bundle",
+                result.RootElement.GetProperty("error").GetProperty("message").GetString());
+        }
+        else
+        {
+            Assert.Contains(
+                $"the OpenClaw dashboard exited with code {dashboardExitCode}",
+                rendered,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("This shouldn't happen", rendered, StringComparison.Ordinal);
+        }
+
+        string logText = string.Join(Environment.NewLine, run.Logs);
+        Assert.DoesNotContain(authenticatedUrl, rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain(dashboardToken, rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain(stderrSecret, rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("fixture-dashboard-failure", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain(authenticatedUrl, run.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain(dashboardToken, run.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain(stderrSecret, run.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain(authenticatedUrl, logText, StringComparison.Ordinal);
+        Assert.DoesNotContain(dashboardToken, logText, StringComparison.Ordinal);
+        Assert.DoesNotContain(stderrSecret, logText, StringComparison.Ordinal);
+        Assert.DoesNotContain("fixture-dashboard-failure", logText, StringComparison.Ordinal);
+        Assert.Empty(Directory.GetFiles(run.WorkspacePath, "launch-*.json"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OpenNamesTheDiagnosticsNextStepWhenTheDashboardExitsNonzero(bool json)
+    {
+        DashboardExitOpenRun run = await RunOpenAfterDashboardExitAsync(
+            json,
+            dashboardExitCode: 1,
+            standardOutput: """{"ok":false,"reason":"fixture-dashboard-failure"}""",
+            standardError: string.Empty);
+
+        Assert.Equal(1, run.ExitCode);
+        Assert.False(run.BrowserLaunched);
+        if (json)
+        {
+            using JsonDocument result = JsonDocument.Parse(run.Output);
+            JsonElement root = result.RootElement;
+            Assert.False(root.GetProperty("ok").GetBoolean());
+            Assert.Equal("open", root.GetProperty("command").GetString());
+            Assert.Equal("running", root.GetProperty("gateway").GetProperty("state").GetString());
+            Assert.Equal("cli_error", root.GetProperty("error").GetProperty("type").GetString());
+            Assert.Equal(
+                "the OpenClaw dashboard exited with code 1. " +
+                "Run `clawctl collect-logs` and review the diagnostics bundle",
+                root.GetProperty("error").GetProperty("message").GetString());
+        }
+        else
+        {
+            string rendered = FlattenRenderedText(run.Output);
+            Assert.Contains(
+                "the OpenClaw dashboard exited with code 1. " +
+                "Run `clawctl collect-logs` and review the diagnostics bundle.",
+                rendered,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("This shouldn't happen", rendered, StringComparison.Ordinal);
+        }
+
+        Assert.Contains(
+            "The Control UI cannot be opened: The OpenClaw dashboard exited with code 1.",
+            run.Logs);
+    }
+
+    private sealed record DashboardExitOpenRun(
+        int ExitCode,
+        string Output,
+        string Error,
+        IReadOnlyList<string> Logs,
+        bool BrowserLaunched,
+        string WorkspacePath);
+
+    // Runs `clawctl open` against a running gateway whose dashboard child the
+    // session host reports as launched and exited with the given code.
+    private async Task<DashboardExitOpenRun> RunOpenAfterDashboardExitAsync(
+        bool json,
+        int dashboardExitCode,
+        string standardOutput,
+        string standardError)
+    {
+        SessionRuntime runtime = await SetUpSessionAsync().ConfigureAwait(false);
+        SessionRecord session = runtime.RequireSetup();
+        var backend = (FakeMxcSessionClient)runtime.Backend;
+        var logs = new List<string>();
+        bool browserLaunched = false;
+        File.WriteAllText(
+            Path.Combine(_testDirectory, "node-v24.20.0-win-x64.zip"),
+            "fixture");
+
+        runtime.GatewayState.Write(new GatewayRecord
+        {
+            SandboxId = session.SandboxId,
+            ProcessId = 42,
+            ProcessStartTimeUtc = DateTimeOffset.UtcNow,
+            HelperPath = runtime.HelperPath,
+            ObservedPorts = [],
+        });
+        backend.ExecuteBehavior = _ =>
+        {
+            string workspace = backend.Metadata!.EphemeralWorkspacePath;
+            string[] inspectionRequests = Directory.GetFiles(workspace, "inspect-*.json");
+            if (inspectionRequests.Length == 1)
+            {
+                string inspectionRequestPath = inspectionRequests[0];
+                SessionInspectRequest inspectionRequest = SessionInspectProtocol.ReadRequest(
+                    File.ReadAllText(inspectionRequestPath));
+                File.WriteAllText(
+                    SessionLaunchProtocol.ResultPathFor(inspectionRequestPath),
+                    SessionInspectProtocol.SerializeResult(new SessionInspectResult
+                    {
+                        RequestId = inspectionRequest.RequestId,
+                        ProcessFound = true,
+                        StartTimeMatches = true,
+                        PortListening = true,
+                        ListeningPorts = [],
+                        ListenerOwned = true,
+                    }));
+                return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
+            }
+
+            string requestPath = Directory.GetFiles(workspace, "launch-*.json")
+                .Single(path => !path.EndsWith(".result.json", StringComparison.Ordinal));
+            SessionLaunchRequest request = SessionLaunchProtocol.ReadRequest(
+                File.ReadAllText(requestPath));
+            File.WriteAllText(
+                SessionLaunchProtocol.ResultPathFor(requestPath),
+                SessionLaunchProtocol.SerializeResult(new SessionLaunchResult
+                {
+                    RequestId = request.RequestId,
+                    Launched = true,
+                    ExitCode = dashboardExitCode,
+                }));
+            return Task.FromResult(new MxcExecutionResult(
+                dashboardExitCode,
+                standardOutput,
+                standardError));
+        };
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        int exitCode = await Program.RunControlAsync(
+            new HostOptions(
+                Path.Combine(_testDirectory, "app"),
+                Path.Combine(_testDirectory, "node-v24.20.0-win-x64.zip"),
+                []),
+            json ? ["open", "--json"] : ["open"],
+            logs.Add,
+            output,
+            error,
+            installationLifecycle: new StubbedRecoveryLifecycle(runtime),
+            launchBrowserAsync: _ =>
+            {
+                browserLaunched = true;
+                return Task.CompletedTask;
+            }).ConfigureAwait(false);
+
+        return new DashboardExitOpenRun(
+            exitCode,
+            output.ToString(),
+            error.ToString(),
+            logs,
+            browserLaunched,
+            session.WorkspacePath!);
+    }
+
+    [Theory]
     [InlineData(51789, 51789, 0, false, 0, 1, true)]
     [InlineData(3000, 18789, 0, false, 1, 0, true)]
     [InlineData(18789, 18789, 0, true, 1, 0, true)]
