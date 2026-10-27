@@ -345,6 +345,12 @@ jobs:
             -p:PublishAot=true `
             -p:Platform='${{ matrix.architecture }}'
           if ($LASTEXITCODE -ne 0) { throw 'Session host restore failed.' }
+          dotnet restore `
+            .\src\OpenClaw.GatewayRecovery\OpenClaw.GatewayRecovery.csproj `
+            --runtime 'win-${{ matrix.architecture }}' `
+            -p:PublishAot=true `
+            -p:Platform='${{ matrix.architecture }}'
+          if ($LASTEXITCODE -ne 0) { throw 'Sign-in helper restore failed.' }
 
       - name: Compose unsigned Gateway MSIX packages
         shell: pwsh

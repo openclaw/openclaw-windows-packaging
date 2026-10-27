@@ -430,6 +430,34 @@ foreach ($architecture in @('x64', 'arm64')) {
             throw "The embedded $architecture session host file set is invalid."
         }
 
+        # Both logon recovery lanes start this executable, so it is held to the
+        # same published-inventory check as the session host.
+        $recoveryHelperProperty = $metadata.PSObject.Properties['gatewayRecoveryFiles']
+        $recoveryHelperFiles = @(
+            if ($null -ne $recoveryHelperProperty) {
+                $recoveryHelperProperty.Value
+            }
+        )
+        if (
+            $recoveryHelperFiles.Count -ne 1 -or
+            [string]$recoveryHelperFiles[0].path -cne 'openclaw-gateway-recovery.exe' -or
+            $recoveryHelperFiles[0].length -isnot [int64] -or
+            $recoveryHelperFiles[0].length -lt 0 -or
+            $recoveryHelperFiles[0].sha256 -notmatch '^[0-9a-fA-F]{64}$'
+        ) {
+            throw "The embedded $architecture sign-in helper inventory is invalid."
+        }
+        $recoveryHelperEntry = Get-PackageEntry `
+            -EntriesByPath $entriesByPath `
+            -Path 'openclaw-gateway-recovery.exe'
+        if (
+            $recoveryHelperEntry.Length -ne $recoveryHelperFiles[0].length -or
+            (Get-PackageEntrySha256 -Entry $recoveryHelperEntry) -ine
+                $recoveryHelperFiles[0].sha256
+        ) {
+            throw "The embedded $architecture sign-in helper is invalid."
+        }
+
         [xml]$manifest = Read-ZipEntryText `
             -EntriesByPath $entriesByPath `
             -Path 'AppxManifest.xml'

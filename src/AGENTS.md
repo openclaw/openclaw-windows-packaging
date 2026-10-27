@@ -1,12 +1,13 @@
 # Source implementation guide
 
-Read the repository-root `AGENTS.md` before this file. This scope owns the three .NET projects under `src\`; keep their boundaries explicit and move shared contracts only through a complete caller cutover.
+Read the repository-root `AGENTS.md` before this file. This scope owns the four .NET projects under `src\`; keep their boundaries explicit and move shared contracts only through a complete caller cutover.
 
 ## Project owners
 
 - `OpenClaw.Launcher` owns the packaged entrypoint, `clawctl` command tree and output, setup state, MXC coordination, gateway lifecycle, diagnostics, and host-side session execution.
 - `OpenClaw.SessionHost` owns work inside the isolated session under the agent identity: runtime installation, config inspection, process launch/supervision, collection, and termination.
 - `OpenClaw.SessionProtocol` owns the versioned AOT-safe JSON file contract between launcher and session host. Change both producers and consumers together; reject unsupported versions rather than guessing compatibility.
+- `OpenClaw.GatewayRecovery` is the windowless sign-in helper that both logon recovery lanes start. It only runs this package's `clawctl gateway-service start --recovery` hidden and returns its exit code; recovery policy stays in the launcher. It must remain a Windows-subsystem executable, because a console helper opens a window at every sign-in.
 
 ## Invariants
 

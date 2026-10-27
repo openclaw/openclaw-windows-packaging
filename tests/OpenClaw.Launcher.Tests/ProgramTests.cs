@@ -542,9 +542,13 @@ public sealed class ProgramTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task RecoveryRemediationMigratesLegacyFilesAndPreservesSessionData(bool fallback)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task RecoveryRemediationMigratesLegacyFilesAndPreservesSessionData(
+        bool fallback,
+        bool scriptHostGeneration)
     {
         SessionRuntime runtime = await SetUpSessionAsync();
         SessionRecord recorded = runtime.RequireSetup();
@@ -559,21 +563,33 @@ public sealed class ProgramTests : IDisposable
         string dataPath = Path.Combine(workspace, "retained %PATH% 日本語.json");
         await File.WriteAllTextAsync(dataPath, "{\"fixture\":\"retained session data\"}");
         byte[] dataBefore = await File.ReadAllBytesAsync(dataPath);
+        string helperPath = Path.Combine(_testDirectory, "WindowsApps", "openclaw-gateway-recovery.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(helperPath)!);
+        await File.WriteAllTextAsync(helperPath, "fixture alias");
+        string startupFolder = Path.Combine(_testDirectory, "startup");
+        Directory.CreateDirectory(startupFolder);
         var scheduler = new Gateway.FakeGatewayTaskScheduler();
         var recovery = new GatewayPersistenceManager(
             scheduler,
             new GatewayPersistenceOptions(
                 UserSid: "S-1-5-21-1",
                 PackageFamilyName: runtime.Paths.PackageFamilyName!,
-                LauncherPath: runtime.Paths.GatewayLauncherPath,
-                StartupFolderPath: Path.Combine(_testDirectory, "startup"),
-                WorkingDirectory: runtime.Paths.StateRoot,
-                ScriptHostPath: @"C:\Windows\System32\wscript.exe"));
-        string legacyLauncher = Path.ChangeExtension(runtime.Paths.GatewayLauncherPath, ".cmd");
-        string legacyFallback = Path.ChangeExtension(recovery.FallbackPath, ".cmd");
-        Directory.CreateDirectory(Path.GetDirectoryName(legacyFallback)!);
-        await File.WriteAllTextAsync(legacyLauncher, GatewayLauncherScript.Marker);
-        await File.WriteAllTextAsync(legacyFallback, GatewayLauncherScript.Marker);
+                HelperPath: helperPath,
+                LegacyLauncherPath: runtime.Paths.GatewayLauncherPath,
+                StartupFolderPath: startupFolder,
+                StateDirectory: runtime.Paths.StateRoot,
+                StartupLinks: new Gateway.FakeStartupLinkStore()));
+        string legacyLauncher = scriptHostGeneration
+            ? runtime.Paths.GatewayLauncherPath
+            : Path.ChangeExtension(runtime.Paths.GatewayLauncherPath, ".cmd");
+        string legacyFallback = Path.ChangeExtension(
+            recovery.FallbackPath,
+            scriptHostGeneration ? ".wsf" : ".cmd");
+        string marker = scriptHostGeneration
+            ? GatewayLauncherScript.ScriptHostMarker
+            : GatewayLauncherScript.Marker;
+        await File.WriteAllTextAsync(legacyLauncher, marker);
+        await File.WriteAllTextAsync(legacyFallback, marker);
         await File.WriteAllTextAsync(
             Path.ChangeExtension(runtime.Paths.GatewayLauncherPath, ".ps1"),
             GatewayLauncherScript.CreateLegacyActivationScript(
@@ -585,9 +601,14 @@ public sealed class ProgramTests : IDisposable
         else
         {
             scheduler.Probe = GatewayTaskProbe.Present(GatewayTaskDefinition.CreateSnapshot(
-                "S-1-5-21-1", @"C:\Windows\System32\cmd.exe", legacyLauncher) with
+                "S-1-5-21-1", helperPath) with
             {
-                Arguments = $"/d /c \"\"{legacyLauncher}\"\""
+                Command = scriptHostGeneration
+                    ? @"C:\Windows\System32\wscript.exe"
+                    : @"C:\Windows\System32\cmd.exe",
+                Arguments = scriptHostGeneration
+                    ? $"//B //Nologo \"{legacyLauncher}\""
+                    : $"/d /c \"\"{legacyLauncher}\"\""
             });
         }
         GatewayPersistenceStatus before = await recovery.GetStatusAsync(CancellationToken.None);
@@ -621,6 +642,8 @@ public sealed class ProgramTests : IDisposable
             after.Lane);
         Assert.False(File.Exists(legacyLauncher));
         Assert.False(File.Exists(legacyFallback));
+        Assert.False(File.Exists(Path.ChangeExtension(runtime.Paths.GatewayLauncherPath, ".ps1")));
+        Assert.Equal(fallback, File.Exists(recovery.FallbackPath));
     }
 
     /// <summary>
@@ -2926,10 +2949,11 @@ public sealed class ProgramTests : IDisposable
             new GatewayPersistenceOptions(
                 UserSid: "S-1-5-21-1",
                 PackageFamilyName: "OpenClaw.Gateway_test",
-                LauncherPath: Path.Combine(stateRoot, "gateway-launcher.js"),
+                HelperPath: Path.Combine(stateRoot, "openclaw-gateway-recovery.exe"),
+                LegacyLauncherPath: Path.Combine(stateRoot, "gateway-launcher.js"),
                 StartupFolderPath: Path.Combine(stateRoot, "startup"),
-                WorkingDirectory: stateRoot,
-                ScriptHostPath: @"C:\Windows\System32\wscript.exe"),
+                StateDirectory: stateRoot,
+                StartupLinks: new Gateway.FakeStartupLinkStore()),
             log);
         var controller = new GatewayController(
             runtime.Coordinator,

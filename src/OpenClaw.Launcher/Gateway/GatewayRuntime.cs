@@ -62,14 +62,30 @@ internal sealed partial class GatewayRuntime
             new GatewayPersistenceOptions(
                 userSid,
                 packageFamilyName,
+                ResolveHelperPath(packageFamilyName),
                 paths.GatewayLauncherPath,
                 GetStartupFolderPath(),
                 paths.StateRoot,
-                Path.Combine(Environment.SystemDirectory, "wscript.exe"),
+                new ShellStartupLinkStore(),
                 LogonTriggerUserSid: logonUserSid),
             log,
             ResolveUserSid);
     }
+
+    // Both recovery lanes start the helper through the alias the installed
+    // manifest declares, so a side-by-side development identity starts its own.
+    private static string ResolveHelperPath(string packageFamilyName) =>
+        PackageExecutionAlias.TryResolve(
+            AppContext.BaseDirectory,
+            packageFamilyName,
+            GatewayPersistenceManager.HelperApplicationId,
+            GatewayPersistenceManager.HelperExecutable,
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            out string? helperPath,
+            out string? error)
+            ? helperPath
+            : throw new SessionException(
+                $"The sign-in helper could not be located, so gateway recovery cannot be configured. {error}");
 
     private static string GetStartupFolderPath()
     {

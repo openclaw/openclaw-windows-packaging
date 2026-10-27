@@ -233,30 +233,64 @@ Use the port reported by status as the observed endpoint. Do not assume the
 upstream default port (18789): an explicit OpenClaw `gateway.port` can differ,
 and multiple unclassified listeners intentionally do not identify an endpoint.
 
-## A terminal opens when signing in
+## A terminal or Windows Script Host prompt opens when signing in
 
-**Check.** Run `clawctl status` and inspect the recovery
-result. Registrations from older packages use a CMD launcher and can open a
-terminal while recovering the gateway.
+**Check.** Run `clawctl status` and inspect the recovery result. Registrations
+from earlier packages run a generated launcher at sign-in: a CMD launcher that
+opens a terminal, or a Windows Script Host launcher that shows a blocking
+"Windows Script Host" prompt when Windows Script Host is disabled. Status
+reports such a task as not matching this installation, and reports a remaining
+Startup-folder `.cmd` or `.wsf` launcher as needing attention.
 
-**Fix.** After installing a package with background recovery, run:
+**Fix.** After installing a package with the windowless sign-in helper, run:
 
 ```powershell
 clawctl setup
 ```
 
 Without `--fresh`, setup reuses the recorded session and keeps its data and
-gateway settings. It replaces the old logon action and removes generated legacy
-Startup-folder files. If Windows refuses to replace an existing task, setup
-retains that task's previous recovery files and reports that further action is
-required, even when it creates a new Startup-folder fallback. Resolve the
-reported permission failure and rerun `clawctl setup` to finish migration.
-After a successful migration, future recovery runs without a terminal. If recovery
+gateway settings. It replaces the old logon action with one that starts the
+windowless helper and removes the earlier generated launcher files. Windows
+Script Host is no longer involved, so nothing needs to be enabled. Only files
+that carry OpenClaw's generated marker count as legacy recovery: a same-named
+CMD file you created is left in place, and status does not ask for a reinstall
+on its account. If Windows refuses to replace an existing task, setup writes a
+Startup-folder shortcut to the helper but retains the files that task still
+runs, and reports that further action is required. Resolve the reported
+permission failure and rerun `clawctl setup` to finish migration.
+
+After a successful migration, recovery runs without any window. If recovery
 fails, run `clawctl gateway-service start` interactively for the error and
-collect logs with `clawctl collect-logs`. For failures before `clawctl` starts,
-check the logon task's last-run result in Task Scheduler, the package's
-execution-alias registration, and whether Windows Script Host and JScript
-are enabled. Background recovery requires those Windows components.
+collect logs with `clawctl collect-logs`; the host log records what the sign-in
+helper did before that command started. For failures before the helper starts,
+check the logon task's last-run result in Task Scheduler and the package's
+execution aliases under **Settings** > **Apps** > **Advanced app settings** >
+**App execution aliases**.
+
+## Logon recovery uses a Startup-folder shortcut
+
+**Check.** `clawctl status` reports recovery as configured through a
+Startup-folder shortcut, and `clawctl setup` reported that the logon task could
+not be registered. Task Scheduler refused the registration, so setup wrote
+`OpenClaw Gateway <package family>.lnk` to your Startup folder instead. The
+shortcut starts the same windowless helper, later than the task and only for
+interactive sign-ins. It appears under **Startup apps** in Settings and Task
+Manager, where turning it off stops recovery at sign-in.
+
+**Fix.** Nothing is required for recovery to work. To use the logon task again,
+resolve the Task Scheduler failure that setup reported, then rerun
+`clawctl setup`; it registers the task and removes the shortcut.
+
+## Logon recovery reports that the sign-in helper is unavailable
+
+**Check.** `clawctl status` or `clawctl setup` names the helper's
+package-qualified execution alias,
+`%LOCALAPPDATA%\Microsoft\WindowsApps\<package family>\openclaw-gateway-recovery.exe`,
+as missing. Both recovery lanes start that alias, so setup does not register a
+task or shortcut that would fail at every sign-in.
+
+**Fix.** Repair or reinstall the OpenClaw Gateway package so Windows recreates
+its execution aliases, then run `clawctl setup`.
 
 ## Automatic gateway start failed after `openclaw`
 

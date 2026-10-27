@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      A Windows-subsystem executable has no console, so starting it at sign-in
+      from Task Scheduler or a Startup-folder shortcut opens no window, even
+      when Windows Terminal is the default terminal.
+    -->
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <AssemblyName>openclaw-gateway-recovery</AssemblyName>
+    <RootNamespace>OpenClaw.GatewayRecovery</RootNamespace>
+    <Platforms>x64;arm64</Platforms>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <TargetLatestRuntimePatch>false</TargetLatestRuntimePatch>
+    <PublishAot Condition="'$(RuntimeIdentifier)' != ''">true</PublishAot>
+    <UseAppHost Condition="'$(RuntimeIdentifier)' != ''">true</UseAppHost>
+
+    <!--
+      The launcher's package build carries this executable as content; the
+      helper itself takes no part in MSIX tooling.
+    -->
+    <WindowsPackageType>None</WindowsPackageType>
+    <EnableMSIXTooling>false</EnableMSIXTooling>
+    <DefineConstants>$(DefineConstants);OPENCLAW_GATEWAY_RECOVERY</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="OpenClaw.Launcher.Tests" />
+    <Compile Include="..\OpenClaw.Launcher\HostDataPaths.cs" Link="HostDataPaths.cs" />
+    <Compile Include="..\OpenClaw.Launcher\HostDiagnosticLog.cs" Link="HostDiagnosticLog.cs" />
+    <Compile Include="..\OpenClaw.Launcher\PackageExecutionAlias.cs" Link="PackageExecutionAlias.cs" />
+  </ItemGroup>
+
+</Project>

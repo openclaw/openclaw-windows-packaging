@@ -10,7 +10,7 @@ internal enum GatewayPersistenceLane
     TaskScheduler,
 
     /// <summary>
-    /// The Startup folder. Permitted only when the task could not be
+    /// A Startup-folder shortcut. Permitted only when the task could not be
     /// registered, and always reported, never a silent substitute.
     /// </summary>
     StartupFolderFallback,
@@ -70,17 +70,21 @@ internal sealed record GatewayPersistenceRemovalResult(
 /// Scopes the task name to this installation, so the public and internal
 /// packages can never overwrite or delete each other's registration.
 /// </param>
-/// <param name="LauncherPath">The generated script both lanes invoke.</param>
+/// <param name="HelperPath">
+/// The package-qualified execution alias of the windowless sign-in helper that
+/// both lanes start. It survives package updates, unlike the install directory.
+/// </param>
+/// <param name="LegacyLauncherPath">
+/// The script an earlier generation's task or Startup file ran. It and its
+/// <c>.ps1</c> and <c>.cmd</c> siblings are removed once nothing references them.
+/// </param>
 /// <param name="StartupFolderPath">
 /// Where the explicitly reported Startup-folder fallback is written.
 /// </param>
-/// <param name="WorkingDirectory">
-/// The directory the gateway is given, rather than the system directory a
-/// logon task would otherwise inherit.
+/// <param name="StateDirectory">
+/// The installation state directory that holds the legacy launcher files.
 /// </param>
-/// <param name="ScriptHostPath">
-/// The absolute path to the windowless Windows Script Host the task runs.
-/// </param>
+/// <param name="StartupLinks">Reads and writes the Startup-folder shortcut.</param>
 /// <param name="DeleteFile">
 /// Optional file-delete seam used to make persistence failures observable in tests.
 /// </param>
@@ -90,9 +94,10 @@ internal sealed record GatewayPersistenceRemovalResult(
 internal sealed record GatewayPersistenceOptions(
     string UserSid,
     string PackageFamilyName,
-    string LauncherPath,
+    string HelperPath,
+    string LegacyLauncherPath,
     string StartupFolderPath,
-    string WorkingDirectory,
-    string ScriptHostPath,
+    string StateDirectory,
+    IStartupLinkStore StartupLinks,
     Action<string>? DeleteFile = null,
     string? LogonTriggerUserSid = null);

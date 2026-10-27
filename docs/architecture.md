@@ -26,6 +26,11 @@ identities are intentional, rather than two copies of a host:
   separate after startup. The agent surface forwards OpenClaw arguments; the
   control surface owns the package commands.
 
+A third package application, `GatewayRecovery`, is not a host entry point. It is
+the separate windowless sign-in helper that logon recovery starts, and it only
+runs the control surface's `gateway-service start --recovery`; see
+[Gateway lifecycle](#gateway-lifecycle-is-recorded-observed-and-restarted-at-logon).
+
 This arrangement makes the user-facing distinction enforceable by package
 activation, while avoiding two launchers that could drift in AOT settings,
 diagnostics, or runtime composition. It also protects transparent forwarding:
@@ -260,27 +265,52 @@ uses the inbox `schtasks.exe` and a task registered for the signed-in user's
 logon, avoiding NativeAOT-incompatible Task Scheduler COM interop and avoiding
 elevation that would make the task user-unmanageable. After registration, the
 persistence manager reads the task back before reporting recovery ready or
-removing a Startup-folder fallback. Trigger or principal drift reports the
+removing a Startup-folder shortcut. Trigger or principal drift reports the
 expected and observed identities; an unreadable result remains unknown. The
 owning token SID and the interactive logon SID remain separate for account
 compatibility, rather than silently redirecting recovery to another user.
 
-Logon recovery runs the generated `gateway-launcher.js` through the windowless
-Windows Script Host. Both the task and the Startup-folder fallback invoke the
-same launcher, which runs Windows PowerShell hidden and waits for its exit code.
-The Startup-folder `.wsf` selects JScript explicitly and references that launcher,
-so a user's `.js` editor association does not intercept recovery.
-The PowerShell script resolves the owning package's Control execution alias from
-its manifest, invokes the package-qualified alias with `CreateNoWindow`, and
-waits for `clawctl gateway-service start --recovery`. Interactive CLI commands
-keep their normal terminal output. The background command retains normal host
-diagnostics and the task receives its exit code. Existing CMD registrations
-migrate through an explicit `clawctl setup` without `--fresh`, reusing the recorded
-session and keeping its data and gateway settings. Successful setup and teardown
-remove only marked legacy files. If an existing task cannot be replaced,
-fallback setup retains its previous recovery files and
-reports that migration still requires action. Windows Script Host
-and its JScript engine must be available for this recovery lane.
+Both recovery lanes start the windowless sign-in helper,
+[`openclaw-gateway-recovery.exe`](../src/OpenClaw.GatewayRecovery/Program.cs), a
+Windows-subsystem NativeAOT executable that the package declares as its own
+`GatewayRecovery` application. It has no console, so nothing at sign-in opens a
+window, even when Windows Terminal is the default terminal. The logon task's
+only action is the helper's quoted package-qualified execution alias,
+`%LOCALAPPDATA%\Microsoft\WindowsApps\<package family>\openclaw-gateway-recovery.exe`,
+with no arguments. Windows recreates that alias on every package update, unlike
+the versioned install directory, so the registration survives updates. Setup
+reads the alias name from the installed manifest through
+[`PackageExecutionAlias`](../src/OpenClaw.Launcher/PackageExecutionAlias.cs), so a
+side-by-side development identity registers its own renamed alias. When Task
+Scheduler refuses the registration, setup instead writes a Startup-folder
+shortcut, `OpenClaw Gateway <package family>.lnk`, to the same alias through the
+shell's ShellLink object. Its description marks it as OpenClaw's; a same-named
+shortcut without that marker is reported, never replaced or removed. Setup writes
+only into an existing Startup folder: a folder created from inside the package
+would be redirected into the package's private AppData, which Explorer does not
+read at sign-in. Status and install report recovery as needing action when the
+helper alias is missing, rather than registering a lane that would fail silently.
+
+The helper resolves this package's `Control` alias from the same manifest,
+starts `clawctl gateway-service start --recovery` with `CreateNoWindow` and the
+user profile as its working directory, waits, and returns that command's exit
+code, so the task's last-run result is the recovery result. It appends what
+happens before that command starts, including a missing alias, to the host
+diagnostic log, and it never shows UI. Interactive CLI commands keep their
+normal terminal output.
+
+Earlier generations ran a generated launcher instead: a CMD file, then
+`gateway-launcher.js` through Windows Script Host, each calling a PowerShell
+activation script, with a Startup-folder `.cmd` or `.wsf` fallback. Those files
+carry a generator marker. Status reports a task that still runs them as not
+matching this installation, and reports a marked file that remains as needing
+action. An explicit `clawctl setup` without `--fresh` reuses the recorded session,
+keeps its data and gateway settings, replaces the logon action, and then removes
+only marked legacy files; teardown removes them too. If an existing task cannot
+be replaced, the new shortcut is written but the files that task still runs are
+retained, and setup reports that migration still requires action. Recovery no
+longer depends on Windows Script Host, so a host disabled by policy cannot block
+sign-in once the task has been migrated.
 
 The real control command is `gateway-service`, not `gateway`. The configured
 port is distinct from the upstream default. The launcher does not force the
@@ -545,4 +575,5 @@ flowchart LR
 | State transfer and activation | [`SessionStateTransferProtocol.cs`](../src/OpenClaw.SessionProtocol/SessionStateTransferProtocol.cs), [`StateTransferCoordinator.cs`](../src/OpenClaw.Launcher/StateTransfer/StateTransferCoordinator.cs), [`SessionStateTransfer.cs`](../src/OpenClaw.SessionHost/SessionStateTransfer.cs), [`SessionStateAccess.cs`](../src/OpenClaw.SessionHost/SessionStateAccess.cs), [`StateActivationJournal.cs`](../src/OpenClaw.SessionHost/StateActivationJournal.cs) |
 | Agent runtime installation | [`SessionRuntimeInstaller.cs`](../src/OpenClaw.SessionHost/SessionRuntimeInstaller.cs) |
 | Gateway lifecycle | [`SchTasksGatewayScheduler.cs`](../src/OpenClaw.Launcher/Gateway/SchTasksGatewayScheduler.cs), [`GatewayController.cs`](../src/OpenClaw.Launcher/Gateway/GatewayController.cs), [`GatewayConfigurationStore.cs`](../src/OpenClaw.Launcher/Gateway/GatewayConfigurationStore.cs) |
+| Logon recovery and the sign-in helper | [`GatewayPersistenceManager.cs`](../src/OpenClaw.Launcher/Gateway/GatewayPersistenceManager.cs), [`ShellStartupLinkStore.cs`](../src/OpenClaw.Launcher/Gateway/ShellStartupLinkStore.cs), [`PackageExecutionAlias.cs`](../src/OpenClaw.Launcher/PackageExecutionAlias.cs), [`GatewayRecoveryStart.cs`](../src/OpenClaw.GatewayRecovery/GatewayRecoveryStart.cs) |
 | Diagnostics and payload integrity | [`HostDiagnosticLog.cs`](../src/OpenClaw.Launcher/HostDiagnosticLog.cs), [`HostEnvironment.cs`](../src/OpenClaw.Launcher/HostEnvironment.cs), [`DiagnosticFailure.cs`](../src/OpenClaw.Launcher/DiagnosticFailure.cs), [`DiagnosticsBundle.cs`](../src/OpenClaw.Launcher/Gateway/DiagnosticsBundle.cs), [`DiagnosticsRedactor.cs`](../src/OpenClaw.Launcher/Gateway/DiagnosticsRedactor.cs), [`Build-MSIX.ps1`](../scripts/Build-MSIX.ps1) |

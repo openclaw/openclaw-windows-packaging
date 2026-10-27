@@ -112,6 +112,32 @@ function Remove-DirectoryIfPresent {
     }
 }
 
+function Get-PortableExecutableSubsystem {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -lt 0x40 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
+        throw "'$Path' is not a Windows executable image."
+    }
+
+    # The subsystem is at offset 68 of the optional header in both PE32 and
+    # PE32+, and the optional header follows the 4-byte signature and the
+    # 20-byte file header.
+    $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+    if (
+        $peOffset -lt 0x40 -or
+        $peOffset + 24 + 70 -gt $bytes.Length -or
+        [BitConverter]::ToUInt32($bytes, $peOffset) -ne 0x00004550
+    ) {
+        throw "'$Path' is not a Windows executable image."
+    }
+
+    return [BitConverter]::ToUInt16($bytes, $peOffset + 24 + 68)
+}
+
 function Test-PackageVersion {
     $segments = @($PackageVersion.Split('.'))
     if ($segments.Count -ne 4) {
@@ -589,6 +615,62 @@ try {
         throw "The published $Architecture session host is incomplete."
     }
 
+    $recoveryHelperProject = Join-Path `
+        $repositoryRoot `
+        'src\OpenClaw.GatewayRecovery\OpenClaw.GatewayRecovery.csproj'
+    $recoveryHelperOutput = Join-Path `
+        $repositoryRoot `
+        "content\gateway-recovery\$Architecture"
+    Remove-DirectoryIfPresent -Path $recoveryHelperOutput
+    New-Item -Path $recoveryHelperOutput -ItemType Directory -Force | Out-Null
+    Write-Host "Publishing the NativeAOT win-$Architecture sign-in helper."
+    Invoke-CheckedCommand `
+        -FailureMessage 'NativeAOT sign-in helper publish failed.' `
+        -Command {
+            & dotnet publish $recoveryHelperProject `
+                --configuration Release `
+                --runtime "win-$Architecture" `
+                --self-contained `
+                --no-restore `
+                "-p:Platform=$Architecture" `
+                -p:PublishAot=true `
+                --output $recoveryHelperOutput `
+                --nologo
+        }
+    $recoveryHelperFiles = @(
+        Get-ChildItem -LiteralPath $recoveryHelperOutput -File -Force -Recurse |
+            Where-Object Extension -notin '.pdb', '.xml' |
+            ForEach-Object {
+                [ordered]@{
+                    path = (
+                        [IO.Path]::GetRelativePath(
+                            $recoveryHelperOutput,
+                            $_.FullName
+                        )
+                    ).Replace('\', '/')
+                    length = $_.Length
+                    sha256 = (
+                        Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256
+                    ).Hash.ToLowerInvariant()
+                }
+            }
+    )
+    if (
+        $recoveryHelperFiles.Count -ne 1 -or
+        $recoveryHelperFiles[0].path -cne 'openclaw-gateway-recovery.exe'
+    ) {
+        throw "The published $Architecture sign-in helper must be exactly openclaw-gateway-recovery.exe."
+    }
+    # A console-subsystem helper would open a terminal window at every sign-in.
+    $recoveryHelperSubsystem = Get-PortableExecutableSubsystem `
+        -Path (Join-Path $recoveryHelperOutput 'openclaw-gateway-recovery.exe')
+    if ($recoveryHelperSubsystem -ne 2) {
+        throw (
+            "The published $Architecture sign-in helper must be a Windows GUI " +
+            "executable; its subsystem is $recoveryHelperSubsystem."
+        )
+    }
+
     $appxOutput = $msixBuildDirectory.TrimEnd('\') + '\'
     Write-Host "Building unsigned NativeAOT win-$Architecture MSIX with MSBuild."
     Invoke-CheckedCommand `
@@ -683,6 +765,14 @@ try {
             }
         )
     }
+    foreach ($recoveryHelperFile in $recoveryHelperFiles) {
+        $expectedPackageFiles.Add(
+            $recoveryHelperFile.path,
+            [pscustomobject]@{
+                Hash = $recoveryHelperFile.sha256
+            }
+        )
+    }
     $packageEntries = [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::OrdinalIgnoreCase
     )
@@ -757,12 +847,25 @@ try {
                 "//*[local-name()='Extension' and @Category='windows.appExecutionAlias']"
             )
         )
-        if ($aliasExtension.Count -ne 2) {
-            throw 'The MSIX must contain public and control app execution alias extensions.'
+        if ($aliasExtension.Count -ne 3) {
+            throw 'The MSIX must contain public, control, and sign-in helper app execution alias extensions.'
+        }
+        $aliasTargets = @{
+            'openclaw.exe' = 'openclaw.exe'
+            'clawctl.exe' = 'openclaw.exe'
+            'openclaw-gateway-recovery.exe' = 'openclaw-gateway-recovery.exe'
         }
         foreach ($extension in $aliasExtension) {
-            if ($extension.Executable -ne 'openclaw.exe') {
-                throw 'Both command aliases must target openclaw.exe.'
+            $extensionAliases = @(
+                $extension.SelectNodes(".//*[local-name()='ExecutionAlias']") |
+                    ForEach-Object { $_.Alias }
+            )
+            if (
+                $extensionAliases.Count -ne 1 -or
+                -not $aliasTargets.ContainsKey([string]$extensionAliases[0]) -or
+                $extension.Executable -cne $aliasTargets[[string]$extensionAliases[0]]
+            ) {
+                throw 'Each command alias must target its own executable.'
             }
         }
 
@@ -771,7 +874,7 @@ try {
                 ForEach-Object { $_.SelectNodes(".//*[local-name()='ExecutionAlias']") } |
                 ForEach-Object { $_.Alias }
         )
-        foreach ($requiredAlias in @('openclaw.exe', 'clawctl.exe')) {
+        foreach ($requiredAlias in $aliasTargets.Keys) {
             if ($requiredAlias -notin $registeredAliases) {
                 throw "The MSIX does not register $requiredAlias."
             }
@@ -840,6 +943,7 @@ try {
         mxcRuntimeVersion = [string]$mxcProvenance.version
         mxcRuntimePackage = [string]$mxcProvenance.package
         sessionHostFiles = $sessionHostFiles
+        gatewayRecoveryFiles = $recoveryHelperFiles
         architecture = $Architecture
         archive = $msixName
         sha256 = $msixHash

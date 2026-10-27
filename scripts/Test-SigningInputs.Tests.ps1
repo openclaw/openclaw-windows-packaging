@@ -280,6 +280,18 @@ function New-TestArtifact {
             }
     )
 
+    $recoveryHelperPath = Join-Path $staging 'openclaw-gateway-recovery.exe'
+    [IO.File]::WriteAllText($recoveryHelperPath, "gateway-recovery-$Architecture")
+    $recoveryHelperFiles = @(
+        [ordered]@{
+            path = 'openclaw-gateway-recovery.exe'
+            length = (Get-Item -LiteralPath $recoveryHelperPath).Length
+            sha256 = (
+                Get-FileHash -LiteralPath $recoveryHelperPath -Algorithm SHA256
+            ).Hash.ToLowerInvariant()
+        }
+    )
+
     $msixName = "OpenClawGateway-$Architecture.msix"
     $msixPath = Join-Path $directory $msixName
     [IO.Compression.ZipFile]::CreateFromDirectory($staging, $msixPath)
@@ -305,6 +317,7 @@ function New-TestArtifact {
         mxcRuntimeVersion = $mxcRuntimeVersion
         mxcRuntimePackage = 'Microsoft.Mxc.Sdk'
         sessionHostFiles = $sessionHostFiles
+        gatewayRecoveryFiles = $recoveryHelperFiles
         architecture = $Architecture
         archive = $msixName
         sha256 = $msixHash
@@ -875,6 +888,30 @@ try {
     }
     Assert-Fails `
         -MessagePattern 'session host file is invalid' `
+        -Action { Invoke-PolicyValidation -Root $testRoot }
+
+    Reset-TestArtifacts
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        Set-Content `
+            -LiteralPath (Join-Path $Expanded 'openclaw-gateway-recovery.exe') `
+            -Value 'tampered' `
+            -Encoding utf8
+    }
+    Assert-Fails `
+        -MessagePattern 'sign-in helper is invalid' `
+        -Action { Invoke-PolicyValidation -Root $testRoot }
+
+    Reset-TestArtifacts
+    $x64MetadataPath = Join-Path $testRoot 'x64\msix-metadata.json'
+    $x64Metadata = Get-Content -LiteralPath $x64MetadataPath -Raw |
+        ConvertFrom-Json
+    $x64Metadata.PSObject.Properties.Remove('gatewayRecoveryFiles')
+    $x64Metadata |
+        ConvertTo-Json |
+        Set-Content -LiteralPath $x64MetadataPath -Encoding utf8
+    Assert-Fails `
+        -MessagePattern 'sign-in helper inventory is invalid' `
         -Action { Invoke-PolicyValidation -Root $testRoot }
 
     Reset-TestArtifacts

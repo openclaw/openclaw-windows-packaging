@@ -7,6 +7,7 @@ content/openclaw/*
 !content/openclaw/.gitkeep
 content/mxc/
 content/session-host/
+content/gateway-recovery/
 artifacts/
 test-signed/
 bin/

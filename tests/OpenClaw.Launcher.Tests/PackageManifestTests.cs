@@ -32,6 +32,29 @@ public sealed class PackageManifestTests
             Aliases(controlApplication));
     }
 
+    [Fact]
+    public void ManifestRegistersTheWindowlessSignInHelperWithItsOwnAlias()
+    {
+        XDocument manifest = XDocument.Load(
+            Path.Combine(AppContext.BaseDirectory, "Package.appxmanifest"));
+        XElement helper = Assert.Single(
+            manifest.Descendants(),
+            element => element.Name.LocalName == "Application" &&
+                (string?)element.Attribute("Id") == Launcher.Gateway.GatewayPersistenceManager.HelperApplicationId);
+
+        Assert.Equal(
+            Launcher.Gateway.GatewayPersistenceManager.HelperExecutable,
+            (string?)helper.Attribute("Executable"));
+        Assert.Equal(
+            [Launcher.Gateway.GatewayPersistenceManager.HelperExecutable],
+            Aliases(helper));
+        Assert.Equal(
+            "none",
+            (string?)helper.Descendants()
+                .Single(element => element.Name.LocalName == "VisualElements")
+                .Attribute("AppListEntry"));
+    }
+
     private static string[] Aliases(XElement application) =>
         [.. application.Descendants()
             .Where(element => element.Name.LocalName == "ExecutionAlias")
