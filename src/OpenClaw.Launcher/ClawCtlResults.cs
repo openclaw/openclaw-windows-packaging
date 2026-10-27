@@ -51,7 +51,8 @@ internal sealed record StatusCommandResult(
     GatewayPersistenceStatus Recovery,
     string? NodeVersion,
     AgentConfigReadinessStatus? Readiness = null,
-    SessionStateTransferResult? StateTransfer = null) : IClawCtlResult
+    SessionStateTransferResult? StateTransfer = null,
+    string? UnownedSetupEvidence = null) : IClawCtlResult
 {
     public string Command => "status";
 

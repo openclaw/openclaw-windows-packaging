@@ -27,6 +27,28 @@ clawctl setup
 
 For another stated prerequisite, correct that prerequisite and rerun setup.
 
+## The session record is missing but setup evidence remains
+
+**Check.** `openclaw`, `clawctl setup`, and `clawctl teardown` stop with this
+message, and `clawctl status` shows it in place of its usual setup hint.
+Preserve the `setup.json` at the path in the message. Its surviving sandbox ID
+can help investigate a lost `session.json`, but does not establish enough
+ownership metadata to start, adopt, or remove the original provision.
+
+**Outcome.** Ordinary setup and teardown leave that evidence unchanged and do
+not contact the session backend. `teardown --force` does not waive the missing
+ownership record. A clean first run, with both records absent, still provisions
+normally. So does a retry after setup failed before it recorded a session,
+because that setup marker has no sandbox ID.
+
+**Recovery.** Investigate the missing ownership record before resetting. If you
+deliberately choose to abandon unresolved resources,
+`clawctl setup --fresh --force` retains the surviving setup locator in
+`Logs\pre-reset.log`, warns that external cleanup remains unresolved, and
+prepares a new session. It does not reclaim the old provision. The report is
+diagnostic evidence, not authority to operate on an account; supported
+original-provision discovery and ownership verification remain unavailable.
+
 ## Companion reports that the agent Gateway config is absent
 
 **Check.** `clawctl gateway-service status --json` may report

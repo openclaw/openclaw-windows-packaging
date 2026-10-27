@@ -47,6 +47,7 @@ internal sealed class TeardownOrchestrator
         bool force,
         CancellationToken cancellationToken)
     {
+        _sessions.RequireRecordedOwnershipOrCleanState(_setup);
         GatewayPersistenceRemovalResult recovery = await _recovery.UninstallAsync(cancellationToken)
             .ConfigureAwait(false);
         if (!recovery.Succeeded)

@@ -204,6 +204,13 @@ internal sealed class SessionRuntime
                     : setup.Detail!);
         }
 
+        SessionStatus session = Coordinator.GetRecordedStatus();
+        if (session.Fault == SessionStateFault.Missing &&
+            SessionCoordinator.MayLocateProvision(setup))
+        {
+            throw new UnownedSetupEvidenceException(SetupState.FilePath);
+        }
+
         if (setup.Record.Phase != SetupPhase.Ready)
         {
             throw new SessionException(
@@ -212,7 +219,6 @@ internal sealed class SessionRuntime
                     : "OpenClaw setup is incomplete. Run `clawctl setup` again.");
         }
 
-        SessionStatus session = Coordinator.GetRecordedStatus();
         if (session.Record is null)
         {
             throw new SessionException(

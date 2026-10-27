@@ -30,12 +30,16 @@ public sealed class SetupOrchestratorTests : IDisposable
         SessionRuntime runtime = CreateRuntime();
         var lifecycle = new StubLifecycle();
 
+        Assert.Equal(SetupStateFault.Missing, runtime.SetupState.Read(runtime.ApplicationId).Fault);
+        Assert.Equal(SessionStateFault.Missing, runtime.Coordinator.GetRecordedStatus().Fault);
         SetupEnsureOutcome outcome = await EnsureAsync(runtime, lifecycle).ConfigureAwait(true);
 
         Assert.Equal(SetupEnsureOutcome.Provisioned, outcome);
         SetupRecord? record = runtime.SetupState.Read(runtime.ApplicationId).Record;
         Assert.NotNull(record);
         Assert.Equal(SetupPhase.Ready, record.Phase);
+        Assert.NotNull(runtime.Coordinator.GetRecordedStatus().Record);
+        _ = Assert.Single(_backend.Calls, call => call == "provision");
         Assert.Equal(1, lifecycle.RecoveryInstalls);
     }
 

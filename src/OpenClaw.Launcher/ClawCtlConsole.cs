@@ -718,7 +718,14 @@ internal static class ClawCtlConsole
         if (result.Session.Availability == Session.SessionAvailability.None)
         {
             view.Blank();
-            view.Command("Run", "clawctl setup");
+            if (result.UnownedSetupEvidence is { } evidence)
+            {
+                view.Note(evidence);
+            }
+            else
+            {
+                view.Command("Run", "clawctl setup");
+            }
         }
         else if (result.Session.Availability == Session.SessionAvailability.Stale)
         {

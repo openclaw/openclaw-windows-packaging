@@ -344,6 +344,7 @@ internal static class SetupOrchestrator
         using ISessionLockHandle? handle = lockAlreadyHeld
             ? null
             : runtime.AcquireLifecycleLock();
+        runtime.Coordinator.RequireRecordedOwnershipOrCleanState(runtime.SetupState);
         runtime.SetupState.Write(new SetupRecord
         {
             ApplicationId = runtime.ApplicationId,
@@ -418,6 +419,7 @@ internal static class SetupOrchestrator
         Action<string> log)
     {
         SessionStatus session = runtime.Coordinator.GetRecordedStatus();
+        SetupStateResult setup = runtime.SetupState.Read(runtime.ApplicationId);
         GatewayStateResult gateway = runtime.GatewayState.Read();
         string path = runtime.Paths.PreResetReportPath;
         string directory = Path.GetDirectoryName(path)
@@ -448,6 +450,16 @@ internal static class SetupOrchestrator
         else
         {
             lines.Add($"sessionRecordFault={session.Fault?.ToString() ?? "none"}");
+        }
+
+        if (setup.Record is not null)
+        {
+            lines.Add($"setupSandboxId={setup.Record.SandboxId ?? string.Empty}");
+            lines.Add($"setupPhase={setup.Record.Phase}");
+        }
+        else
+        {
+            lines.Add($"setupRecordFault={setup.Fault?.ToString() ?? "none"}");
         }
 
         if (gateway.Record is not null)
