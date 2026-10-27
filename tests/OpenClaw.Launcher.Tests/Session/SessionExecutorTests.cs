@@ -360,6 +360,63 @@ public sealed class SessionExecutorTests : IDisposable
             _log);
     }
 
+    // A cmd.exe refusal to start the staged helper exits 1 with only its own
+    // message; it must not read like a helper that ran and failed.
+    [Theory]
+    [InlineData(1, "Access is denied.", "did not start or stopped before reporting")]
+    [InlineData(
+        SessionLaunchProtocol.HelperFailureExitCode,
+        "openclaw-session-host: primary failure",
+        "failed and could not write it")]
+    [InlineData(0, "", "exited without writing it")]
+    public async Task RuntimeInstallWithoutAResultNamesHowTheHelperEnded(
+        int exitCode,
+        string standardError,
+        string cause)
+    {
+        _backend.ExecuteBehavior = _ =>
+            Task.FromResult(new MxcExecutionResult(exitCode, string.Empty, standardError));
+
+        SessionException exception = await Assert.ThrowsAsync<SessionException>(
+            () => Create().InstallRuntimeAsync(
+                Record(),
+                @"C:\Package\session-host\x64\openclaw-session-host.exe",
+                @"C:\Package\runtime\node-v24.20.0-win-x64.zip",
+                @"C:\Package\app",
+                CancellationToken.None));
+
+        Assert.Contains(
+            $"runtime install result: the session helper {cause} (executor exit code {exitCode})",
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Contains(standardError, exception.Message, StringComparison.Ordinal);
+        Assert.Empty(Directory.GetFiles(Workspace));
+    }
+
+    // Collection prefixes the shared missing-result description, so the
+    // composed message must name the result once.
+    [Fact]
+    public async Task CollectionWithoutAResultNamesHowTheHelperEnded()
+    {
+        _backend.ExecuteBehavior = _ =>
+            Task.FromResult(new MxcExecutionResult(1, string.Empty, "Access is denied."));
+
+        SessionException exception = await Assert.ThrowsAsync<SessionException>(
+            () => Create().CollectAsync(
+                Record(),
+                @"C:\Package\session-host\x64\openclaw-session-host.exe",
+                Path.Combine(Workspace, "staged"),
+                [],
+                [],
+                CancellationToken.None));
+
+        Assert.Equal(
+            "The isolated session did not report a collection result: the session helper " +
+            "did not start or stopped before reporting (executor exit code 1): Access is denied.",
+            exception.Message);
+        Assert.Empty(Directory.GetFiles(Workspace));
+    }
+
     [Fact]
     public async Task CollectionFailureResultIsReported()
     {

@@ -116,11 +116,11 @@ as JSON, and launches the requested process with the original argument vector.
 [`OpenClaw.SessionProtocol`](../src/OpenClaw.SessionProtocol/SessionLaunchProtocol.cs)
 defines the AOT-safe JSON contracts shared by host and helper. Each contract
 has a schema version and explicit JSON property names; the protocol validates
-the expected version and writes a correlated result file. Helper failures are
-reported in that result when a request path exists, so the host can distinguish
-an operation failure from a transport failure. The one exception is malformed
-helper invocation without a request path, which can only report usage on
-stderr and exit with the helper failure code.
+the expected version and writes a correlated result file. When publication
+succeeds, helper failures are reported in that result so the host can
+distinguish an operation failure from a transport failure. A malformed helper
+invocation without a request path can only report usage on stderr and exit
+with the helper failure code.
 
 The helper must be copied before it can run. [`SessionHelperStager`](../src/OpenClaw.Launcher/Session/SessionHelperStager.cs)
 stages the immutable packaged helper in the session's shared workspace because
@@ -133,6 +133,22 @@ failure rather than silently substituting another executable. Gateway start
 lifecycle lock before inspecting a retained Gateway process. It reuses the
 configured session without rewriting setup, identity, or profile data. Status
 only requires an already staged helper and never stages one.
+
+Runtime installation and log collection report a correlated failure result
+when the operation fails. If that failure result cannot be published, the
+helper reports the primary and publication errors together on stderr and
+retains failure exit code `64`. Those messages keep file paths, are bounded in
+length, and have credential-shaped values redacted on a best-effort basis.
+This fallback requires helper entry; a successful MXC spawn alone does not
+prove that the staged helper loaded or ran.
+
+When a plain helper exchange such as runtime installation, tool installation,
+config readiness, or collection leaves no result file, the host reports how the
+helper ended, followed by the guest's output. Exit code `64` means the helper
+failed and could not write its result, and `0` means it exited without one.
+Any other code means `cmd.exe` could not start the staged helper or the helper
+stopped before reporting, for example when `cmd.exe` prints `Access is denied`
+and exits `1`.
 
 Before starting an attached child, the helper initializes its own console's
 input and output to UTF-8. Host-side encoding does not set the isolated

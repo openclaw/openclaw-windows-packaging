@@ -31,6 +31,7 @@
     <Compile Include="..\OpenClaw.Launcher\WindowsKillOnCloseJob.cs" Link="WindowsKillOnCloseJob.cs" />
     <Compile Include="..\OpenClaw.Launcher\WindowsInvocationJob.cs" Link="WindowsInvocationJob.cs" />
     <Compile Include="..\OpenClaw.Launcher\Session\TrustedPath.cs" Link="TrustedPath.cs" />
+    <Compile Include="..\OpenClaw.Launcher\Gateway\DiagnosticsRedactor.cs" Link="DiagnosticsRedactor.cs" />
     <Compile Include="..\OpenClaw.Launcher\StateTransfer\StateTransferFiles.cs" Link="StateTransferFiles.cs" />
   </ItemGroup>
 

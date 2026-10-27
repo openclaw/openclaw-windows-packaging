@@ -76,6 +76,7 @@ internal static partial class SmokeProgram
             ("MXC SDK loads and validates requests under NativeAOT", MxcSdkWorksInFreshProcessAsync),
             ("package provenance reads survive NativeAOT", PackageProvenanceReadsBind),
             ("diagnostics redaction survives NativeAOT", DiagnosticsRedactionWorks),
+            ("plain helper failure fallback survives NativeAOT", HelperFailureFallbackWorks),
             ("missing application reports diagnostics", MissingApplicationReportsAsync),
             ("openclaw never parses its arguments", AgentNeverParsesItsArgumentsAsync),
             ("first agent launch provisions and forwards arguments", FirstAgentLaunchProvisionsAsync),
@@ -133,6 +134,32 @@ internal static partial class SmokeProgram
 
         WriteLine($"{scenarios.Length} NativeAOT scenarios passed.");
         return 0;
+    }
+
+    private static Task HelperFailureFallbackWorks()
+    {
+        foreach (bool collect in new[] { false, true })
+        {
+            var errors = new StringWriter();
+            static string Read(string _) =>
+                throw new IOException("""operation denied {"token":"fixture-secret"} at 'C:\private\request.json'""");
+            static void Write(string _, string __) =>
+                throw new UnauthorizedAccessException("publication denied GATEWAY_TOKEN=fixture-secret");
+            int exitCode = collect
+                ? SessionCollector.Run("fixture-request.json", Read, Write, errorOutput: errors)
+                : SessionRuntimeInstaller.Run("fixture-request.json", Read, Write, errorOutput: errors);
+            string output = errors.ToString();
+            Assert(exitCode == SessionLaunchProtocol.HelperFailureExitCode,
+                "The plain helper did not preserve exit 64.");
+            Assert(output.Contains("operation denied", StringComparison.Ordinal) &&
+                output.Contains("publication denied", StringComparison.Ordinal),
+                "The plain helper lost one of the failures.");
+            Assert(output.Contains("<redacted>", StringComparison.Ordinal) &&
+                output.Contains(@"C:\private\request.json", StringComparison.Ordinal) &&
+                !output.Contains("fixture-secret", StringComparison.Ordinal),
+                "The plain helper fallback lost its path or kept a credential under NativeAOT.");
+        }
+        return Task.CompletedTask;
     }
 
     private static Task InvocationJobWorks()

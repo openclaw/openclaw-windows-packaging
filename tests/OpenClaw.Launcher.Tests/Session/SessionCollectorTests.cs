@@ -320,6 +320,161 @@ public sealed class SessionCollectorTests : IDisposable
         Assert.NotNull(result.Error);
     }
 
+    [Fact]
+    public void AnOperationFailureIsCorrelatedWhenTheFailureResultCanBeWritten()
+    {
+        const string requestId = "collect-operation-failure";
+        _ = Directory.CreateDirectory(Workspace);
+        File.WriteAllText(
+            RequestPath,
+            SessionCollectProtocol.SerializeRequest(new SessionCollectRequest
+            {
+                RequestId = requestId,
+                DestinationDirectory = Path.Combine(_root, "outside"),
+                Sources = []
+            }));
+        var errors = new StringWriter();
+
+        int exitCode = SessionCollector.Run(
+            RequestPath,
+            File.ReadAllText,
+            File.WriteAllText,
+            Source,
+            errorOutput: errors);
+
+        Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode, exitCode);
+        SessionCollectResult result = SessionCollectProtocol.ReadResult(
+            File.ReadAllText(SessionLaunchProtocol.ResultPathFor(RequestPath)));
+        Assert.Equal(requestId, result.RequestId);
+        Assert.Equal("destination resolves outside the shared workspace", result.Error);
+        Assert.Empty(errors.ToString());
+    }
+
+    [Fact]
+    public void AnUnwritableFailureResultRetainsBothFailuresOnRedactedStderr()
+    {
+        const string requestId = "collect-write-failure";
+        string publicationError =
+            $"failure result denied for '{SessionLaunchProtocol.ResultPathFor(RequestPath)}' GATEWAY_TOKEN=write-secret";
+        _ = Directory.CreateDirectory(Workspace);
+        File.WriteAllText(
+            RequestPath,
+            SessionCollectProtocol.SerializeRequest(new SessionCollectRequest
+            {
+                RequestId = requestId,
+                DestinationDirectory = Path.Combine(_root, "outside"),
+                Sources = []
+            }));
+        string? attemptedResult = null;
+        var errors = new StringWriter();
+
+        int exitCode = SessionCollector.Run(
+            RequestPath,
+            File.ReadAllText,
+            (path, contents) =>
+            {
+                Assert.Equal(SessionLaunchProtocol.ResultPathFor(RequestPath), path);
+                attemptedResult = contents;
+                throw new UnauthorizedAccessException(publicationError);
+            },
+            Source,
+            errorOutput: errors);
+
+        Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode, exitCode);
+        SessionCollectResult result = SessionCollectProtocol.ReadResult(
+            Assert.IsType<string>(attemptedResult));
+        Assert.Equal(requestId, result.RequestId);
+        Assert.Equal("destination resolves outside the shared workspace", result.Error);
+
+        string output = errors.ToString();
+        Assert.Contains(requestId, output, StringComparison.Ordinal);
+        Assert.Contains(
+            "destination resolves outside the shared workspace",
+            output,
+            StringComparison.Ordinal);
+        Assert.Contains("failure result denied", output, StringComparison.Ordinal);
+        Assert.Contains(SessionLaunchProtocol.ResultPathFor(RequestPath), output, StringComparison.Ordinal);
+        Assert.Contains("<redacted>", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("write-secret", output, StringComparison.Ordinal);
+        _ = Assert.Single(output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+        Assert.True(output.Length < 1200);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AFailedSuccessResultWriteReportsThePublicationFailure(bool failureWriteDenied)
+    {
+        const string requestId = "collect-success-write-failure";
+        string primaryError =
+            $"success result denied for '{SessionLaunchProtocol.ResultPathFor(RequestPath)}' OPENAI_API_KEY=success-secret";
+        string publicationError =
+            $"failure result denied for '{SessionLaunchProtocol.ResultPathFor(RequestPath)}' GATEWAY_TOKEN=write-secret";
+        string? successResult = null;
+        string? failureResult = null;
+        int writes = 0;
+        _ = Directory.CreateDirectory(Workspace);
+        File.WriteAllText(
+            RequestPath,
+            SessionCollectProtocol.SerializeRequest(new SessionCollectRequest
+            {
+                RequestId = requestId,
+                DestinationDirectory = Destination,
+                Sources = []
+            }));
+        var errors = new StringWriter();
+
+        int exitCode = SessionCollector.Run(
+            RequestPath,
+            File.ReadAllText,
+            (_, contents) =>
+            {
+                writes++;
+                if (writes == 1)
+                {
+                    successResult = contents;
+                    throw new IOException(primaryError);
+                }
+
+                failureResult = contents;
+                if (failureWriteDenied)
+                {
+                    throw new UnauthorizedAccessException(publicationError);
+                }
+                File.WriteAllText(SessionLaunchProtocol.ResultPathFor(RequestPath), contents);
+            },
+            Source,
+            errorOutput: errors);
+
+        Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode, exitCode);
+        Assert.Equal(2, writes);
+        Assert.Equal(requestId, SessionCollectProtocol.ReadResult(
+            Assert.IsType<string>(successResult)).RequestId);
+        SessionCollectResult result = SessionCollectProtocol.ReadResult(
+            Assert.IsType<string>(failureResult));
+        Assert.Equal(requestId, result.RequestId);
+        Assert.Equal(primaryError, result.Error);
+
+        string output = errors.ToString();
+        if (!failureWriteDenied)
+        {
+            SessionCollectResult persisted = SessionCollectProtocol.ReadResult(
+                File.ReadAllText(SessionLaunchProtocol.ResultPathFor(RequestPath)));
+            Assert.Equal(requestId, persisted.RequestId);
+            Assert.Equal(primaryError, persisted.Error);
+            Assert.Empty(output);
+            return;
+        }
+        Assert.Contains("success result denied", output, StringComparison.Ordinal);
+        Assert.Contains("failure result denied", output, StringComparison.Ordinal);
+        Assert.Contains(SessionLaunchProtocol.ResultPathFor(RequestPath), output, StringComparison.Ordinal);
+        Assert.Contains("<redacted>", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("success-secret", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("write-secret", output, StringComparison.Ordinal);
+        _ = Assert.Single(output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+        Assert.True(output.Length < 1200);
+    }
+
     [Theory]
     [InlineData("..\\escape.log")]
     [InlineData("C:\\Windows\\escape.log")]

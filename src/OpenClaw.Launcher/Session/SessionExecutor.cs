@@ -441,7 +441,7 @@ internal sealed partial class SessionExecutor
                 exception is FileNotFoundException or DirectoryNotFoundException or IOException)
             {
                 throw new SessionException(
-                    "The isolated session did not report a collection result " +
+                    "The isolated session did not report a collection " +
                     DescribeMissingResult(execution),
                     exception);
             }
@@ -1002,14 +1002,24 @@ internal sealed partial class SessionExecutor
         return result.ExitCode ?? executorExitCode;
     }
 
+    // Plain helpers exit 0 or with the helper failure code. Any other code
+    // means cmd.exe could not start the staged helper, or the helper stopped
+    // before it could report; the guest's output carries the reason.
     private static string DescribeMissingResult(MxcExecutionResult execution)
     {
+        string cause = execution.ExitCode switch
+        {
+            0 => "the session helper exited without writing it",
+            SessionLaunchProtocol.HelperFailureExitCode =>
+                "the session helper failed and could not write it",
+            _ => "the session helper did not start or stopped before reporting",
+        };
         string detail = string.Join(
             " ",
             new[] { execution.StandardOutput, execution.StandardError }
                 .Where(static value => !string.IsNullOrWhiteSpace(value)));
         return string.IsNullOrWhiteSpace(detail)
-            ? $"result (executor exit code {execution.ExitCode})."
-            : $"result (executor exit code {execution.ExitCode}): {detail}";
+            ? $"result: {cause} (executor exit code {execution.ExitCode})."
+            : $"result: {cause} (executor exit code {execution.ExitCode}): {detail}";
     }
 }
