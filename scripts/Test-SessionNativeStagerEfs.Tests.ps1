@@ -1,3 +1,5 @@
+#Requires -Version 7.0
+
 <#
 .SYNOPSIS
     Checks native staging against an existing EFS-encrypted application fixture.
