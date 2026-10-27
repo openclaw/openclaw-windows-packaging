@@ -249,6 +249,12 @@ authorized disposition is backed by actual platform denial evidence.
 Cache deletion, dispatch, alert disposition, signing, and publication are
 separate authorized operations, not part of local implementation validation.
 
-## Automated Store submission
+## Release-manager-approved Store publication
 
-See [Microsoft Store submission](microsoft-store.md) for protected OIDC setup, manual submission from an existing release run, automatic activation, and recovery. Automatic submission remains off until the repository variable `MSSTORE_ENABLED` is `true`; the existing release and artifact handoffs are unchanged.
+See [Microsoft Store publication](microsoft-store.md) for the central-first
+cutover, required administrator settings, manual requests from an existing build,
+and recovery. The packaging repository retains the authorized unsigned Store
+bundle but has no Store credentials or automatic Store publisher. Its manual
+request workflow targets `openclaw/releases`; the centralized publisher validates
+the candidate and requires release-manager approval. This does not change
+sideload signing, GitHub releases, or the installed-upgrade gate.

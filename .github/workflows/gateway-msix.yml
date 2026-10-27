@@ -255,11 +255,9 @@ jobs:
         shell: pwsh
         run: .\scripts\Test-Get-MxcSdkMetadata.Tests.ps1
 
-      - name: Test Microsoft Store submission
+      - name: Test Microsoft Store publication requests
         shell: pwsh
-        run: |
-          ./scripts/Test-Submit-MicrosoftStore.Tests.ps1
-          ./scripts/Test-StoreSubmissionSource.Tests.ps1
+        run: ./scripts/Test-Request-MicrosoftStorePublish.Tests.ps1
 
       - name: Test signing workflow configuration
         shell: pwsh
