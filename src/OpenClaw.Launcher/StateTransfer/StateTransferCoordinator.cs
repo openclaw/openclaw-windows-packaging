@@ -45,41 +45,52 @@ internal sealed partial class StateTransferCoordinator
             _ = runtime.RequireSetup();
             SessionRecord record = await runtime.Coordinator
                 .StartRecordedAsync(cancellationToken).ConfigureAwait(false);
-            using var operation = new SessionWorkspaceOperation(
-                record, runtime.IsCurrentSessionRecord, privateData: true, log: _log);
-            SessionStateTransferRequest request = CreateRequest(
-                runtime,
-                SessionStateTransferAction.Capture) with
-            { DryRun = options.DryRun };
-            string artifact = Path.Combine(
-                operation.WorkspacePath, $"state-archive-{request.RequestId}.tar.gz");
-            try
-            {
-                SessionStateTransferResult result = await runtime.Executor.TransferStateAsync(
-                    record, runtime.RequireStagedHelper(record), operation, request, cancellationToken).ConfigureAwait(false);
-                if (result.Archive is { } archive)
-                {
-                    using FileStream source = operation.OpenRead(archive.Path, protectContents: true);
-                    string retained = await _store.PublishAsync(
-                        source, archive, destination, protection: false, cancellationToken).ConfigureAwait(false);
-                    result = result with { Archive = archive with { Path = retained } };
-                }
-                else if (!options.DryRun)
-                {
-                    throw new SessionException("The agent did not return a verified backup archive.");
-                }
-                // A dry run creates no archive, so it is a preview, not a completed backup.
-                return new StateArchiveCommandResult("backup", 0, options.DryRun ? result with { Phase = "preview" } : result);
-            }
-            finally
-            {
-                operation.Delete(artifact);
-            }
+            return await CaptureBackupUnderLockAsync(
+                runtime, record, destination, options.DryRun, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (IsOperationalFailure(exception))
         {
             _log($"Backup failed: {DiagnosticFailure.Describe(exception)}");
             return new StateArchiveCommandResult("backup", 1, Error: exception.Message);
+        }
+    }
+
+    private async Task<StateArchiveCommandResult> CaptureBackupUnderLockAsync(
+        SessionRuntime runtime,
+        SessionRecord record,
+        string? destination,
+        bool dryRun,
+        CancellationToken cancellationToken)
+    {
+        using var operation = new SessionWorkspaceOperation(
+            record, runtime.IsCurrentSessionRecord, privateData: true, log: _log);
+        SessionStateTransferRequest request = CreateRequest(
+            runtime,
+            SessionStateTransferAction.Capture) with
+        { DryRun = dryRun };
+        string artifact = Path.Combine(
+            operation.WorkspacePath, $"state-archive-{request.RequestId}.tar.gz");
+        try
+        {
+            SessionStateTransferResult result = await runtime.Executor.TransferStateAsync(
+                record, runtime.RequireStagedHelper(record), operation, request, cancellationToken).ConfigureAwait(false);
+            if (result.Archive is { } archive)
+            {
+                using FileStream source = operation.OpenRead(archive.Path, protectContents: true);
+                string retained = await _store.PublishAsync(
+                    source, archive, destination, protection: false, cancellationToken).ConfigureAwait(false);
+                result = result with { Archive = archive with { Path = retained } };
+            }
+            else if (!dryRun)
+            {
+                throw new SessionException("The agent did not return a verified backup archive.");
+            }
+            // A dry run creates no archive, so it is a preview, not a completed backup.
+            return new StateArchiveCommandResult("backup", 0, dryRun ? result with { Phase = "preview" } : result);
+        }
+        finally
+        {
+            operation.Delete(artifact);
         }
     }
 

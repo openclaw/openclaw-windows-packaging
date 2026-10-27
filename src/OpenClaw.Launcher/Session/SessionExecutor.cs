@@ -137,29 +137,32 @@ internal sealed partial class SessionExecutor
         ArgumentNullException.ThrowIfNull(record);
         ArgumentNullException.ThrowIfNull(request);
 
-        string nodeDirectory = Path.GetDirectoryName(request.NodePath)
-            ?? throw new SessionException(
-                "The agent Node.js executable has no parent directory.");
-        IReadOnlyDictionary<string, string> environment = _buildEnvironment();
-
         return await ExecuteCommandAsync(
-            record,
-            new SessionCommandRequest(
-                request.HelperPath,
-                request.NodePath,
-                BuildNodeArguments(request),
-                request.WorkingDirectory)
-            {
-                PathPrefix = nodeDirectory,
-                AdditionalEnvironment = MergeEnvironment(
-                    environment,
-                    request.AdditionalEnvironment),
-                NodeOptionsSuffix = request.NodeOptionsSuffix,
-                NativeRootPath = request.NativeRootPath
-            },
-            "Running OpenClaw in the isolated session.",
-            "OpenClaw",
+            record, CreateOpenClawCommandRequest(request),
+            "Running OpenClaw in the isolated session.", "OpenClaw",
             cancellationToken).ConfigureAwait(false);
+    }
+
+    public Task<SessionCommandCaptureResult> ExecuteCaptureAsync(
+        SessionRecord record,
+        SessionExecutionRequest request,
+        CancellationToken cancellationToken) =>
+        ExecuteCommandCaptureAsync(
+            record, CreateOpenClawCommandRequest(request),
+            "Running OpenClaw in the isolated session.", "OpenClaw", cancellationToken);
+
+    private SessionCommandRequest CreateOpenClawCommandRequest(SessionExecutionRequest request)
+    {
+        string nodeDirectory = Path.GetDirectoryName(request.NodePath)
+            ?? throw new SessionException("The agent Node.js executable has no parent directory.");
+        return new SessionCommandRequest(
+            request.HelperPath, request.NodePath, BuildNodeArguments(request), request.WorkingDirectory)
+        {
+            PathPrefix = nodeDirectory,
+            AdditionalEnvironment = MergeEnvironment(_buildEnvironment(), request.AdditionalEnvironment),
+            NodeOptionsSuffix = request.NodeOptionsSuffix,
+            NativeRootPath = request.NativeRootPath
+        };
     }
 
     /// <summary>

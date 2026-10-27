@@ -420,7 +420,7 @@ ID and public key, then approves only that exact request.
 ## State transfer preserves the current session identity
 
 [`StateTransferCoordinator`](../src/OpenClaw.Launcher/StateTransfer/StateTransferCoordinator.cs)
-owns host-side backup, restore, and recovery orchestration. It requires ready
+owns host-side backup, restore, recovery, and protected Doctor orchestration. It requires ready
 setup, starts only the recorded session, binds exchanges to its generation, and
 uses its staged helper and agent-owned Node.js runtime. The archive store
 publishes hash/length-checked files without overwriting an existing destination.
@@ -443,6 +443,14 @@ documents in staging, never arbitrary credential/history strings. Missing,
 external, relative, or environment-dependent required paths remain explicit
 automatic-recovery refusals. Windows/profile portability is not account or
 package migration.
+
+Explicit `clawctl gateway-service repair --yes` uses that same lifecycle lock,
+backup pipeline, and recorded identity. It refuses pending activation, stops
+through the gateway owner, and publishes a verified archive before invoking
+the packaged Doctor. Doctor owns the schema/data mutations, with external
+service repair policy retained. It never automatically starts the gateway or
+runs in the update/logon path. Failure retains the archive and the stopped
+state; an unavailable backup prevents Doctor from running.
 
 Restore verifies and prepares before asking the existing gateway owner to stop
 the managed gateway. It acquires exclusive state access, captures and retains

@@ -577,3 +577,29 @@ The behavior above is verified against:
   `tests\OpenClaw.Launcher.Tests\HostEnvironmentTests.cs`,
   `DiagnosticFailureTests.cs`, and `ProgramStartupTests.cs`
 - [`mxc-compatibility-evidence.md`](mxc-compatibility-evidence.md)
+
+## Gateway requests maintenance after an update
+
+A startup refusal is not repaired by repeated restarts. Collect the startup
+log with `clawctl collect-logs`. If OpenClaw reports that Doctor repair or a
+supported schema migration is required, use the explicit protected route:
+
+```powershell
+clawctl gateway-service repair --yes
+clawctl gateway-service start
+clawctl gateway-service status
+```
+
+Repair verifies that the package-owned gateway stopped, retains a verified
+full-state archive outside the package, and runs the packaged Doctor inside
+the same recorded agent. It holds the installation lifecycle lock throughout.
+Doctor remains responsible for migrations, integrity checks, and its own
+migration backups. Service repair remains externally owned by `clawctl`.
+No repair runs automatically on startup, update, or logon.
+
+Repair leaves the gateway stopped on success and on failure after stopping it.
+If backup fails, Doctor does not run. If Doctor fails, the retained archive is
+still listed by `clawctl backup --list`; do not delete it or provision a fresh
+session. A newer-than-supported schema requires the upstream rollback path,
+not repeated repair. After a successful start, verify a model request in
+Companion. A running listener alone does not prove provider authentication.

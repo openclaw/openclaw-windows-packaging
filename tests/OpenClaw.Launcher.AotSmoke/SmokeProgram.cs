@@ -49,6 +49,7 @@ internal static partial class SmokeProgram
             ("--help prints help", HelpOptionPrintsHelpAsync),
             ("setup --help prints command help", SetupHelpPrintsCommandHelpAsync),
             ("gateway-service help includes restart", GatewayServiceHelpIncludesRestartAsync),
+            ("gateway repair requires confirmation", GatewayRepairRequiresConfirmationAsync),
             ("Companion help parses under NativeAOT", CompanionHelpParsesAsync),
             ("Companion failures identify their command", CompanionFailureNamesCommandAsync),
             ("completion --help prints command help", CompletionHelpPrintsCommandHelpAsync),
@@ -393,6 +394,16 @@ internal static partial class SmokeProgram
 
         AssertExitCode(0, exitCode, fixture);
         AssertContains(fixture.Output.ToString(), "restart", fixture);
+        fixture.AssertNoInstallationWorkStarted();
+    }
+
+    private static async Task GatewayRepairRequiresConfirmationAsync()
+    {
+        using Fixture fixture = Fixture.CreateWithoutApplication();
+        int exitCode = await fixture.RunAsync(["gateway-service", "repair", "--json"]).ConfigureAwait(false);
+        AssertExitCode(1, exitCode, fixture);
+        AssertContains(fixture.Output.ToString(), "gateway-service repair", fixture);
+        AssertContains(fixture.Output.ToString(), "--yes", fixture);
         fixture.AssertNoInstallationWorkStarted();
     }
 

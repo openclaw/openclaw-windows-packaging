@@ -68,6 +68,10 @@ internal sealed record GatewayRestartResult(
 /// </remarks>
 internal sealed class GatewayController
 {
+    private const string FailedStartupGuidance =
+        "Run `clawctl collect-logs` to capture the gateway log. " +
+        "If it requests Doctor repair, run `clawctl gateway-service repair --yes` to back up state before repair.";
+
     /// <summary>
     /// How long a start waits for the gateway to bind before reporting that it
     /// is still coming up. Long enough for a cold Node.js start inside the
@@ -734,7 +738,7 @@ internal sealed class GatewayController
         }
 
         return $"The supervisor reported: {inspection.SupervisorDetail} " +
-            "Run `clawctl collect-logs` to capture the gateway log.";
+            FailedStartupGuidance;
     }
 
     private static string DescribeExitedDuringStartup(
@@ -743,7 +747,7 @@ internal sealed class GatewayController
         DescribeStoppedGateway(record, inspection) is string detail
             ? $"The gateway process exited during startup. {detail}"
             : "The gateway process exited during startup. " +
-              "Run `clawctl collect-logs` to capture the gateway log.";
+              FailedStartupGuidance;
 
     /// <summary>
     /// Explains an unhealthy gateway in terms of what was observed.
