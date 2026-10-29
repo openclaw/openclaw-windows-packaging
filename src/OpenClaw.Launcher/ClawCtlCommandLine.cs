@@ -16,15 +16,16 @@ internal sealed record ClawCtlHandlers
     public Func<CancellationToken, Task<int>> Open { get; init; } = _ => Task.FromResult(1);
     public Func<CompletionOptions, CancellationToken, Task<int>> Completion { get; init; } = (_, _) => Task.FromResult(1);
     public required Func<PowerShellOptions, CancellationToken, Task<int>> PowerShell { get; init; }
-    public required Func<bool, CancellationToken, Task<int>> GatewayStart { get; init; }
+    public required Func<GatewayStartOptions, CancellationToken, Task<int>> GatewayStart { get; init; }
     public required Func<CancellationToken, Task<int>> GatewayStatus { get; init; }
-    public required Func<CancellationToken, Task<int>> GatewayStop { get; init; }
+    public required Func<string?, CancellationToken, Task<int>> GatewayStop { get; init; }
     public required Func<CancellationToken, Task<int>> GatewayRestart { get; init; }
     public Func<int, bool, bool, CancellationToken, Task<int>> CompanionPrepare { get; init; } =
         (_, _, _, _) => Task.FromResult(1);
 }
 
 internal sealed record SetupOptions(bool Fresh, bool Force);
+internal sealed record GatewayStartOptions(bool Recovery, string? AttemptId);
 internal sealed record BackupOptions(string? Path, bool List, bool DryRun);
 internal sealed record RestoreOptions(string? Path, bool DryRun, bool Yes, bool Rollback);
 internal sealed record RecoverOptions(string Profile, string? Output, bool DryRun, bool Yes);
@@ -294,7 +295,16 @@ internal static partial class ClawCtlCommandLine
         Command gatewayStart = new("start", "Start the gateway if needed.");
         Option<bool> gatewayStartJson = CreateJsonOption();
         Option<bool> recovery = new("--recovery") { Hidden = true };
+        Option<string?> attemptId = CreateAttemptOption("--attempt-id", "Correlate a new launch using a fresh lowercase GUID (N format).");
         gatewayStart.Options.Add(recovery);
+        gatewayStart.Options.Add(attemptId);
+        gatewayStart.Validators.Add(result =>
+        {
+            if (result.GetValue(recovery) && result.GetValue(attemptId) is not null)
+            {
+                result.AddError("Option '--attempt-id' cannot be used with '--recovery'.");
+            }
+        });
         gatewayStart.Options.Add(gatewayStartJson);
         gatewayStart.SetAction((parsed, token) =>
         {
@@ -304,7 +314,8 @@ internal static partial class ClawCtlCommandLine
                 gatewayJson,
                 gatewayStartJson);
             outputOptions.NoColor = parsed.GetValue(noColor);
-            return handlers.GatewayStart(parsed.GetValue(recovery), token);
+            return handlers.GatewayStart(new GatewayStartOptions(
+                parsed.GetValue(recovery), parsed.GetValue(attemptId)), token);
         });
         Command gatewayStatus = new("status", "Show whether the gateway is running.");
         Option<bool> gatewayStatusJson = CreateJsonOption();
@@ -321,7 +332,9 @@ internal static partial class ClawCtlCommandLine
         });
         Command gatewayStop = new("stop", "Stop the gateway but keep the session and its data.");
         Option<bool> gatewayStopJson = CreateJsonOption();
+        Option<string?> ifAttemptId = CreateAttemptOption("--if-attempt-id", "Stop only the matching launch attempt; refuse if ownership cannot be verified.");
         gatewayStop.Options.Add(gatewayStopJson);
+        gatewayStop.Options.Add(ifAttemptId);
         gatewayStop.SetAction((parsed, token) =>
         {
             outputOptions.Json = IsJsonRequested(
@@ -330,7 +343,7 @@ internal static partial class ClawCtlCommandLine
                 gatewayJson,
                 gatewayStopJson);
             outputOptions.NoColor = parsed.GetValue(noColor);
-            return handlers.GatewayStop(token);
+            return handlers.GatewayStop(parsed.GetValue(ifAttemptId), token);
         });
         Command gatewayRestart = new("restart", "Stop the gateway and start it again.");
         Option<bool> gatewayRestartJson = CreateJsonOption();
@@ -419,6 +432,20 @@ internal static partial class ClawCtlCommandLine
         UseClawCtlHelp(root, helpAction);
 
         return root;
+    }
+
+    private static Option<string?> CreateAttemptOption(string name, string description)
+    {
+        Option<string?> option = new(name) { Description = description };
+        option.Validators.Add(result =>
+        {
+            if (result.GetValueOrDefault<string?>() is string value &&
+                !Gateway.GatewayLaunchAttempt.IsValid(value))
+            {
+                result.AddError($"Option '{name}' requires a nonempty lowercase GUID in N format.");
+            }
+        });
+        return option;
     }
 
     private static Option<bool> CreateJsonOption() =>
