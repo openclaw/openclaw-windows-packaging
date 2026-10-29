@@ -21,8 +21,8 @@ internal enum GatewayState
     Stopped,
 
     /// <summary>
-    /// The recorded process is alive but is not serving, so it is neither
-    /// usable nor safe to ignore.
+    /// The recorded process is alive but has a conflicting listener or no
+    /// longer serves a previously recorded listener.
     /// </summary>
     Unhealthy,
 
@@ -305,7 +305,7 @@ internal sealed class GatewayController
                 helperPath,
                 cancellationToken).ConfigureAwait(false);
 
-            if (inspection.IsOwnedAndHealthy)
+            if (Describe(existing.Record, inspection).State == GatewayState.Running)
             {
                 GatewayRecord confirmedRecord = existing.Record;
                 _log("The gateway is already running.");
@@ -386,12 +386,7 @@ internal sealed class GatewayController
 
         SessionInspectResult observed = await WaitForListenerAsync(
             session, record, helperPath, progress, cancellationToken).ConfigureAwait(false);
-        GatewayState resultState = observed.Error is not null ? GatewayState.Unknown
-            : observed.SupervisorState == SessionSupervisorStatus.ExitedState ? GatewayState.Stopped
-            : observed.IsOwnedAndHealthy ? GatewayState.Running
-            : !(observed.ProcessFound && observed.StartTimeMatches) ? GatewayState.Stopped
-            : observed.PortListening || observed.ListeningPorts is { Count: > 0 } ? GatewayState.Unhealthy
-            : GatewayState.Starting;
+        GatewayState resultState = Describe(record, observed).State;
 
         if (observed.ListeningPorts is { Count: > 0 })
         {
@@ -686,6 +681,15 @@ internal sealed class GatewayController
                 inspection.Error);
         }
 
+        if (inspection.SupervisorState == SessionSupervisorStatus.ExitedState)
+        {
+            return new GatewayStatusReport(
+                GatewayState.Stopped,
+                record,
+                "The gateway is not running.",
+                DescribeStoppedGateway(record, inspection));
+        }
+
         if (inspection.IsOwnedAndHealthy)
         {
             return new GatewayStatusReport(
@@ -705,6 +709,19 @@ internal sealed class GatewayController
                     ? "The recorded process identifier now belongs to an " +
                       "unrelated process."
                     : DescribeStoppedGateway(record, inspection));
+        }
+
+        if (!inspection.PortListening &&
+            inspection.ListeningPorts is not { Count: > 0 } &&
+            record.ObservedPorts is not { Count: > 0 })
+        {
+            return new GatewayStatusReport(
+                GatewayState.Starting,
+                record,
+                "The supervised gateway launch is still starting; no listener is available.",
+                "Run `clawctl gateway-service status` to check again or " +
+                "`clawctl collect-logs` to inspect startup. " +
+                "Use `clawctl gateway-service stop` to stop the owned launch.");
         }
 
         return new GatewayStatusReport(

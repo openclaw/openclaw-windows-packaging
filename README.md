@@ -296,6 +296,19 @@ running listener before using the Gateway or sending credentials. A failed
 inspection, exited process, or conflicting listener does not receive this
 acknowledgement.
 
+Status keeps reporting `starting` while that recorded process is verified live,
+has no listener, and has no previously recorded listener. A failed inspection
+reports `unknown`; an exited supervisor or missing/replaced process reports
+`stopped`. Conflicting listeners or loss of a previously recorded listener
+remain `unhealthy`. Configuration `startup-eligible` only admits a launch; it
+does not establish that the Gateway is serving.
+
+Status is read-only: a listener first seen after the start command returns is
+reported as running but is not saved to the launch record. If that late
+listener disappears, status can report `starting` again. There is no elapsed-time
+deadline that turns a still-owned launch into success or failure; clients must
+bound their own wait and explicitly stop the launch if they choose to abandon it.
+
 `clawctl` reports the gateway port only when it can identify that listener
 unambiguously:
 
