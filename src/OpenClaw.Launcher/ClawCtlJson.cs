@@ -25,7 +25,11 @@ internal sealed record ClawCtlJsonDocument(
     SessionStateTransferResult? StateTransfer = null,
     IReadOnlyList<StateTransfer.StateArchiveEntry>? Archives = null);
 
-internal sealed record ClawCtlJsonIntegration(string Kind, int Version);
+internal sealed record ClawCtlJsonIntegration(string Kind, int Version)
+{
+    public ClawCtlJsonGatewayLaunchCapability GatewayLaunch { get; init; } = new(1);
+}
+internal sealed record ClawCtlJsonGatewayLaunchCapability(int Version);
 internal sealed record ClawCtlJsonCompanion(int Port, string Token);
 // A version and the commit that produced it. Reported for the package and for
 // the OpenClaw payload it carries.
@@ -49,7 +53,8 @@ internal sealed record ClawCtlJsonGateway(
     int? Port = null,
     string? Url = null,
     ClawCtlJsonReadiness? Readiness = null,
-    ClawCtlJsonOwnership? Ownership = null);
+    ClawCtlJsonOwnership? Ownership = null,
+    GatewayLaunchReceipt? Launch = null);
 
 internal sealed record ClawCtlJsonOwnership(
     string SandboxId,
@@ -231,7 +236,10 @@ internal static class ClawCtlJson
                     GatewayAddress.ResolvePort(result.Gateway.Record),
                     result.Gateway.SandboxId,
                     result.Gateway.AgentUserSid,
-                    result.Gateway.OwnedListeners)),
+                    result.Gateway.OwnedListeners),
+                Launch: result.Gateway.Record?.AttemptId is string attemptId
+                    ? new GatewayLaunchReceipt(attemptId)
+                    : null),
             Recovery: new ClawCtlJsonRecovery(DescribeRecovery(result.Recovery.State)),
             StateTransfer: result.StateTransfer,
             Error: result.ExitCode == 0
@@ -286,7 +294,8 @@ internal static class ClawCtlJson
                         result.Port,
                         result.SandboxId,
                         result.AgentUserSid,
-                        result.OwnedListeners)),
+                        result.OwnedListeners),
+                    result.Launch),
                 StateTransfer: result.StateTransfer)
             : new ClawCtlJsonDocument(
                 false,
@@ -295,15 +304,16 @@ internal static class ClawCtlJson
                 Session: result.SessionAvailability is { } failureAvailability
                     ? new ClawCtlJsonSession(DescribeSession(failureAvailability))
                     : null,
-                Gateway: result.Readiness is null && result.StateTransfer is null
+                Gateway: result.Readiness is null && result.StateTransfer is null && result.Launch is null
                     ? null
                     : new ClawCtlJsonGateway(
                         DescribeGateway(result.State),
                         result.Port,
                         result.Url,
-                        FromReadiness(result.Readiness)),
+                        FromReadiness(result.Readiness),
+                        Launch: result.Launch),
                 Error: new ClawCtlJsonError(
-                    "cli_error",
+                    result.Launch?.Refusal is not null ? "launch_ownership_refused" : "cli_error",
                     NormalizeMessage(result.StateTransfer?.Error ??
                         (result.StateTransfer?.Pending == true
                             ? "State activation is pending. Run `clawctl restore --rollback --yes`."

@@ -201,6 +201,41 @@ session ID alone is not ownership proof. No `openclaw.json` is created under Com
 Windows account for this path. Older Gateway packages without the supported
 integration contract cannot be treated as isolated.
 
+Packages advertising `integration.gatewayLaunch.version: 1` also support
+correlated launches and conditional cleanup. Before dispatch, generate a fresh
+lowercase GUID with no separators and keep it for that attempt. Pass it to
+`clawctl gateway-service start --attempt-id <id> --json`. The package durably
+records it before launch; `gateway.launch` reports `version: 1`, `attemptId`,
+and a start-only `disposition` of `created` or `adopted`. Adoption returns the
+existing launch's ID, not the requested ID, and grants no cleanup ownership.
+Both status commands retain `gateway.launch` for starting, running, stopped,
+unhealthy, and unknown recorded attempts, including failed status responses.
+Legacy records can omit it. It is correlation, not listener readiness or
+credential-handoff ownership proof.
+
+After a lost acknowledgement, compare status's attempt ID with the ID selected
+before dispatch. A match correlates the retained launch to that caller;
+absence, a different ID, or a timeout is not proof of failure or rollback.
+The supervisor's durable receipt can recover the process identity even when
+the start acknowledgement never arrives. Until that receipt is usable, status
+remains unknown and cleanup refuses. Status does not repair records or latch
+first listener readiness.
+
+To clean up only an owned attempt, use
+`clawctl gateway-service stop --if-attempt-id <id> --json`. Under the lifecycle
+lock, the package compares the durable attempt and then verifies process
+identity inside the session before stopping anything. `gateway.launch` echoes
+the requested ID and returns `stopOutcome: stopped` or `not-running` on success.
+A refusal returns exit code 1, `ok: false`,
+`error.type: launch_ownership_refused`, `stopOutcome: refused`, and
+`refusal: attempt-mismatch` or `ownership-unverified`. It retains state and never
+falls back to unconditional stop. Never retry a refusal using plain `stop` as
+onboarding cleanup, and never reuse an ID for a different launch attempt.
+An absent capability means unsupported; malformed advertised capability or
+receipt data is an integration error, not permission to use unconditional stop.
+Existing clients can continue using the unchanged v1 integration envelope and
+plain lifecycle commands.
+
 Interactive terminals use color for headings and status marks. `--no-color`,
 the `NO_COLOR` environment variable, redirected output, and CI disable color;
 `FORCE_COLOR` enables it for redirected output or CI unless color was

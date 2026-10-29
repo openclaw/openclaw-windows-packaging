@@ -169,6 +169,15 @@ public sealed record SessionSupervisorStatus
     [JsonPropertyName("schemaVersion")]
     public int SchemaVersion { get; init; } = SessionLaunchProtocol.CurrentSchemaVersion;
 
+    [JsonPropertyName("requestId")]
+    public string? RequestId { get; init; }
+
+    [JsonPropertyName("processStartTimeUtc")]
+    public DateTimeOffset ProcessStartTimeUtc { get; init; }
+
+    [JsonPropertyName("helperPath")]
+    public string? HelperPath { get; init; }
+
     [JsonPropertyName("state")]
     public string? State { get; init; }
 
