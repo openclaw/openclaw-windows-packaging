@@ -450,7 +450,9 @@ without querying the moving channel again. An earlier attempt that never ran the
 capture job, such as a fork pull request run that waited for approval, leaves no
 snapshot, so the approved attempt captures it then. If an earlier attempt ran the
 upload, or its outcome is unknown, a missing or expired (90-day retention)
-snapshot fails the retry; start a new run instead.
+snapshot fails the retry; start a new run instead. **Re-run all jobs** discards
+the earlier attempt's artifacts, so retry with **Re-run failed jobs** or by
+re-running individual jobs, which keep the snapshot.
 Package and payload metadata record the resolved source commit and version.
 
 For a one-time source override in any signing mode, provide an OpenClaw tag,
