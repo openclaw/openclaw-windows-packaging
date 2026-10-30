@@ -214,12 +214,90 @@ public sealed class GatewayStartWaitTests
         GatewayStopResult stopped = await harness.StopAsync();
 
         Assert.Equal(GatewayState.Starting, start.State);
-        Assert.Equal(GatewayState.Unhealthy, pending.State);
+        Assert.Equal(GatewayState.Starting, pending.State);
         Assert.Equal(GatewayState.Running, running.State);
         Assert.True(stopped.Succeeded);
         Assert.True(stopped.Stopped);
         Assert.Single(harness.Client.Calls, call => call == "start");
         Assert.Equal(GatewayStateFault.Missing, harness.Store.Read().Fault);
+    }
+
+    [Theory]
+    [InlineData("waiting", "Starting")]
+    [InlineData("listening", "Running")]
+    [InlineData("exited", "Stopped")]
+    [InlineData("gone", "Stopped")]
+    [InlineData("reused", "Stopped")]
+    [InlineData("inspection failed", "Unknown")]
+    [InlineData("port conflict", "Unhealthy")]
+    [InlineData("wrong port", "Unhealthy")]
+    public async Task StatusRechecksAnAcceptedLaunchWithoutReplacingIt(
+        string observation,
+        string expectedState)
+    {
+        using var harness = new GatewayStartHarness(port: 18789);
+        harness.Client.Inspection = StartingUp();
+        await harness.StartAsync();
+        GatewayRecord recorded = harness.Store.Read().Record!;
+        harness.Client.Inspection = observation switch
+        {
+            "listening" => Listening(),
+            "exited" => Listening() with
+            {
+                SupervisorState = SessionSupervisorStatus.ExitedState,
+                SupervisorDetail = "the application exited with code 78"
+            },
+            "gone" => Gone(),
+            "reused" => StartingUp() with { StartTimeMatches = false },
+            "inspection failed" => Listening() with
+            {
+                SupervisorState = SessionSupervisorStatus.ExitedState,
+                Error = "inspection failed"
+            },
+            "port conflict" => StartingUp() with { PortListening = true },
+            "wrong port" => StartingUp() with { ListeningPorts = [18790] },
+            _ => StartingUp()
+        };
+
+        GatewayStatusReport status = await harness.GetStatusAsync();
+
+        Assert.Equal(expectedState, status.State.ToString());
+        Assert.Equal(recorded, harness.Store.Read().Record);
+        Assert.Single(harness.Client.Calls, call => call == "start");
+        if (observation == "exited")
+        {
+            Assert.Contains("exited with code 78", status.Detail!, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task LosingARecordedListenerIsUnhealthyRatherThanAnotherPendingStart()
+    {
+        using var harness = new GatewayStartHarness();
+        harness.Client.Inspection = Listening();
+        await harness.StartAsync();
+        harness.Client.Inspection = StartingUp();
+
+        GatewayStatusReport status = await harness.GetStatusAsync();
+
+        Assert.Equal(GatewayState.Unhealthy, status.State);
+        Assert.Equal([18789], harness.Store.Read().Record!.ObservedPorts);
+    }
+
+    [Fact]
+    public async Task ReadOnlyStatusDoesNotLatchALateListenerIntoTheLaunchRecord()
+    {
+        using var harness = new GatewayStartHarness();
+        harness.Client.Inspection = StartingUp();
+        await harness.StartAsync();
+        harness.Client.Inspection = Listening();
+        Assert.Equal(GatewayState.Running, (await harness.GetStatusAsync()).State);
+        harness.Client.Inspection = StartingUp();
+
+        GatewayStatusReport status = await harness.GetStatusAsync();
+
+        Assert.Equal(GatewayState.Starting, status.State);
+        Assert.Null(harness.Store.Read().Record!.ObservedPorts);
     }
 
     [Fact]

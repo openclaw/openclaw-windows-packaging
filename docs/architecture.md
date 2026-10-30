@@ -352,6 +352,20 @@ The record remains available for inspection and stop, and clients keep their
 own bounded readiness wait. Inspection failures, terminal supervisor failures,
 and listener conflicts remain unsuccessful starts.
 
+Start and status share one classification of the inspected launch. Inspection
+failure takes precedence over supervisor exit, which takes precedence over a
+listener observation. A matching live process with no listener and no recorded
+`observedPorts` remains `starting`, without an age-based cutoff. Loss of recorded
+listeners and listener conflicts remain `unhealthy`; a missing or replaced
+process is `stopped`. Configuration eligibility is independent of these process
+and listener observations.
+
+Status never writes the launch record. Consequently, readiness first observed
+after the start wait is not durably latched: a later observation with no listener
+can return to `starting` when the record has no `observedPorts`. This contract
+does not provide a monotonic first-readiness history. Stop/restart and session
+teardown remain explicit lifecycle operations.
+
 Process access denial is not evidence that a recorded PID belongs to another
 process. Inspection uses query rights instead of requesting a full-access
 handle. If Windows denies inspection or termination, the session helper reads

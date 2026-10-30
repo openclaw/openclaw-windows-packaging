@@ -810,7 +810,7 @@ internal static partial class SmokeProgram
 
     private static Task PendingGatewayJsonIsStructured()
     {
-        foreach (string action in new[] { "start", "restart" })
+        foreach (string action in new[] { "start", "restart", "status" })
         {
             using var output = new StringWriter();
             ClawCtlJson.WriteResult(output, new GatewayCommandResult(
@@ -834,6 +834,28 @@ internal static partial class SmokeProgram
                 !root.TryGetProperty("error", out _),
                 "Pending acceptance claimed readiness or reported an error.");
         }
+
+        using var statusOutput = new StringWriter();
+        ClawCtlJson.WriteResult(statusOutput, new StatusCommandResult(
+            new SessionStatus(SessionAvailability.Running, null, null, null),
+            new GatewayStatusReport(
+                GatewayState.Starting,
+                new GatewayRecord { Port = 18789 },
+                "The supervised gateway launch is still starting."),
+            new GatewayPersistenceStatus(
+                GatewayPersistenceState.Ready,
+                GatewayPersistenceLane.TaskScheduler,
+                "Recovery is configured."),
+            null));
+        using JsonDocument statusDocument = JsonDocument.Parse(statusOutput.ToString());
+        JsonElement statusRoot = statusDocument.RootElement;
+        JsonElement statusGateway = statusRoot.GetProperty("gateway");
+        Assert(statusRoot.GetProperty("ok").GetBoolean(), "Starting made overall status fail.");
+        Assert(statusGateway.GetProperty("state").GetString() == "starting",
+            "Overall status lost the pending launch.");
+        Assert(!statusGateway.TryGetProperty("port", out _) &&
+            !statusGateway.TryGetProperty("ownership", out _),
+            "Overall status exposed a configured port or ownership as readiness.");
         return Task.CompletedTask;
     }
 

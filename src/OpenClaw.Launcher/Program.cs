@@ -1090,7 +1090,8 @@ internal static class Program
                                 result.State,
                                 result.Message,
                                 result.Detail,
-                                (result.State is Gateway.GatewayState.Running or Gateway.GatewayState.NotStarted) &&
+                                (result.State is Gateway.GatewayState.Running or Gateway.GatewayState.Starting or
+                                    Gateway.GatewayState.NotStarted) &&
                                     configReadiness?.ProbeFailed != true && stateTransfer?.Pending != true &&
                                     stateTransfer?.Error is null ? 0 : 1,
                                 port,

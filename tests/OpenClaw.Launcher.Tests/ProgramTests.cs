@@ -373,6 +373,70 @@ public sealed class ProgramTests : IDisposable
     }
 
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task StatusJsonKeepsAnAcceptedLaunchStartingAndConfigEligibilitySeparate(
+        bool gatewayOnly,
+        bool startupEligible)
+    {
+        SessionRuntime runtime = await SetUpSessionAsync();
+        var backend = (FakeMxcSessionClient)runtime.Backend;
+        var clock = new Gateway.AdvancingTimeProvider(DateTimeOffset.UtcNow);
+        new GatewayConfigurationStore(runtime.Paths.GatewayConfigurationPath).Write(
+            new GatewayLaunchConfiguration { Port = 18789 });
+        ConfigureGatewayLaunch(backend, new SessionInspectResult
+        {
+            ProcessFound = true,
+            StartTimeMatches = true,
+            SupervisorState = SessionSupervisorStatus.RunningState
+        }, startupEligible ? SessionConfigReadinessState.StartupEligible : SessionConfigReadinessState.NotReady);
+        var lifecycle = new StubbedRecoveryLifecycle(runtime);
+        HostOptions options = CreateSetupOptions(Path.Combine(_testDirectory, "app"));
+        Assert.Equal(0, await Program.RunControlAsync(
+            options,
+            ["gateway-service", "start", "--json"],
+            _ => { },
+            TextWriter.Null,
+            TextWriter.Null,
+            installationLifecycle: lifecycle,
+            clock: clock,
+            getLogonSessionId: () => "logon-pending"));
+        string recorded = await File.ReadAllTextAsync(runtime.Paths.GatewayStatePath);
+        backend.Calls.Clear();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        int exitCode = await Program.RunControlAsync(
+            options,
+            gatewayOnly ? ["gateway-service", "status", "--json"] : ["status", "--json"],
+            _ => { },
+            output,
+            error,
+            installationLifecycle: lifecycle);
+
+        Assert.Equal(0, exitCode);
+        Assert.Empty(error.ToString());
+        using JsonDocument document = JsonDocument.Parse(output.ToString());
+        JsonElement root = document.RootElement;
+        Assert.True(root.GetProperty("ok").GetBoolean());
+        Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
+        JsonElement gateway = root.GetProperty("gateway");
+        Assert.Equal("starting", gateway.GetProperty("state").GetString());
+        Assert.Equal(
+            startupEligible ? "startup-eligible" : "not-ready",
+            gateway.GetProperty("readiness").GetProperty("state").GetString());
+        Assert.False(gateway.TryGetProperty("ownership", out _));
+        Assert.False(gateway.TryGetProperty("url", out _));
+        Assert.False(gateway.TryGetProperty("port", out _));
+        Assert.False(root.TryGetProperty("error", out _));
+        Assert.Equal(recorded, await File.ReadAllTextAsync(runtime.Paths.GatewayStatePath));
+        Assert.DoesNotContain(backend.Calls, call =>
+            call.StartsWith("provision", StringComparison.Ordinal));
+    }
+
+    [Theory]
     [InlineData("start", false)]
     [InlineData("start", true)]
     [InlineData("restart", false)]
@@ -3834,11 +3898,34 @@ public sealed class ProgramTests : IDisposable
 
     private static void ConfigureGatewayLaunch(
         FakeMxcSessionClient backend,
-        SessionInspectResult inspection)
+        SessionInspectResult inspection,
+        SessionConfigReadinessState? readiness = null)
     {
         backend.ExecuteBehavior = _ =>
         {
             string workspace = backend.Metadata!.EphemeralWorkspacePath;
+            if (WriteStateInspectionResult(backend))
+            {
+                return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
+            }
+            string? readinessPath = Directory.GetFiles(workspace, "config-readiness-*.json")
+                .SingleOrDefault();
+            if (readinessPath is not null && readiness is { } readinessState)
+            {
+                SessionConfigReadinessRequest request = SessionConfigReadinessProtocol.ReadRequest(
+                    File.ReadAllText(readinessPath));
+                File.WriteAllText(
+                    SessionLaunchProtocol.ResultPathFor(readinessPath),
+                    SessionConfigReadinessProtocol.SerializeResult(new SessionConfigReadinessResult
+                    {
+                        RequestId = request.RequestId,
+                        State = readinessState,
+                        Reason = readinessState == SessionConfigReadinessState.StartupEligible
+                            ? SessionConfigReadinessReason.GatewayModeLocal
+                            : SessionConfigReadinessReason.GatewayModeMissing
+                    }));
+                return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
+            }
             string? inspectPath = Directory.GetFiles(workspace, "inspect-*.json")
                 .SingleOrDefault(path => !path.EndsWith(".result.json", StringComparison.Ordinal));
             if (inspectPath is not null)
