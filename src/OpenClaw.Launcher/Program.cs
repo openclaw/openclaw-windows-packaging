@@ -650,7 +650,10 @@ internal static class Program
                 result.Message,
                 null,
                 result.State is Gateway.GatewayState.Running or Gateway.GatewayState.Starting ? 0 : 1,
-                port));
+                port,
+                Launch: result.Record.AttemptId is string attemptId
+                    ? new Gateway.GatewayLaunchReceipt(attemptId, result.Created ? "created" : "adopted")
+                    : null));
         }
 
         IReadOnlyDictionary<string, string> CompanionEnvironment(
@@ -1018,8 +1021,9 @@ internal static class Program
                         runtime.Paths.CompletionCachePath,
                         ExitCode: 0)));
                 },
-                GatewayStart = async (recovery, cancellationToken) =>
+                GatewayStart = async (startOptions, cancellationToken) =>
                 {
+                    bool recovery = startOptions.Recovery;
                     Session.SessionRuntime runtime = GetSessionRuntime();
                     bool retainedRecoveryInvocation =
                         !recovery &&
@@ -1044,7 +1048,8 @@ internal static class Program
                     Gateway.GatewayStartResult result = await NarrateOperationAsync(
                         Gateway.GatewayStartProgress.Initial,
                         progress => controller.StartAsync(
-                            runtime.HelperPath, cancellationToken, progress))
+                            runtime.HelperPath, cancellationToken, progress,
+                            attemptId: startOptions.AttemptId))
                         .ConfigureAwait(false);
 
                     return WriteGatewayStartResult("start", result);
@@ -1102,11 +1107,14 @@ internal static class Program
                                 SessionAvailability: result.State == Gateway.GatewayState.Running
                                     ? null
                                     : session.Availability,
-                                StateTransfer: stateTransfer);
+                                StateTransfer: stateTransfer,
+                                Launch: result.Record?.AttemptId is string attemptId
+                                    ? new Gateway.GatewayLaunchReceipt(attemptId)
+                                    : null);
                         }).ConfigureAwait(false);
                     return WriteResult(commandResult);
                 },
-                GatewayStop = async cancellationToken =>
+                GatewayStop = async (ifAttemptId, cancellationToken) =>
                 {
                     Session.SessionRuntime runtime = GetSessionRuntime();
                     Gateway.GatewayStopResult result = await NarrateOperationAsync(
@@ -1114,7 +1122,7 @@ internal static class Program
                         _ => Gateway.GatewayRuntime
                             .Create(options, runtime.Paths, runtime, log)
                             .Controller
-                            .StopAsync(runtime.HelperPath, cancellationToken))
+                            .StopAsync(runtime.HelperPath, cancellationToken, ifAttemptId))
                         .ConfigureAwait(false);
                     return WriteResult(new GatewayCommandResult(
                         "stop",
@@ -1125,7 +1133,12 @@ internal static class Program
                                 : Gateway.GatewayState.Unknown,
                         result.Message,
                         result.Detail,
-                        result.Succeeded ? 0 : 1));
+                        result.Succeeded ? 0 : 1,
+                        Launch: result.AttemptId is string attemptId
+                            ? new Gateway.GatewayLaunchReceipt(attemptId,
+                                StopOutcome: !result.Succeeded ? "refused" : result.Stopped ? "stopped" : "not-running",
+                                Refusal: result.Refusal)
+                            : null));
                 },
                 GatewayRestart = async cancellationToken =>
                 {

@@ -366,6 +366,27 @@ can return to `starting` when the record has no `observedPorts`. This contract
 does not provide a monotonic first-readiness history. Stop/restart and session
 teardown remain explicit lifecycle operations.
 
+Launch correlation is an additive v1 capability inside the existing integration
+envelope. The controller persists a fresh caller-selected (or generated) attempt
+ID in its existing launch intent before dispatch. The same ID names the
+supervisor exchange, and the supervisor writes its own ID, creation time, helper
+image, and request ID before entering application state. If the launch
+acknowledgement is lost, the session client resolves that receipt through the
+validated shared workspace and performs the usual guest identity inspection.
+Missing or mismatched evidence remains unknown; it never proves absence or
+permits replacement. No second launch registry or status-side repair is involved.
+The receipt's `running` state still means application process, not listener
+readiness.
+
+Start distinguishes creating an attempt from adopting an existing starting or
+running attempt. Adoption preserves the existing ID. Conditional stop compares
+the requested attempt under the same lifecycle lock used for start and restart,
+then verifies and stops only the recorded supervisor. A mismatch or unavailable
+identity refuses without clearing state or falling back to plain stop. Callers
+must choose a fresh ID for every new attempt and retain it across lost
+acknowledgements; a receipt encountered through adoption does not confer cleanup
+ownership. See the [Companion contract](../README.md#clawctl) for its JSON fields.
+
 Process access denial is not evidence that a recorded PID belongs to another
 process. Inspection uses query rights instead of requesting a full-access
 handle. If Windows denies inspection or termination, the session helper reads

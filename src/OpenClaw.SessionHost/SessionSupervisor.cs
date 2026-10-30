@@ -42,6 +42,7 @@ internal static class SessionSupervisor
 
         try
         {
+            WriteStatus(writeFile, statusPath, request, "starting", "The supervisor accepted the launch.");
             enterState ??= SessionStateAccess.ForAgent().EnterReader;
             using IDisposable state = enterState();
             Directory.CreateDirectory(
@@ -145,10 +146,14 @@ internal static class SessionSupervisor
     {
         try
         {
+            using Process self = Process.GetCurrentProcess();
             writeFile(
                 statusPath,
                 SessionInspectProtocol.SerializeStatus(new SessionSupervisorStatus
                 {
+                    RequestId = request.RequestId,
+                    ProcessStartTimeUtc = self.StartTime.ToUniversalTime(),
+                    HelperPath = System.Environment.ProcessPath,
                     State = state,
                     ProcessId = System.Environment.ProcessId,
                     Port = 0,

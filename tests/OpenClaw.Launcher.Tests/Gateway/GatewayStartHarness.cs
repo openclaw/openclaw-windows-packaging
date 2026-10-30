@@ -44,14 +44,15 @@ internal sealed class GatewayStartHarness : IDisposable
 
     public Task<GatewayStartResult> StartAsync(
         IProgress<GatewayStartProgress>? progress = null,
+        string? attemptId = null,
         CancellationToken cancellationToken = default) =>
-        CreateController().StartAsync("helper.exe", cancellationToken, progress);
+        CreateController().StartAsync("helper.exe", cancellationToken, progress, attemptId: attemptId);
 
     public Task<GatewayStatusReport> GetStatusAsync() =>
         CreateController().GetStatusAsync("helper.exe", CancellationToken.None);
 
-    public Task<GatewayStopResult> StopAsync() =>
-        CreateController().StopAsync("helper.exe", CancellationToken.None);
+    public Task<GatewayStopResult> StopAsync(string? ifAttemptId = null) =>
+        CreateController().StopAsync("helper.exe", CancellationToken.None, ifAttemptId);
 
     public Task<GatewayRestartResult> RestartAsync(
         IProgress<GatewayStartProgress>? progress = null) =>
