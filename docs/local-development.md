@@ -441,17 +441,20 @@ Run `.\scripts\Test-NativeRedirect.Tests.ps1` when you change
 `src\OpenClaw.Launcher\node\native-redirect.mjs`. It requires Node.js and runs
 `tests\node\native-redirect.test.mjs` with `node --test`. Each test starts
 Node.js with the preload against temporary application and staged roots, then
-checks where CommonJS, ESM, child-process, and worker-thread resolution lands.
-It also checks the preload's `NODE_OPTIONS` entry and its startup failure when
+checks where CommonJS, ESM, child-process, and worker-thread resolution lands,
+including through an application root reached by a junction. It also checks
+the preload's `NODE_OPTIONS` entry and its startup failure when
 `module.registerHooks()` is unavailable. The suite creates only temporary
 fixtures. It never touches an isolated session, a package registration, or
 installed OpenClaw data.
 
-The loose-registration layout does not exercise the redirect. Its `app`
-directory is a junction to the payload, and Node.js resolves modules through
-real paths, which never fall under the configured application root. To prove
-redirection inside the isolated session, use a package installed as described
-in [Compose, sign, and install an artifact](#compose-sign-and-install-an-artifact).
+Node.js resolves modules through real paths, so the redirect matches both the
+configured application root and its real path. A package installed on a
+secondary AppX volume is reached through a junction at its `WindowsApps`
+location, and the loose-registration `app` directory is a junction to the
+payload; both resolve to the junction's target. To prove redirection inside the
+isolated session, use a package installed as described in
+[Compose, sign, and install an artifact](#compose-sign-and-install-an-artifact).
 
 ### Managed code and packaging
 

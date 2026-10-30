@@ -11,6 +11,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -154,6 +155,28 @@ test("the application root matches regardless of case", () => {
 
   assertReport(probe("commonjs.cjs", { environment }), { requireBare: "staged", resolveBare: "staged" });
   assertReport(probe("esm.mjs", { environment }), { importBare: "staged", metaResolveBare: "staged" });
+});
+
+test("an application root reached through a junction reaches the staged copy", () => {
+  // A package installed on a secondary AppX volume is reached through a
+  // junction at its Program Files\WindowsApps location. Node.js resolves
+  // modules, and so every package's own __dirname, through the junction's
+  // target, while the launcher passes the junction path.
+  const linkedPackageRoot = join(root, "Program Files", "OpenClaw (volume)");
+  symlinkSync(join(root, "Program Files", "OpenClaw"), linkedPackageRoot, "junction");
+  const linkedAppRoot = join(linkedPackageRoot, "app");
+  const linkedPreloadUrl = pathToFileURL(join(linkedPackageRoot, "node", "native-redirect.mjs")).href;
+  const environment = { OPENCLAW_NATIVE_APP_ROOT: linkedAppRoot };
+
+  for (const [entry, expected] of [
+    ["commonjs.cjs", { requireBare: "staged", requireAbsolute: "staged", resolveFilename: "staged", unstaged: "app" }],
+    ["esm.mjs", { importBare: "staged", importAbsolute: "staged", createRequire: "staged", unstaged: "app" }],
+  ]) {
+    const result = runNode(["--import", linkedPreloadUrl, join(linkedAppRoot, entry)], environment);
+    assert.equal(result.stderr, "");
+    assert.equal(result.status, 0);
+    assertReport(JSON.parse(result.stdout), expected);
+  }
 });
 
 test("child processes inherit the redirect through NODE_OPTIONS", () => {
