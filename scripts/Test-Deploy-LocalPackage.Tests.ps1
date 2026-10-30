@@ -127,12 +127,17 @@ function New-Fixture {
         [IO.File]::WriteAllText(
             (Join-Path $completionDirectory 'openclaw.ps1'),
             'Register-ArgumentCompleter -Native -CommandName openclaw')
+        $setupDirectory = Join-Path $directory 'app\dist\extensions\fixture\.setup'
+        New-Item -Path $setupDirectory -ItemType Directory -Force | Out-Null
+        [IO.File]::WriteAllText((Join-Path $setupDirectory 'entry.mjs'), 'export {};')
         [IO.File]::WriteAllText((Join-Path $directory 'payload-metadata.json'), (@{
             architecture = $architecture
             layout = 'expanded-directory'
             nodeVersion = $nodeVersion
             packageVersion = '2026.9.4'
             resolvedCommit = '0965053fe6b9341776df147a6934b7485c60b5ca'
+            inventory = & (Join-Path $PSScriptRoot 'Get-PayloadInventory.ps1') `
+                -ApplicationDirectory (Join-Path $directory 'app')
         } | ConvertTo-Json))
     }
     $state.Operations = @{
@@ -970,6 +975,78 @@ try {
     $supplied = Invoke-Fixture $j @{ PayloadDirectory = $external }
     Assert-True ($j.Downloads -eq 0 -and $j.Queries -eq 0) 'A supplied payload still contacted GitHub.'
     Assert-True ((Get-Content (Join-Path $supplied.LayoutDirectory 'app\openclaw.mjs') -Raw) -eq 'supplied') 'A supplied payload was not used.'
+    foreach ($architecture in @('x64', 'arm64')) {
+        foreach ($damage in @('missing-setup', 'missing-inventory', 'invalid-inventory', 'renamed-file', 'resized-file', 'added-file')) {
+            $broken = New-Fixture
+            $brokenPayload = Join-Path $broken.Root 'broken-payload'
+            & $broken.WritePayload $brokenPayload $architecture 'payload' '24.20.0'
+            $brokenMetadataPath = Join-Path $brokenPayload 'payload-metadata.json'
+            $brokenMetadata = Get-Content -LiteralPath $brokenMetadataPath -Raw |
+                ConvertFrom-Json -AsHashtable
+            $expectedFailure = 'Payload file inventory does not match'
+            switch ($damage) {
+                'missing-setup' {
+                    Remove-Item -LiteralPath (
+                        Join-Path $brokenPayload 'app\dist\extensions\fixture\.setup'
+                    ) -Recurse -Force
+                }
+                'missing-inventory' {
+                    $brokenMetadata.Remove('inventory')
+                    $expectedFailure = 'no supported file inventory'
+                }
+                'invalid-inventory' {
+                    $brokenMetadata['inventory']['fileCount'] = '3'
+                    $expectedFailure = 'no supported file inventory'
+                }
+                'renamed-file' {
+                    Rename-Item -LiteralPath (
+                        Join-Path $brokenPayload 'app\dist\extensions\fixture\.setup\entry.mjs'
+                    ) -NewName 'other.mjs'
+                }
+                'resized-file' {
+                    [IO.File]::AppendAllText((Join-Path $brokenPayload 'app\openclaw.mjs'), 'changed')
+                }
+                'added-file' {
+                    [IO.File]::WriteAllText((Join-Path $brokenPayload 'app\extra.mjs'), 'extra')
+                }
+            }
+            [IO.File]::WriteAllText($brokenMetadataPath, ($brokenMetadata | ConvertTo-Json))
+            Assert-Fails {
+                Invoke-Fixture $broken @{ Architecture = $architecture; PayloadDirectory = $brokenPayload }
+            } "$expectedFailure.*-PayloadRunId.*Build-Payload.ps1"
+            Assert-True (
+                $broken.Publishes -eq 0 -and $broken.Registrations -eq 0 -and $broken.Setups -eq 0
+            ) "A $damage $architecture payload reached deployment."
+            Assert-Fails {
+                Invoke-LocalPackageMsixBuild -RepositoryRoot $broken.Root -Architecture $architecture `
+                    -PayloadDirectory $brokenPayload -Operations $broken.Operations `
+                    -Compose { throw 'An incomplete payload reached MSIX composition.' }
+            } $expectedFailure
+        }
+    }
+
+    $damagedCache = New-Fixture
+    $cachedDeployment = Invoke-Fixture $damagedCache
+    Remove-Item -LiteralPath (
+        Join-Path $cachedDeployment.LayoutDirectory 'app\dist\extensions\fixture\.setup'
+    ) -Recurse -Force
+    Assert-Fails { Invoke-Fixture $damagedCache } 'Payload file inventory does not match'
+    Assert-True ($damagedCache.Registrations -eq 1) 'A damaged cached payload was registered again.'
+
+    $damagedDownload = New-Fixture
+    $damagedDownload.Operations.Download = {
+        param($runId, $architecture, $directory)
+        & $damagedDownload.WritePayload $directory $architecture 'payload' '24.20.0'
+        Remove-Item -LiteralPath (
+            Join-Path $directory 'app\dist\extensions\fixture\.setup'
+        ) -Recurse -Force
+    }.GetNewClosure()
+    Assert-Fails { Invoke-Fixture $damagedDownload } 'Payload file inventory does not match'
+    Assert-True (
+        $damagedDownload.Publishes -eq 0 -and $damagedDownload.Registrations -eq 0 -and
+        -not (Test-Path -LiteralPath (
+            Join-Path $damagedDownload.Root 'artifacts\local-package\x64\payloads\current.json'))
+    ) 'An incomplete download was accepted or selected.'
     $incomplete = New-Fixture
     $incompletePayload = Join-Path $testRoot 'incomplete supplied payload'
     & $incomplete.WritePayload $incompletePayload 'x64' 'incomplete' '24.20.0'

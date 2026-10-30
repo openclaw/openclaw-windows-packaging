@@ -34,10 +34,26 @@ try {
         -ItemType Directory `
         -Path `
             "$source\dist\control-ui\assets", `
-            "$source\dist\extensions\fixture", `
+            "$source\dist\extensions\fixture\.setup", `
             $package `
         -Force |
         Out-Null
+    $inventoryFixture = Join-Path $testRoot 'inventory fixture'
+    $hiddenDirectory = Join-Path $inventoryFixture '.setup'
+    New-Item -Path $hiddenDirectory -ItemType Directory -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $inventoryFixture 'b'), 'bb')
+    [IO.File]::WriteAllText((Join-Path $hiddenDirectory 'a'), 'a')
+    [IO.File]::SetAttributes($hiddenDirectory, [IO.FileAttributes]::Hidden)
+    [IO.File]::SetAttributes((Join-Path $inventoryFixture 'b'), [IO.FileAttributes]::Hidden)
+    $fixtureInventory = & "$PSScriptRoot\Get-PayloadInventory.ps1" `
+        -ApplicationDirectory $inventoryFixture
+    $expectedDigest = [Convert]::ToHexString(
+        [Security.Cryptography.SHA256]::HashData(
+            [Text.Encoding]::UTF8.GetBytes(".setup/a`t1`nb`t2`n"))).ToLowerInvariant()
+    if ($fixtureInventory.algorithm -cne 'sha256-path-length-v1' -or
+        $fixtureInventory.fileCount -ne 2 -or $fixtureInventory.sha256 -cne $expectedDigest) {
+        throw 'The payload inventory must use sorted relative paths and lengths, including hidden entries.'
+    }
     '{"name":"openclaw","version":"0.0.0","type":"module","scripts":{"install":"node install.cjs"}}' |
         Set-Content -LiteralPath "$source\package.json"
     @'
@@ -47,6 +63,7 @@ require("node:fs").writeFileSync("installed-architecture.txt", process.arch);
         -LiteralPath (Join-Path $PSScriptRoot 'fixtures\openclaw-plugin-inspection.mjs') `
         -Destination "$source\openclaw.mjs"
     'export {};' | Set-Content -LiteralPath "$source\dist\index.js"
+    'export {};' | Set-Content -LiteralPath "$source\dist\extensions\fixture\.setup\entry.mjs"
     '{"name":"@openclaw/fixture","version":"1.0.0"}' |
         Set-Content `
             -LiteralPath "$source\dist\extensions\fixture\package.json"
@@ -138,6 +155,23 @@ require("node:fs").writeFileSync("installed-architecture.txt", process.arch);
     $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
     if ($metadata.nodeVersion -cne $nodeVersion) {
         throw 'The payload did not preserve the exact source build Node.js version.'
+    }
+    $setupPath = Join-Path $payload 'app\dist\extensions\fixture\.setup\entry.mjs'
+    if (-not (Test-Path -LiteralPath $setupPath -PathType Leaf)) {
+        throw 'The payload build dropped a dot-directory from the npm package.'
+    }
+    $inventory = & "$PSScriptRoot\Get-PayloadInventory.ps1" `
+        -ApplicationDirectory (Join-Path $payload 'app')
+    if ($metadata.inventory.fileCount -ne $inventory.fileCount -or
+        $metadata.inventory.sha256 -cne $inventory.sha256) {
+        throw 'The payload build did not record its final application inventory.'
+    }
+    Remove-Item -LiteralPath $setupPath
+    $withoutSetup = & "$PSScriptRoot\Get-PayloadInventory.ps1" `
+        -ApplicationDirectory (Join-Path $payload 'app')
+    if ($withoutSetup.fileCount -ne $inventory.fileCount - 1 -or
+        $withoutSetup.sha256 -ceq $inventory.sha256) {
+        throw 'The payload inventory did not account for dot-directory contents.'
     }
     if ((Get-Content -LiteralPath "$payload\app\installed-architecture.txt" -Raw) -cne $nodeArchitecture) {
         throw 'The npm install lifecycle did not execute with the target Node.js architecture.'

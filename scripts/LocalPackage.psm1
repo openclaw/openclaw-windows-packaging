@@ -247,6 +247,24 @@ function Assert-LocalPackagePayload {
         [string]$metadata['nodeVersion'] -notmatch '^v?\d+\.\d+\.\d+$') {
         throw "Payload metadata must describe an expanded $Architecture directory with a Node.js version: $Directory. Supply a matching payload or use -RefreshPayload."
     }
+    $inventory = $metadata['inventory']
+    $recovery = (
+        'Use -RefreshPayload with -PayloadRunId from a newer successful workflow run, ' +
+        'or rebuild with scripts\Build-Payload.ps1 and supply -PayloadDirectory. ' +
+        'Downloading the same older artifact cannot restore omitted files.'
+    )
+    if ($inventory -isnot [System.Collections.IDictionary] -or
+        $inventory['algorithm'] -cne 'sha256-path-length-v1' -or
+        $inventory['fileCount'] -isnot [long] -or $inventory['fileCount'] -le 0 -or
+        [string]$inventory['sha256'] -cnotmatch '^[0-9a-f]{64}$') {
+        throw "Payload metadata has no supported file inventory: $Directory. $recovery"
+    }
+    $actual = & (Join-Path $PSScriptRoot 'Get-PayloadInventory.ps1') `
+        -ApplicationDirectory $application
+    if ($actual.fileCount -ne $inventory['fileCount'] -or
+        $actual.sha256 -cne $inventory['sha256']) {
+        throw "Payload file inventory does not match: $Directory. Files are missing, added, renamed, or resized. $recovery"
+    }
     return ([string]$metadata['nodeVersion']).TrimStart('v')
 }
 
@@ -461,7 +479,9 @@ function Invoke-LocalPackageMsixBuild {
     $lock = Enter-LocalPackageBuildLock (Join-Path $msixRoot '.lock')
     try {
         if ($PayloadDirectory) {
-            & $Compose (Resolve-Path -LiteralPath $PayloadDirectory -ErrorAction Stop).Path
+            $payload = Resolve-LocalPackagePayload -Architecture $Architecture `
+                -PayloadDirectory $PayloadDirectory -Operations $services
+            & $Compose $payload.Directory
             return
         }
 

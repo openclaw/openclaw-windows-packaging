@@ -82,6 +82,16 @@ Use options for a concrete reason:
 | `-ReplaceExistingInstall` | You explicitly accept removal of an installed MSIX, another checkout's registration, or an owned development registration needing destructive repair. Removal can delete the isolated profile; packaged app data also cannot survive a loose/installed transition. |
 | `-Patch <name>` | You are iterating on a change; this is the recommended default. Name it for the work so its commands, app data, and isolated session stay separate from the base package. See [side-by-side patched identities](#side-by-side-patched-identities). |
 
+Local deployment and local MSIX composition verify every acquired, cached, or
+supplied payload against the file inventory in `payload-metadata.json` before
+using it. `Build-Payload.ps1` records the file count and a SHA-256 digest of the
+ordinal-sorted, app-relative paths and lengths, including dot-directories such
+as plugin `.setup` trees and hidden files. This confirms file presence and size,
+not the contents of same-length files. Older payloads without an inventory are
+rejected. Select a newer successful run with `-RefreshPayload -PayloadRunId <id>`,
+or rebuild with `scripts\Build-Payload.ps1` and pass `-PayloadDirectory`.
+Re-downloading an older artifact cannot recover files omitted during upload.
+
 The command is idempotent, not timestamp-driven. `LocalPackage.psm1` records
 two content-hash fingerprints:
 

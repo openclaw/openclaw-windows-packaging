@@ -408,9 +408,11 @@ if ($bundledNodeFiles.Count -ne 0) {
     layout           = 'expanded-directory'
     nodeVersion      = $nodeVersion
     npmVersion       = $npmVersion
+    inventory        = & (Join-Path $PSScriptRoot 'Get-PayloadInventory.ps1') `
+        -ApplicationDirectory $applicationDirectory
 } | ConvertTo-Json | Set-Content (Join-Path $OutputDirectory 'payload-metadata.json') -Encoding utf8
 
-$files = @(Get-ChildItem -LiteralPath $applicationDirectory -File -Recurse)
+$files = @(Get-ChildItem -LiteralPath $applicationDirectory -File -Recurse -Force)
 $size = ($files | Measure-Object -Property Length -Sum).Sum / 1MB
 Write-Host (
     "Created expanded payload at {0} ({1} files, {2:N1} MiB)" -f
