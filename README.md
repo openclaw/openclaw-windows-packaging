@@ -445,8 +445,14 @@ numeric correction suffixes must be `-2` through `-9`. Unsupported corrections
 are rejected for channel selection, explicit refs, policy pins, and retries.
 
 The `openclaw-source-resolution` artifact records this choice once per run.
-Retries reuse it without querying the moving channel again. If the snapshot
-is missing or expired (90-day retention), start a new run instead of retrying.
+The first attempt that captures source uploads it; later attempts reuse it
+without querying the moving channel again. An earlier attempt that never ran the
+capture job, such as a fork pull request run that waited for approval, leaves no
+snapshot, so the approved attempt captures it then. If an earlier attempt ran the
+upload, or its outcome is unknown, a missing or expired (90-day retention)
+snapshot fails the retry; start a new run instead. **Re-run all jobs** discards
+the earlier attempt's artifacts, so retry with **Re-run failed jobs** or by
+re-running individual jobs, which keep the snapshot.
 Package and payload metadata record the resolved source commit and version.
 
 For a one-time source override in any signing mode, provide an OpenClaw tag,
