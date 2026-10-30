@@ -484,7 +484,8 @@ Run PowerShell policy suites by owning surface rather than indiscriminately:
 `Build-Payload.ps1` and `Build-MSIX.ps1`,
 `Test-MSIXReleaseIdentity.Tests.ps1` and
 `Test-WorkflowPackageVersion.Tests.ps1` for release/version identity,
-`Test-OpenClawSource.Tests.ps1` and
+`Test-OpenClawSource.Tests.ps1`,
+`Test-WorkflowSourceSnapshotMode.Tests.ps1`, and
 `Test-WorkflowSigningConfiguration.ps1` for source capture, retry context,
 cache routing, and selected-build outcomes,
 `Test-MSIXUpgradeMatrix.Tests.ps1` for parallel upgrade scenario selection,
