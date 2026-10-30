@@ -306,7 +306,10 @@ internal static class SessionNativeStager
         Directory.CreateDirectory(destination);
         foreach (string file in Directory.EnumerateFiles(source))
         {
-            File.Copy(file, Path.Combine(destination, Path.GetFileName(file)), overwrite: true);
+            // Do not carry package EFS encryption into the agent profile.
+            using FileStream input = File.OpenRead(file);
+            using FileStream output = File.Create(Path.Combine(destination, Path.GetFileName(file)));
+            input.CopyTo(output);
         }
 
         foreach (string directory in Directory.EnumerateDirectories(source))
