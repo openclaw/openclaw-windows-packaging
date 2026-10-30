@@ -331,6 +331,7 @@ jobs:
         with:
           name: openclaw-gateway-payload-${{ matrix.architecture }}
           path: ${{ runner.temp }}\openclaw-payload\
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
 

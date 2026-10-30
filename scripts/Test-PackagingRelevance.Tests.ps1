@@ -158,6 +158,7 @@ try {
         'release-policy.json'
         'scripts/Build-Payload.ps1'
         'scripts/Copy-PayloadTree.ps1'
+        'scripts/Get-PayloadInventory.ps1'
         'scripts/Get-WorkflowSource.ps1'
         'scripts/OpenClawSource.ps1'
         'plugins/gateway-isolation/index.js'
