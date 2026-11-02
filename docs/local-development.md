@@ -468,6 +468,12 @@ dotnet test .\OpenClaw.Gateway.MSIX.slnx --configuration Release --no-restore
 The branch-local invocation-job prototype's `InvocationCancellationTests`
 exercise real helper/process trees only in temporary fixtures, including
 retained job handles, cancellation, deadlines, and sibling survival.
+The owner-death regression uses the managed scenario driver's temporary
+process tree and kernel waits: it kills only its fixture owner, pins every
+workload member, and checks coordinator exit and sibling survival. Paused
+dispatch proves a dead owner cannot admit late work. Mutex tests distinguish
+established ownership, normal release, and abandonment. State-transfer tests
+exercise the same owner-death contract against the real helper worker.
 They never provision an isolated account. The separately callable disposable
 MXC probe is not part of this lane; running it requires explicit authorization
 and exact-ID cleanup with independent account/profile/workspace verification.

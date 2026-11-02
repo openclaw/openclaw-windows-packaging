@@ -205,8 +205,9 @@ This branch prototypes per-invocation cleanup with
 The host creates a job and per-invocation lifecycle events. The helper's internal
 `--request-in-job=<id>` mode joins the job before starting any workload, then
 checks the event so a delayed, already-cancelled spawn cannot start late work.
-An outside-job helper coordinator uses query-only job access and its agent
-identity to pin member process handles.
+An outside-job helper coordinator uses its agent identity to pin member process
+handles. Its job access is limited to this unique invocation's query,
+admission-control, and termination operations.
 Console Ctrl+C and Ctrl+Break leave that coordinator alive to finish pinning
 and drain acknowledgement; its process-local handler is not inherited by the
 worker, which retains normal console interruption behavior.
@@ -229,12 +230,26 @@ belong to the exact job remain explicit failures. Every retained handle still
 requires a signaled wait; no exit-code or job-count shortcut replaces it.
 Failed drain closes supported SDK output readers before joining them; closing
 readers does not count as process exit. The agent receives no host-process
-duplication or job-termination access.
+access or duplication rights.
 
 This is ordinary process-leak control, not an authorization boundary against
 hostile same-identity code. Explicit termination does not depend on the last
-job handle closing; kill-on-close remains only a host-death fallback and is not
-guaranteed against retained handles. Older helpers reject the new
+job handle closing. Before publishing an invocation, the host establishes a
+named mutex owned by a dedicated thread for that invocation's lifetime.
+The coordinator watches it alongside stop, worker-exit, and termination
+signals. Kernel-confirmed abandonment identifies hard owner death; ordinary
+disposal releases it normally, after the host's drain attempt. If ownership
+ends before termination is confirmed, the coordinator closes admission,
+latches stop, pins members, and terminates and drains only that job itself.
+This also rejects a late worker after owner death. No timeout, process ID, or
+job-handle closure stands in for owner or process-exit confirmation.
+The coordinator reports ownership ending and confirmed orphan drain without
+logging command arguments. Kill-on-close remains a secondary fallback, not
+the owner-death mechanism. If owner-ended admission, snapshot, pinning, or drain
+fails, the coordinator still requests emergency termination and reports the
+failure. An unconfirmed drain with a native-root lease deliberately retains
+that waiter and lease until explicit `clawctl teardown`; termination success
+alone does not authorize native-root reclamation. Older helpers reject the new
 `--coordinate-invocation=<id>` mode without starting a workload. State-transfer
 workers (backup, restore, recovery) use the same lifetime through the paired
 `--coordinate-state-transfer=<id>` and `--state-transfer-in-job=<id>` modes, so
@@ -243,9 +258,8 @@ cancelled restore whose prepare step already recorded its activation is rolled
 back automatically. The other helper modes (runtime/tool installation,
 inspection, collection, configuration checks) still run as plain executions. The JSON
 protocol version is unchanged; the branch-local modes and events require a
-matching host/helper. Local regressions, managed quality, the full Release
-suite, and the observed cross-identity NativeAOT scenarios pass; the remaining
-limits and unrun lanes are recorded in the
+matching host/helper. Local owner-death fixtures supplement the earlier
+cross-identity evidence; the current proof limits and unrun lanes are recorded in the
 [operational evidence](mxc-compatibility-evidence.md#branch-local-descendant-cancellation-prototype).
 Dispatched lifecycle calls are not abandoned, so a provision's identity can
 always be recorded.
