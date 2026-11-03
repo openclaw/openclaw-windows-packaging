@@ -3451,8 +3451,7 @@ public sealed class ProgramTests : IDisposable
                 {
                     read = true;
                     throw new InvalidOperationException("A torn-down installation must not be read.");
-                },
-                CancellationToken.None));
+                }));
             await attempted.Task.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(true);
             TeardownOrchestrator teardown = CreateTeardownOrchestrator(
                 runtime,

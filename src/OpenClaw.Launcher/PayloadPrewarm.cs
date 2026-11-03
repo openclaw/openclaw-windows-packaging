@@ -72,7 +72,8 @@ internal static class PayloadPrewarm
         string applicationDirectory,
         PayloadPrewarmLimits limits,
         TimeProvider clock,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<bool>? isCancellationRequested = null)
     {
         ArgumentNullException.ThrowIfNull(limits);
         ArgumentNullException.ThrowIfNull(clock);
@@ -113,7 +114,7 @@ internal static class PayloadPrewarm
         byte[] buffer = new byte[BufferSize];
         foreach (string? relativePath in list.Files)
         {
-            if (cancellationToken.IsCancellationRequested)
+            if (cancellationToken.IsCancellationRequested || isCancellationRequested?.Invoke() == true)
             {
                 return Finish(PayloadPrewarmOutcome.Cancelled);
             }
@@ -162,7 +163,7 @@ internal static class PayloadPrewarm
                         return Finish(PayloadPrewarmOutcome.ByteLimitReached);
                     }
 
-                    if (cancellationToken.IsCancellationRequested)
+                    if (cancellationToken.IsCancellationRequested || isCancellationRequested?.Invoke() == true)
                     {
                         return Finish(PayloadPrewarmOutcome.Cancelled);
                     }
@@ -250,15 +251,15 @@ internal static class PayloadPrewarm
                     runtime.LifecycleLock,
                     () => { _ = runtime.RequireSetup(); },
                     scope,
-                    token => RunPass(
+                    isCancellationRequested => RunPass(
                         PayloadPrewarmNative.TryEnterBackgroundMode,
                         GetListPath(AppContext.BaseDirectory),
                         options.RequirePackagedApplicationDirectory(),
                         PayloadPrewarmLimits.Default,
                         TimeProvider.System,
                         log,
-                        token),
-                    cancellationToken);
+                        cancellationToken,
+                        isCancellationRequested));
             }
             finally
             {
@@ -277,43 +278,23 @@ internal static class PayloadPrewarm
         ISessionLock lifecycleLock,
         Action requireSetup,
         string scope,
-        Func<CancellationToken, PayloadPrewarmResult> runPass,
-        CancellationToken cancellationToken)
+        Func<Func<bool>, PayloadPrewarmResult> runPass)
     {
-        using CancellationTokenSource linked =
-            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         using EventWaitHandle cancelSignal = new(
             initialState: false,
-            EventResetMode.AutoReset,
+            EventResetMode.ManualReset,
             CancelEventPrefix + scope);
-        RegisteredWaitHandle registration;
         // Setup starts the process while holding this same lock. Register
         // before releasing it, or refuse a delayed worker after teardown won.
         using (ISessionLockHandle handle = lifecycleLock.TryAcquire(SessionCoordinator.DefaultLockTimeout)
             ?? throw new SessionBusyException(SessionCoordinator.DefaultLockTimeout))
         {
             requireSetup();
-            registration = ThreadPool.RegisterWaitForSingleObject(
-                cancelSignal,
-                static (state, _) => ((CancellationTokenSource)state!).Cancel(),
-                linked,
-                Timeout.Infinite,
-                executeOnlyOnce: false);
         }
 
-        try
-        {
-            return runPass(linked.Token);
-        }
-        finally
-        {
-            // A queued callback must finish before its token source is disposed.
-            using ManualResetEvent drained = new(initialState: false);
-            if (registration.Unregister(drained))
-            {
-                _ = drained.WaitOne();
-            }
-        }
+        // Poll with the I/O budgets so no asynchronous waiter can retain the
+        // named event after this pass has disposed it.
+        return runPass(() => cancelSignal.WaitOne(TimeSpan.Zero));
     }
 
     // The pass checks its deadline before each file and after each chunk, but a
@@ -379,7 +360,8 @@ internal static class PayloadPrewarm
         PayloadPrewarmLimits limits,
         TimeProvider clock,
         Action<string> log,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<bool>? isCancellationRequested = null)
     {
         ArgumentNullException.ThrowIfNull(enterBackgroundMode);
         ArgumentNullException.ThrowIfNull(log);
@@ -389,7 +371,7 @@ internal static class PayloadPrewarm
             {
                 Detail = $"Win32 error {error.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
             }
-            : Run(listPath, applicationDirectory, limits, clock, cancellationToken);
+            : Run(listPath, applicationDirectory, limits, clock, cancellationToken, isCancellationRequested);
         log(result.Describe());
         return result;
     }

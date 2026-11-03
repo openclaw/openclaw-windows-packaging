@@ -44,13 +44,15 @@ public sealed class PayloadPrewarmTests : IDisposable
     private PayloadPrewarmResult Run(
         PayloadPrewarmLimits? limits = null,
         TimeProvider? clock = null,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        Func<bool>? isCancellationRequested = null) =>
         PayloadPrewarm.Run(
             ListPath,
             Application,
             limits ?? PayloadPrewarmLimits.Default,
             clock ?? TimeProvider.System,
-            cancellationToken);
+            cancellationToken,
+            isCancellationRequested);
 
     [Fact]
     public void ListedFilesAreReadAndUnsafeOrMissingEntriesAreSkipped()
@@ -247,7 +249,7 @@ public sealed class PayloadPrewarmTests : IDisposable
             lifecycleLock,
             () => Assert.Equal(1, lifecycleLock.HeldCount),
             scope,
-            token =>
+            isCancellationRequested =>
             {
                 Assert.Equal(0, lifecycleLock.HeldCount);
                 using (lifecycleLock.TryAcquire(TimeSpan.Zero))
@@ -255,10 +257,9 @@ public sealed class PayloadPrewarmTests : IDisposable
                     PayloadPrewarm.SignalCancel(scope, log.Add);
                 }
 
-                Assert.True(token.WaitHandle.WaitOne(TimeSpan.FromSeconds(10)));
-                return Run(cancellationToken: token);
-            },
-            CancellationToken.None);
+                Assert.True(isCancellationRequested());
+                return Run(isCancellationRequested: isCancellationRequested);
+            });
 
         Assert.Equal(PayloadPrewarmOutcome.Cancelled, result.Outcome);
         Assert.Equal(0, result.BytesRead);
@@ -284,12 +285,11 @@ public sealed class PayloadPrewarmTests : IDisposable
                     throw new SessionException("OpenClaw has not been set up.");
                 },
                 scope,
-                token =>
+                isCancellationRequested =>
                 {
                     read = true;
-                    return Run(cancellationToken: token);
-                },
-                CancellationToken.None));
+                    return Run(isCancellationRequested: isCancellationRequested);
+                }));
 
         Assert.Contains("not been set up", failure.Message, StringComparison.Ordinal);
         Assert.False(read);
@@ -307,12 +307,38 @@ public sealed class PayloadPrewarmTests : IDisposable
             new AlwaysFreeLock(),
             () => { },
             scope,
-            _ => throw new IOException("fixture read failure"),
-            CancellationToken.None));
+            _ => throw new IOException("fixture read failure")));
 
         List<string> log = [];
         PayloadPrewarm.SignalCancel(scope, log.Add);
         Assert.Empty(log);
+    }
+
+    [Fact]
+    public void TeardownCancellationStopsAFileBetweenChunks()
+    {
+        WriteApplicationFile("large.js", 200_000);
+        WriteList(ListJson("large.js"));
+        string scope = Guid.NewGuid().ToString("N");
+        int checks = 0;
+
+        PayloadPrewarmResult result = PayloadPrewarm.RunRegisteredPass(
+            new AlwaysFreeLock(),
+            () => { },
+            scope,
+            isCancellationRequested => Run(isCancellationRequested: () =>
+            {
+                if (++checks == 2)
+                {
+                    PayloadPrewarm.SignalCancel(scope, _ => { });
+                }
+
+                return isCancellationRequested();
+            }));
+
+        Assert.Equal(PayloadPrewarmOutcome.Cancelled, result.Outcome);
+        Assert.Equal(0, result.FilesRead);
+        Assert.Equal(64 * 1024, result.BytesRead);
     }
 
     [Fact]
@@ -328,16 +354,15 @@ public sealed class PayloadPrewarmTests : IDisposable
             new AlwaysFreeLock(),
             () => { },
             scope,
-            token =>
+            isCancellationRequested =>
             {
                 PayloadPrewarm.SignalCancel(other, log.Add);
-                Assert.False(token.IsCancellationRequested);
+                Assert.False(isCancellationRequested());
                 Assert.Empty(log);
                 PayloadPrewarm.SignalCancel(scope, log.Add);
-                Assert.True(token.WaitHandle.WaitOne(TimeSpan.FromSeconds(10)));
-                return Run(cancellationToken: token);
-            },
-            CancellationToken.None);
+                Assert.True(isCancellationRequested());
+                return Run(isCancellationRequested: isCancellationRequested);
+            });
 
         Assert.Equal(PayloadPrewarmOutcome.Cancelled, result.Outcome);
         Assert.Equal(0, result.BytesRead);

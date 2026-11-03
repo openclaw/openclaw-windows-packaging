@@ -180,15 +180,15 @@ internal static partial class SmokeProgram
                 new NamedSessionLock(directory),
                 () => { },
                 Guid.NewGuid().ToString("N"),
-                token => OpenClaw.Launcher.PayloadPrewarm.RunPass(
+                isCancellationRequested => OpenClaw.Launcher.PayloadPrewarm.RunPass(
                     OpenClaw.Launcher.PayloadPrewarmNative.TryEnterBackgroundMode,
                     listPath,
                     Path.Combine(directory, "app"),
                     OpenClaw.Launcher.PayloadPrewarmLimits.Default,
                     TimeProvider.System,
                     log.Add,
-                    token),
-                CancellationToken.None);
+                    CancellationToken.None,
+                    isCancellationRequested));
 
             Assert(result.Outcome == OpenClaw.Launcher.PayloadPrewarmOutcome.Completed &&
                 result.FilesRead == 1 &&
