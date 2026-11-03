@@ -110,7 +110,7 @@ variables](#environment-variables) to restore the prior start hint.
 ### Environment variables
 
 These host-side variables are not passed to the OpenClaw child. Automatic
-behavior is enabled by default. Set either variable to `0`, `false`, `no`, or
+behavior is enabled by default. Set any of these variables to `0`, `false`, `no`, or
 `off` (case-insensitive and with surrounding whitespace ignored) to suppress
 its automatic behavior; any other value, including an unset variable, leaves
 it enabled.
@@ -119,6 +119,7 @@ it enabled.
 | --- | --- |
 | `CLAWCTL_AUTO_SETUP` | Restores the previous clean-machine failure: `openclaw` reports that it has not been set up and directs you to `clawctl setup`; it provisions, records, and registers nothing. |
 | `CLAWCTL_AUTO_GATEWAY_START` | Restores the previous `clawctl gateway-service start` hint instead of automatically starting an eligible gateway. |
+| `CLAWCTL_PAYLOAD_PREWARM` | Skips the best-effort [payload prewarm](docs/architecture.md#setup-starts-a-best-effort-payload-prewarm) that a successful setup starts in the background. |
 
 ### `clawctl`
 

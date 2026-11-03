@@ -184,6 +184,14 @@ function New-TestArtifact {
         Set-Content `
             -LiteralPath (Join-Path $payloadDirectory 'payload-files.json') `
             -Encoding utf8
+    [ordered]@{
+        schemaVersion = 1
+        files = @('openclaw.mjs')
+    } |
+        ConvertTo-Json |
+        Set-Content `
+            -LiteralPath (Join-Path $payloadDirectory 'startup-files.json') `
+            -Encoding utf8
 
     $selectedIdentity = if ($IdentityChannel -eq 'Sideload') {
         $policy.sideloadPackageIdentity
@@ -1097,6 +1105,24 @@ try {
     }
     Assert-Fails `
         -MessagePattern 'payload inventory is invalid' `
+        -Action {
+            Invoke-PolicyValidation -Root $testRoot
+        }
+
+    Reset-TestArtifacts
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        [ordered]@{
+            schemaVersion = 1
+            files = @('openclaw.mjs', '../outside.js')
+        } |
+            ConvertTo-Json |
+            Set-Content `
+                -LiteralPath (Join-Path $Expanded 'payload\startup-files.json') `
+                -Encoding utf8
+    }
+    Assert-Fails `
+        -MessagePattern 'startup file list is invalid' `
         -Action {
             Invoke-PolicyValidation -Root $testRoot
         }

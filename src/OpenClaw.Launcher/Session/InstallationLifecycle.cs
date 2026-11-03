@@ -35,6 +35,14 @@ internal interface IInstallationLifecycle
     Task<GatewayPersistenceStatus> GetRecoveryStatusAsync(
         Action<string> log,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Starts the best-effort, detached payload prewarm after setup succeeds.
+    /// Implementations must not throw or wait for it.
+    /// </summary>
+    void StartPayloadPrewarm(Action<string> log)
+    {
+    }
 }
 
 internal sealed class InstallationLifecycle : IInstallationLifecycle
@@ -92,6 +100,7 @@ internal sealed class InstallationLifecycle : IInstallationLifecycle
         bool lockAlreadyHeld,
         CancellationToken cancellationToken)
     {
+        PayloadPrewarm.SignalCancel(log);
         TeardownOrchestrator teardown =
             GatewayRuntime.CreateTeardownOrchestrator(options, runtime, log);
         return lockAlreadyHeld
@@ -112,6 +121,8 @@ internal sealed class InstallationLifecycle : IInstallationLifecycle
         Action<string> log,
         CancellationToken cancellationToken) =>
         GatewayRuntime.CreateRecoveryManager(log).GetStatusAsync(cancellationToken);
+
+    public void StartPayloadPrewarm(Action<string> log) => PayloadPrewarm.TryStart(log);
 }
 
 internal sealed record PackageRuntimeMetadata(

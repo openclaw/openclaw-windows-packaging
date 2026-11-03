@@ -104,6 +104,61 @@ The separation is consequential: state says what this installation recorded,
 whereas inspection asks the isolated session what is actually running. A stale
 record is therefore not treated as proof that the session is healthy.
 
+## Setup starts a best-effort payload prewarm
+
+The first Gateway start in a new isolated session can spend much of its time
+waiting for on-access antivirus scans of payload files that a later start does
+not repeat. MSIX runs no package code at install or update, so the earliest
+point this repository owns is a successful `clawctl setup`, explicit or
+automatic. After setup records its completion,
+[`PayloadPrewarm`](../src/OpenClaw.Launcher/PayloadPrewarm.cs) starts the
+package's own `clawctl` alias with the hidden `payload-prewarm` command as a
+detached, windowless, below-normal-priority process that does not inherit
+handles, then setup continues without waiting for it. Setup itself keeps its
+normal priority. Because a priority class alone does not lower file I/O, the
+worker then enters `PROCESS_MODE_BACKGROUND_BEGIN`, which Windows lets only
+the process itself set, to lower its CPU, I/O, and memory scheduling; if that
+fails, it records the error and reads nothing. Otherwise it reads each file
+named by `payload\startup-files.json` once.
+
+The pass is a hint, not a dependency:
+
+- It never changes setup's result. Start and worker failures, a missing or
+  invalid list, and each outcome are written only to the host diagnostic log.
+- It reads only package files, and only list entries that are plain relative
+  paths under `app\`. It stops at the first exhausted budget: 8,000 files,
+  256 MiB, or five minutes, checked before each file and after each 64 KiB
+  read. A blocked open or read cannot observe that deadline, so the worker
+  also ends its own process 15 seconds after it, recording the stop in the
+  diagnostic log when the log accepts the line within 5 seconds. Teardown
+  signals a running worker to stop, and a second worker for the same
+  installation exits immediately.
+- It adds no Defender exclusions and changes no Defender or system settings.
+  `CLAWCTL_PAYLOAD_PREWARM=0` skips it.
+
+`Build-MSIX.ps1` generates the list with
+[`Get-PayloadStartupFiles.ps1`](../scripts/Get-PayloadStartupFiles.ps1), which
+walks literal `import`, `export ... from`, `import()`, and `require()`
+specifiers from `openclaw.mjs` and from each `dist\extensions\*\index` entry,
+resolving packages through `package.json` `exports` or `main`. The build
+refuses a listed path outside the payload inventory, and
+`Test-SigningInputs.ps1` repeats that check before signing. A static graph only
+approximates startup: CommonJS patterns, computed specifiers, conditional
+exports, and plugin discovery can be missed, and deferred imports can be
+included, so the list does not guarantee coverage of the files a start opens.
+
+Benefit is unproven. The worker reads as the invoking user, whereas the
+Gateway reads the same package files later as the isolated agent identity;
+[Microsoft documents Defender's scan cache](https://learn.microsoft.com/en-us/defender-endpoint/troubleshoot-performance-issues)
+but not whether a verdict produced for one process helps a later process under
+another identity. The Defender verdict cache is separate from the OS file
+cache; warming either does not imply the other, and signature updates can
+invalidate cached verdicts. A Gateway start that happens without setup, such as
+the sign-in start after a package update, is not preceded by a prewarm. A
+worker still running when an update arrives can hold package files until its
+deadline. Make no startup-time claim without a comparable packaged, isolated
+before-and-after measurement.
+
 ## The guest helper carries data, not a user command line
 
 MXC's current execution route accepts a command-line string and flattens it
@@ -594,6 +649,7 @@ flowchart LR
 | MXC SDK API and redistribution notice | [`Directory.Packages.props`](../Directory.Packages.props), [`Get-MxcSdkMetadata.ps1`](../scripts/Get-MxcSdkMetadata.ps1), [`MxcRuntimeLocator.cs`](../src/OpenClaw.Launcher/Mxc/MxcRuntimeLocator.cs), [`MxcSdkSessionClient.cs`](../src/OpenClaw.Launcher/Mxc/MxcSdkSessionClient.cs) |
 | State transfer and activation | [`SessionStateTransferProtocol.cs`](../src/OpenClaw.SessionProtocol/SessionStateTransferProtocol.cs), [`StateTransferCoordinator.cs`](../src/OpenClaw.Launcher/StateTransfer/StateTransferCoordinator.cs), [`SessionStateTransfer.cs`](../src/OpenClaw.SessionHost/SessionStateTransfer.cs), [`SessionStateAccess.cs`](../src/OpenClaw.SessionHost/SessionStateAccess.cs), [`StateActivationJournal.cs`](../src/OpenClaw.SessionHost/StateActivationJournal.cs) |
 | Agent runtime installation | [`SessionRuntimeInstaller.cs`](../src/OpenClaw.SessionHost/SessionRuntimeInstaller.cs) |
+| Payload prewarm and startup file list | [`PayloadPrewarm.cs`](../src/OpenClaw.Launcher/PayloadPrewarm.cs), [`PayloadPrewarmNative.cs`](../src/OpenClaw.Launcher/PayloadPrewarmNative.cs), [`Get-PayloadStartupFiles.ps1`](../scripts/Get-PayloadStartupFiles.ps1), [`Build-MSIX.ps1`](../scripts/Build-MSIX.ps1) |
 | Gateway lifecycle | [`SchTasksGatewayScheduler.cs`](../src/OpenClaw.Launcher/Gateway/SchTasksGatewayScheduler.cs), [`GatewayController.cs`](../src/OpenClaw.Launcher/Gateway/GatewayController.cs), [`GatewayConfigurationStore.cs`](../src/OpenClaw.Launcher/Gateway/GatewayConfigurationStore.cs) |
 | Logon recovery and the sign-in helper | [`GatewayPersistenceManager.cs`](../src/OpenClaw.Launcher/Gateway/GatewayPersistenceManager.cs), [`ShellStartupLinkStore.cs`](../src/OpenClaw.Launcher/Gateway/ShellStartupLinkStore.cs), [`PackageExecutionAlias.cs`](../src/OpenClaw.Launcher/PackageExecutionAlias.cs), [`GatewayRecoveryStart.cs`](../src/OpenClaw.GatewayRecovery/GatewayRecoveryStart.cs) |
 | Diagnostics and payload integrity | [`HostDiagnosticLog.cs`](../src/OpenClaw.Launcher/HostDiagnosticLog.cs), [`HostEnvironment.cs`](../src/OpenClaw.Launcher/HostEnvironment.cs), [`DiagnosticFailure.cs`](../src/OpenClaw.Launcher/DiagnosticFailure.cs), [`DiagnosticsBundle.cs`](../src/OpenClaw.Launcher/Gateway/DiagnosticsBundle.cs), [`DiagnosticsRedactor.cs`](../src/OpenClaw.Launcher/Gateway/DiagnosticsRedactor.cs), [`Build-MSIX.ps1`](../scripts/Build-MSIX.ps1) |

@@ -19,6 +19,7 @@ internal static class OpenClawRuntimeEnvironment
     // Host-side policy reads; never flow into the OpenClaw child environment.
     public const string AutoSetupVariable = "CLAWCTL_AUTO_SETUP";
     public const string AutoGatewayStartVariable = "CLAWCTL_AUTO_GATEWAY_START";
+    public const string PayloadPrewarmVariable = "CLAWCTL_PAYLOAD_PREWARM";
 
     /// <summary>
     /// The packaged application root whose native dependency packages were

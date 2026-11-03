@@ -82,7 +82,9 @@ internal static partial class SmokeProgram
             ("first agent launch provisions and forwards arguments", FirstAgentLaunchProvisionsAsync),
             ("prepared agent launch has no setup narration", PreparedAgentLaunchIsQuietAsync),
             ("automatic setup opt-out preserves missing-setup failure", AutomaticSetupOptOutPreservesFailureAsync),
-            ("gateway-start opt-out writes the gateway hint to stderr", GatewayStartOptOutWritesHintAsync)
+            ("gateway-start opt-out writes the gateway hint to stderr", GatewayStartOptOutWritesHintAsync),
+            // Last: it moves this driver into background scheduling for the rest of its life.
+            ("payload prewarm background mode and list survive NativeAOT", PayloadPrewarmWorks)
         ];
 
         if (args is ["--runtime-image-preflight-only"])
@@ -159,6 +161,41 @@ internal static partial class SmokeProgram
                 !output.Contains("fixture-secret", StringComparison.Ordinal),
                 "The plain helper fallback lost its path or kept a credential under NativeAOT.");
         }
+        return Task.CompletedTask;
+    }
+
+    private static Task PayloadPrewarmWorks()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"clawctl-aot-prewarm-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(directory, "app", "dist"));
+        try
+        {
+            File.WriteAllText(Path.Combine(directory, "app", "dist", "entry.js"), "fixture");
+            string listPath = OpenClaw.Launcher.PayloadPrewarm.GetListPath(directory);
+            Directory.CreateDirectory(Path.GetDirectoryName(listPath)!);
+            File.WriteAllText(listPath, """{"schemaVersion":1,"files":["dist/entry.js","../escape.js"]}""");
+            var log = new List<string>();
+
+            OpenClaw.Launcher.PayloadPrewarmResult result = OpenClaw.Launcher.PayloadPrewarm.RunPass(
+                OpenClaw.Launcher.PayloadPrewarmNative.TryEnterBackgroundMode,
+                listPath,
+                Path.Combine(directory, "app"),
+                OpenClaw.Launcher.PayloadPrewarmLimits.Default,
+                TimeProvider.System,
+                log.Add,
+                CancellationToken.None);
+
+            Assert(result.Outcome == OpenClaw.Launcher.PayloadPrewarmOutcome.Completed &&
+                result.FilesRead == 1 &&
+                result.FilesSkipped == 1 &&
+                log.Count == 1,
+                $"The prewarm did not enter background mode or bind its list under NativeAOT: {string.Join(" | ", log)}");
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+
         return Task.CompletedTask;
     }
 
