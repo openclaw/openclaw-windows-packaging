@@ -1079,6 +1079,33 @@ try {
     Assert-Fails { Invoke-Fixture $damagedCache } 'Payload file inventory does not match'
     Assert-True ($damagedCache.Registrations -eq 1) 'A damaged cached payload was registered again.'
 
+    $olderCache = New-Fixture
+    $olderDeployment = Invoke-Fixture $olderCache
+    $olderFamily = @($olderCache.SetupPackageFamilyNames)[0]
+    $olderProfile = $olderCache.Profiles[$olderFamily]
+    $olderSettings = Join-Path $olderProfile.Path 'settings.json'
+    [IO.File]::WriteAllText($olderSettings, '{"preserve":"existing configuration"}')
+    $olderState = Get-Content -LiteralPath (
+        Join-Path (Split-Path $olderDeployment.LayoutDirectory -Parent) 'state.json'
+    ) -Raw | ConvertFrom-Json
+    $olderMetadataPath = Join-Path $olderState.payloadDirectory 'payload-metadata.json'
+    $olderMetadata = Get-Content -LiteralPath $olderMetadataPath -Raw | ConvertFrom-Json -AsHashtable
+    $olderMetadata.Remove('inventory')
+    [IO.File]::WriteAllText($olderMetadataPath, ($olderMetadata | ConvertTo-Json))
+    Assert-Fails { Invoke-Fixture $olderCache } 'no supported file inventory'
+    Assert-True (
+        $olderCache.Registrations -eq 1 -and $olderCache.Removals.Count -eq 0
+    ) 'An older cached payload changed its installed registration before recovery.'
+    $recoveredCache = Invoke-Fixture $olderCache @{ RefreshPayload = $true }
+    Assert-True (
+        $recoveredCache.Changed -and $olderCache.Downloads -eq 2 -and
+        $olderCache.Removals.Count -eq 0 -and
+        $olderCache.Profiles[$olderFamily].Identity -ceq $olderProfile.Identity -and
+        [IO.File]::ReadAllText($olderSettings) -ceq '{"preserve":"existing configuration"}' -and
+        (Test-Path -LiteralPath (
+            Join-Path $recoveredCache.LayoutDirectory 'app\dist\extensions\fixture\.setup\entry.mjs'))
+    ) 'Refreshing an older payload lost the existing profile/settings or omitted plugin setup.'
+
     $damagedDownload = New-Fixture
     $damagedDownload.Operations.Download = {
         param($runId, $architecture, $directory)
