@@ -1155,17 +1155,6 @@ function Invoke-LocalPackageDeployment {
                     'to remove it explicitly before deployment.'
                 )
             }
-
-            $preserveLegacyData = [bool]$legacyInstalled.IsDevelopmentMode
-            Write-Warning (
-                "Removing legacy registration $($legacyInstalled.PackageFullName) " +
-                'before deploying the Partner Center identity; its packaged ' +
-                'LocalState does not transfer to the new package family.'
-            )
-            & $services.RemovePackage `
-                $legacyInstalled.PackageFullName `
-                $preserveLegacyData |
-                Out-Null
         }
         if ($null -ne $installed -and -not $installed.IsDevelopmentMode) {
             if (-not $ReplaceExistingInstall) {
@@ -1176,9 +1165,6 @@ function Invoke-LocalPackageDeployment {
                     'cannot be preserved across that switch.'
                 )
             }
-            Write-Warning "Removing the packaged $($identity.Name) $($installed.Version); its app data cannot be preserved."
-            & $services.RemovePackage $installed.PackageFullName $false | Out-Null
-            $installed = $null
         }
         elseif ($null -ne $installed -and
             -not (Test-LocalPackageOwnership -Installed $installed -LayoutDirectory $layoutDirectory)) {
@@ -1207,6 +1193,24 @@ function Invoke-LocalPackageDeployment {
             Resolve-LocalPackagePayload -CacheDirectory (Join-Path $stateRoot 'payloads') `
                 -Architecture $Architecture -PayloadDirectory $PayloadDirectory `
                 -PayloadRunId $PayloadRunId -RefreshPayload:$RefreshPayload -Operations $services
+        }
+        # Reject unusable replacements before removing either package family.
+        if ($null -ne $legacyInstalled) {
+            $preserveLegacyData = [bool]$legacyInstalled.IsDevelopmentMode
+            Write-Warning (
+                "Removing legacy registration $($legacyInstalled.PackageFullName) " +
+                'before deploying the Partner Center identity; its packaged ' +
+                'LocalState does not transfer to the new package family.'
+            )
+            & $services.RemovePackage `
+                $legacyInstalled.PackageFullName `
+                $preserveLegacyData |
+                Out-Null
+        }
+        if ($null -ne $installed -and -not $installed.IsDevelopmentMode) {
+            Write-Warning "Removing the packaged $($identity.Name) $($installed.Version); its app data cannot be preserved."
+            & $services.RemovePackage $installed.PackageFullName $false | Out-Null
+            $installed = $null
         }
         $payloadMetadata = Read-LocalPackageRecord (
             Join-Path $payload.Directory 'payload-metadata.json'

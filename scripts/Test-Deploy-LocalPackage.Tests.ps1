@@ -1017,6 +1017,52 @@ try {
             Assert-True (
                 $broken.Publishes -eq 0 -and $broken.Registrations -eq 0 -and $broken.Setups -eq 0
             ) "A $damage $architecture payload reached deployment."
+            if ($damage -in @('missing-setup', 'missing-inventory')) {
+                foreach ($replacement in @('packaged', 'legacy-packaged', 'legacy-loose', 'both')) {
+                    $names = switch ($replacement) {
+                        'packaged' { 'OpenClawFoundation.OpenClawGateway' }
+                        'both' { 'OpenClawFoundation.OpenClawGateway'; 'OpenClaw.Gateway' }
+                        default { 'OpenClaw.Gateway' }
+                    }
+                    $broken.Installed = @(
+                        foreach ($name in $names) {
+                            [pscustomobject]@{
+                                Name = $name
+                                Version = '1.2.3.4'
+                                PackageFullName = "${name}_1.2.3.4_${architecture}__fixture"
+                                PackageFamilyName = "${name}_fixture"
+                                InstallLocation = Join-Path $broken.Root "installed\$name"
+                                IsDevelopmentMode = ($replacement -eq 'legacy-loose')
+                                Status = 'Ok'
+                            }
+                        }
+                    )
+                    foreach ($package in $broken.Installed) {
+                        $profile = Join-Path $broken.Root "profiles\$($package.PackageFamilyName)"
+                        New-Item -Path $profile -ItemType Directory -Force | Out-Null
+                        [IO.File]::WriteAllText((Join-Path $profile 'settings.json'), '{"preserve":true}')
+                        $broken.Profiles[$package.PackageFamilyName] = @{ Path = $profile }
+                    }
+                    Assert-Fails {
+                        Invoke-Fixture $broken @{
+                            Architecture = $architecture
+                            PayloadDirectory = $brokenPayload
+                            ReplaceExistingInstall = $true
+                        }
+                    } $expectedFailure
+                    Assert-True (
+                        $broken.Removals.Count -eq 0 -and $broken.Publishes -eq 0 -and
+                        $broken.Registrations -eq 0 -and $broken.Setups -eq 0 -and
+                        @($broken.Installed).Count -eq @($names).Count
+                    ) "A rejected $damage $architecture payload modified the $replacement installation."
+                    foreach ($package in $broken.Installed) {
+                        $settings = Join-Path $broken.Profiles[$package.PackageFamilyName].Path 'settings.json'
+                        Assert-True (
+                            [IO.File]::ReadAllText($settings) -ceq '{"preserve":true}'
+                        ) "Rejected replacement lost the $($package.Name) profile settings."
+                    }
+                }
+            }
             Assert-Fails {
                 Invoke-LocalPackageMsixBuild -RepositoryRoot $broken.Root -Architecture $architecture `
                     -PayloadDirectory $brokenPayload -Operations $broken.Operations `

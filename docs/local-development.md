@@ -87,8 +87,11 @@ supplied payload against the file inventory in `payload-metadata.json` before
 using it. `Build-Payload.ps1` records the file count and a SHA-256 digest of the
 ordinal-sorted, app-relative paths and lengths, including dot-directories such
 as plugin `.setup` trees and hidden files. This confirms file presence and size,
-not the contents of same-length files. Older payloads without an inventory are
-rejected. Select a newer successful run with `-RefreshPayload -PayloadRunId <id>`,
+not the contents of same-length files. Validation also runs before
+`-ReplaceExistingInstall` removes a current or legacy registration, so a rejected
+payload leaves those installations and their data intact. Older payloads without
+an inventory are rejected. Select a newer successful run with
+`-RefreshPayload -PayloadRunId <id>`,
 or rebuild with `scripts\Build-Payload.ps1` and pass `-PayloadDirectory`.
 Re-downloading an older artifact cannot recover files omitted during upload.
 
