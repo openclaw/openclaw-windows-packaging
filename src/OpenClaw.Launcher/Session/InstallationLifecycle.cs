@@ -100,7 +100,6 @@ internal sealed class InstallationLifecycle : IInstallationLifecycle
         bool lockAlreadyHeld,
         CancellationToken cancellationToken)
     {
-        PayloadPrewarm.SignalCancel(log);
         TeardownOrchestrator teardown =
             GatewayRuntime.CreateTeardownOrchestrator(options, runtime, log);
         return lockAlreadyHeld

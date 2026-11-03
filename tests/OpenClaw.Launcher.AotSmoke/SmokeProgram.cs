@@ -176,13 +176,18 @@ internal static partial class SmokeProgram
             File.WriteAllText(listPath, """{"schemaVersion":1,"files":["dist/entry.js","../escape.js"]}""");
             var log = new List<string>();
 
-            OpenClaw.Launcher.PayloadPrewarmResult result = OpenClaw.Launcher.PayloadPrewarm.RunPass(
-                OpenClaw.Launcher.PayloadPrewarmNative.TryEnterBackgroundMode,
-                listPath,
-                Path.Combine(directory, "app"),
-                OpenClaw.Launcher.PayloadPrewarmLimits.Default,
-                TimeProvider.System,
-                log.Add,
+            OpenClaw.Launcher.PayloadPrewarmResult result = OpenClaw.Launcher.PayloadPrewarm.RunRegisteredPass(
+                new NamedSessionLock(directory),
+                () => { },
+                Guid.NewGuid().ToString("N"),
+                token => OpenClaw.Launcher.PayloadPrewarm.RunPass(
+                    OpenClaw.Launcher.PayloadPrewarmNative.TryEnterBackgroundMode,
+                    listPath,
+                    Path.Combine(directory, "app"),
+                    OpenClaw.Launcher.PayloadPrewarmLimits.Default,
+                    TimeProvider.System,
+                    log.Add,
+                    token),
                 CancellationToken.None);
 
             Assert(result.Outcome == OpenClaw.Launcher.PayloadPrewarmOutcome.Completed &&

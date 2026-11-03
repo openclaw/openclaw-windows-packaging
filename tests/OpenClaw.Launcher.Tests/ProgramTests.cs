@@ -3396,6 +3396,92 @@ public sealed class ProgramTests : IDisposable
         Assert.Equal(1, backend.Calls.Count(call => call.StartsWith("deprovision:", StringComparison.Ordinal)));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TeardownCancelsPayloadPrewarmUnderTheLifecycleLock(bool lockAlreadyHeld)
+    {
+        var lifecycleLock = new Session.AlwaysFreeLock();
+        SessionRuntime runtime = await SetUpSessionAsync(lifecycleLock).ConfigureAwait(true);
+        bool cancelled = false;
+        TeardownOrchestrator orchestrator = CreateTeardownOrchestrator(
+            runtime,
+            _ => { },
+            cancelPayloadPrewarm: () =>
+            {
+                Assert.Equal(1, lifecycleLock.HeldCount);
+                Assert.NotNull(runtime.SetupState.Read(runtime.ApplicationId).Record);
+                cancelled = true;
+            });
+
+        TeardownResult result;
+        if (lockAlreadyHeld)
+        {
+            using ISessionLockHandle handle = runtime.AcquireLifecycleLock();
+            result = await orchestrator.RunUnderLockAsync(
+                runtime.HelperPath, force: false, CancellationToken.None).ConfigureAwait(true);
+        }
+        else
+        {
+            result = await orchestrator.RunAsync(
+                runtime.HelperPath, force: false, CancellationToken.None).ConfigureAwait(true);
+        }
+
+        Assert.True(result.Succeeded);
+        Assert.True(cancelled);
+        Assert.Equal(0, lifecycleLock.HeldCount);
+        Assert.Equal(SetupStateFault.Missing, runtime.SetupState.Read(runtime.ApplicationId).Fault);
+    }
+
+    [Fact]
+    public async Task APrewarmWaitingForSetupCannotReadAfterTeardownWinsTheLock()
+    {
+        SessionRuntime runtime = await SetUpSessionAsync().ConfigureAwait(true);
+        string scope = Guid.NewGuid().ToString("N");
+        var attempted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool read = false;
+        Task<PayloadPrewarmResult> worker;
+        using (ISessionLockHandle handle = runtime.AcquireLifecycleLock())
+        {
+            worker = Task.Run(() => PayloadPrewarm.RunRegisteredPass(
+                new NotifyingSessionLock(runtime.LifecycleLock, attempted),
+                () => { _ = runtime.RequireSetup(); },
+                scope,
+                _ =>
+                {
+                    read = true;
+                    throw new InvalidOperationException("A torn-down installation must not be read.");
+                },
+                CancellationToken.None));
+            await attempted.Task.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(true);
+            TeardownOrchestrator teardown = CreateTeardownOrchestrator(
+                runtime,
+                _ => { },
+                cancelPayloadPrewarm: () => PayloadPrewarm.SignalCancel(scope, _ => { }));
+
+            TeardownResult result = await teardown.RunUnderLockAsync(
+                runtime.HelperPath, force: false, CancellationToken.None).ConfigureAwait(true);
+
+            Assert.True(result.Succeeded);
+        }
+
+        _ = await Assert.ThrowsAsync<SessionException>(
+            () => worker.WaitAsync(TimeSpan.FromSeconds(10))).ConfigureAwait(true);
+        Assert.False(read);
+        Assert.Equal(SetupStateFault.Missing, runtime.SetupState.Read(runtime.ApplicationId).Fault);
+    }
+
+    private sealed class NotifyingSessionLock(
+        ISessionLock inner,
+        TaskCompletionSource attempted) : ISessionLock
+    {
+        public ISessionLockHandle? TryAcquire(TimeSpan timeout)
+        {
+            attempted.SetResult();
+            return inner.TryAcquire(timeout);
+        }
+    }
+
     public void Dispose()
     {
         Directory.Delete(_testDirectory, recursive: true);
@@ -3427,7 +3513,8 @@ public sealed class ProgramTests : IDisposable
     private TeardownOrchestrator CreateTeardownOrchestrator(
         SessionRuntime runtime,
         Action<string> log,
-        Gateway.FakeGatewayTaskScheduler? scheduler = null)
+        Gateway.FakeGatewayTaskScheduler? scheduler = null,
+        Action? cancelPayloadPrewarm = null)
     {
         string stateRoot = Path.Combine(_testDirectory, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(stateRoot);
@@ -3460,7 +3547,8 @@ public sealed class ProgramTests : IDisposable
             runtime.Coordinator,
             runtime.GatewayState,
             new GatewayConfigurationStore(Path.Combine(stateRoot, "gateway-config.json")),
-            runtime.SetupState);
+            runtime.SetupState,
+            cancelPayloadPrewarm);
     }
 
     [Fact]
@@ -3800,7 +3888,7 @@ public sealed class ProgramTests : IDisposable
         };
     }
 
-    private SessionRuntime CreateSessionRuntime()
+    private SessionRuntime CreateSessionRuntime(ISessionLock? lifecycleLock = null)
     {
         string stateRoot = Path.Combine(_testDirectory, "state");
         string baseDirectory = Path.Combine(_testDirectory, "base");
@@ -3829,6 +3917,7 @@ public sealed class ProgramTests : IDisposable
             baseDirectory,
             _ => { },
             backend,
+            lifecycleLock,
             isInteractiveLogon: () => _interactiveLogon);
     }
 
@@ -3867,9 +3956,9 @@ public sealed class ProgramTests : IDisposable
         };
     }
 
-    private async Task<SessionRuntime> SetUpSessionAsync()
+    private async Task<SessionRuntime> SetUpSessionAsync(ISessionLock? lifecycleLock = null)
     {
-        SessionRuntime runtime = CreateSessionRuntime();
+        SessionRuntime runtime = CreateSessionRuntime(lifecycleLock);
         string applicationDirectory = Path.Combine(_testDirectory, "app");
         string archivePath = Path.Combine(_testDirectory, "node-v24.15.0-win-x64.zip");
         Directory.CreateDirectory(applicationDirectory);

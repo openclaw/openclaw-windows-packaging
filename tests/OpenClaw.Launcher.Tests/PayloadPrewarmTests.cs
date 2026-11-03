@@ -1,5 +1,7 @@
 using System.CommandLine;
 using OpenClaw.Launcher.Gateway;
+using OpenClaw.Launcher.Session;
+using OpenClaw.Launcher.Tests.Session;
 
 namespace OpenClaw.Launcher.Tests;
 
@@ -121,7 +123,7 @@ public sealed class PayloadPrewarmTests : IDisposable
 
         Assert.Equal(PayloadPrewarmOutcome.ByteLimitReached, result.Outcome);
         Assert.Equal(1, result.FilesRead);
-        Assert.True(result.BytesRead < 100_000);
+        Assert.Equal(50_000, result.BytesRead);
     }
 
     [Fact]
@@ -230,6 +232,87 @@ public sealed class PayloadPrewarmTests : IDisposable
 
         Assert.Equal(PayloadPrewarmOutcome.Cancelled, result.Outcome);
         Assert.Equal(0, result.FilesRead);
+    }
+
+    [Fact]
+    public void TeardownAfterWorkerRegistrationCancelsBeforeAnyPayloadRead()
+    {
+        WriteApplicationFile("a.js", 1);
+        WriteList(ListJson("a.js"));
+        string scope = Guid.NewGuid().ToString("N");
+        var lifecycleLock = new AlwaysFreeLock();
+        List<string> log = [];
+
+        PayloadPrewarmResult result = PayloadPrewarm.RunRegisteredPass(
+            lifecycleLock,
+            () => Assert.Equal(1, lifecycleLock.HeldCount),
+            scope,
+            token =>
+            {
+                Assert.Equal(0, lifecycleLock.HeldCount);
+                using (lifecycleLock.TryAcquire(TimeSpan.Zero))
+                {
+                    PayloadPrewarm.SignalCancel(scope, log.Add);
+                }
+
+                Assert.True(token.WaitHandle.WaitOne(TimeSpan.FromSeconds(10)));
+                return Run(cancellationToken: token);
+            },
+            CancellationToken.None);
+
+        Assert.Equal(PayloadPrewarmOutcome.Cancelled, result.Outcome);
+        Assert.Equal(0, result.BytesRead);
+        Assert.Equal(["Asked the running payload prewarm to stop."], log);
+        log.Clear();
+        PayloadPrewarm.SignalCancel(scope, log.Add);
+        Assert.Empty(log);
+    }
+
+    [Fact]
+    public void AWorkerDelayedUntilAfterTeardownNeverRegistersOrReads()
+    {
+        var lifecycleLock = new AlwaysFreeLock();
+        string scope = Guid.NewGuid().ToString("N");
+        bool read = false;
+
+        SessionException failure = Assert.Throws<SessionException>(() =>
+            PayloadPrewarm.RunRegisteredPass(
+                lifecycleLock,
+                () =>
+                {
+                    Assert.Equal(1, lifecycleLock.HeldCount);
+                    throw new SessionException("OpenClaw has not been set up.");
+                },
+                scope,
+                _ =>
+                {
+                    read = true;
+                    return Run();
+                },
+                CancellationToken.None));
+
+        Assert.Contains("not been set up", failure.Message, StringComparison.Ordinal);
+        Assert.False(read);
+        Assert.Equal(0, lifecycleLock.HeldCount);
+        List<string> log = [];
+        PayloadPrewarm.SignalCancel(scope, log.Add);
+        Assert.Empty(log);
+    }
+
+    [Fact]
+    public void AFailedPassReleasesItsCancellationRegistration()
+    {
+        string scope = Guid.NewGuid().ToString("N");
+        _ = Assert.Throws<IOException>(() => PayloadPrewarm.RunRegisteredPass(
+            new AlwaysFreeLock(),
+            () => { },
+            scope,
+            _ => throw new IOException("fixture read failure"),
+            CancellationToken.None));
+
+        List<string> log = [];
+        PayloadPrewarm.SignalCancel(scope, log.Add);
+        Assert.Empty(log);
     }
 
     [Fact]

@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using OpenClaw.Launcher.Session;
 
 namespace OpenClaw.Launcher;
 
@@ -127,6 +128,11 @@ internal static class PayloadPrewarm
                 return Finish(PayloadPrewarmOutcome.FileLimitReached);
             }
 
+            if (bytes >= limits.MaximumBytes)
+            {
+                return Finish(PayloadPrewarmOutcome.ByteLimitReached);
+            }
+
             string? path = ResolveContainedPath(root, relativePath);
             if (path is null)
             {
@@ -144,7 +150,10 @@ internal static class PayloadPrewarm
                     BufferSize,
                     FileOptions.SequentialScan);
                 int count;
-                while ((count = file.Read(buffer, 0, buffer.Length)) > 0)
+                while ((count = file.Read(
+                    buffer,
+                    0,
+                    (int)Math.Min(buffer.Length, limits.MaximumBytes - bytes))) > 0)
                 {
                     bytes += count;
                     if (bytes >= limits.MaximumBytes)
@@ -236,33 +245,20 @@ internal static class PayloadPrewarm
 
             try
             {
-                using EventWaitHandle cancelSignal = new(
-                    initialState: false,
-                    EventResetMode.ManualReset,
-                    CancelEventPrefix + scope);
-                using CancellationTokenSource linked =
-                    CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                RegisteredWaitHandle registration = ThreadPool.RegisterWaitForSingleObject(
-                    cancelSignal,
-                    static (state, _) => ((CancellationTokenSource)state!).Cancel(),
-                    linked,
-                    Timeout.Infinite,
-                    executeOnlyOnce: true);
-                try
-                {
-                    _ = RunPass(
+                SessionRuntime runtime = SessionRuntime.Create(log);
+                _ = RunRegisteredPass(
+                    runtime.LifecycleLock,
+                    () => { _ = runtime.RequireSetup(); },
+                    scope,
+                    token => RunPass(
                         PayloadPrewarmNative.TryEnterBackgroundMode,
                         GetListPath(AppContext.BaseDirectory),
                         options.RequirePackagedApplicationDirectory(),
                         PayloadPrewarmLimits.Default,
                         TimeProvider.System,
                         log,
-                        linked.Token);
-                }
-                finally
-                {
-                    _ = registration.Unregister(null);
-                }
+                        token),
+                    cancellationToken);
             }
             finally
             {
@@ -275,6 +271,49 @@ internal static class PayloadPrewarm
         }
 
         return 0;
+    }
+
+    internal static PayloadPrewarmResult RunRegisteredPass(
+        ISessionLock lifecycleLock,
+        Action requireSetup,
+        string scope,
+        Func<CancellationToken, PayloadPrewarmResult> runPass,
+        CancellationToken cancellationToken)
+    {
+        using CancellationTokenSource linked =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using EventWaitHandle cancelSignal = new(
+            initialState: false,
+            EventResetMode.AutoReset,
+            CancelEventPrefix + scope);
+        RegisteredWaitHandle registration;
+        // Setup starts the process while holding this same lock. Register
+        // before releasing it, or refuse a delayed worker after teardown won.
+        using (ISessionLockHandle handle = lifecycleLock.TryAcquire(SessionCoordinator.DefaultLockTimeout)
+            ?? throw new SessionBusyException(SessionCoordinator.DefaultLockTimeout))
+        {
+            requireSetup();
+            registration = ThreadPool.RegisterWaitForSingleObject(
+                cancelSignal,
+                static (state, _) => ((CancellationTokenSource)state!).Cancel(),
+                linked,
+                Timeout.Infinite,
+                executeOnlyOnce: false);
+        }
+
+        try
+        {
+            return runPass(linked.Token);
+        }
+        finally
+        {
+            // A queued callback must finish before its token source is disposed.
+            using ManualResetEvent drained = new(initialState: false);
+            if (registration.Unregister(drained))
+            {
+                _ = drained.WaitOne();
+            }
+        }
     }
 
     // The pass checks its deadline before each file and after each chunk, but a
@@ -359,12 +398,14 @@ internal static class PayloadPrewarm
     /// Asks a running prewarm for this installation to stop. Teardown does
     /// not wait: the worker only reads package files.
     /// </summary>
-    public static void SignalCancel(Action<string> log)
+    public static void SignalCancel(Action<string> log) => SignalCancel(GetScope(), log);
+
+    internal static void SignalCancel(string scope, Action<string> log)
     {
         ArgumentNullException.ThrowIfNull(log);
         try
         {
-            if (EventWaitHandle.TryOpenExisting(CancelEventPrefix + GetScope(), out EventWaitHandle? signal))
+            if (EventWaitHandle.TryOpenExisting(CancelEventPrefix + scope, out EventWaitHandle? signal))
             {
                 using (signal)
                 {

@@ -131,12 +131,15 @@ The pass is a hint, not a dependency:
   read. A blocked open or read cannot observe that deadline, so the worker
   also ends its own process 15 seconds after it, recording the stop in the
   diagnostic log when the log accepts the line within 5 seconds. Teardown
-  signals a running worker to stop, and a second worker for the same
-  installation exits immediately.
+  signals a running worker to stop under the installation lifecycle lock.
+  The worker validates completed setup and registers its cancellation event
+  under that same lock before reading: teardown either sees the event or
+  removes setup first, so a delayed worker refuses to read. A second worker
+  for the same installation exits immediately.
 - It adds no Defender exclusions and changes no Defender or system settings.
   `CLAWCTL_PAYLOAD_PREWARM=0` skips it.
 
-`Build-MSIX.ps1` generates the list with
+`Build-MSIX.ps1` and the loose-layout owner `LocalPackage.psm1` generate the list with
 [`Get-PayloadStartupFiles.ps1`](../scripts/Get-PayloadStartupFiles.ps1), which
 walks literal `import`, `export ... from`, `import()`, and `require()`
 specifiers from `openclaw.mjs` and from each `dist\extensions\*\index` entry,

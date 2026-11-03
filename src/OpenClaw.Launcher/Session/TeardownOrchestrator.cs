@@ -12,6 +12,7 @@ internal sealed class TeardownOrchestrator
     private readonly GatewayStateStore _gatewayState;
     private readonly GatewayConfigurationStore _configuration;
     private readonly SetupStateStore _setup;
+    private readonly Action? _cancelPayloadPrewarm;
 
     public TeardownOrchestrator(
         ISessionLock lifecycleLock,
@@ -20,7 +21,8 @@ internal sealed class TeardownOrchestrator
         SessionCoordinator sessions,
         GatewayStateStore gatewayState,
         GatewayConfigurationStore configuration,
-        SetupStateStore setup)
+        SetupStateStore setup,
+        Action? cancelPayloadPrewarm = null)
     {
         _lock = lifecycleLock;
         _recovery = recovery;
@@ -29,6 +31,7 @@ internal sealed class TeardownOrchestrator
         _gatewayState = gatewayState;
         _configuration = configuration;
         _setup = setup;
+        _cancelPayloadPrewarm = cancelPayloadPrewarm;
     }
 
     public async Task<TeardownResult> RunAsync(
@@ -48,6 +51,7 @@ internal sealed class TeardownOrchestrator
         CancellationToken cancellationToken)
     {
         _sessions.RequireRecordedOwnershipOrCleanState(_setup);
+        _cancelPayloadPrewarm?.Invoke();
         GatewayPersistenceRemovalResult recovery = await _recovery.UninstallAsync(cancellationToken)
             .ConfigureAwait(false);
         if (!recovery.Succeeded)

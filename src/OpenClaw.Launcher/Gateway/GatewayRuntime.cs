@@ -189,7 +189,8 @@ internal sealed partial class GatewayRuntime
             session.Coordinator,
             session.GatewayState,
             new GatewayConfigurationStore(paths.GatewayConfigurationPath),
-            session.SetupState);
+            session.SetupState,
+            () => PayloadPrewarm.SignalCancel(log));
     }
 
     private static GatewayController CreateController(
