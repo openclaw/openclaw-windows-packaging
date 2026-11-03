@@ -303,7 +303,9 @@ jobs:
 
       - name: Test OpenClaw source selection
         shell: pwsh
-        run: .\scripts\Test-OpenClawSource.Tests.ps1
+        run: |
+          .\scripts\Test-OpenClawSource.Tests.ps1
+          .\scripts\Test-WorkflowSourceSnapshotMode.Tests.ps1
 
       - name: Test local package deployment
         shell: pwsh
@@ -360,6 +362,10 @@ jobs:
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.packaging == 'true' }}
     needs: changes
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
     outputs:
       source_sha: ${{ steps.resolve.outputs.sha }}
       source_tag: ${{ steps.resolve.outputs.tag }}
@@ -372,8 +378,26 @@ jobs:
         with:
           persist-credentials: false
 
+      # An earlier attempt may have ended without running this job, such as a
+      # fork pull request run that waited for approval. Reuse only a snapshot
+      # that some attempt could have produced.
+      - name: Find captured source selection
+        id: snapshot
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $mode = ./scripts/Get-WorkflowSourceSnapshotMode.ps1 `
+            -Repository $env:GITHUB_REPOSITORY `
+            -RunId $env:GITHUB_RUN_ID `
+            -RunAttempt $env:GITHUB_RUN_ATTEMPT `
+            -PreflightJobName 'Capture source and validate build route' `
+            -SaveStepName 'Save immutable source selection'
+          "mode=$mode" >> $env:GITHUB_OUTPUT
+          "Source selection for attempt ${env:GITHUB_RUN_ATTEMPT}: $mode." >> $env:GITHUB_STEP_SUMMARY
+
       - name: Restore source selection for a retry
-        if: ${{ github.run_attempt != 1 }}
+        if: ${{ steps.snapshot.outputs.mode == 'reuse' }}
         id: restore-source
         uses: actions/download-artifact@v8
         with:
@@ -399,7 +423,11 @@ jobs:
           SOURCE_REF: ${{ inputs.openclaw_ref }}
           GATEWAY_VERSION: ${{ inputs.gateway_version }}
           SIGNING_MODE: ${{ inputs.signing_mode || 'unsigned' }}
+          SNAPSHOT_MODE: ${{ steps.snapshot.outputs.mode }}
         run: |
+          if ($env:SNAPSHOT_MODE -cnotin @('resolve', 'reuse')) {
+            throw "Unknown source snapshot mode '$env:SNAPSHOT_MODE'."
+          }
           $snapshotPath = Join-Path $env:RUNNER_TEMP 'openclaw-source/source-resolution.json'
           $source = ./scripts/Get-WorkflowSource.ps1 `
             -PolicyPath ./release-policy.json `
@@ -410,7 +438,7 @@ jobs:
             -WorkflowRunId $env:GITHUB_RUN_ID `
             -PackagingCommit $env:GITHUB_SHA `
             -WorkflowRef $env:GITHUB_WORKFLOW_REF -GitHubRef $env:GITHUB_REF -EventName $env:GITHUB_EVENT_NAME `
-            -ReuseSnapshot:($env:GITHUB_RUN_ATTEMPT -ne '1')
+            -ReuseSnapshot:($env:SNAPSHOT_MODE -ceq 'reuse')
           "route=$($source.buildRoute)" >> $env:GITHUB_OUTPUT
           "sha=$($source.resolvedCommit)" >> $env:GITHUB_OUTPUT
           "tag=v$($source.packageVersion)" >> $env:GITHUB_OUTPUT
@@ -423,7 +451,7 @@ jobs:
           "OpenClaw $($source.packageVersion) ($($source.resolvedCommit)), selected by $($source.requestedRef); release identity $($releaseIdentitySource.releaseTag)." >> $env:GITHUB_STEP_SUMMARY
 
       - name: Save immutable source selection
-        if: ${{ github.run_attempt == 1 }}
+        if: ${{ steps.snapshot.outputs.mode == 'resolve' }}
         uses: actions/upload-artifact@v7
         with:
           name: openclaw-source-resolution

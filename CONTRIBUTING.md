@@ -74,6 +74,7 @@ or package version logic:
 .\scripts\Test-Measure-Coverage.Tests.ps1
 .\scripts\Test-MSIXReleaseIdentity.Tests.ps1
 .\scripts\Test-OpenClawSource.Tests.ps1
+.\scripts\Test-WorkflowSourceSnapshotMode.Tests.ps1
 .\scripts\Test-WorkflowSigningConfiguration.ps1
 .\scripts\Test-MSIXUpgradeMatrix.Tests.ps1
 .\scripts\Test-WorkflowPackageVersion.Tests.ps1

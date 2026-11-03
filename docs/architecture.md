@@ -282,8 +282,11 @@ from a persisted record. [`GatewayConfigurationStore`](../src/OpenClaw.Launcher/
 persists launch choices because the later logon task has no interactive caller
 from which to recover them. [`SchTasksGatewayScheduler`](../src/OpenClaw.Launcher/Gateway/SchTasksGatewayScheduler.cs)
 uses the inbox `schtasks.exe` and a task registered for the signed-in user's
-logon, avoiding NativeAOT-incompatible Task Scheduler COM interop and avoiding
-elevation that would make the task user-unmanageable. After registration, the
+logon. XML readback uses the Task Scheduler API through inbox Windows PowerShell
+and explicit UTF-8 output, preserving Unicode profile paths that `schtasks`
+would convert lossily to the system code page. This keeps COM outside the
+NativeAOT launcher and avoids elevation that would make the task
+user-unmanageable. After registration, the
 persistence manager reads the task back before reporting recovery ready or
 removing a Startup-folder shortcut. Trigger or principal drift reports the
 expected and observed identities; an unreadable result remains unknown. The
