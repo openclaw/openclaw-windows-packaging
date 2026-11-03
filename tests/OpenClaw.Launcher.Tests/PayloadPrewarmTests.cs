@@ -284,10 +284,10 @@ public sealed class PayloadPrewarmTests : IDisposable
                     throw new SessionException("OpenClaw has not been set up.");
                 },
                 scope,
-                _ =>
+                token =>
                 {
                     read = true;
-                    return Run();
+                    return Run(cancellationToken: token);
                 },
                 CancellationToken.None));
 

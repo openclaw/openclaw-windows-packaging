@@ -90,14 +90,6 @@ internal sealed class InstallationLifecycle : IInstallationLifecycle
         SessionRuntime runtime,
         Action<string> log,
         bool lockAlreadyHeld,
-        CancellationToken cancellationToken) =>
-        RunTeardownAsync(options, runtime, log, lockAlreadyHeld, cancellationToken);
-
-    private static Task<TeardownResult> RunTeardownAsync(
-        HostOptions options,
-        SessionRuntime runtime,
-        Action<string> log,
-        bool lockAlreadyHeld,
         CancellationToken cancellationToken)
     {
         TeardownOrchestrator teardown =
