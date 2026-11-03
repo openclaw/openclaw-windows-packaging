@@ -44,8 +44,8 @@ public sealed class PayloadPrewarmTests : IDisposable
     private PayloadPrewarmResult Run(
         PayloadPrewarmLimits? limits = null,
         TimeProvider? clock = null,
-        CancellationToken cancellationToken = default,
-        Func<bool>? isCancellationRequested = null) =>
+        Func<bool>? isCancellationRequested = null,
+        CancellationToken cancellationToken = default) =>
         PayloadPrewarm.Run(
             ListPath,
             Application,
