@@ -316,6 +316,35 @@ public sealed class PayloadPrewarmTests : IDisposable
     }
 
     [Fact]
+    public void CancellationForAnotherUsersInstallationDoesNotStopThisWorker()
+    {
+        WriteApplicationFile("a.js", 1);
+        WriteList(ListJson("a.js"));
+        string scope = PayloadPrewarm.GetScope(Path.Combine(_root, "user-a", "Package", "LocalState"));
+        string other = PayloadPrewarm.GetScope(Path.Combine(_root, "user-b", "Package", "LocalState"));
+        List<string> log = [];
+
+        PayloadPrewarmResult result = PayloadPrewarm.RunRegisteredPass(
+            new AlwaysFreeLock(),
+            () => { },
+            scope,
+            token =>
+            {
+                PayloadPrewarm.SignalCancel(other, log.Add);
+                Assert.False(token.IsCancellationRequested);
+                Assert.Empty(log);
+                PayloadPrewarm.SignalCancel(scope, log.Add);
+                Assert.True(token.WaitHandle.WaitOne(TimeSpan.FromSeconds(10)));
+                return Run(cancellationToken: token);
+            },
+            CancellationToken.None);
+
+        Assert.Equal(PayloadPrewarmOutcome.Cancelled, result.Outcome);
+        Assert.Equal(0, result.BytesRead);
+        Assert.Equal(["Asked the running payload prewarm to stop."], log);
+    }
+
+    [Fact]
     public void TheWorkerEntersBackgroundModeBeforeReadingAnyFile()
     {
         WriteApplicationFile("a.js", 1);

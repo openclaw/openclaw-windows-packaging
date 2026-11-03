@@ -61,8 +61,8 @@ internal static class PayloadPrewarm
 {
     public const string CommandName = "payload-prewarm";
     private const int BufferSize = 64 * 1024;
-    private const string InstanceMutexPrefix = @"Local\OpenClaw.PayloadPrewarm.";
-    private const string CancelEventPrefix = @"Local\OpenClaw.PayloadPrewarm.Cancel.";
+    private const string InstanceMutexPrefix = @"Global\OpenClaw.PayloadPrewarm.";
+    private const string CancelEventPrefix = @"Global\OpenClaw.PayloadPrewarm.Cancel.";
 
     public static string GetListPath(string baseDirectory) =>
         Path.Combine(baseDirectory, "payload", "startup-files.json");
@@ -422,12 +422,13 @@ internal static class PayloadPrewarm
         }
     }
 
-    // Side-by-side development identities and checkouts each prewarm their own
-    // payload, so named objects are scoped to the package family or directory.
-    private static string GetScope() =>
-        HostDataPaths.TryGetPackageFamilyName() ??
+    // Match the lifecycle lock across console/RDP sessions, without letting
+    // different users or side-by-side identities cancel each other's workers.
+    private static string GetScope() => GetScope(HostPaths.Create().StateRoot);
+
+    internal static string GetScope(string stateRoot) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-            AppContext.BaseDirectory.ToUpperInvariant())))[..16];
+            Path.GetFullPath(stateRoot).ToUpperInvariant())))[..16];
 
     /// <summary>
     /// Starts the worker through the package's own <c>clawctl</c> alias after

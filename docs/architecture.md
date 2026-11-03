@@ -136,6 +136,10 @@ The pass is a hint, not a dependency:
   under that same lock before reading: teardown either sees the event or
   removes setup first, so a delayed worker refuses to read. A second worker
   for the same installation exits immediately.
+- Worker coordination uses the same cross-logon-session scope as installation
+  lifecycle operations. Named objects include a hash of the per-user,
+  per-package state root so a console/RDP transition can cancel the worker
+  without colliding with another user's installation.
 - It adds no Defender exclusions and changes no Defender or system settings.
   `CLAWCTL_PAYLOAD_PREWARM=0` skips it.
 
