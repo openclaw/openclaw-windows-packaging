@@ -26,6 +26,7 @@ internal enum PayloadPrewarmOutcome
     DeadlineReached,
     ByteLimitReached,
     FileLimitReached,
+    BackgroundModeUnavailable,
 }
 
 internal sealed record PayloadPrewarmResult(
@@ -35,9 +36,12 @@ internal sealed record PayloadPrewarmResult(
     long BytesRead,
     TimeSpan Elapsed)
 {
-    public string Describe() =>
-        $"Payload prewarm {Outcome}: read {FilesRead} files ({BytesRead} bytes), " +
-        $"skipped {FilesSkipped}, in {Elapsed.TotalSeconds:0.0} s.";
+    public string? Detail { get; init; }
+
+    public string Describe() => Outcome == PayloadPrewarmOutcome.BackgroundModeUnavailable
+        ? $"Payload prewarm skipped: background mode could not be entered ({Detail}); no files were read."
+        : $"Payload prewarm {Outcome}: read {FilesRead} files ({BytesRead} bytes), " +
+          $"skipped {FilesSkipped}, in {Elapsed.TotalSeconds:0.0} s.";
 }
 
 /// <summary>
@@ -153,6 +157,11 @@ internal static class PayloadPrewarm
                     {
                         return Finish(PayloadPrewarmOutcome.Cancelled);
                     }
+
+                    if (clock.GetElapsedTime(started) >= limits.Deadline)
+                    {
+                        return Finish(PayloadPrewarmOutcome.DeadlineReached);
+                    }
                 }
 
                 read++;
@@ -199,6 +208,12 @@ internal static class PayloadPrewarm
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(log);
 
+        using ITimer lifetimeBound = ArmLifetimeBound(
+            TimeProvider.System,
+            PayloadPrewarmLimits.Default.Deadline + LifetimeGrace,
+            LifetimeLogGrace,
+            log,
+            PayloadPrewarmNative.TerminateCurrentProcess);
         try
         {
             string scope = GetScope();
@@ -262,10 +277,61 @@ internal static class PayloadPrewarm
         return 0;
     }
 
+    // The pass checks its deadline before each file and after each chunk, but a
+    // blocked open or read cannot observe it. The grace lets the cooperative
+    // stop win normally; the bound is what limits the worker's lifetime.
+    internal static TimeSpan LifetimeGrace { get; } = TimeSpan.FromSeconds(15);
+
+    internal static TimeSpan LifetimeLogGrace { get; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Ends the dedicated worker process once <paramref name="limit"/> elapses,
+    /// even if a file open or read is blocked.
+    /// </summary>
+    /// <remarks>
+    /// The diagnostic write runs on its own thread and gets at most
+    /// <paramref name="logGrace"/>, because the log can block too; termination
+    /// follows whether or not it finished. Only the worker arms this, so it
+    /// never ends setup or any other process.
+    /// </remarks>
+    internal static ITimer ArmLifetimeBound(
+        TimeProvider clock,
+        TimeSpan limit,
+        TimeSpan logGrace,
+        Action<string> log,
+        Action terminate)
+    {
+        ArgumentNullException.ThrowIfNull(clock);
+        ArgumentNullException.ThrowIfNull(log);
+        ArgumentNullException.ThrowIfNull(terminate);
+
+        string message =
+            $"Payload prewarm reached its {limit.TotalSeconds.ToString("0", System.Globalization.CultureInfo.InvariantCulture)} s " +
+            "lifetime bound; ending the worker.";
+        return clock.CreateTimer(
+            _ =>
+            {
+                try
+                {
+                    _ = Task.Run(() => log(message)).Wait(logGrace);
+                }
+                catch (AggregateException)
+                {
+                }
+                finally
+                {
+                    terminate();
+                }
+            },
+            null,
+            limit,
+            Timeout.InfiniteTimeSpan);
+    }
+
     /// <summary>
     /// Enters background resource scheduling, then reads the list. Priority
-    /// class alone does not lower file I/O, so a pass that cannot enter
-    /// background mode still runs but records why.
+    /// class alone does not lower file I/O, so a worker that cannot enter
+    /// background mode reads nothing and records why.
     /// </summary>
     internal static PayloadPrewarmResult RunPass(
         Func<int?> enterBackgroundMode,
@@ -279,12 +345,12 @@ internal static class PayloadPrewarm
         ArgumentNullException.ThrowIfNull(enterBackgroundMode);
         ArgumentNullException.ThrowIfNull(log);
 
-        if (enterBackgroundMode() is int error)
-        {
-            log($"Payload prewarm continues without background mode (error {error.ToString(System.Globalization.CultureInfo.InvariantCulture)}).");
-        }
-
-        PayloadPrewarmResult result = Run(listPath, applicationDirectory, limits, clock, cancellationToken);
+        PayloadPrewarmResult result = enterBackgroundMode() is int error
+            ? new(PayloadPrewarmOutcome.BackgroundModeUnavailable, 0, 0, 0, TimeSpan.Zero)
+            {
+                Detail = $"Win32 error {error.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+            }
+            : Run(listPath, applicationDirectory, limits, clock, cancellationToken);
         log(result.Describe());
         return result;
     }

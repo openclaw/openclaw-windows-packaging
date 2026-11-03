@@ -137,6 +137,90 @@ public sealed class PayloadPrewarmTests : IDisposable
     }
 
     [Fact]
+    public void TheDeadlineStopsAFileBetweenChunks()
+    {
+        WriteApplicationFile("large.js", 200_000);
+        WriteList(ListJson("large.js"));
+
+        // Each timestamp read advances one second: the check before the file
+        // sees 1 s, and the check after the first chunk sees 2 s.
+        PayloadPrewarmResult result = Run(
+            new PayloadPrewarmLimits(int.MaxValue, long.MaxValue, TimeSpan.FromSeconds(2)),
+            new SteppingClock());
+
+        Assert.Equal(PayloadPrewarmOutcome.DeadlineReached, result.Outcome);
+        Assert.Equal(0, result.FilesRead);
+        Assert.Equal(64 * 1024, result.BytesRead);
+    }
+
+    [Fact]
+    public void TheLifetimeBoundLogsThenEndsTheWorkerAtItsLimit()
+    {
+        CapturingTimerClock clock = new();
+        List<string> log = [];
+        int terminated = 0;
+
+        using ITimer bound = PayloadPrewarm.ArmLifetimeBound(
+            clock,
+            TimeSpan.FromSeconds(315),
+            TimeSpan.FromSeconds(5),
+            log.Add,
+            () => terminated++);
+
+        Assert.Equal(TimeSpan.FromSeconds(315), clock.DueTime);
+        Assert.Equal(Timeout.InfiniteTimeSpan, clock.Period);
+        Assert.Equal(0, terminated);
+
+        clock.Fire();
+
+        Assert.Equal(1, terminated);
+        Assert.Equal(["Payload prewarm reached its 315 s lifetime bound; ending the worker."], log);
+    }
+
+    [Fact]
+    public void ABlockedLogDoesNotHoldTheWorkerPastItsBound()
+    {
+        CapturingTimerClock clock = new();
+        using ManualResetEventSlim release = new();
+        int terminated = 0;
+
+        using ITimer bound = PayloadPrewarm.ArmLifetimeBound(
+            clock,
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromMilliseconds(50),
+            _ => release.Wait(),
+            () => terminated++);
+        try
+        {
+            clock.Fire();
+
+            Assert.Equal(1, terminated);
+        }
+        finally
+        {
+            release.Set();
+        }
+    }
+
+    [Fact]
+    public void AFailingLogStillEndsTheWorker()
+    {
+        CapturingTimerClock clock = new();
+        int terminated = 0;
+
+        using ITimer bound = PayloadPrewarm.ArmLifetimeBound(
+            clock,
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(5),
+            _ => throw new IOException("log unavailable"),
+            () => terminated++);
+
+        clock.Fire();
+
+        Assert.Equal(1, terminated);
+    }
+
+    [Fact]
     public void CancellationStopsThePass()
     {
         WriteApplicationFile("a.js", 1);
@@ -175,7 +259,7 @@ public sealed class PayloadPrewarmTests : IDisposable
     }
 
     [Fact]
-    public void ABackgroundModeFailureIsLoggedAndThePassStillRuns()
+    public void ABackgroundModeFailureSkipsThePass()
     {
         WriteApplicationFile("a.js", 1);
         WriteList(ListJson("a.js"));
@@ -190,9 +274,11 @@ public sealed class PayloadPrewarmTests : IDisposable
             log.Add,
             CancellationToken.None);
 
-        Assert.Equal(1, result.FilesRead);
+        Assert.Equal(PayloadPrewarmOutcome.BackgroundModeUnavailable, result.Outcome);
+        Assert.Equal(0, result.FilesRead);
+        Assert.Equal(0, result.BytesRead);
         Assert.Equal(
-            ["Payload prewarm continues without background mode (error 5).", result.Describe()],
+            ["Payload prewarm skipped: background mode could not be entered (Win32 error 5); no files were read."],
             log);
     }
 
@@ -318,5 +404,50 @@ public sealed class PayloadPrewarmTests : IDisposable
         Assert.DoesNotContain(
             ClawCtlHelp.Describe(root).Commands,
             command => command.Term == PayloadPrewarm.CommandName);
+    }
+
+    private sealed class SteppingClock : TimeProvider
+    {
+        private long _seconds;
+
+        public override long TimestampFrequency => 1;
+
+        public override long GetTimestamp() => _seconds++;
+    }
+
+    private sealed class CapturingTimerClock : TimeProvider
+    {
+        private TimerCallback? _callback;
+        private object? _state;
+
+        public TimeSpan DueTime { get; private set; }
+
+        public TimeSpan Period { get; private set; }
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period)
+        {
+            _callback = callback;
+            _state = state;
+            DueTime = dueTime;
+            Period = period;
+            return new NoOpTimer();
+        }
+
+        public void Fire() => _callback!(_state);
+    }
+
+    private sealed class NoOpTimer : ITimer
+    {
+        public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+
+        public void Dispose()
+        {
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

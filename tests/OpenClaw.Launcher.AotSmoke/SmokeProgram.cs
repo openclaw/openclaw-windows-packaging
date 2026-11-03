@@ -185,12 +185,11 @@ internal static partial class SmokeProgram
                 log.Add,
                 CancellationToken.None);
 
-            Assert(log.Count == 1,
-                $"The prewarm could not enter background mode under NativeAOT: {string.Join(" | ", log)}");
             Assert(result.Outcome == OpenClaw.Launcher.PayloadPrewarmOutcome.Completed &&
                 result.FilesRead == 1 &&
-                result.FilesSkipped == 1,
-                $"The prewarm list did not bind under NativeAOT: {result.Describe()}");
+                result.FilesSkipped == 1 &&
+                log.Count == 1,
+                $"The prewarm did not enter background mode or bind its list under NativeAOT: {string.Join(" | ", log)}");
         }
         finally
         {

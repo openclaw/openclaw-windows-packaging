@@ -50,6 +50,12 @@ internal static class PayloadPrewarmNative
             ? null
             : Marshal.GetLastPInvokeError();
 
+    // Ends only the calling worker process with the worker's success code.
+    // Windows cancels its outstanding I/O; a driver that never completes a
+    // request can still delay the final teardown of the process object.
+    public static void TerminateCurrentProcess() =>
+        _ = TerminateProcess(GetCurrentProcess(), 0);
+
     private static bool TryCreate(
         string executable,
         string argument,
@@ -99,6 +105,10 @@ internal static class PayloadPrewarmNative
 
     [DllImport("kernel32.dll")]
     private static extern IntPtr GetCurrentProcess();
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool TerminateProcess(IntPtr process, uint exitCode);
 
     [DllImport("kernel32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

@@ -118,8 +118,8 @@ handles, then setup continues without waiting for it. Setup itself keeps its
 normal priority. Because a priority class alone does not lower file I/O, the
 worker then enters `PROCESS_MODE_BACKGROUND_BEGIN`, which Windows lets only
 the process itself set, to lower its CPU, I/O, and memory scheduling; if that
-fails, it records the error and reads anyway. It reads each file named by
-`payload\startup-files.json` once.
+fails, it records the error and reads nothing. Otherwise it reads each file
+named by `payload\startup-files.json` once.
 
 The pass is a hint, not a dependency:
 
@@ -127,8 +127,12 @@ The pass is a hint, not a dependency:
   invalid list, and each outcome are written only to the host diagnostic log.
 - It reads only package files, and only list entries that are plain relative
   paths under `app\`. It stops at the first exhausted budget: 8,000 files,
-  256 MiB, or five minutes. Teardown signals a running worker to stop, and a
-  second worker for the same installation exits immediately.
+  256 MiB, or five minutes, checked before each file and after each 64 KiB
+  read. A blocked open or read cannot observe that deadline, so the worker
+  also ends its own process 15 seconds after it, recording the stop in the
+  diagnostic log when the log accepts the line within 5 seconds. Teardown
+  signals a running worker to stop, and a second worker for the same
+  installation exits immediately.
 - It adds no Defender exclusions and changes no Defender or system settings.
   `CLAWCTL_PAYLOAD_PREWARM=0` skips it.
 

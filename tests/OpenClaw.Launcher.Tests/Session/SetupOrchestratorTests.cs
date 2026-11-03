@@ -45,6 +45,49 @@ public sealed class SetupOrchestratorTests : IDisposable
     }
 
     [Fact]
+    public async Task AutomaticSetupStartsThePrewarmOnlyAfterRecordingReady()
+    {
+        SessionRuntime runtime = CreateRuntime();
+        SetupPhase? phaseAtPrewarm = null;
+        var lifecycle = new StubLifecycle
+        {
+            OnPrewarmStart = () => phaseAtPrewarm = runtime.SetupState.Read(runtime.ApplicationId).Record?.Phase
+        };
+
+        SetupEnsureOutcome outcome = await EnsureAsync(runtime, lifecycle).ConfigureAwait(true);
+
+        Assert.Equal(SetupEnsureOutcome.Provisioned, outcome);
+        Assert.Equal(1, lifecycle.PrewarmStarts);
+        Assert.Equal(SetupPhase.Ready, phaseAtPrewarm);
+    }
+
+    [Fact]
+    public async Task ExplicitSetupStartsThePrewarmOnlyAfterRecordingReady()
+    {
+        SessionRuntime runtime = CreateRuntime();
+        (HostOptions options, _) = CreateHostOptions();
+        SetupPhase? phaseAtPrewarm = null;
+        var lifecycle = new StubLifecycle
+        {
+            SessionSupported = true,
+            OnPrewarmStart = () => phaseAtPrewarm = runtime.SetupState.Read(runtime.ApplicationId).Record?.Phase
+        };
+
+        SetupCommandResult result = await SetupOrchestrator.RunAsync(
+            new SetupOptions(Fresh: false, Force: false),
+            options,
+            () => runtime,
+            lifecycle,
+            _ => { },
+            new NoProgress(),
+            CancellationToken.None).ConfigureAwait(true);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(1, lifecycle.PrewarmStarts);
+        Assert.Equal(SetupPhase.Ready, phaseAtPrewarm);
+    }
+
+    [Fact]
     public async Task SetupThatCannotEnableRecoveryDoesNotStartThePayloadPrewarm()
     {
         SessionRuntime runtime = CreateRuntime();
@@ -370,7 +413,15 @@ public sealed class SetupOrchestratorTests : IDisposable
 
         public int PrewarmStarts { get; private set; }
 
-        public void StartPayloadPrewarm(Action<string> log) => PrewarmStarts++;
+        public bool SessionSupported { get; init; }
+
+        public Action? OnPrewarmStart { get; init; }
+
+        public void StartPayloadPrewarm(Action<string> log)
+        {
+            PrewarmStarts++;
+            OnPrewarmStart?.Invoke();
+        }
 
         public GatewayPersistenceInstallResult Recovery { get; init; } =
             new(
@@ -393,7 +444,7 @@ public sealed class SetupOrchestratorTests : IDisposable
         public Task EnsureSessionSupportedAsync(
             Action<string> log,
             CancellationToken cancellationToken) =>
-            throw new NotSupportedException();
+            SessionSupported ? Task.CompletedTask : throw new NotSupportedException();
 
         public PackageRuntimeMetadata ValidatePackageRuntime(
             HostOptions options,
