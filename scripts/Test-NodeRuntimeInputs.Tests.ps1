@@ -56,6 +56,8 @@ require("node:fs").writeFileSync("installed-architecture.txt", process.arch);
         Set-Content -LiteralPath "$source\dist\control-ui\sw.js"
     'const buildId = "fixture-build";' |
         Set-Content -LiteralPath "$source\dist\control-ui\assets\app.js"
+    '<html><head><script type="module" src="./assets/app.js"></script></head><body></body></html>' |
+        Set-Content -LiteralPath "$source\dist\control-ui\index.html"
     & npm pack $source --ignore-scripts --offline --silent --pack-destination $package
     if ($LASTEXITCODE -ne 0) {
         throw 'Unable to pack the local Node.js input fixture.'
