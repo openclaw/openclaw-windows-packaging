@@ -75,6 +75,65 @@ public sealed class GatewayLaunchAttemptTests
     }
 
     [Theory]
+    [InlineData(false, null)]
+    [InlineData(false, OtherAttempt)]
+    [InlineData(true, null)]
+    [InlineData(true, OtherAttempt)]
+    public async Task FreshStartReplacesARecoveredPendingLaunchWhoseProcessIsGoneOrReused(
+        bool processIdReused,
+        string? freshAttempt)
+    {
+        using var harness = new GatewayStartHarness();
+        harness.Client.StartFailure = new IOException("The start acknowledgement was lost.");
+        GatewayStartResult uncertain = await harness.StartAsync(attemptId: Attempt);
+        Assert.Equal(GatewayState.Unknown, uncertain.State);
+        Assert.True(harness.Store.Read().Record!.LaunchPending);
+        harness.Client.StartFailure = null;
+        harness.Client.InspectionSequence.Enqueue(new SessionInspectResult
+        {
+            ProcessFound = processIdReused,
+            StartTimeMatches = false,
+            SupervisorState = SessionSupervisorStatus.ExitedState
+        });
+        harness.Client.Inspection = Live(true);
+
+        GatewayStartResult replacement = await harness.StartAsync(attemptId: freshAttempt);
+
+        Assert.True(replacement.Created);
+        Assert.Equal(GatewayState.Running, replacement.State);
+        Assert.NotEqual(Attempt, replacement.Record.AttemptId);
+        if (freshAttempt is not null)
+        {
+            Assert.Equal(freshAttempt, replacement.Record.AttemptId);
+        }
+        Assert.False(harness.Store.Read().Record!.LaunchPending);
+        Assert.Equal(replacement.Record, harness.Store.Read().Record);
+        Assert.Equal(2, harness.Client.Calls.Count(call => call == "start"));
+        Assert.DoesNotContain(harness.Client.Calls, call => call.StartsWith("stop:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ReusingTheSameAttemptAfterItsPendingProcessExitsDoesNotDispatchAnotherLaunch()
+    {
+        using var harness = new GatewayStartHarness();
+        harness.Client.StartFailure = new IOException("The start acknowledgement was lost.");
+        await harness.StartAsync(attemptId: Attempt);
+        harness.Client.StartFailure = null;
+        harness.Client.Inspection = new SessionInspectResult
+        {
+            SupervisorState = SessionSupervisorStatus.ExitedState
+        };
+
+        GatewayStartResult retained = await harness.StartAsync(attemptId: Attempt);
+
+        Assert.False(retained.Created);
+        Assert.Equal(GatewayState.Stopped, retained.State);
+        Assert.Equal(Attempt, retained.Record.AttemptId);
+        Assert.Single(harness.Client.Calls, call => call == "start");
+        Assert.True(harness.Store.Read().Record!.LaunchPending);
+    }
+
+    [Theory]
     [InlineData("missing")]
     [InlineData("wrong-attempt")]
     [InlineData("wrong-helper")]

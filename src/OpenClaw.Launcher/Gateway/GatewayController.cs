@@ -318,7 +318,7 @@ internal sealed class GatewayController
 
             GatewayStatusReport retained = Describe(existing.Record, inspection);
             if (retained.State is GatewayState.Running or GatewayState.Starting ||
-                existing.Record.LaunchPending ||
+                (existing.Record.LaunchPending && retained.State != GatewayState.Stopped) ||
                 (existing.Record.AttemptId == attemptId && attemptId is not null))
             {
                 _log($"Adopting the recorded gateway launch: {retained.State}.");
