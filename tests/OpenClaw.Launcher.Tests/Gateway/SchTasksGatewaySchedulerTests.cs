@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text;
 using OpenClaw.Launcher.Gateway;
 
 namespace OpenClaw.Launcher.Tests.Gateway;
@@ -36,6 +38,75 @@ public sealed class SchTasksGatewaySchedulerTests
             bool isListing = arguments.Contains("CSV");
             return Task.FromResult(isListing ? listing : query);
         });
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task XmlExportPreservesUnicodeAndReportsReadFailure(bool refused)
+    {
+        const string taskName = @"\OpenClaw ü漢字 O'Brien O’Brien ‘ + $(throw 'injected') + ’";
+        const string xml = "<Task><Actions><Exec><Arguments>ü漢字 O'Brien</Arguments></Exec></Actions></Task>";
+        ProcessStartInfo start = SchTasksGatewayScheduler.CreateStartInfo(
+            "must-not-run-schtasks.exe", ["/Query", "/TN", taskName, "/XML", "ONE"]);
+        Assert.True(start.CreateNoWindow);
+        Assert.False(start.UseShellExecute);
+        Assert.Equal(Encoding.UTF8, start.StandardOutputEncoding);
+        Assert.Equal(Encoding.UTF8, start.StandardErrorEncoding);
+        string command = Encoding.Unicode.GetString(Convert.FromBase64String(start.ArgumentList[^1]));
+        // Replace only the external COM boundary. Execute the generated query,
+        // task-name quoting, UTF-8 transport, and failure handling unchanged.
+        string fixture = $$"""
+            $global:expectedName = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('{{Convert.ToBase64String(Encoding.Unicode.GetBytes(taskName))}}'))
+            $global:fixtureXml = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('{{Convert.ToBase64String(Encoding.Unicode.GetBytes(xml))}}'))
+            $global:refused = ${{refused}}
+            function New-Object {
+                param([string]$ComObject)
+                if ($ComObject -ne 'Schedule.Service') { throw 'Wrong COM owner' }
+                $service = [pscustomobject]@{}
+                $service | Add-Member ScriptMethod Connect {}
+                $service | Add-Member ScriptMethod GetFolder {
+                    param($path)
+                    if ($path -ne '\') { throw 'Wrong task folder' }
+                    $folder = [pscustomobject]@{}
+                    $folder | Add-Member ScriptMethod GetTask {
+                        param($name)
+                        if ($name -cne $global:expectedName) { throw 'Task name changed' }
+                        if ($global:refused) { throw 'fixture access denied' }
+                        return [pscustomobject]@{Xml=$global:fixtureXml}
+                    }
+                    return $folder
+                }
+                return $service
+            }
+            """;
+        start.ArgumentList[^1] = Convert.ToBase64String(Encoding.Unicode.GetBytes(fixture + "\n" + command));
+        using Process process = Process.Start(start)!;
+        Task<string> output = process.StandardOutput.ReadToEndAsync();
+        Task<string> error = process.StandardError.ReadToEndAsync();
+        using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        try
+        {
+            await process.WaitForExitAsync(budget.Token);
+            Assert.Equal(refused ? 1 : 0, process.ExitCode);
+            Assert.Equal(refused ? string.Empty : xml, await output.ConfigureAwait(true));
+            if (refused)
+            {
+                Assert.Contains("fixture access denied", await error.ConfigureAwait(true), StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.Equal(string.Empty, await error.ConfigureAwait(true));
+            }
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync(CancellationToken.None);
+            }
+        }
+    }
 
     [Fact]
     public async Task AnAlreadyCancelledRequestDoesNotInvokeTheScheduler()
