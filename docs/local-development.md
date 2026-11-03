@@ -479,6 +479,7 @@ cover that contract.
 
 Run PowerShell policy suites by owning surface rather than indiscriminately:
 `Test-SigningInputs.Tests.ps1` for signing inputs,
+`Test-PayloadStartupFiles.Tests.ps1` for the generated startup file list,
 `Test-NodeRuntimeInputs.Tests.ps1` for Node runtime inputs,
 `Test-PackagingRelevance.Tests.ps1`, `Test-OpenClawCacheKey.Tests.ps1`, and
 `Test-OpenClawPackage.Tests.ps1` for payload/package workflow behavior,

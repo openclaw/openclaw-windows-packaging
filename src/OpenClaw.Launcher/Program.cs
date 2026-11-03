@@ -826,6 +826,8 @@ internal static class Program
                             cancellationToken)).ConfigureAwait(false);
                     return WriteResult(new TeardownCommandResult(result));
                 },
+                PayloadPrewarm = cancellationToken => Task.FromResult(
+                    OpenClaw.Launcher.PayloadPrewarm.RunWorker(options, log, cancellationToken)),
                 Open = async cancellationToken =>
                 {
                     Session.SessionRuntime runtime = GetSessionRuntime();

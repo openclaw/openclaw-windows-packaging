@@ -41,6 +41,27 @@ public sealed class SetupOrchestratorTests : IDisposable
         Assert.NotNull(runtime.Coordinator.GetRecordedStatus().Record);
         _ = Assert.Single(_backend.Calls, call => call == "provision");
         Assert.Equal(1, lifecycle.RecoveryInstalls);
+        Assert.Equal(1, lifecycle.PrewarmStarts);
+    }
+
+    [Fact]
+    public async Task SetupThatCannotEnableRecoveryDoesNotStartThePayloadPrewarm()
+    {
+        SessionRuntime runtime = CreateRuntime();
+        var lifecycle = new StubLifecycle
+        {
+            Recovery = new(
+                GatewayPersistenceState.ActionRequired,
+                GatewayPersistenceLane.TaskScheduler,
+                "Logon recovery needs attention.",
+                Changed: false)
+        };
+
+        // Whether ensure reports or throws here belongs to its own tests.
+        _ = await Record.ExceptionAsync(() => EnsureAsync(runtime, lifecycle)).ConfigureAwait(true);
+
+        Assert.NotEqual(SetupPhase.Ready, runtime.SetupState.Read(runtime.ApplicationId).Record?.Phase);
+        Assert.Equal(0, lifecycle.PrewarmStarts);
     }
 
     [Fact]
@@ -346,6 +367,10 @@ public sealed class SetupOrchestratorTests : IDisposable
     private sealed class StubLifecycle : IInstallationLifecycle
     {
         public int RecoveryInstalls { get; private set; }
+
+        public int PrewarmStarts { get; private set; }
+
+        public void StartPayloadPrewarm(Action<string> log) => PrewarmStarts++;
 
         public GatewayPersistenceInstallResult Recovery { get; init; } =
             new(
