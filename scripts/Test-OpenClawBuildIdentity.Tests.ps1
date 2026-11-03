@@ -147,6 +147,10 @@ try {
         @{ Name = 'wrong-element'; Script = $validDocument.Replace('script', 'div') }
         @{ Name = 'wrong-marker'; Script = $validDocument.Replace('openclaw-control-ui-build-info', 'wrong-marker') }
         @{ Name = 'wrong-assignment'; Script = $validDocument.Replace($assignment, 'other=') }
+        @{ Name = 'data-block'; Script = $validDocument.Replace('<script ', '<script type="application/json" ') }
+        @{ Name = 'external-script'; Script = $validDocument.Replace('<script ', '<script src="other.js" ') }
+        @{ Name = 'nomodule'; Script = $validDocument.Replace('<script ', '<script nomodule ') }
+        @{ Name = 'duplicate-id-attribute'; Script = $validDocument.Replace('<script ', '<script id="other" ') }
     )) {
         $fixture = New-BuildFixture `
             -Name $case.Name `

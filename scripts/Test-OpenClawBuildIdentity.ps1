@@ -72,9 +72,11 @@ $documentMarker = 'openclaw-control-ui-build-info'
 if ($html.Contains($documentMarker, [StringComparison]::Ordinal) -or
     $html.Contains('OPENCLAW_CONTROL_UI_BUILD_INFO', [StringComparison]::Ordinal)) {
     $markers = [regex]::Matches($html, [regex]::Escape($documentMarker))
+    # Match the producer's executable inline tag; type/src/nomodule or duplicate
+    # attributes can make matching child text inert or change its browser identity.
     $scripts = [regex]::Matches(
         $html,
-        '(?is)<script\b(?=[^>]*\s+id\s*=\s*["'']openclaw-control-ui-build-info["''])[^>]*>(?<body>.*?)</script\s*>')
+        '(?s)<script data-cfasync="false" id="openclaw-control-ui-build-info">(?<body>.*?)</script>')
     if ($markers.Count -ne 1 -or $scripts.Count -ne 1) {
         throw 'Control UI document build identity requires exactly one canonical script.'
     }
@@ -86,7 +88,8 @@ if ($html.Contains($documentMarker, [StringComparison]::Ordinal) -or
     }
     try {
         $document = [System.Text.Json.JsonDocument]::Parse(
-            [string]$assignment.Groups['json'].Value)
+            [string]$assignment.Groups['json'].Value,
+            [System.Text.Json.JsonDocumentOptions]::new())
     }
     catch {
         throw 'Control UI document build identity is not valid JSON.'
