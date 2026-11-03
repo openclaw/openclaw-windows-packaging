@@ -33,6 +33,7 @@ $payloadArtifactPaths = @(
     'scripts/Copy-PayloadTree.ps1'
     'scripts/Get-PayloadInventory.ps1'
     'scripts/Get-WorkflowSource.ps1'
+    'scripts/Get-WorkflowSourceSnapshotMode.ps1'
     'scripts/OpenClawSource.ps1'
 )
 # Bundles only add the architecture packages to one delivery archive. Rebuild
@@ -52,6 +53,8 @@ $versioningPaths = @(
     'scripts/OpenClawSource.ps1'
     'scripts/Get-WorkflowSource.ps1'
     'scripts/Test-OpenClawSource.Tests.ps1'
+    'scripts/Get-WorkflowSourceSnapshotMode.ps1'
+    'scripts/Test-WorkflowSourceSnapshotMode.Tests.ps1'
     'scripts/Get-MSIXReleaseIdentity.ps1'
     'scripts/Get-MSIXUpgradeMatrix.ps1'
     'scripts/Test-MSIXReleaseIdentity.Tests.ps1'

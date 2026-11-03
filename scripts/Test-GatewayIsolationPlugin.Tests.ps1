@@ -135,6 +135,10 @@ try {
         -Value 'const buildId = "fixture-build";' `
         -Encoding utf8
     Set-Content `
+        -LiteralPath (Join-Path $packageSource 'dist\control-ui\index.html') `
+        -Value '<html><head><script type="module" src="./assets/app.js"></script></head><body></body></html>' `
+        -Encoding utf8
+    Set-Content `
         -LiteralPath (
             Join-Path $packageSource 'dist\extensions\fixture\package.json'
         ) `

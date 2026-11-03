@@ -1,17 +1,19 @@
 using System.Diagnostics;
 using System.Text;
+using OpenClaw.Launcher.Session;
 
 namespace OpenClaw.Launcher.Gateway;
 
 /// <summary>
-/// Drives Task Scheduler through the inbox <c>schtasks.exe</c>.
+/// Drives Task Scheduler through inbox Windows tools.
 /// </summary>
 /// <remarks>
 /// <para>
 /// The COM Task Scheduler API is not usable here: this launcher is published
 /// with NativeAOT, and the interop that API needs is exactly what NativeAOT
-/// cannot generate. The inbox executable is present on every supported Windows
-/// installation and takes the same structured task XML.
+/// cannot generate. Registration uses schtasks.exe. XML readback uses the same
+/// API through inbox Windows PowerShell, because schtasks converts XML to the
+/// system code page and irreversibly loses characters in Unicode profile paths.
 /// </para>
 /// <para>
 /// Nothing in this type elevates. Registration must run as the signed-in user:
@@ -314,8 +316,8 @@ internal sealed class SchTasksGatewayScheduler : IGatewayTaskScheduler
     {
         string message = FirstMeaningfulLine(outcome.StandardError)
             ?? FirstMeaningfulLine(outcome.StandardOutput)
-            ?? "schtasks.exe reported no diagnostics.";
-        return $"schtasks.exe exited with code {outcome.ExitCode}. {message}";
+            ?? "The Task Scheduler command reported no diagnostics.";
+        return $"The Task Scheduler command exited with code {outcome.ExitCode}. {message}";
     }
 
     private static string? FirstMeaningfulLine(string text)
@@ -344,6 +346,46 @@ internal sealed class SchTasksGatewayScheduler : IGatewayTaskScheduler
         }
     }
 
+    internal static ProcessStartInfo CreateStartInfo(string executablePath, string[] arguments)
+    {
+        bool exportXml = arguments is ["/Query", "/TN", _, "/XML", "ONE"];
+        ProcessStartInfo startInfo = new()
+        {
+            FileName = exportXml ? AgentShellResolver.WindowsPowerShellPath : executablePath,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = exportXml ? Encoding.UTF8 : Console.OutputEncoding,
+            StandardErrorEncoding = exportXml ? Encoding.UTF8 : Console.OutputEncoding
+        };
+        if (exportXml)
+        {
+            string taskName = Convert.ToBase64String(Encoding.Unicode.GetBytes(arguments[2]));
+            string script =
+                "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; " +
+                "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); " +
+                $"$taskName = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('{taskName}')); " +
+                "try { $service = New-Object -ComObject 'Schedule.Service'; " +
+                "$service.Connect(); " +
+                "[Console]::Write($service.GetFolder('\\').GetTask($taskName).Xml) " +
+                "} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }";
+            foreach (string argument in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand",
+                Convert.ToBase64String(Encoding.Unicode.GetBytes(script)) })
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
+        }
+        else
+        {
+            foreach (string argument in arguments)
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
+        }
+        return startInfo;
+    }
+
     private async Task<SchTasksOutcome> RunAsync(
         string[] arguments,
         CancellationToken cancellationToken)
@@ -355,23 +397,7 @@ internal sealed class SchTasksGatewayScheduler : IGatewayTaskScheduler
             return await _run(arguments, cancellationToken).ConfigureAwait(false);
         }
 
-        ProcessStartInfo startInfo = new()
-        {
-            FileName = _executablePath,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-
-            // schtasks uses the console output code page when redirected.
-            StandardOutputEncoding = Console.OutputEncoding,
-            StandardErrorEncoding = Console.OutputEncoding
-        };
-
-        foreach (string argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
+        ProcessStartInfo startInfo = CreateStartInfo(_executablePath, arguments);
 
         using Process process = new() { StartInfo = startInfo };
         try
@@ -383,7 +409,7 @@ internal sealed class SchTasksGatewayScheduler : IGatewayTaskScheduler
             InvalidOperationException)
         {
             throw new SchTasksLaunchException(
-                $"'{_executablePath}' could not be started: {exception.Message}",
+                $"'{startInfo.FileName}' could not be started: {exception.Message}",
                 exception);
         }
 
