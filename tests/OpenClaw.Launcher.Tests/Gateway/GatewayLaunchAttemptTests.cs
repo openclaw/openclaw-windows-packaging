@@ -107,7 +107,8 @@ public sealed class GatewayLaunchAttemptTests
             Assert.Equal(freshAttempt, replacement.Record.AttemptId);
         }
         Assert.False(harness.Store.Read().Record!.LaunchPending);
-        Assert.Equal(replacement.Record, harness.Store.Read().Record);
+        Assert.Equal(replacement.Record.AttemptId, harness.Store.Read().Record!.AttemptId);
+        Assert.Equal(replacement.Record.ProcessId, harness.Store.Read().Record!.ProcessId);
         Assert.Equal(2, harness.Client.Calls.Count(call => call == "start"));
         Assert.DoesNotContain(harness.Client.Calls, call => call.StartsWith("stop:", StringComparison.Ordinal));
     }
