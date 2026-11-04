@@ -1,6 +1,8 @@
 msix-validation-evidence/
 packaging-test-output/
 uninstall-validation-output/
+.crabbox/
+.agents/skill-history/
 
 # Generated payloads and build output
 content/openclaw/*

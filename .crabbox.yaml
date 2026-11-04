@@ -1,0 +1,80 @@
+# Initialized with Crabbox v0.81.0 init --detect, then scoped to local Windows checks.
+provider: hyperv
+target: windows
+windowsMode: normal
+
+hyperv:
+  cpus: 4
+  memory: 8192
+
+sync:
+  source: git
+  gitSeed: false
+  gitOverlay: false
+  delete: true
+  include:
+    - .crabbox.yaml
+    - .ci-policy.md
+    - .editorconfig
+    - .gitattributes
+    - .github
+    - .gitignore
+    - AGENTS.md
+    - CONTRIBUTING.md
+    - CONTRIBUTORS.md
+    - Directory.Build.props
+    - Directory.Packages.props
+    - LICENSE
+    - OpenClaw.Gateway.MSIX.slnx
+    - README.md
+    - global.json
+    - release-policy.json
+    - store-submission.json
+    - content/openclaw/.gitkeep
+    - docs
+    - hooks
+    - plugins
+    - scripts
+    - src
+    - tests
+  exclude:
+    - bin
+    - obj
+    - artifacts
+    - TestResults
+    - msix-validation-evidence
+    - packaging-test-output
+    - uninstall-validation-output
+    - test-signed
+    - '*.log'
+    - '*.trx'
+    - .env
+    - .env.*
+    - '*.key'
+    - '*.pem'
+    - '*.pfx'
+    - '*.p12'
+    - credentials.json
+    - secrets.json
+  failFiles: 10000
+  failBytes: 104857600
+
+env:
+  allow: []
+
+jobs:
+  transport-smoke:
+    provider: hyperv
+    target: windows
+    command: node --test plugins/gateway-isolation/index.test.js
+    stop: auto
+  quality:
+    provider: hyperv
+    target: windows
+    command: pwsh -NoLogo -NoProfile -File scripts\Test-DotNetQuality.ps1
+    stop: auto
+  tests:
+    provider: hyperv
+    target: windows
+    command: dotnet test OpenClaw.Gateway.MSIX.slnx --configuration Release
+    stop: auto
