@@ -196,6 +196,7 @@ test("renders one informational Gateway Isolation row with a single active badge
 const expectedCommands = [
   ["Gateway status", "clawctl gateway-service status"],
   ["Restart Gateway", "clawctl gateway-service restart"],
+  ["Repair Gateway state", "clawctl gateway-service repair --help"],
   ["Open dashboard", "clawctl open"],
   ["Agent session PowerShell", "clawctl pwsh"],
   ["Back up agent state", "clawctl backup"],
@@ -214,9 +215,9 @@ test("groups the brief cheat sheet with ClawCtl first and packaged OpenClaw seco
       [1, "Windows Launcher"],
       [2, "Command reference"],
       [3, "ClawCtl"],
-      ...expectedCommands.slice(0, 8).map(([title]) => [4, title]),
+      ...expectedCommands.slice(0, 9).map(([title]) => [4, title]),
       [3, "OpenClaw"],
-      ...expectedCommands.slice(8).map(([title]) => [4, title]),
+      ...expectedCommands.slice(9).map(([title]) => [4, title]),
     ],
   );
   const groups = [...html.matchAll(/<section aria-labelledby="([^"]+)">([\s\S]*?)<\/section>/g)];
@@ -224,7 +225,7 @@ test("groups the brief cheat sheet with ClawCtl first and packaged OpenClaw seco
   assert.match(groups[0][2], /<h3 id="clawctl-title" class="command-group-title">ClawCtl<\/h3>/);
   assert.match(html, /<h2 class="command-reference-title">Command reference<\/h2>\s*<p class="intro">Run these commands in your normal Windows terminal \(user session\)\.<\/p>\s*<section aria-labelledby="clawctl-title">/);
   assert.match(groups[1][2], /<h3 id="openclaw-title" class="command-group-title">OpenClaw<\/h3>\s*<p class="intro">The packaged openclaw command forwards to your agent session\. Inside clawctl pwsh, it runs directly\.<\/p>/);
-  for (const [index, expected] of [expectedCommands.slice(0, 8), expectedCommands.slice(8)].entries()) {
+  for (const [index, expected] of [expectedCommands.slice(0, 9), expectedCommands.slice(9)].entries()) {
     assert.deepEqual(
       [...groups[index][2].matchAll(/<h4>([^<]+)<\/h4>/g)].map(match => match[1]),
       expected.map(([title]) => title),
@@ -235,6 +236,7 @@ test("groups the brief cheat sheet with ClawCtl first and packaged OpenClaw seco
     [
       "Show whether the gateway is running.",
       "Restart the gateway, keeping the session and its data. Starts it if no gateway is running.",
+      "Stop the gateway, retain a verified backup, and run Doctor with explicit confirmation. Leaves the gateway stopped.",
       "Open the dashboard in your default browser. Requires completed setup and a running gateway. Does not print authenticated URLs or tokens.",
       "Open PowerShell inside the isolated agent. openclaw and node are available there; clawctl manages the session from outside it.",
       "Save a verified archive containing configuration, credentials, history, and workspaces. Store it securely.",
@@ -347,14 +349,14 @@ for (const legacy of [false, "throw"]) {
 
 test("reports inability to select or copy without claiming manual selection succeeded", async () => {
   const copy = runCopyScript({ selectionAvailable: false });
-  await copy.buttons[3].click();
+  await copy.buttons[expectedCommands.findIndex(([title]) => title === "Agent session PowerShell")].click();
   assert.equal(copy.feedback.textContent, "Could not copy Agent session PowerShell command. Select the command and copy it manually.");
   assert.equal(copy.selected, undefined);
 });
 
 test("can use Clipboard API without DOM selection support", async () => {
   const copy = runCopyScript({ selectionAvailable: false, modern: "success" });
-  await copy.buttons[3].click();
+  await copy.buttons[expectedCommands.findIndex(([title]) => title === "Agent session PowerShell")].click();
   assert.equal(copy.feedback.textContent, "Copied Agent session PowerShell command.");
   assert.deepEqual(copy.calls, [["modern", "clawctl pwsh"]]);
 });

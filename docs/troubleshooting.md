@@ -235,7 +235,10 @@ scheduled-task recovery state. The gateway's own output is not printed; run
 
 **Likely cause.** `not started` means this installation has not started a
 gateway. `stopped` can be an ordinary consequence of stopping the isolated
-session. `unhealthy` means the recorded process is alive but is not serving;
+session. `starting` means the recorded process is verified live with no listener
+and no previously recorded listener; configuration `startup-eligible` does not
+mean it is serving. `unhealthy` means a listener conflicts with the expected
+Gateway or a previously recorded listener is no longer serving;
 `unknown` means liveness could not be established, so the launcher will not
 risk starting a second gateway.
 
@@ -254,6 +257,13 @@ record and aborts rather than risk starting a second process. Use
 Use the port reported by status as the observed endpoint. Do not assume the
 upstream default port (18789): an explicit OpenClaw `gateway.port` can differ,
 and multiple unclassified listeners intentionally do not identify an endpoint.
+
+For `starting`, continue bounded status polling or collect the launch log to
+investigate. Elapsed time alone does not establish a failed or usable Gateway.
+Use `clawctl gateway-service stop` if you choose to abandon the launch; do not
+start a second one beside it. Status is read-only and does not save a listener
+first observed after the start wait, so loss of that late listener can return
+the report to `starting` rather than `unhealthy`.
 
 ## A terminal or Windows Script Host prompt opens when signing in
 
@@ -599,3 +609,29 @@ The behavior above is verified against:
   `tests\OpenClaw.Launcher.Tests\HostEnvironmentTests.cs`,
   `DiagnosticFailureTests.cs`, and `ProgramStartupTests.cs`
 - [`mxc-compatibility-evidence.md`](mxc-compatibility-evidence.md)
+
+## Gateway requests maintenance after an update
+
+A startup refusal is not repaired by repeated restarts. Collect the startup
+log with `clawctl collect-logs`. If OpenClaw reports that Doctor repair or a
+supported schema migration is required, use the explicit protected route:
+
+```powershell
+clawctl gateway-service repair --yes
+clawctl gateway-service start
+clawctl gateway-service status
+```
+
+Repair verifies that the package-owned gateway stopped, retains a verified
+full-state archive outside the package, and runs the packaged Doctor inside
+the same recorded agent. It holds the installation lifecycle lock throughout.
+Doctor remains responsible for migrations, integrity checks, and its own
+migration backups. Service repair remains externally owned by `clawctl`.
+No repair runs automatically on startup, update, or logon.
+
+Repair leaves the gateway stopped on success and on failure after stopping it.
+If backup fails, Doctor does not run. If Doctor fails, the retained archive is
+still listed by `clawctl backup --list`; do not delete it or provision a fresh
+session. A newer-than-supported schema requires the upstream rollback path,
+not repeated repair. After a successful start, verify a model request in
+Companion. A running listener alone does not prove provider authentication.

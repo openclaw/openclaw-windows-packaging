@@ -570,6 +570,23 @@ foreach ($architecture in @('x64', 'arm64')) {
                 "The embedded $architecture application file set is invalid."
             )
         }
+
+        # The setup prewarm reads only inventoried application files, so the
+        # startup list may name nothing outside the verified payload.
+        $startupFiles = Read-ZipEntryText `
+            -EntriesByPath $entriesByPath `
+            -Path 'payload/startup-files.json' |
+            ConvertFrom-Json
+        if (
+            $startupFiles.schemaVersion -ne 1 -or
+            $null -eq $startupFiles.files -or
+            @($startupFiles.files | Where-Object {
+                $_ -isnot [string] -or
+                -not $expectedApplicationPaths.Contains("app/$_")
+            }).Count -ne 0
+        ) {
+            throw "The embedded $architecture startup file list is invalid."
+        }
     }
     finally {
         $packageArchive.Dispose()

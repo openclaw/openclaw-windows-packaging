@@ -340,6 +340,13 @@ try {
         (Test-Path (Join-Path $layout 'mxc-runtime.json')) -and
         (Test-Path (Join-Path $layout 'mxc-LICENSE.md'))
     ) 'Layout omitted SDK API metadata or the redistribution notice.'
+    $startupListPath = Join-Path $layout 'payload\startup-files.json'
+    $startupList = Get-Content -LiteralPath $startupListPath -Raw | ConvertFrom-Json
+    Assert-True (
+        $startupList.schemaVersion -eq 1 -and
+        @($startupList.files).Count -eq 1 -and
+        $startupList.files[0] -ceq 'openclaw.mjs'
+    ) 'A clean layout did not generate the startup list without manually staged metadata.'
     Assert-True (Test-Path (Join-Path $layout 'Images\StoreLogo.png')) 'Layout is missing package images.'
     Assert-True (@(Get-ChildItem (Join-Path $layout 'runtime') -File).Name -eq 'node-v24.20.0-win-x64.zip') 'Layout is missing the bundled Node.js runtime.'
     [xml]$m = Get-Content (Join-Path $layout 'AppxManifest.xml') -Raw
@@ -365,6 +372,18 @@ try {
         [IO.File]::ReadAllText($profileCanary) -ceq 'authenticated workspace state'
     ) 'Ordinary re-registration replaced the isolated account or erased its workspace.'
     Assert-True (@($f.Removals).Count -eq 0) 'Ordinary re-registration unregistered the package.'
+
+    $missingList = New-Fixture
+    $missingListFirst = Invoke-Fixture $missingList
+    $missingListPath = Join-Path $missingListFirst.LayoutDirectory 'payload\startup-files.json'
+    Remove-Item -LiteralPath $missingListPath
+    $repaired = Invoke-Fixture $missingList
+    Assert-True ($repaired.Changed -and (Test-Path -LiteralPath $missingListPath)) `
+        'An older layout without a startup list was incorrectly reported as up to date.'
+    $regenerated = Get-Content -LiteralPath $missingListPath -Raw | ConvertFrom-Json
+    Assert-True (
+        $regenerated.schemaVersion -eq 1 -and $regenerated.files[0] -ceq 'openclaw.mjs'
+    ) 'The repair did not regenerate usable startup metadata.'
 
     $replacement = New-Fixture
     $replacementFirst = Invoke-Fixture $replacement

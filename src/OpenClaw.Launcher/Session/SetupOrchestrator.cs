@@ -401,6 +401,7 @@ internal static class SetupOrchestrator
 
         progress.Report(new ClawCtlProgress("Finalizing setup."));
         runtime.CompleteSetup(record, agentRuntime, startupEnabled: true);
+        lifecycle.StartPayloadPrewarm(log);
         return new SetupCommandResult(
             0,
             applicationDirectory,

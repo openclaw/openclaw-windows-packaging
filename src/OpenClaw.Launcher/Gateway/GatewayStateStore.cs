@@ -35,6 +35,9 @@ internal sealed record GatewayRecord
     [JsonPropertyName("launchPending")]
     public bool LaunchPending { get; init; }
 
+    [JsonPropertyName("attemptId")]
+    public string? AttemptId { get; init; }
+
     [JsonPropertyName("processStartTimeUtc")]
     public DateTimeOffset ProcessStartTimeUtc { get; init; }
 
@@ -187,7 +190,8 @@ internal sealed class GatewayStateStore
         }
 
         if ((!record.LaunchPending && record.ProcessId <= 0) || string.IsNullOrWhiteSpace(record.SandboxId) ||
-            record.ProcessStartTimeUtc == default || record.Port is < 1 or > 65535)
+            record.ProcessStartTimeUtc == default || record.Port is < 1 or > 65535 ||
+            (record.AttemptId is not null && !GatewayLaunchAttempt.IsValid(record.AttemptId)))
         {
             return GatewayStateResult.Failed(
                 GatewayStateFault.Incomplete,

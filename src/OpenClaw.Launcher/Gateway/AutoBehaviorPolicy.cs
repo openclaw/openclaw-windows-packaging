@@ -20,6 +20,15 @@ internal static class AutoBehaviorPolicy
             readEnvironmentVariable(OpenClawRuntimeEnvironment.AutoSetupVariable));
     }
 
+    public static bool IsPayloadPrewarmEnabled(
+        Func<string, string?> readEnvironmentVariable)
+    {
+        ArgumentNullException.ThrowIfNull(readEnvironmentVariable);
+
+        return !IsSuppressed(
+            readEnvironmentVariable(OpenClawRuntimeEnvironment.PayloadPrewarmVariable));
+    }
+
     public static GatewayAutoAction DecideGatewayAction(
         int openClawExitCode,
         bool interactive,
