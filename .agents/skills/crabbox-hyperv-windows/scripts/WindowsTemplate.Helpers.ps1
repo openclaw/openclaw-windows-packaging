@@ -98,7 +98,13 @@ function Get-CrabboxTemplateFileSecurity {
 function Get-CrabboxWindowsArchitecture {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$WindowsRoot)
-    $stream = [IO.File]::OpenRead((Join-Path $WindowsRoot 'System32\ntoskrnl.exe'))
+    $kernel = Join-Path $WindowsRoot 'System32\ntoskrnl.exe'
+    foreach ($path in @($WindowsRoot,(Join-Path $WindowsRoot 'System32'),$kernel)) {
+        if ((Get-Item -LiteralPath $path -Force).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
+            throw 'Linked Windows image paths are unsupported.'
+        }
+    }
+    $stream = [IO.File]::OpenRead($kernel)
     $reader = [IO.BinaryReader]::new($stream)
     try {
         if ($reader.ReadUInt16() -ne 0x5a4d) { throw 'Invalid Windows kernel DOS header.' }

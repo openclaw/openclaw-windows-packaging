@@ -79,13 +79,25 @@ try {
     })
     if ($volumes.Count -ne 1) { throw 'Expected exactly one Windows volume on the owned copy.' }
     $windowsRoot = "$($volumes[0].DriveLetter):\Windows"
+    $windowsDirectory = Get-Item -LiteralPath $windowsRoot -Force
+    if (-not $windowsDirectory.PSIsContainer -or $windowsDirectory.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
+        throw 'Windows must be an ordinary directory on the owned image, not a linked host path.'
+    }
     $architecture = Get-CrabboxWindowsArchitecture -WindowsRoot $windowsRoot
     $hostArchitecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
     if (($architecture -eq 'amd64' -and $hostArchitecture -ne 'X64') -or
         ($architecture -eq 'arm64' -and $hostArchitecture -ne 'Arm64')) { throw 'Guest architecture must match the Hyper-V host.' }
     $answer = Join-Path $windowsRoot 'Panther\unattend.xml'
+    $panther = Split-Path -Parent $answer
+    $pantherDirectory = $null
+    try { $pantherDirectory = Get-Item -LiteralPath $panther -Force -ErrorAction Stop }
+    catch [System.Management.Automation.ItemNotFoundException] { $pantherDirectory = $null }
+    if ($pantherDirectory -and (-not $pantherDirectory.PSIsContainer -or
+        $pantherDirectory.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint))) {
+        throw 'Panther must not redirect credential writes outside the owned image.'
+    }
     if (Test-Path -LiteralPath $answer) { throw 'The image already contains an answer file; refusing to replace it.' }
-    New-Item -ItemType Directory -Path (Split-Path -Parent $answer) -Force | Out-Null
+    New-Item -ItemType Directory -Path $panther -Force | Out-Null
     $xml = ConvertTo-CrabboxUnattendXml -AdminUser $AdminUser -AdminPassword $AdminPassword -Architecture $architecture
     Write-CrabboxTemplateAnswer -Path $answer -Xml $xml
     Dismount-VHD -Path $output

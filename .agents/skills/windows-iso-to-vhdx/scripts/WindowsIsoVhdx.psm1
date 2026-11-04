@@ -83,6 +83,10 @@ try {
     $efiRoot = "$($layout.Efi.DriveLetter):\"
     $windowsRoot = "$($layout.Windows.DriveLetter):\"
     Invoke-WindowsImageTool -Path $dism -Arguments @('/English','/Quiet','/Apply-Image',"/ImageFile:$image","/Index:$($selected.Index)","/ApplyDir:$windowsRoot",'/CheckIntegrity') | Out-Host
+    $windowsDirectory = Get-Item -LiteralPath (Join-Path $windowsRoot 'Windows') -Force
+    if (-not $windowsDirectory.PSIsContainer -or $windowsDirectory.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
+        throw 'Applied Windows must be an ordinary directory on the new disk, not a linked host path.'
+    }
     Invoke-WindowsImageTool -Path $bcdboot -Arguments @((Join-Path $windowsRoot 'Windows'),'/s',"$($layout.Efi.DriveLetter):",'/f','UEFI') | Out-Host
     $fallback = if ($selected.Architecture -eq 'arm64') { 'bootaa64.efi' } else { 'bootx64.efi' }
     foreach ($file in @((Join-Path $windowsRoot 'Windows\System32\Config\SYSTEM'),

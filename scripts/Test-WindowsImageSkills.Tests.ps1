@@ -274,6 +274,8 @@ Describe 'Bounded guest readiness probe cleanup' {
             Mock Get-CrabboxWindowsArchitecture {
                 if ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -eq 'Arm64') { 'arm64' } else { 'amd64' }
             } -ModuleName WindowsTemplate
+            Mock Get-Item { [pscustomobject]@{PSIsContainer=$true;Attributes=[IO.FileAttributes]::Directory} } `
+                -ModuleName WindowsTemplate -ParameterFilter { $LiteralPath -match '^[A-Za-z]:\\Windows(\\Panther)?$' }
             Mock Get-VM {} -ModuleName WindowsTemplate
             Mock Get-VMHardDiskDrive {} -ModuleName WindowsTemplate
             Mock New-VM { [pscustomobject]@{Id=$script:expectedVm;State='Running'} } -ModuleName WindowsTemplate
@@ -324,6 +326,8 @@ Describe 'Bounded guest readiness probe cleanup' {
                         @('Index : 1','Name : Windows 11 Pro','Architecture : x64','Version : 10.0.1')
                     }
                 } -ModuleName WindowsIsoVhdx
+                Mock Get-Item { [pscustomobject]@{PSIsContainer=$true;Attributes=[IO.FileAttributes]::Directory} } `
+                    -ModuleName WindowsIsoVhdx -ParameterFilter { $LiteralPath -match '^[A-Za-z]:\\Windows$' }
                 Mock New-VHD { [IO.File]::WriteAllText($Path,'synthetic output disk') } -ModuleName WindowsIsoVhdx
                 Mock Mount-VHD { $script:vhdAttached=$true; [pscustomobject]@{DiskNumber=99} } -ModuleName WindowsIsoVhdx
                 Mock Dismount-VHD { $script:vhdAttached=$false } -ModuleName WindowsIsoVhdx
@@ -383,6 +387,13 @@ Describe 'Bounded guest readiness probe cleanup' {
                 $caught.InnerExceptions.Message | Should -Contain 'synthetic ISO cleanup failure'
                 Should -Invoke Dismount-DiskImage -Times 1 -ModuleName WindowsIsoVhdx
             }
+            It 'refuses a redirected applied Windows directory before BCDBoot' {
+                Mock Get-Item { [pscustomobject]@{PSIsContainer=$true;Attributes=[IO.FileAttributes]'Directory,ReparsePoint'} } `
+                    -ModuleName WindowsIsoVhdx -ParameterFilter { $LiteralPath -match '^[A-Za-z]:\\Windows$' }
+                { Invoke-WindowsIsoVhdx -IsoPath $script:isoFixture -VhdxPath $script:newDisk -WarningAction SilentlyContinue } |
+                    Should -Throw '*linked host path*'
+                Should -Invoke Invoke-WindowsImageTool -Times 0 -ModuleName WindowsIsoVhdx -ParameterFilter { $Path -like '*bcdboot.exe' }
+            }
         }
         It 'keeps source bytes and credentials out of result/streams while qualifying only the owned VM' {
             $before = [IO.File]::ReadAllText($script:source)
@@ -423,6 +434,22 @@ Describe 'Bounded guest readiness probe cleanup' {
                 -CrabboxPath $script:binary -Switch fixture -AdminPassword $script:secure -Confirm:$false -WarningAction SilentlyContinue } |
                 Should -Throw '*synthetic file ACL failure*'
             Should -Invoke Mount-VHD -Times 0 -ModuleName WindowsTemplate
+            Should -Invoke Write-CrabboxTemplateAnswer -Times 0 -ModuleName WindowsTemplate
+        }
+        It 'refuses a linked Windows image root before creating an answer file' {
+            Mock Get-Item { [pscustomobject]@{PSIsContainer=$true;Attributes=[IO.FileAttributes]'Directory,ReparsePoint'} } `
+                -ModuleName WindowsTemplate -ParameterFilter { $LiteralPath -match '^[A-Za-z]:\\Windows$' }
+            { Initialize-CrabboxWindowsTemplate -VhdxPath $script:source -OutputDirectory $script:destination `
+                -CrabboxPath $script:binary -Switch fixture -AdminPassword $script:secure -Confirm:$false -WarningAction SilentlyContinue } |
+                Should -Throw '*linked host path*'
+            Should -Invoke Write-CrabboxTemplateAnswer -Times 0 -ModuleName WindowsTemplate
+        }
+        It 'refuses a Panther junction rather than writing credentials through a host redirect' {
+            Mock Get-Item { [pscustomobject]@{PSIsContainer=$true;Attributes=[IO.FileAttributes]'Directory,ReparsePoint'} } `
+                -ModuleName WindowsTemplate -ParameterFilter { $LiteralPath -match '^[A-Za-z]:\\Windows\\Panther$' }
+            { Initialize-CrabboxWindowsTemplate -VhdxPath $script:source -OutputDirectory $script:destination `
+                -CrabboxPath $script:binary -Switch fixture -AdminPassword $script:secure -Confirm:$false -WarningAction SilentlyContinue } |
+                Should -Throw '*redirect credential writes*'
             Should -Invoke Write-CrabboxTemplateAnswer -Times 0 -ModuleName WindowsTemplate
         }
         It 'preserves both a preparation failure and exact-copy cleanup failure' {
