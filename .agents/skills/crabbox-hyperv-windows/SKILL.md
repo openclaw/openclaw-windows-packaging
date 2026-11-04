@@ -67,8 +67,11 @@ $guestPassword = Read-Host 'Template administrator password (retain securely)' -
     -AdminPassword $guestPassword -Prime
 ```
 
-The new output directory and copied VHDX each have a verified private ACL for
-their creator, Administrators and SYSTEM. A strong password is required; none is generated, returned or
+The new output directory, copied VHDX, and mounted answer file each have a
+verified private ACL for their creator, Administrators and SYSTEM. The answer
+file is created with that ACL atomically and checked through its open handle
+before credential bytes are written; directory protection alone is insufficient
+once the disk is mounted. A strong password is required; none is generated, returned or
 printed. The [helper functions](scripts/WindowsTemplate.Helpers.ps1) create
 the public Windows Setup local-account answer file and bound readiness probes.
 The [module](scripts/WindowsTemplate.psm1) owns copy/mount/VM lifecycle checks.

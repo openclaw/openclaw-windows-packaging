@@ -178,7 +178,16 @@ function Get-CrabboxTemplateExecutable {
 
 function Write-CrabboxTemplateAnswer {
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Xml)
-    [IO.File]::WriteAllText($Path, $Xml, [Text.UTF8Encoding]::new($false))
+    # The mounted volume is a separate access path; its parent directory's host ACL does not protect it.
+    $stream = [IO.FileSystemAclExtensions]::Create([IO.FileInfo]::new($Path),
+        [IO.FileMode]::CreateNew, [Security.AccessControl.FileSystemRights]::FullControl,
+        [IO.FileShare]::None, 4096, [IO.FileOptions]::None, (Get-CrabboxTemplateFileSecurity))
+    try {
+        Assert-CrabboxTemplatePrivacy -Security ([IO.FileSystemAclExtensions]::GetAccessControl($stream))
+        $bytes = [Text.UTF8Encoding]::new($false).GetBytes($Xml)
+        $stream.Write($bytes,0,$bytes.Length)
+        $stream.Flush($true)
+    } finally { $stream.Dispose() }
 }
 
 Export-ModuleMember -Function Initialize-CrabboxWindowsTemplate

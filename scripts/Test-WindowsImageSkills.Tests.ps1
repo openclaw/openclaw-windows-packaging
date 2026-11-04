@@ -140,6 +140,12 @@ Describe 'Public image input and WhatIf boundaries' {
     It 'replaces a copied file ACL independently of the containing directory before injecting credentials' {
         $copy = Join-Path $TestDrive 'copied-disk-fixture.vhdx'
         [IO.File]::WriteAllText($copy,'synthetic disk')
+        $prior = Get-Acl -LiteralPath $copy
+        $prior.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+            [Security.Principal.SecurityIdentifier]::new('S-1-1-0'),
+            [Security.AccessControl.FileSystemRights]::Read,
+            [Security.AccessControl.AccessControlType]::Allow))
+        Set-Acl -LiteralPath $copy -AclObject $prior
         Protect-CrabboxTemplateFile -Path $copy -Confirm:$false
         $acl = Get-Acl -LiteralPath $copy
         $acl.AreAccessRulesProtected | Should -BeTrue
@@ -147,6 +153,28 @@ Describe 'Public image input and WhatIf boundaries' {
         foreach ($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
             $rule.IdentityReference.Value | Should -BeIn $allowed
         }
+    }
+    It 'creates the answer file with a private ACL on an otherwise ordinary filesystem path' {
+        $answer = Join-Path $TestDrive 'private-answer-fixture.xml'
+        $xml = ConvertTo-CrabboxUnattendXml -AdminUser fixture -AdminPassword (ConvertTo-TestPassword 'Synthetic-Strong-42') -Architecture amd64
+        & (Get-Module WindowsTemplate) { param($Path,$Xml); Write-CrabboxTemplateAnswer -Path $Path -Xml $Xml } $answer $xml
+        [IO.File]::ReadAllText($answer) | Should -Be $xml
+        $acl = Get-Acl -LiteralPath $answer
+        $acl.AreAccessRulesProtected | Should -BeTrue
+        $allowed = @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value,'S-1-5-32-544','S-1-5-18')
+        foreach ($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
+            $rule.IdentityReference.Value | Should -BeIn $allowed
+        }
+        { & (Get-Module WindowsTemplate) { param($Path); Write-CrabboxTemplateAnswer -Path $Path -Xml 'replacement' } $answer } |
+            Should -Throw
+        [IO.File]::ReadAllText($answer) | Should -Be $xml
+    }
+    It 'writes zero credential bytes if handle-based privacy verification fails' {
+        $answer = Join-Path $TestDrive 'denied-answer-fixture.xml'
+        Mock Assert-CrabboxTemplatePrivacy { throw 'synthetic effective ACL failure' } -ModuleName WindowsTemplate
+        { & (Get-Module WindowsTemplate) { param($Path); Write-CrabboxTemplateAnswer -Path $Path -Xml 'synthetic credential bytes' } $answer } |
+            Should -Throw '*synthetic effective ACL failure*'
+        (Get-Item -LiteralPath $answer).Length | Should -Be 0
     }
 }
 
