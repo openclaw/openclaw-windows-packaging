@@ -222,7 +222,9 @@ internal static class ClawCtlJson
                 result.Session.Record?.WorkspacePath),
             Gateway: new ClawCtlJsonGateway(
                 DescribeGateway(result.Gateway.State),
-                GatewayAddress.ResolvePort(result.Gateway.Record),
+                result.Gateway.State == GatewayState.Starting
+                    ? null
+                    : GatewayAddress.ResolvePort(result.Gateway.Record),
                 Readiness: FromReadiness(result.Readiness),
                 Ownership: FromOwnership(
                     result.Gateway.State,
