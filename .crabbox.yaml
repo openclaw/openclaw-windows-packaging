@@ -1,3 +1,4 @@
+# Initialized with Crabbox v0.81.0 init --detect, then scoped to local Windows checks.
 provider: hyperv
 target: windows
 windowsMode: normal

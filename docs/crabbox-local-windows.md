@@ -140,6 +140,28 @@ needed evidence before releasing the lease. The 100 MiB / 10,000-file limits
 fail closed if the source scope unexpectedly grows; review the plan rather
 than bypassing them blindly.
 
+## Init scaffold and agent guidance
+
+This onboarding builds on the actual Crabbox v0.81.0 `init --detect` scaffold.
+Initialization ran in a clean staging Git repository with this repository's
+name/origin and root .NET manifests, without `--force`. It emitted
+`.crabbox.yaml`, `.agents/skills/crabbox/SKILL.md`, and a Crabbox Actions
+hydration workflow; no runnable root command was detected, so the
+existing explicit Windows jobs were retained.
+
+The config keeps the validated Windows settings instead of the scaffold's
+generic capacity, SSH, environment-forwarding, and Git-seeding defaults.
+The [project Crabbox skill](../.agents/skills/crabbox/SKILL.md) retains the
+scaffold's inspect/warm/reuse/run/stop workflow, narrowed to this repository's
+local jobs, authorization, and proof boundaries. It is host-side agent guidance,
+not an extra guest runtime dependency or a credential store.
+
+The generated Actions workflow was intentionally not added: it dispatches a
+self-hosted hydration runner and uses Bash/Linux preparation and keep-alive
+steps. That is outside this local Windows flow. Future onboarding changes
+should scaffold in staging and review the outputs rather than overwrite this
+config with `init --force`.
+
 Configuration and lifecycle semantics are verified against the
 [v0.81.0 configuration contract](https://github.com/openclaw/crabbox/blob/v0.81.0/docs/features/configuration.md),
 [Windows Hyper-V provider](https://github.com/openclaw/crabbox/blob/v0.81.0/docs/providers/hyperv.md),
