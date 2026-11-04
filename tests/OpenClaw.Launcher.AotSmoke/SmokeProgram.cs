@@ -42,6 +42,14 @@ internal static partial class SmokeProgram
             "scenarios.")]
     private static async Task<int> Main(string[] args)
     {
+        if (args is ["--invocation-owner-fixture", string request, string ready, string release, string kind])
+        {
+            return RunInvocationOwnerFixture(request, ready, release, kind);
+        }
+        if (args is ["--invocation-tree-fixture", string root, string role, string events])
+        {
+            return RunInvocationTreeFixture(root, role, events);
+        }
         (string Name, Func<Task> RunAsync)[] scenarios =
         [
             ("native alias resolves to clawctl", NativeAliasResolvesToControlAsync),
@@ -209,6 +217,9 @@ internal static partial class SmokeProgram
         using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
         using OpenClaw.Launcher.WindowsInvocationJob job =
             OpenClaw.Launcher.WindowsInvocationJob.Create(identity.User!.Value);
+        using var owner = Mutex.OpenExisting(@"Global\OpenClaw.Invocation." +
+            OpenClaw.Launcher.WindowsInvocationJob.InvocationId(job.Mode) + ".owner");
+        Assert(!owner.WaitOne(0), "The invocation was published before its owner acquired the mutex.");
         job.Stop();
         return Task.CompletedTask;
     }

@@ -15,6 +15,9 @@ public sealed class InvocationJobSecurityTests
     // failed with "Unable to open the invocation job" despite the DACL grant.
     [Theory]
     [InlineData(0x0005u)]
+    [InlineData(0x000fu)]
+    [InlineData(0x00100001u)]
+    [InlineData(0x00100002u)]
     [InlineData(0x00100000u)]
     [InlineData(0x00000002u)]
     public void InvocationObjectsCarryAnExplicitMediumNoWriteUpLabel(uint agentAccess)
@@ -36,7 +39,7 @@ public sealed class InvocationJobSecurityTests
     public void TheLabelLeavesTheProtectedOwnerAndAgentGrantsUnchanged()
     {
         var descriptor = new RawSecurityDescriptor(
-            WindowsInvocationJob.AccessDescriptor(Owner, Agent, 0x0005));
+            WindowsInvocationJob.AccessDescriptor(Owner, Agent, 0x000f));
 
         Assert.True(descriptor.ControlFlags.HasFlag(ControlFlags.DiscretionaryAclProtected));
         Assert.Collection(
@@ -49,7 +52,27 @@ public sealed class InvocationJobSecurityTests
             agent =>
             {
                 Assert.Equal(new SecurityIdentifier(Agent), agent.SecurityIdentifier);
-                Assert.Equal(0x0005, agent.AccessMask);
+                Assert.Equal(0x000f, agent.AccessMask);
             });
+    }
+
+    [Fact]
+    public void OwnerIsEstablishedBeforePublicationAndNormalReleaseIsNotAbandonment()
+    {
+        using WindowsIdentity identity = WindowsIdentity.GetCurrent();
+        WindowsInvocationJob job = WindowsInvocationJob.Create(identity.User!.Value);
+        using var owner = Mutex.OpenExisting(@"Global\OpenClaw.Invocation." +
+            WindowsInvocationJob.InvocationId(job.Mode) + ".owner");
+        try
+        {
+            Assert.False(owner.WaitOne(0));
+        }
+        finally
+        {
+            job.Dispose();
+        }
+        // An abandoned owner would throw rather than returning true.
+        Assert.True(owner.WaitOne(TimeSpan.FromSeconds(10)));
+        owner.ReleaseMutex();
     }
 }
