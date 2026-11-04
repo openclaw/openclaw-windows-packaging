@@ -44,22 +44,46 @@ function New-CrabboxPrivateDirectory {
     $rights = [Security.AccessControl.FileSystemRights]::FullControl
     $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
     $propagation = [Security.AccessControl.PropagationFlags]::None
-    $principals = @([Security.Principal.WindowsIdentity]::GetCurrent().User,
-        [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'),
-        [Security.Principal.SecurityIdentifier]::new('S-1-5-18'))
+    $principals = @(Get-CrabboxTemplatePrincipal)
     foreach ($sid in $principals) {
         $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
             $sid, $rights, $inherit, $propagation, [Security.AccessControl.AccessControlType]::Allow))
     }
     [IO.FileSystemAclExtensions]::Create([IO.DirectoryInfo]::new($Path), $acl)
+    Assert-CrabboxTemplatePrivacy -Path $Path
+}
+
+function Get-CrabboxTemplatePrincipal {
+    [Security.Principal.WindowsIdentity]::GetCurrent().User
+    [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+    [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+}
+
+function Assert-CrabboxTemplatePrivacy {
+    param([Parameter(Mandatory)][string]$Path)
     $actual = Get-Acl -LiteralPath $Path
-    if (-not $actual.AreAccessRulesProtected) { throw 'Private output directory still inherits permissions.' }
-    $allowed = @($principals.Value)
+    if (-not $actual.AreAccessRulesProtected) { throw 'Private output still inherits permissions.' }
+    $allowed = @((Get-CrabboxTemplatePrincipal).Value)
     foreach ($rule in $actual.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
         if ($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Value -notin $allowed) {
-            throw 'Unexpected access to the private output directory; no credential material was written.'
+            throw 'Unexpected access to private output; no credential material was written.'
         }
     }
+}
+
+function Protect-CrabboxTemplateFile {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not $PSCmdlet.ShouldProcess($Path, 'Restrict and verify copied VHDX access before writing credentials')) { return }
+    $acl = [Security.AccessControl.FileSecurity]::new()
+    $acl.SetAccessRuleProtection($true,$false)
+    foreach ($sid in @(Get-CrabboxTemplatePrincipal)) {
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+            $sid, [Security.AccessControl.FileSystemRights]::FullControl,
+            [Security.AccessControl.AccessControlType]::Allow))
+    }
+    Set-Acl -LiteralPath $Path -AclObject $acl
+    Assert-CrabboxTemplatePrivacy -Path $Path
 }
 
 function Get-CrabboxWindowsArchitecture {

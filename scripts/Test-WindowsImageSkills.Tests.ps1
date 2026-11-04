@@ -137,6 +137,17 @@ Describe 'Public image input and WhatIf boundaries' {
         }
         { New-CrabboxPrivateDirectory -Path $private -Confirm:$false } | Should -Throw '*new*overwrite*'
     }
+    It 'replaces a copied file ACL independently of the containing directory before injecting credentials' {
+        $copy = Join-Path $TestDrive 'copied-disk-fixture.vhdx'
+        [IO.File]::WriteAllText($copy,'synthetic disk')
+        Protect-CrabboxTemplateFile -Path $copy -Confirm:$false
+        $acl = Get-Acl -LiteralPath $copy
+        $acl.AreAccessRulesProtected | Should -BeTrue
+        $allowed = @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value,'S-1-5-32-544','S-1-5-18')
+        foreach ($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
+            $rule.IdentityReference.Value | Should -BeIn $allowed
+        }
+    }
 }
 
 Describe 'Image selection and private account document' {
@@ -377,6 +388,14 @@ Describe 'Bounded guest readiness probe cleanup' {
             Should -Invoke Dismount-VHD -Times 1 -ModuleName WindowsTemplate -ParameterFilter { $Path -like '*windows-template.vhdx' }
             Test-Path -LiteralPath (Join-Path $script:destination 'windows-template.vhdx') | Should -BeTrue
             Should -Invoke New-VM -Times 0 -ModuleName WindowsTemplate
+        }
+        It 'fails before mounting or writing credentials if the copied file cannot be protected' {
+            Mock Protect-CrabboxTemplateFile { throw 'synthetic file ACL failure' } -ModuleName WindowsTemplate
+            { Initialize-CrabboxWindowsTemplate -VhdxPath $script:source -OutputDirectory $script:destination `
+                -CrabboxPath $script:binary -Switch fixture -AdminPassword $script:secure -Confirm:$false -WarningAction SilentlyContinue } |
+                Should -Throw '*synthetic file ACL failure*'
+            Should -Invoke Mount-VHD -Times 0 -ModuleName WindowsTemplate
+            Should -Invoke Write-CrabboxTemplateAnswer -Times 0 -ModuleName WindowsTemplate
         }
         It 'preserves both a preparation failure and exact-copy cleanup failure' {
             Mock Write-CrabboxTemplateAnswer { throw 'synthetic write failure' } -ModuleName WindowsTemplate

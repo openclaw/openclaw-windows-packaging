@@ -61,6 +61,7 @@ $cleanupFailures = [Collections.Generic.List[Exception]]::new()
 try {
     New-CrabboxPrivateDirectory -Path $destination -Confirm:$false
     [IO.File]::Copy($source.FullName, $output, $false)
+    Protect-CrabboxTemplateFile -Path $output -Confirm:$false
     $mounted = Mount-VHD -Path $output -PassThru
     $mountedHere = $true
     $disk = Get-Disk -Number $mounted.DiskNumber
