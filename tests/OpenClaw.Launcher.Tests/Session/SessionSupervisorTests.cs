@@ -63,6 +63,35 @@ public sealed class SessionSupervisorTests : IDisposable
     }
 
     [Fact]
+    public void SupervisorPersistsItsIdentityBeforeEnteringApplicationState()
+    {
+        SessionLaunchRequest request = Request("/c", "exit 0");
+        string requestPath = SessionSupervisor.RequestPathFor(StatusPath);
+        File.WriteAllText(requestPath, SessionLaunchProtocol.SerializeRequest(request));
+        bool observed = false;
+
+        int exitCode = SessionSupervisor.Run(requestPath, File.ReadAllText, File.WriteAllText, () =>
+        {
+            SessionSupervisorStatus receipt = SessionInspectProtocol.ReadStatus(File.ReadAllText(StatusPath));
+            using Process self = Process.GetCurrentProcess();
+            Assert.Equal(request.RequestId, receipt.RequestId);
+            Assert.Equal(self.Id, receipt.ProcessId);
+            Assert.Equal(self.StartTime.ToUniversalTime(), receipt.ProcessStartTimeUtc);
+            Assert.Equal(Environment.ProcessPath, receipt.HelperPath);
+            Assert.Equal("starting", receipt.State);
+            Assert.False(File.Exists(LogPath));
+            observed = true;
+            throw new SessionLaunchException("Fixture stops before application launch.");
+        });
+
+        Assert.True(observed);
+        Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode, exitCode);
+        SessionSupervisorStatus exited = SessionInspectProtocol.ReadStatus(File.ReadAllText(StatusPath));
+        Assert.Equal(request.RequestId, exited.RequestId);
+        Assert.Equal(SessionSupervisorStatus.ExitedState, exited.State);
+    }
+
+    [Fact]
     public void TheApplicationsOutputIsCapturedInTheLog()
     {
         // A detached process has no console to inherit, so without this its

@@ -701,6 +701,17 @@ internal static partial class SmokeProgram
 
     private static async Task JsonFailureIsStructuredAsync()
     {
+        foreach (string action in new[] { "start", "stop" })
+        {
+            using Fixture fixture = Fixture.CreateWithoutApplication();
+            int exitCode = await fixture.RunAsync(
+                ["gateway-service", action, action == "start" ? "--attempt-id" : "--if-attempt-id", "invalid", "--json"])
+                .ConfigureAwait(false);
+            AssertExitCode(1, exitCode, fixture);
+            Assert((fixture.Output.ToString() + fixture.Error.ToString())
+                .Contains("lowercase GUID", StringComparison.Ordinal),
+                "The native attempt option did not reject malformed correlation data.");
+        }
         foreach (string command in new[] { "setup", "status" })
         {
             using Fixture fixture = Fixture.CreateWithoutApplication();
@@ -863,7 +874,8 @@ internal static partial class SmokeProgram
 
     private static Task PendingGatewayJsonIsStructured()
     {
-        foreach (string action in new[] { "start", "restart" })
+        const string attemptId = "1234567890abcdef1234567890abcdef";
+        foreach (string action in new[] { "start", "restart", "status" })
         {
             using var output = new StringWriter();
             ClawCtlJson.WriteResult(output, new GatewayCommandResult(
@@ -871,12 +883,18 @@ internal static partial class SmokeProgram
                 GatewayState.Starting,
                 "The supervised gateway launch was accepted.",
                 null,
-                0));
+                0,
+                Launch: new GatewayLaunchReceipt(attemptId, action == "status" ? null : "created")));
             using JsonDocument document = JsonDocument.Parse(output.ToString());
             JsonElement root = document.RootElement;
             JsonElement gateway = root.GetProperty("gateway");
             Assert(root.GetProperty("ok").GetBoolean(), "An accepted launch was reported as failed.");
             Assert(root.GetProperty("schemaVersion").GetInt32() == 1, "The JSON schema version changed.");
+            Assert(root.GetProperty("integration").GetProperty("gatewayLaunch").GetProperty("version").GetInt32() == 1,
+                "The launch-attempt capability was trimmed.");
+            Assert(gateway.GetProperty("launch").GetProperty("attemptId").GetString() == attemptId &&
+                gateway.GetProperty("launch").GetProperty("version").GetInt32() == 1,
+                "The durable launch receipt was trimmed.");
             Assert(root.GetProperty("command").GetString() == $"gateway-service {action}",
                 "The accepted launch lost its command identity.");
             Assert(gateway.GetProperty("state").GetString() == "starting",
@@ -887,6 +905,50 @@ internal static partial class SmokeProgram
                 !root.TryGetProperty("error", out _),
                 "Pending acceptance claimed readiness or reported an error.");
         }
+
+        using var statusOutput = new StringWriter();
+        ClawCtlJson.WriteResult(statusOutput, new StatusCommandResult(
+            new SessionStatus(SessionAvailability.Running, null, null, null),
+            new GatewayStatusReport(
+                GatewayState.Starting,
+                new GatewayRecord { Port = 18789, AttemptId = attemptId },
+                "The supervised gateway launch is still starting."),
+            new GatewayPersistenceStatus(
+                GatewayPersistenceState.Ready,
+                GatewayPersistenceLane.TaskScheduler,
+                "Recovery is configured."),
+            null));
+        using JsonDocument statusDocument = JsonDocument.Parse(statusOutput.ToString());
+        JsonElement statusRoot = statusDocument.RootElement;
+        JsonElement statusGateway = statusRoot.GetProperty("gateway");
+        Assert(statusRoot.GetProperty("ok").GetBoolean(), "Starting made overall status fail.");
+        Assert(statusGateway.GetProperty("state").GetString() == "starting",
+            "Overall status lost the pending launch.");
+        Assert(!statusGateway.TryGetProperty("port", out _) &&
+            !statusGateway.TryGetProperty("ownership", out _),
+            "Overall status exposed a configured port or ownership as readiness.");
+        Assert(statusGateway.GetProperty("launch").GetProperty("attemptId").GetString() == attemptId,
+            "Overall status lost the attempt correlation.");
+
+        using var refusedOutput = new StringWriter();
+        ClawCtlJson.WriteResult(refusedOutput, new GatewayCommandResult(
+            "stop", GatewayState.Unknown, "Launch replaced.", null, 1,
+            Launch: new GatewayLaunchReceipt(attemptId, StopOutcome: "refused", Refusal: "attempt-mismatch")));
+        using JsonDocument refusal = JsonDocument.Parse(refusedOutput.ToString());
+        Assert(!refusal.RootElement.GetProperty("ok").GetBoolean() &&
+            refusal.RootElement.GetProperty("error").GetProperty("type").GetString() == "launch_ownership_refused" &&
+            refusal.RootElement.GetProperty("gateway").GetProperty("launch").GetProperty("stopOutcome").GetString() == "refused",
+            "Conditional stop lost its refusal contract.");
+
+        var supervisor = new SessionSupervisorStatus
+        {
+            RequestId = attemptId,
+            ProcessId = 123,
+            ProcessStartTimeUtc = DateTimeOffset.UnixEpoch,
+            HelperPath = @"C:\fixture\helper.exe"
+        };
+        Assert(SessionInspectProtocol.ReadStatus(SessionInspectProtocol.SerializeStatus(supervisor)) == supervisor,
+            "The supervisor launch receipt did not round-trip.");
         return Task.CompletedTask;
     }
 

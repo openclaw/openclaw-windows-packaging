@@ -525,7 +525,7 @@ public sealed class PayloadPrewarmTests : IDisposable
             PowerShell = (_, _) => Task.FromResult(1),
             GatewayStart = (_, _) => Task.FromResult(1),
             GatewayStatus = _ => Task.FromResult(1),
-            GatewayStop = _ => Task.FromResult(1),
+            GatewayStop = (_, _) => Task.FromResult(1),
             GatewayRestart = _ => Task.FromResult(1),
             PayloadPrewarm = _ =>
             {
