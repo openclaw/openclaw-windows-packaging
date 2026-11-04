@@ -247,6 +247,24 @@ function Assert-LocalPackagePayload {
         [string]$metadata['nodeVersion'] -notmatch '^v?\d+\.\d+\.\d+$') {
         throw "Payload metadata must describe an expanded $Architecture directory with a Node.js version: $Directory. Supply a matching payload or use -RefreshPayload."
     }
+    $inventory = $metadata['inventory']
+    $recovery = (
+        'Use -RefreshPayload with -PayloadRunId from a newer successful workflow run, ' +
+        'or rebuild with scripts\Build-Payload.ps1 and supply -PayloadDirectory. ' +
+        'Downloading the same older artifact cannot restore omitted files.'
+    )
+    if ($inventory -isnot [System.Collections.IDictionary] -or
+        $inventory['algorithm'] -cne 'sha256-path-length-v1' -or
+        $inventory['fileCount'] -isnot [long] -or $inventory['fileCount'] -le 0 -or
+        [string]$inventory['sha256'] -cnotmatch '^[0-9a-f]{64}$') {
+        throw "Payload metadata has no supported file inventory: $Directory. $recovery"
+    }
+    $actual = & (Join-Path $PSScriptRoot 'Get-PayloadInventory.ps1') `
+        -ApplicationDirectory $application
+    if ($actual.fileCount -ne $inventory['fileCount'] -or
+        $actual.sha256 -cne $inventory['sha256']) {
+        throw "Payload file inventory does not match: $Directory. Files are missing, added, renamed, or resized. $recovery"
+    }
     return ([string]$metadata['nodeVersion']).TrimStart('v')
 }
 
@@ -461,7 +479,9 @@ function Invoke-LocalPackageMsixBuild {
     $lock = Enter-LocalPackageBuildLock (Join-Path $msixRoot '.lock')
     try {
         if ($PayloadDirectory) {
-            & $Compose (Resolve-Path -LiteralPath $PayloadDirectory -ErrorAction Stop).Path
+            $payload = Resolve-LocalPackagePayload -Architecture $Architecture `
+                -PayloadDirectory $PayloadDirectory -Operations $services
+            & $Compose $payload.Directory
             return
         }
 
@@ -1135,17 +1155,6 @@ function Invoke-LocalPackageDeployment {
                     'to remove it explicitly before deployment.'
                 )
             }
-
-            $preserveLegacyData = [bool]$legacyInstalled.IsDevelopmentMode
-            Write-Warning (
-                "Removing legacy registration $($legacyInstalled.PackageFullName) " +
-                'before deploying the Partner Center identity; its packaged ' +
-                'LocalState does not transfer to the new package family.'
-            )
-            & $services.RemovePackage `
-                $legacyInstalled.PackageFullName `
-                $preserveLegacyData |
-                Out-Null
         }
         if ($null -ne $installed -and -not $installed.IsDevelopmentMode) {
             if (-not $ReplaceExistingInstall) {
@@ -1156,9 +1165,6 @@ function Invoke-LocalPackageDeployment {
                     'cannot be preserved across that switch.'
                 )
             }
-            Write-Warning "Removing the packaged $($identity.Name) $($installed.Version); its app data cannot be preserved."
-            & $services.RemovePackage $installed.PackageFullName $false | Out-Null
-            $installed = $null
         }
         elseif ($null -ne $installed -and
             -not (Test-LocalPackageOwnership -Installed $installed -LayoutDirectory $layoutDirectory)) {
@@ -1187,6 +1193,24 @@ function Invoke-LocalPackageDeployment {
             Resolve-LocalPackagePayload -CacheDirectory (Join-Path $stateRoot 'payloads') `
                 -Architecture $Architecture -PayloadDirectory $PayloadDirectory `
                 -PayloadRunId $PayloadRunId -RefreshPayload:$RefreshPayload -Operations $services
+        }
+        # Reject unusable replacements before removing either package family.
+        if ($null -ne $legacyInstalled) {
+            $preserveLegacyData = [bool]$legacyInstalled.IsDevelopmentMode
+            Write-Warning (
+                "Removing legacy registration $($legacyInstalled.PackageFullName) " +
+                'before deploying the Partner Center identity; its packaged ' +
+                'LocalState does not transfer to the new package family.'
+            )
+            & $services.RemovePackage `
+                $legacyInstalled.PackageFullName `
+                $preserveLegacyData |
+                Out-Null
+        }
+        if ($null -ne $installed -and -not $installed.IsDevelopmentMode) {
+            Write-Warning "Removing the packaged $($identity.Name) $($installed.Version); its app data cannot be preserved."
+            & $services.RemovePackage $installed.PackageFullName $false | Out-Null
+            $installed = $null
         }
         $payloadMetadata = Read-LocalPackageRecord (
             Join-Path $payload.Directory 'payload-metadata.json'
