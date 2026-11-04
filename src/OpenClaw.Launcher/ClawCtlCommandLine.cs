@@ -20,6 +20,7 @@ internal sealed record ClawCtlHandlers
     public required Func<CancellationToken, Task<int>> GatewayStatus { get; init; }
     public required Func<CancellationToken, Task<int>> GatewayStop { get; init; }
     public required Func<CancellationToken, Task<int>> GatewayRestart { get; init; }
+    public Func<bool, CancellationToken, Task<int>>? GatewayRepair { get; init; }
     public Func<int, bool, bool, CancellationToken, Task<int>> CompanionPrepare { get; init; } =
         (_, _, _, _) => Task.FromResult(1);
 }
@@ -345,6 +346,19 @@ internal static partial class ClawCtlCommandLine
             outputOptions.NoColor = parsed.GetValue(noColor);
             return handlers.GatewayRestart(token);
         });
+        Command gatewayRepair = new("repair", "Stop the gateway, retain a verified backup, and run OpenClaw Doctor. Leave it stopped.");
+        Option<bool> repairYes = new("--yes") { Description = "Confirm backup and Doctor --fix under the recorded agent identity." };
+        Option<bool> repairJson = CreateJsonOption();
+        gatewayRepair.Options.Add(repairYes);
+        gatewayRepair.Options.Add(repairJson);
+        gatewayRepair.SetAction((parsed, token) =>
+        {
+            outputOptions.Json = IsJsonRequested(parsed, rootJson, gatewayJson, repairJson);
+            outputOptions.NoColor = parsed.GetValue(noColor);
+            return (handlers.GatewayRepair ?? throw new InvalidOperationException("The gateway repair handler is not registered."))(
+                parsed.GetValue(repairYes), token);
+        });
+        gateway.Subcommands.Add(gatewayRepair);
         gateway.Subcommands.Add(gatewayStart);
         gateway.Subcommands.Add(gatewayStatus);
         gateway.Subcommands.Add(gatewayStop);
