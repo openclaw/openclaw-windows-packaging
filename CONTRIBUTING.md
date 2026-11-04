@@ -12,6 +12,11 @@ summary below:
 - [Troubleshooting](docs/troubleshooting.md)
 - [Local development](docs/local-development.md)
 - [Local Windows checks with Crabbox](docs/crabbox-local-windows.md)
+
+The public image-preparation helpers have an isolated fixture suite (Pester 5):
+`Invoke-Pester .\scripts\Test-WindowsImageSkills.Tests.ps1`. It mocks disk,
+Hyper-V, deployment-tool, and account operations; it does not convert an ISO,
+boot a template, or change Defender.
 - [Official release process](docs/release-process.md)
 
 ## Prerequisites

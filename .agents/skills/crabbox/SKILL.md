@@ -21,7 +21,7 @@ prerequisites. Discovery is guidance, not permission to provision a VM.
 | Concern | Contract |
 | --- | --- |
 | Use when | Running or inspecting this repository's local Windows Hyper-V checks, same-lease resync, or exact owned-lease cleanup. |
-| Do not use when | Preparing a Windows image (`crabbox-hyperv-windows`), using cloud providers or hydration, or producing/installing a package. |
+| Do not use when | ISO conversion ([windows-iso-to-vhdx](../windows-iso-to-vhdx/SKILL.md)), template preparation ([crabbox-hyperv-windows](../crabbox-hyperv-windows/SKILL.md)), cloud providers/hydration, or producing/installing a package. |
 | Required inputs | Repository root, verified Crabbox binary/version, intended job, machine-local provider prerequisites, and the exact owned lease ID for reuse. |
 | Mutation boundary | Preview read-only first. Acquire or execute only within explicit task authority; never alter unrelated VMs, templates, host configuration, or credentials. |
 | Done when | The actual job result and relevant synced edits are verified, proof limits are stated, and required exact-lease cleanup is independently confirmed. |

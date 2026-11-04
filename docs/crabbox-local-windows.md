@@ -8,6 +8,25 @@ desktop capture, signing, or package installation.
 
 ## Prepare the host and template
 
+Choose the image path:
+
+- Have a Gen2 Windows VHDX: use the public project
+  [Crabbox template skill](../.agents/skills/crabbox-hyperv-windows/SKILL.md)
+  to prepare a new private copy with a known administrator.
+- Have a Windows ISO: use the public project
+  [ISO conversion skill](../.agents/skills/windows-iso-to-vhdx/SKILL.md),
+  then the template skill.
+- Need an ISO: start at Microsoft's
+  [Windows Insider Preview ISO page](https://www.microsoft.com/en-us/software-download/windowsinsiderpreviewiso).
+  It requires a Microsoft account, Insider enrollment, and browser sign-in;
+  previews may expire or regress. The ISO skill also links stable public media
+  for users declining enrollment or requiring stability. Licensing still applies.
+
+An offline-prepared VHDX is not boot-tested. A primed template additionally
+proves its account/OOBE readiness; neither establishes repository job success
+or IsolationSession eligibility. The original transport smoke evidence does
+not constitute ISO conversion or template-priming proof.
+
 Use Crabbox **v0.81.0**, the version used to verify this configuration. Run
 from the repository root in PowerShell 7 under your ordinary Hyper-V-authorized
 account, not LocalSystem. Hyper-V, its PowerShell and storage modules, and a
