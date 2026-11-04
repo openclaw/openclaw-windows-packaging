@@ -235,7 +235,10 @@ scheduled-task recovery state. The gateway's own output is not printed; run
 
 **Likely cause.** `not started` means this installation has not started a
 gateway. `stopped` can be an ordinary consequence of stopping the isolated
-session. `unhealthy` means the recorded process is alive but is not serving;
+session. `starting` means the recorded process is verified live with no listener
+and no previously recorded listener; configuration `startup-eligible` does not
+mean it is serving. `unhealthy` means a listener conflicts with the expected
+Gateway or a previously recorded listener is no longer serving;
 `unknown` means liveness could not be established, so the launcher will not
 risk starting a second gateway.
 
@@ -254,6 +257,13 @@ record and aborts rather than risk starting a second process. Use
 Use the port reported by status as the observed endpoint. Do not assume the
 upstream default port (18789): an explicit OpenClaw `gateway.port` can differ,
 and multiple unclassified listeners intentionally do not identify an endpoint.
+
+For `starting`, continue bounded status polling or collect the launch log to
+investigate. Elapsed time alone does not establish a failed or usable Gateway.
+Use `clawctl gateway-service stop` if you choose to abandon the launch; do not
+start a second one beside it. Status is read-only and does not save a listener
+first observed after the start wait, so loss of that late listener can return
+the report to `starting` rather than `unhealthy`.
 
 ## A terminal or Windows Script Host prompt opens when signing in
 
