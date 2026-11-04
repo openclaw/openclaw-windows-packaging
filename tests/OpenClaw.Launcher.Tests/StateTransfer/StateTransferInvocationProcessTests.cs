@@ -3,6 +3,7 @@ using System.IO.Pipes;
 using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
+using OpenClaw.Launcher.Tests.Session;
 using OpenClaw.SessionProtocol;
 
 namespace OpenClaw.Launcher.Tests.StateTransfer;
@@ -81,6 +82,75 @@ public sealed class StateTransferInvocationProcessTests : IDisposable
         Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode, worker.ExitCode);
         Assert.Contains("stopped before", result.Error, StringComparison.Ordinal);
         Assert.False(File.Exists(marker));
+    }
+
+    [Fact]
+    public async Task HardOwnerDeathDrainsAStateTransferWorkerAndItsDescendants()
+    {
+        string events = @"Local\OpenClaw.StateOwnerTest." + Guid.NewGuid().ToString("N");
+        using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, events + ".ready");
+        using var release = new EventWaitHandle(false, EventResetMode.ManualReset, events + ".release");
+        string pipeName = "openclaw-state-owner-" + Guid.NewGuid().ToString("N");
+        using var pipe = new NamedPipeServerStream(
+            pipeName, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+        using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        string requestPath = WriteRequest($$"""
+            import { connect } from "node:net";
+            const socket = connect("\\\\.\\pipe\\{{pipeName}}");
+            socket.once("connect", () => socket.write("ready\n"));
+            setInterval(() => {}, 1000);
+            """);
+        var start = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            ArgumentList = { Path.Combine(AppContext.BaseDirectory, "OpenClaw.Launcher.AotSmoke.dll"),
+                "--invocation-owner-fixture", requestPath, events + ".ready", events + ".release", "state-transfer" },
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        start.Environment["OPENCLAW_SESSION_STATE_DIRECTORY"] = Path.Combine(_root, "state-transfer");
+        using Process owner = Process.Start(start)!;
+        var members = new List<Process>();
+        Process? coordinator = null;
+        try
+        {
+            Assert.True(ready.WaitOne(TimeSpan.FromSeconds(30)));
+            coordinator = Process.GetProcessById(int.Parse(File.ReadAllText(requestPath + ".coordinator"),
+                System.Globalization.CultureInfo.InvariantCulture));
+            await pipe.WaitForConnectionAsync(budget.Token);
+            using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
+            Assert.Equal("ready", await reader.ReadLineAsync(budget.Token));
+            string name = @"Global\OpenClaw.Invocation." +
+                WindowsInvocationJob.InvocationId(File.ReadAllText(requestPath + ".owner-mode"));
+            using var job = CancellationPrototypeProbe.OpenFixtureJob(name);
+            foreach (int id in OpenClaw.SessionHost.SessionInvocationCoordinator.ReadMembers(job))
+            {
+                Process member = Process.GetProcessById(id);
+                _ = member.SafeHandle;
+                members.Add(member);
+            }
+            Assert.True(members.Count >= 2);
+            Assert.All(members, member => Assert.False(member.HasExited));
+            owner.Kill();
+            await owner.WaitForExitAsync(budget.Token);
+            await coordinator.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.All(members, member => Assert.True(member.HasExited));
+            Assert.False(File.Exists(SessionLaunchProtocol.ResultPathFor(requestPath)));
+        }
+        finally
+        {
+            foreach (Process member in members)
+            {
+                StateTransferProcessFixture.Stop(member);
+                member.Dispose();
+            }
+            if (coordinator is not null)
+            {
+                StateTransferProcessFixture.Stop(coordinator);
+                coordinator.Dispose();
+            }
+            StateTransferProcessFixture.Stop(owner);
+        }
     }
 
     private Process StartHelper(string mode, string requestPath)
