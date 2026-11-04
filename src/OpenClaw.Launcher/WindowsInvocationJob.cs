@@ -32,6 +32,7 @@ internal sealed class WindowsInvocationJob : IInvocationLifetime
     internal const string StateTransferCoordinatorModePrefix = "--coordinate-state-transfer=";
     private const string NamePrefix = @"Global\OpenClaw.Invocation.";
     private readonly SafeFileHandle _job;
+    private readonly InvocationOwner _owner;
     private readonly EventWaitHandle _stopping;
     private readonly EventWaitHandle _completed;
     private readonly EventWaitHandle _pinned;
@@ -53,11 +54,12 @@ internal sealed class WindowsInvocationJob : IInvocationLifetime
     private WindowsInvocationJob(
         string id, SafeFileHandle job, EventWaitHandle stopping,
         EventWaitHandle completed, EventWaitHandle pinned,
-        EventWaitHandle terminated, EventWaitHandle drained)
+        EventWaitHandle terminated, EventWaitHandle drained, InvocationOwner owner)
     {
         Mode = CoordinatorModePrefix + id;
         StateTransferMode = StateTransferCoordinatorModePrefix + id;
         _job = job;
+        _owner = owner;
         _stopping = stopping;
         _completed = completed;
         _pinned = pinned;
@@ -74,13 +76,14 @@ internal sealed class WindowsInvocationJob : IInvocationLifetime
         string owner = identity.User!.Value;
         string id = Guid.NewGuid().ToString("N");
         string name = NamePrefix + id;
-        using var jobSecurity = new ObjectSecurity(AccessDescriptor(owner, agentSid, 0x0005));
+        using var jobSecurity = new ObjectSecurity(AccessDescriptor(owner, agentSid, 0x000f));
         SafeFileHandle? job = null;
         EventWaitHandle? stopping = null;
         EventWaitHandle? completed = null;
         EventWaitHandle? pinned = null;
         EventWaitHandle? terminated = null;
         EventWaitHandle? drained = null;
+        InvocationOwner? invocationOwner = null;
         try
         {
             job = CreateJobObjectW(ref jobSecurity.Attributes, name);
@@ -95,12 +98,14 @@ internal sealed class WindowsInvocationJob : IInvocationLifetime
             {
                 throw Failure("configure the invocation job");
             }
-            stopping = CreateEvent(name + ".stopping", owner, agentSid, 0x00100000);
+            stopping = CreateEvent(name + ".stopping", owner, agentSid, 0x00100002);
             completed = CreateEvent(name + ".completed", owner, agentSid, 0x00000002);
             pinned = CreateEvent(name + ".pinned", owner, agentSid, 0x00000002);
             terminated = CreateEvent(name + ".terminated", owner, agentSid, 0x00100000);
             drained = CreateEvent(name + ".drained", owner, agentSid, 0x00000002);
-            var result = new WindowsInvocationJob(id, job, stopping, completed, pinned, terminated, drained);
+            invocationOwner = new InvocationOwner(name + ".owner", owner, agentSid);
+            var result = new WindowsInvocationJob(id, job, stopping, completed, pinned, terminated, drained, invocationOwner);
+            invocationOwner = null;
             job = null;
             stopping = null;
             completed = null;
@@ -111,6 +116,7 @@ internal sealed class WindowsInvocationJob : IInvocationLifetime
         }
         finally
         {
+            invocationOwner?.Dispose();
             stopping?.Dispose();
             completed?.Dispose();
             pinned?.Dispose();
@@ -165,7 +171,7 @@ internal sealed class WindowsInvocationJob : IInvocationLifetime
     }
 
     // The worker opens only ASSIGN_PROCESS and closes it before spawn.
-    // The outside coordinator separately opens QUERY, never TERMINATE.
+    // The outside coordinator can terminate this job only if ownership ends.
     internal static void Join(string mode)
     {
         if (!IsMode(mode) && !IsStateTransferMode(mode))
@@ -255,11 +261,7 @@ internal sealed class WindowsInvocationJob : IInvocationLifetime
         {
             // A finite membership snapshot is safe only after new workload
             // admission is closed. Existing members remain alive to pin.
-            var limits = new ExtendedLimits { LimitFlags = 0x2008, ActiveProcessLimit = 1 };
-            if (!SetInformationJobObject(_job, 9, ref limits, (uint)Marshal.SizeOf<ExtendedLimits>()))
-            {
-                throw Failure("close invocation process admission");
-            }
+            CloseAdmission(_job);
             _admissionClosed = true;
         }
         _stopping.Set();
@@ -288,6 +290,15 @@ internal sealed class WindowsInvocationJob : IInvocationLifetime
         _drainConfirmed = true;
     }
 
+    internal static void CloseAdmission(SafeFileHandle job)
+    {
+        var limits = new ExtendedLimits { LimitFlags = 0x2008, ActiveProcessLimit = 1 };
+        if (!SetInformationJobObject(job, 9, ref limits, (uint)Marshal.SizeOf<ExtendedLimits>()))
+        {
+            throw Failure("close invocation process admission");
+        }
+    }
+
     private void ThrowRecordedFailure()
     {
         if (_terminationFailure is { } failure)
@@ -303,6 +314,7 @@ internal sealed class WindowsInvocationJob : IInvocationLifetime
         {
             stopped.WaitOne();
         }
+        _owner.Dispose();
         _stopping.Dispose();
         _completed.Dispose();
         _pinned.Dispose();
@@ -323,6 +335,74 @@ internal sealed class WindowsInvocationJob : IInvocationLifetime
             throw new Win32Exception(error, "Unable to create the invocation lifecycle event.");
         }
         return new EventWaitHandle(false, EventResetMode.ManualReset) { SafeWaitHandle = handle };
+    }
+
+    // Mutex abandonment is a kernel-confirmed owner death even when another
+    // process retains a job handle. Keep ownership on one dedicated thread,
+    // not on an async caller's transient thread-pool thread.
+    private sealed class InvocationOwner : IDisposable
+    {
+        private readonly EventWaitHandle _release = new(false, EventResetMode.ManualReset);
+        private readonly Thread _thread;
+        private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private Exception? _failure;
+
+        public InvocationOwner(string name, string owner, string agentSid)
+        {
+            _thread = new Thread(() => Hold(name, owner, agentSid)) { IsBackground = true };
+            _thread.Start();
+            try
+            {
+                _ready.Task.GetAwaiter().GetResult();
+            }
+            catch
+            {
+                _thread.Join();
+                _release.Dispose();
+                throw;
+            }
+        }
+
+        private void Hold(string name, string owner, string agentSid)
+        {
+            try
+            {
+                using var security = new ObjectSecurity(AccessDescriptor(owner, agentSid, 0x00100001));
+                SafeWaitHandle handle = CreateMutexW(ref security.Attributes, true, name);
+                int error = Marshal.GetLastWin32Error();
+                if (handle.IsInvalid)
+                {
+                    handle.Dispose();
+                    throw new Win32Exception(error, "Unable to create the invocation owner mutex.");
+                }
+                if (error == 183)
+                {
+                    handle.Dispose();
+                    throw new InvalidOperationException("The invocation owner mutex already exists.");
+                }
+                using var mutex = new Mutex(false) { SafeWaitHandle = handle };
+                _ready.SetResult();
+                _release.WaitOne();
+                mutex.ReleaseMutex();
+            }
+            catch (Exception exception) when (exception is Win32Exception or InvalidOperationException or
+                UnauthorizedAccessException)
+            {
+                _failure = exception;
+                _ready.TrySetException(exception);
+            }
+        }
+
+        public void Dispose()
+        {
+            _release.Set();
+            _thread.Join();
+            _release.Dispose();
+            if (_failure is not null)
+            {
+                throw new InvalidOperationException("Invocation owner confirmation failed.", _failure);
+            }
+        }
     }
 
     private static Win32Exception Failure(string operation) =>
@@ -394,6 +474,9 @@ internal sealed class WindowsInvocationJob : IInvocationLifetime
         [MarshalAs(UnmanagedType.Bool)] bool initialState, string name);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern SafeWaitHandle OpenEventW(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, string name);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeWaitHandle CreateMutexW(
+        ref SecurityAttributes attributes, [MarshalAs(UnmanagedType.Bool)] bool initialOwner, string name);
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool AssignProcessToJobObject(SafeFileHandle job, IntPtr process);

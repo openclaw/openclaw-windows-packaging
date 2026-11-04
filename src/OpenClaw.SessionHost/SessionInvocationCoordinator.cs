@@ -9,9 +9,15 @@ namespace OpenClaw.SessionHost;
 // Runs outside the workload job so host termination cannot destroy the waiter.
 internal static class SessionInvocationCoordinator
 {
-    public static int Run(string mode, string requestPath)
+    public static int Run(
+        string mode, string requestPath,
+        Func<SafeFileHandle, int[]>? readMembers = null,
+        Func<ProcessStartInfo, Process?>? startWorker = null,
+        Action? waitForRecovery = null)
     {
         string? requestId = null;
+        FileStream? lease = null;
+        bool orphanDrainUnconfirmed = false;
         bool stateTransfer = WindowsInvocationJob.IsStateTransferCoordinatorMode(mode);
         // Console controls reach the waiter too; only the workload should stop before pin/drain.
         ConsoleCancelEventHandler preserveWaiter = static (_, args) => args.Cancel = true;
@@ -20,8 +26,10 @@ internal static class SessionInvocationCoordinator
         {
             if (stateTransfer)
             {
-                requestId = SessionStateTransferProtocol.ReadRequest(File.ReadAllText(requestPath)).RequestId;
-                return Coordinate(mode, requestPath);
+                SessionStateTransferRequest transfer = SessionStateTransferProtocol.ReadRequest(File.ReadAllText(requestPath));
+                requestId = transfer.RequestId;
+                lease = SessionNativeStager.OpenConsumerLease(transfer.NativeRootPath);
+                return Coordinate(mode, requestPath, out orphanDrainUnconfirmed, readMembers, startWorker);
             }
             SessionLaunchRequest request = SessionLaunchProtocol.ReadRequest(File.ReadAllText(requestPath));
             requestId = request.RequestId;
@@ -29,8 +37,8 @@ internal static class SessionInvocationCoordinator
             {
                 throw new SessionLaunchException("Invocation coordinators support attached requests only.");
             }
-            using FileStream? lease = SessionNativeStager.OpenConsumerLease(request.NativeRootPath);
-            return Coordinate(mode, requestPath);
+            lease = SessionNativeStager.OpenConsumerLease(request.NativeRootPath);
+            return Coordinate(mode, requestPath, out orphanDrainUnconfirmed, readMembers, startWorker);
         }
         catch (Exception exception) when (exception is Win32Exception or InvalidOperationException or
             TimeoutException or IOException or UnauthorizedAccessException or SessionLaunchException or
@@ -53,6 +61,16 @@ internal static class SessionInvocationCoordinator
         }
         finally
         {
+            if (orphanDrainUnconfirmed && lease is not null)
+            {
+                // Termination success cannot replace missing process-exit proof.
+                // Keep the native root protected until explicit session teardown
+                // ends this waiter, rather than returning and dropping its lease.
+                Console.Error.WriteLine(
+                    "openclaw-session-host: orphan drain is unconfirmed; retaining the native root until clawctl teardown.");
+                (waitForRecovery ?? WaitForRecovery)();
+            }
+            lease?.Dispose();
             Console.CancelKeyPress -= preserveWaiter;
         }
     }
@@ -75,24 +93,71 @@ internal static class SessionInvocationCoordinator
         }
     }
 
-    private static int Coordinate(string mode, string requestPath)
+    private static void WaitForRecovery()
     {
+        using var recovery = new EventWaitHandle(false, EventResetMode.ManualReset);
+        recovery.WaitOne();
+    }
+
+    private static int Coordinate(
+        string mode, string requestPath, out bool orphanDrainUnconfirmed,
+        Func<SafeFileHandle, int[]>? readMembers,
+        Func<ProcessStartInfo, Process?>? startWorker)
+    {
+        orphanDrainUnconfirmed = false;
         string id = WindowsInvocationJob.InvocationId(mode);
         string workerMode = (WindowsInvocationJob.IsStateTransferCoordinatorMode(mode)
             ? WindowsInvocationJob.StateTransferModePrefix
             : WindowsInvocationJob.ModePrefix) + id;
         string name = @"Global\OpenClaw.Invocation." + id;
-        using SafeFileHandle job = OpenJobObjectW(0x0004, false, name);
+        using SafeFileHandle job = OpenJobObjectW(0x000e, false, name);
         if (job.IsInvalid)
         {
             throw Failure("query the invocation job");
         }
-        using EventWaitHandle stopping = OpenEvent(name + ".stopping", 0x00100000);
+        using EventWaitHandle stopping = OpenEvent(name + ".stopping", 0x00100002);
         using EventWaitHandle completed = OpenEvent(name + ".completed", 0x00000002);
         using EventWaitHandle pinned = OpenEvent(name + ".pinned", 0x00000002);
         using EventWaitHandle terminated = OpenEvent(name + ".terminated", 0x00100000);
         using EventWaitHandle drained = OpenEvent(name + ".drained", 0x00000002);
-        using Process worker = Process.Start(new ProcessStartInfo
+        using Mutex owner = OpenOwner(name + ".owner");
+        bool ownerEnded = false;
+        int WaitForOwnerOr(WaitHandle[] signals, int milliseconds = Timeout.Infinite)
+        {
+            if (ownerEnded)
+            {
+                return 0;
+            }
+            int result;
+            bool abandoned = false;
+            try
+            {
+                result = WaitHandle.WaitAny([owner, .. signals], milliseconds);
+            }
+            catch (AbandonedMutexException exception)
+            {
+                result = exception.MutexIndex;
+                abandoned = true;
+            }
+            if (result == 0)
+            {
+                ownerEnded = true;
+                owner.ReleaseMutex();
+                Console.Error.WriteLine(
+                    abandoned
+                        ? "openclaw-session-host: invocation owner died; terminating and draining its workload."
+                        : "openclaw-session-host: invocation owner released; terminating and draining its workload.");
+            }
+            return result;
+        }
+        if (WaitForOwnerOr([], 0) == 0)
+        {
+            WindowsInvocationJob.CloseAdmission(job);
+            stopping.Set();
+            TerminateOwnedJob(job);
+            return 130;
+        }
+        using Process worker = (startWorker ?? Process.Start)(new ProcessStartInfo
         {
             FileName = Environment.ProcessPath
                 ?? throw new InvalidOperationException("The invocation coordinator cannot locate its own helper."),
@@ -105,18 +170,25 @@ internal static class SessionInvocationCoordinator
         {
             SafeWaitHandle = new SafeWaitHandle(worker.SafeHandle.DangerousGetHandle(), ownsHandle: false)
         };
-        if (WaitHandle.WaitAny([stopping, workerSignal]) == 1)
-        {
-            completed.Set();
-        }
-        stopping.WaitOne();
         var elapsed = Stopwatch.StartNew();
         int Remaining() => (int)Math.Max(0, 30_000 - elapsed.ElapsedMilliseconds);
 
         var processes = new List<SafeProcessHandle>();
         try
         {
-            foreach (int processId in ReadMembers(job))
+            if (WaitForOwnerOr([stopping, workerSignal]) == 2)
+            {
+                completed.Set();
+            }
+            _ = WaitForOwnerOr([stopping]);
+            // Start the drain budget only after ownership/stop is observed.
+            elapsed.Restart();
+            if (ownerEnded)
+            {
+                WindowsInvocationJob.CloseAdmission(job);
+                stopping.Set();
+            }
+            foreach (int processId in (readMembers ?? ReadMembers)(job))
             {
                 if (processId == worker.Id)
                 {
@@ -129,17 +201,59 @@ internal static class SessionInvocationCoordinator
                 }
             }
             pinned.Set();
-            if (!terminated.WaitOne(Remaining()))
+            int termination = WaitForOwnerOr([terminated], Remaining());
+            if (termination == 0)
+            {
+                // The host's handles may be gone or it may have died between
+                // pin acknowledgement and termination. This exact job remains
+                // usable regardless of other retained handles.
+                TerminateOwnedJob(job);
+            }
+            else if (termination != 1)
             {
                 throw new TimeoutException("The host did not confirm invocation termination.");
             }
+
             WaitForExit(worker.SafeHandle, Remaining());
             foreach (SafeProcessHandle process in processes)
             {
                 WaitForExit(process, Remaining());
             }
             drained.Set();
+            if (ownerEnded)
+            {
+                Console.Error.WriteLine("openclaw-session-host: orphaned invocation process exit confirmed.");
+            }
             return worker.ExitCode;
+        }
+        catch (Exception exception) when (exception is
+            Win32Exception or InvalidOperationException or TimeoutException)
+        {
+            if (WaitForOwnerOr([], 0) != 0)
+            {
+                // The live host retains its existing emergency-cleanup path.
+                throw;
+            }
+            orphanDrainUnconfirmed = true;
+            // Even failed admission/snapshot/pinning must not strand a tree
+            // whose host can no longer perform its emergency termination.
+            try
+            {
+                TerminateOwnedJob(job);
+                WaitForExit(worker.SafeHandle, Remaining());
+                foreach (SafeProcessHandle process in processes)
+                {
+                    WaitForExit(process, Remaining());
+                }
+            }
+            catch (Exception cleanupFailure) when (cleanupFailure is
+                Win32Exception or InvalidOperationException or TimeoutException)
+            {
+                throw new InvalidOperationException(
+                    "Invocation orphan drain and emergency cleanup both failed.",
+                    new AggregateException(exception, cleanupFailure));
+            }
+            throw;
         }
         finally
         {
@@ -148,6 +262,26 @@ internal static class SessionInvocationCoordinator
                 process.Dispose();
             }
         }
+    }
+
+    private static void TerminateOwnedJob(SafeFileHandle job)
+    {
+        if (!TerminateJobObject(job, 130))
+        {
+            throw Failure("terminate the orphaned invocation job");
+        }
+    }
+
+    private static Mutex OpenOwner(string name)
+    {
+        SafeWaitHandle handle = OpenMutexW(0x00100001, false, name);
+        if (handle.IsInvalid)
+        {
+            int error = Marshal.GetLastWin32Error();
+            handle.Dispose();
+            throw new Win32Exception(error, "Unable to open the invocation owner mutex.");
+        }
+        return new Mutex(false) { SafeWaitHandle = handle };
     }
 
     internal static SafeProcessHandle? PinSnapshotMember(
@@ -212,7 +346,7 @@ internal static class SessionInvocationCoordinator
         }
     }
 
-    private static int[] ReadMembers(SafeFileHandle job)
+    internal static int[] ReadMembers(SafeFileHandle job)
     {
         int capacity = 64;
         while (true)
@@ -268,6 +402,11 @@ internal static class SessionInvocationCoordinator
     private static extern SafeFileHandle OpenJobObjectW(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, string name);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern SafeWaitHandle OpenEventW(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, string name);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeWaitHandle OpenMutexW(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, string name);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool TerminateJobObject(SafeFileHandle job, uint exitCode);
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern SafeProcessHandle OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, int processId);
     [DllImport("kernel32.dll", SetLastError = true)]
