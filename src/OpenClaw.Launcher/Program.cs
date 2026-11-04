@@ -1142,6 +1142,14 @@ internal static class Program
                                 Refusal: result.Refusal)
                             : null));
                 },
+                GatewayRepair = async (confirmed, cancellationToken) =>
+                {
+                    StateArchiveCommandResult result = await NarrateOperationAsync(
+                        new ClawCtlProgress("Backing up agent state and running Gateway maintenance."),
+                        _ => CreateStateTransfer().RepairAsync(confirmed, cancellationToken))
+                        .ConfigureAwait(false);
+                    return WriteResult(result);
+                },
                 GatewayRestart = async cancellationToken =>
                 {
                     Session.SessionRuntime runtime = GetSessionRuntime();

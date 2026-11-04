@@ -24,6 +24,12 @@ const COMMAND_GROUPS = [
         command: "clawctl gateway-service restart",
       },
       {
+        id: "gateway-repair",
+        title: "Repair Gateway state",
+        description: "Stop the gateway, retain a verified backup, and run Doctor with explicit confirmation. Leaves the gateway stopped.",
+        command: "clawctl gateway-service repair --help",
+      },
+      {
         id: "dashboard",
         title: "Open dashboard",
         description: "Open the dashboard in your default browser. Requires completed setup and a running gateway. Does not print authenticated URLs or tokens.",
