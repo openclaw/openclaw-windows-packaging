@@ -11,6 +11,7 @@ summary below:
 - [Architecture](docs/architecture.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Local development](docs/local-development.md)
+- [Local Windows checks with Crabbox](docs/crabbox-local-windows.md)
 - [Official release process](docs/release-process.md)
 
 ## Prerequisites

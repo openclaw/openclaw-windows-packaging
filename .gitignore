@@ -1,6 +1,7 @@
 msix-validation-evidence/
 packaging-test-output/
 uninstall-validation-output/
+.crabbox/
 
 # Generated payloads and build output
 content/openclaw/*
