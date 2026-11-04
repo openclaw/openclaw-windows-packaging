@@ -58,9 +58,11 @@ internal sealed class SessionWorkspaceOperation : IDisposable
                     throw new SessionException("Private state transfer requires the recorded agent identity and diagnostics.");
                 }
                 _sharedWorkspace = _workspace;
+                // Upstream adds nested SQLite staging paths. Generation custody
+                // remains in the pinned workspace and request/result contract.
                 _workspace = TrustedPath.CreatePrivateDirectory(
                     _sharedWorkspace,
-                    Path.Combine(_sharedWorkspace.FinalPath, $"state-private-{record.Generation}-{Guid.NewGuid():N}"),
+                    Path.Combine(_sharedWorkspace.FinalPath, $"p-{Guid.NewGuid():N}"),
                     record.AgentUserSid);
             }
         }

@@ -203,6 +203,7 @@ public sealed class StateTransferScenarioTests : IDisposable
         WriteProfile(Current, "current");
         WriteProfile(Old, "old");
         var workspace = new DirectoryInfo(_backend.Metadata!.EphemeralWorkspacePath);
+        string[] directoriesBefore = Directory.GetDirectories(workspace.FullName);
         DirectorySecurity security = workspace.GetAccessControl();
         security.AddAccessRule(new FileSystemAccessRule(
             new SecurityIdentifier(WellKnownSidType.WorldSid, null),
@@ -239,7 +240,9 @@ public sealed class StateTransferScenarioTests : IDisposable
         Assert.True(inspectedSource);
         StateArchiveStoreTests.AssertPrivateFile(result.Transfer!.Archive!.Path);
         StateArchiveStoreTests.AssertPrivateFile(result.Transfer.ProtectionArchive!);
-        Assert.Empty(Directory.GetDirectories(workspace.FullName, "state-private-*"));
+        Assert.Equal(
+            directoriesBefore.Order(StringComparer.Ordinal),
+            Directory.GetDirectories(workspace.FullName).Order(StringComparer.Ordinal));
         Assert.DoesNotContain(_log, entry => entry.Contains("cleanup failed", StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain("old-synthetic-token", string.Join('\n', _log), StringComparison.Ordinal);
     }

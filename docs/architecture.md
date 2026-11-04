@@ -561,6 +561,9 @@ gain access. The shared `TrustedPath` owner also creates the per-command
 exchange for the invoking user and recorded agent, excluding broad parent
 readers. Upstream scratch remains in that private exchange. Guest transaction
 and normalization roots are private to the agent, SYSTEM, and administrators.
+Exchange and scratch names retain full random identifiers but stay short so the
+bundled Windows SQLite helper has room for its nested snapshot paths. Generation
+checks remain bound to the workspace handles and request/result contract.
 Existing folder, profile, and archive permissions are not rewritten.
 
 [`SessionStateTransfer`](../src/OpenClaw.SessionHost/SessionStateTransfer.cs)

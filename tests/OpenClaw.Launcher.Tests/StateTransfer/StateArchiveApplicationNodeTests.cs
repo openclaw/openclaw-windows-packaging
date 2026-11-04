@@ -1,4 +1,6 @@
+using System.Security.Principal;
 using System.Text.Json.Nodes;
+using OpenClaw.Launcher.Session;
 using OpenClaw.SessionHost;
 using OpenClaw.SessionProtocol;
 using HostTrustedPath = OpenClaw.Launcher.Session.TrustedPath;
@@ -105,7 +107,7 @@ public sealed class StateArchiveApplicationNodeTests : IDisposable
 
     public void Dispose() => Directory.Delete(_root, recursive: true);
 
-    private StateArchiveApplication Create(string? overrideName = null, string? preload = null)
+    private StateArchiveApplication Create(string? overrideName = null, string? preload = null, string? workspace = null)
     {
         string? node = (Environment.GetEnvironmentVariable("PATH") ?? "")
             .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
@@ -132,7 +134,7 @@ public sealed class StateArchiveApplicationNodeTests : IDisposable
         return new StateArchiveApplication(new SessionStateTransferRequest
         {
             RequestId = Guid.NewGuid().ToString("N"),
-            WorkspaceDirectory = Exchange,
+            WorkspaceDirectory = workspace ?? Exchange,
             NodePath = node,
             ApplicationDirectory = Application,
             NativePreloadPath = preload,
@@ -141,19 +143,39 @@ public sealed class StateArchiveApplicationNodeTests : IDisposable
     }
 
     [Fact]
-    public void CaptureKeepsRuntimeScratchInsideThePrivateExchange()
+    public void CaptureKeepsPrivateScratchWithinTheWindowsSqlitePathBudget()
     {
         File.WriteAllText(Path.Combine(Staged, "contract.json"), """{"verified":true,"scratch":true}""");
+        using WindowsIdentity identity = WindowsIdentity.GetCurrent();
+        Assert.NotNull(identity.User);
+        SessionRecord record = new()
+        {
+            WorkspacePath = Exchange,
+            Generation = Guid.NewGuid().ToString("N"),
+            AgentUserSid = identity.User.Value
+        };
+        using var operation = new SessionWorkspaceOperation(record, _ => true, privateData: true, log: _ => { });
+        using var sibling = new SessionWorkspaceOperation(record, _ => true, privateData: true, log: _ => { });
+        Assert.NotEqual(operation.WorkspacePath, sibling.WorkspacePath);
 
-        _ = Create().Capture(Staged, Path.Combine(Exchange, "capture.tar.gz"), dryRun: false);
+        _ = Create(workspace: operation.WorkspacePath).Capture(
+            Staged, Path.Combine(operation.WorkspacePath, "capture.tar.gz"), dryRun: false);
 
         string scratch = File.ReadAllText(Path.Combine(Staged, "scratch-path.txt"));
-        Assert.StartsWith(Exchange + Path.DirectorySeparatorChar, scratch, StringComparison.Ordinal);
+        Assert.StartsWith(operation.WorkspacePath + Path.DirectorySeparatorChar, scratch, StringComparison.Ordinal);
+        string relativeScratch = Path.GetRelativePath(Exchange, scratch);
+        const string consumerId = "00000000-0000-0000-0000-000000000000";
+        string sqliteSnapshot = Path.Combine(
+            @"C:\Users\A1-B2\Shared", relativeScratch,
+            $"openclaw-backup-owned-{consumerId}", "state-snapshot-no-legacy",
+            $".sqlite-snapshot-{consumerId}", "database.sqlite");
+        Assert.True(sqliteSnapshot.Length < 260,
+            $"The bundled Windows SQLite helper requires a path below MAX_PATH: {sqliteSnapshot.Length} characters.");
 
         // Locate the file by enumeration so the reported path is only compared,
         // never reused as a file-system argument.
         string scratchFile = Assert.Single(
-            Directory.EnumerateFiles(Exchange, "scratch.txt", SearchOption.AllDirectories));
+            Directory.EnumerateFiles(operation.WorkspacePath, "scratch.txt", SearchOption.AllDirectories));
         Assert.Equal(scratch, Path.GetDirectoryName(scratchFile));
         Assert.Equal("synthetic scratch", File.ReadAllText(scratchFile));
         StateArchiveStoreTests.AssertPrivateFile(scratchFile, protectedAcl: false);
