@@ -176,6 +176,23 @@ on the native x64 and ARM64 packaging runners. Payload installation requires
 Node.js to match the target architecture; npm's CPU flags alone do not change
 the architecture seen by dependency install scripts.
 
+Payload installation follows the
+[upstream npm consumer policy](https://github.com/openclaw/openclaw/blob/1ca0669dbe3982369463b921397027f3727f51fd/docs/install/index.md):
+npm 11.16 and later receive explicit lifecycle approval for only the verified
+OpenClaw archive; older npm remains unflagged. npm 12 intentionally skips
+unapproved dependency hooks, while npm 11 retains its advisory behavior. This
+does not translate the source build's pnpm `allowBuilds` policy into npm.
+The global-install layout is confined to the explicit temporary staging
+prefix and cache, not the user's global modules or shims. Unreadable npm
+version probes, comma-containing archive paths on approval-aware npm, missing
+staged files, and upstream lifecycle-pending guards fail the build.
+Staged installs from the earlier policy must be rebuilt.
+
+Use the source-selected Node.js runtime. When isolating an extracted toolchain,
+set process-local `npm_config_prefix` to that directory as well as putting it
+first on `PATH`, then verify `node --version` and `npm --version` in the child
+shell: npm's shim can otherwise redirect to a globally installed npm.
+
 Run the NativeAOT publish when you change host JSON, reflection, interop, or
 anything else that is trimming-sensitive. A JIT `dotnet build` does not
 exercise that path:

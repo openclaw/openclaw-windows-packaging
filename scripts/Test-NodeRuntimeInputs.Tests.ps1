@@ -4,10 +4,11 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) (
-    "openclaw-node-inputs-$([guid]::NewGuid().ToString('N'))"
+    "openclaw-node-inputs-$([guid]::NewGuid().ToString('D'))"
 )
 $previousRunnerTemp = $env:RUNNER_TEMP
 $previousNpmCache = $env:npm_config_cache
+$previousNpmPrefix = $env:npm_config_prefix
 
 function Assert-Fails {
     param([scriptblock]$Action, [string]$MessagePattern)
@@ -27,8 +28,12 @@ function Assert-Fails {
 try {
     $env:RUNNER_TEMP = $testRoot
     $env:npm_config_cache = Join-Path $testRoot 'npm-cache'
+    $ambientPrefix = Join-Path $testRoot 'ambient global prefix'
+    New-Item -ItemType Directory -Path $ambientPrefix -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $ambientPrefix 'preserve.txt'), 'preserve')
+    $env:npm_config_prefix = $ambientPrefix
     $source = Join-Path $testRoot 'source'
-    $package = Join-Path $testRoot 'package'
+    $package = Join-Path $testRoot "package space #percent% [bracket]'quote"
     $payload = Join-Path $testRoot 'payload'
     New-Item `
         -ItemType Directory `
@@ -54,10 +59,29 @@ try {
         $fixtureInventory.fileCount -ne 2 -or $fixtureInventory.sha256 -cne $expectedDigest) {
         throw 'The payload inventory must use sorted relative paths and lengths, including hidden entries.'
     }
-    '{"name":"openclaw","version":"0.0.0","type":"module","scripts":{"install":"node install.cjs"}}' |
-        Set-Content -LiteralPath "$source\package.json"
+    $dependencySource = Join-Path $testRoot 'dependency-source'
+    $dependencyPackage = Join-Path $testRoot 'dependency-package'
+    New-Item -ItemType Directory -Path $dependencySource, $dependencyPackage | Out-Null
+    '{"name":"fixture-helper","version":"0.0.0","scripts":{"install":"node install.cjs"}}' |
+        Set-Content -LiteralPath "$dependencySource\package.json"
+    'require("node:fs").writeFileSync("dependency-hook.txt", "ran");' |
+        Set-Content -LiteralPath "$dependencySource\install.cjs"
+    & npm pack $dependencySource --ignore-scripts --offline --silent --pack-destination $dependencyPackage
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to pack the dependency lifecycle fixture.' }
+    @{
+        name = 'openclaw'
+        version = '0.0.0'
+        type = 'module'
+        scripts = @{ install = 'node install.cjs' }
+        dependencies = @{
+            'fixture-helper' = "file:$(Join-Path $dependencyPackage 'fixture-helper-0.0.0.tgz')"
+        }
+    } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath "$source\package.json"
+    [IO.File]::WriteAllText("$source\.openclaw-lifecycle-pending", 'pending')
     @'
-require("node:fs").writeFileSync("installed-architecture.txt", process.arch);
+const fs = require("node:fs");
+fs.writeFileSync("installed-architecture.txt", process.arch);
+fs.unlinkSync(".openclaw-lifecycle-pending");
 '@ | Set-Content -LiteralPath "$source\install.cjs"
     Copy-Item `
         -LiteralPath (Join-Path $PSScriptRoot 'fixtures\openclaw-plugin-inspection.mjs') `
@@ -88,6 +112,10 @@ require("node:fs").writeFileSync("installed-architecture.txt", process.arch);
         throw 'Unable to determine the fixture Node.js architecture.'
     }
     $otherArchitecture = if ($nodeArchitecture -eq 'x64') { 'arm64' } else { 'x64' }
+    $actualNpmVersion = & npm --version
+    if ($LASTEXITCODE -ne 0 -or $actualNpmVersion -notmatch '^\d+\.\d+\.\d+$') {
+        throw 'Unable to determine the fixture npm version.'
+    }
     $sourceMetadata = @{
         repository = 'https://github.com/openclaw/openclaw'
         requestedRef = '1' * 40
@@ -151,8 +179,105 @@ require("node:fs").writeFileSync("installed-architecture.txt", process.arch);
         Remove-Item Function:\node
     }
 
-    & "$PSScriptRoot\Build-Payload.ps1" `
-        -PackageDirectory $package -Architecture $nodeArchitecture -OutputDirectory $payload
+    $currentStage = Join-Path $testRoot "openclaw-stage-$nodeArchitecture"
+    New-Item -ItemType Directory -Path $currentStage | Out-Null
+    $npmMarker = Join-Path $currentStage 'preserve-before-npm-check.txt'
+    [IO.File]::WriteAllText($npmMarker, 'preserve')
+    function npm {
+        if ($args.Count -eq 1 -and $args[0] -ceq '--version') {
+            $global:LASTEXITCODE = $npmProbe.exitCode
+            $npmProbe.version
+            return
+        }
+        throw 'A failed npm probe must not reach installation.'
+    }
+    try {
+        foreach ($npmProbe in @(
+            @{ version = 'invalid'; exitCode = 0; pattern = 'Unable to determine.*npm version' }
+            @{ version = ''; exitCode = 0; pattern = 'Unable to determine.*npm version' }
+            @{ version = '11.19.1'; exitCode = 1; pattern = 'Unable to determine.*npm version' }
+        )) {
+            foreach ($reuse in @($false, $true)) {
+                $npmOutput = Join-Path $testRoot "failed-npm-$($npmProbe.version)-$reuse"
+                Assert-Fails -MessagePattern $npmProbe.pattern -Action {
+                    & "$PSScriptRoot\Build-Payload.ps1" `
+                        -PackageDirectory $package -Architecture $nodeArchitecture `
+                        -OutputDirectory $npmOutput -ReuseStagedInstall:$reuse
+                }
+                if ([IO.File]::ReadAllText($npmMarker) -cne 'preserve' -or
+                    @(Get-ChildItem -LiteralPath $currentStage -Force).Count -ne 1 -or
+                    (Test-Path -LiteralPath $npmOutput)) {
+                    throw 'A failed npm probe changed staging or output before rejection.'
+                }
+            }
+        }
+        $commaPackage = Join-Path $testRoot 'package,blocked'
+        New-Item -ItemType Directory -Path $commaPackage | Out-Null
+        Copy-Item -LiteralPath (Get-ChildItem -LiteralPath $package -File).FullName -Destination $commaPackage
+        $npmProbe = @{ version = '12.2.0'; exitCode = 0 }
+        $commaOutput = Join-Path $testRoot 'comma-output'
+        Assert-Fails -MessagePattern 'archive path without commas' -Action {
+            & "$PSScriptRoot\Build-Payload.ps1" `
+                -PackageDirectory $commaPackage -Architecture $nodeArchitecture `
+                -OutputDirectory $commaOutput
+        }
+        if ([IO.File]::ReadAllText($npmMarker) -cne 'preserve' -or
+            @(Get-ChildItem -LiteralPath $currentStage -Force).Count -ne 1 -or
+            (Test-Path -LiteralPath $commaOutput)) {
+            throw 'An unrepresentable archive approval changed staging or output.'
+        }
+    }
+    finally {
+        Remove-Item Function:\npm
+    }
+
+    if ([version]$actualNpmVersion -lt [version]'12.0.0') {
+        $npmCli = Join-Path (Split-Path $nodeExecutable -Parent) 'node_modules\npm\bin\npm-cli.js'
+        $bundledNpmVersion = & $nodeExecutable $npmCli --version
+        if ($LASTEXITCODE -ne 0 -or $bundledNpmVersion -cne $actualNpmVersion) {
+            throw 'The legacy fixture requires the selected runtime bundled npm.'
+        }
+        $legacyOutput = Join-Path $testRoot 'legacy-npm-output'
+        function npm {
+            if ($args.Count -eq 1 -and $args[0] -ceq '--version') {
+                $global:LASTEXITCODE = 0
+                return '11.15.0'
+            }
+            if (@($args | Where-Object { $_ -like '--allow-scripts=*' -or
+                $_ -like '--dangerously-allow-all-scripts=*' }).Count -ne 0) {
+                throw 'Legacy npm received an unsupported lifecycle option.'
+            }
+            & $nodeExecutable $npmCli @args
+        }
+        try {
+            & "$PSScriptRoot\Build-Payload.ps1" `
+                -PackageDirectory $package -Architecture $nodeArchitecture -OutputDirectory $legacyOutput
+            if ([IO.File]::ReadAllText("$legacyOutput\app\installed-architecture.txt") -cne $nodeArchitecture) {
+                throw 'The legacy unflagged install did not complete its lifecycle.'
+            }
+        }
+        finally {
+            Remove-Item Function:\npm
+        }
+    }
+
+    $previousDangerousScripts = $env:npm_config_dangerously_allow_all_scripts
+    try {
+        $env:npm_config_dangerously_allow_all_scripts = 'true'
+        & "$PSScriptRoot\Build-Payload.ps1" `
+            -PackageDirectory $package -Architecture $nodeArchitecture -OutputDirectory $payload
+    }
+    finally {
+        $env:npm_config_dangerously_allow_all_scripts = $previousDangerousScripts
+    }
+    $dependencyMarker = Join-Path $payload 'app\node_modules\fixture-helper\dependency-hook.txt'
+    if ((Test-Path -LiteralPath $dependencyMarker) -ne ([version]$actualNpmVersion -lt [version]'12.0.0')) {
+        throw 'Dependency lifecycle behavior did not match upstream npm consumer policy.'
+    }
+    if ([IO.File]::ReadAllText((Join-Path $ambientPrefix 'preserve.txt')) -cne 'preserve' -or
+        @(Get-ChildItem -LiteralPath $ambientPrefix -Force).Count -ne 1) {
+        throw 'The payload install escaped its explicit staging prefix.'
+    }
     $metadataPath = Join-Path $payload 'payload-metadata.json'
     $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
     if ($metadata.nodeVersion -cne $nodeVersion) {
@@ -205,6 +330,39 @@ require("node:fs").writeFileSync("installed-architecture.txt", process.arch);
     ) {
         throw 'The reused staged install did not regenerate PowerShell completion.'
     }
+    $stagedPackage = Join-Path $currentStage 'node_modules\openclaw'
+    foreach ($guard in @('.openclaw-lifecycle-pending', 'dist\openclaw-install-guard')) {
+        $guardPath = Join-Path $stagedPackage $guard
+        [IO.File]::WriteAllText($guardPath, 'pending')
+        $guardOutput = Join-Path $testRoot ('guard-' + [IO.Path]::GetFileName($guard))
+        Assert-Fails -MessagePattern 'install lifecycle did not complete' -Action {
+            & "$PSScriptRoot\Build-Payload.ps1" `
+                -PackageDirectory $package -Architecture $nodeArchitecture `
+                -OutputDirectory $guardOutput -ReuseStagedInstall
+        }
+        if (Test-Path -LiteralPath $guardOutput) { throw 'A pending lifecycle emitted a payload.' }
+        Remove-Item -LiteralPath $guardPath
+    }
+    $previousIgnoreScripts = $env:npm_config_ignore_scripts
+    try {
+        $env:npm_config_ignore_scripts = 'true'
+        $env:RUNNER_TEMP = Join-Path $testRoot 'blocked-lifecycle'
+        New-Item -ItemType Directory -Path $env:RUNNER_TEMP | Out-Null
+        $blockedOutput = Join-Path $testRoot 'blocked-lifecycle-output'
+        Assert-Fails -MessagePattern 'install lifecycle did not complete' -Action {
+            & "$PSScriptRoot\Build-Payload.ps1" `
+                -PackageDirectory $package -Architecture $nodeArchitecture `
+                -OutputDirectory $blockedOutput
+        }
+        if ((Test-Path -LiteralPath $blockedOutput) -or
+            (Test-Path -LiteralPath "$env:RUNNER_TEMP\openclaw-stage-$nodeArchitecture\.openclaw-install.json")) {
+            throw 'A skipped install lifecycle recorded success or emitted output.'
+        }
+    }
+    finally {
+        $env:RUNNER_TEMP = $testRoot
+        $env:npm_config_ignore_scripts = $previousIgnoreScripts
+    }
 
     $packagePath = @(
         Get-ChildItem -LiteralPath $package -Filter '*.tgz' -File
@@ -236,6 +394,16 @@ require("node:fs").writeFileSync("installed-architecture.txt", process.arch);
         Join-Path $testRoot "openclaw-stage-$nodeArchitecture"
     ) '.openclaw-install.json'
     $stagingMetadata = Get-Content -LiteralPath $stagingMetadataPath -Raw
+    $oldPolicyMetadata = $stagingMetadata | ConvertFrom-Json
+    $oldPolicyMetadata.PSObject.Properties.Remove('installPolicy')
+    $oldPolicyMetadata | ConvertTo-Json |
+        Set-Content -LiteralPath $stagingMetadataPath -Encoding utf8
+    Assert-Fails -MessagePattern 'does not match the requested installPolicy' -Action {
+        & "$PSScriptRoot\Build-Payload.ps1" `
+            -PackageDirectory $package -Architecture $nodeArchitecture `
+            -OutputDirectory (Join-Path $testRoot 'legacy-install-policy') -ReuseStagedInstall
+    }
+    [IO.File]::WriteAllText($stagingMetadataPath, $stagingMetadata)
     $wrongArchitectureMetadata = $stagingMetadata | ConvertFrom-Json
     if ($wrongArchitectureMetadata.nodeArchitecture -cne $nodeArchitecture) {
         throw 'The staged install did not record its build Node.js architecture.'
@@ -346,6 +514,7 @@ require("node:fs").writeFileSync("installed-architecture.txt", process.arch);
 finally {
     $env:RUNNER_TEMP = $previousRunnerTemp
     $env:npm_config_cache = $previousNpmCache
+    $env:npm_config_prefix = $previousNpmPrefix
     if (Test-Path -LiteralPath $testRoot) {
         Remove-Item -LiteralPath $testRoot -Recurse -Force
     }
