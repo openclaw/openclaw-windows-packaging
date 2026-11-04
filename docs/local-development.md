@@ -514,7 +514,13 @@ cache routing, and selected-build outcomes,
 `Test-MSIXUpgradeMatrix.Tests.ps1` for parallel upgrade scenario selection,
 `Test-Deploy-LocalPackage.Tests.ps1` for the loose-registration flow, and
 `Test-Sign-TestMSIX.Tests.ps1` for test signing. The Node input suite requires
-Node.js and npm; it uses a dependency-free local fixture.
+Node.js and npm; its local fixture exercises the approved OpenClaw install hook,
+an unapproved dependency hook, staged reuse, and lifecycle-pending refusals
+without downloading OpenClaw. Payload installation follows upstream's
+version-aware npm consumer approvals inside an explicit temporary prefix,
+not the source build's pnpm policy. Use the source-selected Node.js runtime;
+see the [Node input prerequisites](../CONTRIBUTING.md) for policy details and
+toolchain isolation.
 
 Cache-boundary checks are offline contracts, not platform proof. The workflow
 grants writes only to main/stable builds; arbitrary-ref unsigned/test dispatch
