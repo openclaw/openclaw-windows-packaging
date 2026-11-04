@@ -40,7 +40,7 @@ internal sealed partial class StateTransferCoordinator
             // The package owns custody and process lifecycle. Doctor owns all
             // migrations and repairs, using the ordinary external-service environment.
             SessionStateTransferRequest inputs = CreateRequest(runtime, SessionStateTransferAction.Inspect);
-            _ = await runtime.Executor.ExecuteCaptureAsync(
+            SessionCommandCaptureResult doctor = await runtime.Executor.ExecuteCaptureAsync(
                 record,
                 new SessionExecutionRequest(
                     runtime.RequireStagedHelper(record), inputs.NodePath!, inputs.ApplicationDirectory!,
@@ -53,6 +53,10 @@ internal sealed partial class StateTransferCoordinator
                         OpenClawRuntimeEnvironment.BuildNativeRedirectNodeArguments(inputs.NativePreloadPath)
                 },
                 cancellationToken).ConfigureAwait(false);
+            if (doctor.ExitCode != 0)
+            {
+                throw new SessionException($"OpenClaw Doctor exited with code {doctor.ExitCode}.");
+            }
             return new StateArchiveCommandResult(command, 0, backup with
             {
                 Phase = "doctor-completed",

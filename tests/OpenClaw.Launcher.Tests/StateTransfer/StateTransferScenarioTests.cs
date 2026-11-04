@@ -88,7 +88,7 @@ public sealed class StateTransferScenarioTests : IDisposable
                         Launched = true,
                         ExitCode = _doctorExitCode
                     }));
-                return Task.FromResult(new MxcExecutionResult(0, "private doctor output", "private doctor error"));
+                return Task.FromResult(new MxcExecutionResult(_doctorExitCode, "private doctor output", "private doctor error"));
             }
             string requestPath = Directory.GetFiles(
                 record.WorkspacePath!, "state-transfer-*.json", SearchOption.AllDirectories)
@@ -163,6 +163,7 @@ public sealed class StateTransferScenarioTests : IDisposable
 
     [Theory]
     [InlineData(0)]
+    [InlineData(1)]
     [InlineData(78)]
     public async Task RepairRetainsPreDoctorStateAndLeavesGatewayStopped(int doctorExitCode)
     {
@@ -177,6 +178,7 @@ public sealed class StateTransferScenarioTests : IDisposable
         };
         StateArchiveCommandResult result = await coordinator.RepairAsync(true, CancellationToken.None);
         Assert.Equal(doctorExitCode == 0 ? 0 : 1, result.ExitCode);
+        Assert.Equal(doctorExitCode == 0 ? "doctor-completed" : "repair-failed", result.Transfer!.Phase);
         Assert.Equal("gateway-service repair", result.Command);
         Assert.True(result.Transfer!.GatewayStopped);
         Assert.True(File.Exists(result.Transfer.Archive!.Path));
@@ -192,7 +194,10 @@ public sealed class StateTransferScenarioTests : IDisposable
         Assert.DoesNotContain(_log, line => line.Contains("private doctor", StringComparison.Ordinal));
         if (doctorExitCode != 0)
         {
-            Assert.Contains("78", result.Error, StringComparison.Ordinal);
+            Assert.StartsWith($"OpenClaw Doctor exited with code {doctorExitCode}.", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain(result.Transfer.Warnings,
+                warning => warning.Contains("Doctor completed", StringComparison.Ordinal));
+            Assert.DoesNotContain("private doctor", result.Error, StringComparison.Ordinal);
         }
     }
 
