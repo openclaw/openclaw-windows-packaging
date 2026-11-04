@@ -20,6 +20,8 @@ internal sealed record GatewayStartRequest(
     /// the user configured nothing.
     /// </summary>
     public string? WorkingDirectory { get; init; }
+
+    public string AttemptId { get; init; } = Guid.NewGuid().ToString("N");
 }
 
 /// <summary>The identity of a gateway that was started.</summary>
@@ -107,7 +109,7 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
         // Each launch gets its own unguessable evidence paths, so a process
         // left behind by an earlier launch cannot write to them and cannot make
         // itself look like this generation.
-        string generation = Guid.NewGuid().ToString("N");
+        string generation = request.AttemptId;
         string requestPath = operation.FilePath("gateway", generation);
         string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
         string statusPath = operation.FilePath("gateway", generation, ".status.json");
@@ -191,6 +193,8 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
         finally
         {
             operation.Delete(requestPath);
+            // The supervisor writes its own durable receipt independently of
+            // this acknowledgement. Never remove its status on a timeout.
             operation.Delete(resultPath);
         }
     }
@@ -241,6 +245,41 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
 
         try
         {
+            if (gateway.LaunchPending && gateway.AttemptId is not null)
+            {
+                try
+                {
+                    string statusPath = operation.FilePath("gateway", gateway.AttemptId, ".status.json");
+                    SessionSupervisorStatus receipt = SessionInspectProtocol.ReadStatus(
+                        await operation.ReadTextAsync(statusPath, cancellationToken).ConfigureAwait(false));
+                    if (receipt.SchemaVersion != SessionLaunchProtocol.CurrentSchemaVersion ||
+                        receipt.RequestId != gateway.AttemptId ||
+                        receipt.ProcessId <= 0 || receipt.ProcessStartTimeUtc == default ||
+                        !string.Equals(receipt.HelperPath, gateway.HelperPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new SessionException("The gateway supervisor receipt does not identify this launch attempt.");
+                    }
+                    gateway = gateway with
+                    {
+                        LaunchPending = false,
+                        ProcessId = receipt.ProcessId,
+                        ProcessStartTimeUtc = receipt.ProcessStartTimeUtc,
+                        HelperPath = receipt.HelperPath,
+                        StatusPath = statusPath
+                    };
+                }
+                catch (Exception exception) when (
+                    exception is IOException or UnauthorizedAccessException or SessionLaunchException or SessionException)
+                {
+                    _log($"Gateway {DescribeOperation(option)} receipt unavailable: {DiagnosticFailure.Describe(exception)}");
+                    return new SessionInspectResult
+                    {
+                        RequestId = requestId,
+                        Error = "The launch attempt has no usable supervisor receipt; its intent was retained. " + exception.Message
+                    };
+                }
+            }
+
             await operation.WriteTextNewAsync(
                 requestPath,
                 SessionInspectProtocol.SerializeRequest(new SessionInspectRequest
