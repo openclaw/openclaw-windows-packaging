@@ -47,6 +47,14 @@ media. It refuses to overwrite an existing answer file.
 
 ## Prepare the private copy
 
+Copy/hash, first boot and readiness are separate phases; they can be quiet.
+The [timing reference](../../../docs/crabbox-timings.md)
+distinguishes measured native lease/warm checks from the 38m 47s nested
+qualification with extra security cases. Individual copy/OOBE durations were
+not retained. The default 25-minute readiness budget starts after VM start;
+it is **not** a template-command estimate or total limit. Do not reboot or
+retry an active owner just because no output appears.
+
 Run the [template helper](scripts/Initialize-CrabboxHypervWindowsTemplate.ps1)
 from the repository root, first with `-WhatIf`:
 

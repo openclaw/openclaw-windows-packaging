@@ -59,6 +59,10 @@ acquiring a VM; `sync.exclude` appends to inherited exclusions.
 
 ## Preview, then run
 
+Budget one-time image preparation separately from each new lease and warm job.
+See [measured time scales and progress](crabbox-timings.md) for the retained
+samples, unmeasured phases, timeout boundaries and quiet-phase guidance.
+
 These commands do not acquire a VM:
 
 ```powershell

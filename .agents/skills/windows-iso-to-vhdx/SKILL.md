@@ -41,6 +41,13 @@ metadata, not its download history. Do not demand a source URL or checksum.
 
 ## Convert
 
+Plan for multi-phase I/O, not an immediate launch. The
+[timing reference](../../../docs/crabbox-timings.md)
+records a 38m 47s nested qualification that included ISO transfer, conversion
+and extra template/security cases; it is **not a conversion-only estimate**.
+No separate converter duration was retained. DISM, disk growth and antivirus
+can be quiet; wait for the verified result, not a console heartbeat.
+
 Use [New-WindowsIsoVhdx.ps1](scripts/New-WindowsIsoVhdx.ps1), whose
 [module](scripts/WindowsIsoVhdx.psm1) and
 [helpers](scripts/WindowsIsoVhdx.Helpers.ps1) own image selection and GPT layout:

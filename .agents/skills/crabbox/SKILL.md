@@ -45,6 +45,12 @@ prerequisites. Discovery is guidance, not permission to provision a VM.
 
 ## Run and reuse
 
+Use the [timing reference](../../../docs/crabbox-timings.md)
+to budget work: one observed native acquisition took 7m 42s; explicit warm
+transport checks took 57s/81s, excluding acquisition and separate stop. Those
+are samples, not promises or .NET/build timings. Reuse avoids VM creation,
+not the configured sync or tool checks; do not treat a timeout as an estimate.
+
 - `transport-smoke` runs the existing Node test entry. Crabbox bootstraps
   Node/npm; this job does not qualify .NET, PowerShell, or package behavior.
 - `quality` uses the canonical PowerShell quality script; `tests` runs the
