@@ -690,6 +690,17 @@ function New-LocalPackageLayout {
         Copy-Item -LiteralPath $asset.FullName -Destination $LayoutDirectory -Recurse -Force
     }
 
+    $startupFiles = @(
+        & (Join-Path $PSScriptRoot 'Get-PayloadStartupFiles.ps1') `
+            -ApplicationDirectory $applicationTarget
+    )
+    $payloadMetadata = Join-Path $LayoutDirectory 'payload'
+    New-Item -Path $payloadMetadata -ItemType Directory -Force | Out-Null
+    Write-LocalPackageRecord (Join-Path $payloadMetadata 'startup-files.json') ([ordered]@{
+        schemaVersion = 1
+        files = $startupFiles
+    })
+
     return $manifestPath
 }
 
@@ -757,7 +768,10 @@ function Get-LocalPackageSourceInventory {
             }
         }
     }
-    $buildFiles =     foreach ($name in @('Directory.Build.props', 'Directory.Packages.props', 'global.json')) {
+    $buildFiles = foreach ($name in @(
+        'Directory.Build.props', 'Directory.Packages.props', 'global.json',
+        'scripts\LocalPackage.psm1', 'scripts\Get-PayloadStartupFiles.ps1'
+    )) {
         $path = Join-Path $RepositoryRoot $name
         if (Test-Path -LiteralPath $path -PathType Leaf) {
             "$name`:$((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash)"
@@ -787,6 +801,7 @@ function Test-LocalPackageLayout {
         'mxc-runtime.json',
         'mxc-LICENSE.md',
         'node\native-redirect.mjs'
+        'payload\startup-files.json'
     )) {
         if (-not (Test-Path -LiteralPath (Join-Path $LayoutDirectory $relative) -PathType Leaf)) {
             return $false

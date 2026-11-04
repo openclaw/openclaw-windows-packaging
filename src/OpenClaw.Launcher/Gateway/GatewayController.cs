@@ -50,10 +50,12 @@ internal sealed record GatewayStartResult(
     GatewayState State,
     GatewayRecord Record,
     bool AlreadyRunning,
-    string Message);
+    string Message,
+    bool Created = false);
 
 internal sealed record GatewayStopResult(
-    bool Stopped, string Message, string? Detail = null, bool Succeeded = true);
+    bool Stopped, string Message, string? Detail = null, bool Succeeded = true,
+    string? AttemptId = null, string? Refusal = null);
 
 internal sealed record GatewayRestartResult(
     GatewayStopResult Stop,
@@ -153,7 +155,7 @@ internal sealed class GatewayController
                     state.Detail);
         }
 
-        if (state.Record.LaunchPending)
+        if (state.Record.LaunchPending && state.Record.AttemptId is null)
         {
             return new GatewayStatusReport(GatewayState.Unknown, state.Record,
                 "A previous gateway launch has not been confirmed.",
@@ -232,14 +234,16 @@ internal sealed class GatewayController
         string helperPath,
         CancellationToken cancellationToken,
         IProgress<GatewayStartProgress>? progress = null,
-        Action<GatewayStartResult>? onRunningUnderLock = null)
+        Action<GatewayStartResult>? onRunningUnderLock = null,
+        string? attemptId = null)
     {
         using ISessionLockHandle handle = AcquireLock();
         return await StartWithLockAlreadyHeldAsync(
             helperPath,
             cancellationToken,
             progress,
-            onRunningUnderLock).ConfigureAwait(false);
+            onRunningUnderLock,
+            attemptId).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -251,12 +255,14 @@ internal sealed class GatewayController
         string helperPath,
         CancellationToken cancellationToken,
         IProgress<GatewayStartProgress>? progress = null,
-        Action<GatewayStartResult>? onRunningUnderLock = null)
+        Action<GatewayStartResult>? onRunningUnderLock = null,
+        string? attemptId = null)
     {
         GatewayStartResult result = await StartUnderLockAsync(
             helperPath,
             cancellationToken,
-            progress)
+            progress,
+            attemptId: attemptId)
             .ConfigureAwait(false);
         if (result.State == GatewayState.Running || result.AlreadyRunning)
         {
@@ -270,8 +276,13 @@ internal sealed class GatewayController
         string helperPath,
         CancellationToken cancellationToken,
         IProgress<GatewayStartProgress>? progress,
-        bool? autostartDisabledOverride = null)
+        bool? autostartDisabledOverride = null,
+        string? attemptId = null)
     {
+        if (attemptId is not null && !GatewayLaunchAttempt.IsValid(attemptId))
+        {
+            throw new ArgumentException("The launch attempt must be a nonempty lowercase GUID in N format.", nameof(attemptId));
+        }
         SessionRecord configured = _requireSetup();
         GatewayStateResult existing = _store.Read();
         if (existing.Record is null && existing.Fault != GatewayStateFault.Missing)
@@ -283,7 +294,7 @@ internal sealed class GatewayController
         {
             throw new SessionException("The gateway record belongs to a different session.");
         }
-        if (existing.Record?.LaunchPending == true)
+        if (existing.Record is { LaunchPending: true, AttemptId: null })
         {
             throw new SessionException(
                 "A previous gateway launch was not confirmed. The launch intent was retained; " +
@@ -309,19 +320,21 @@ internal sealed class GatewayController
                 helperPath,
                 cancellationToken).ConfigureAwait(false);
 
-            if (Describe(existing.Record, inspection).State == GatewayState.Running)
+            GatewayStatusReport retained = Describe(existing.Record, inspection);
+            if (retained.State is GatewayState.Running or GatewayState.Starting ||
+                (existing.Record.LaunchPending && retained.State != GatewayState.Stopped) ||
+                (existing.Record.AttemptId == attemptId && attemptId is not null))
             {
-                GatewayRecord confirmedRecord = existing.Record;
-                _log("The gateway is already running.");
+                _log($"Adopting the recorded gateway launch: {retained.State}.");
                 Report(
                     progress,
                     GatewayStartStage.AlreadyRunning,
-                    "The gateway is already running.");
+                    retained.Message);
                 return new GatewayStartResult(
-                    GatewayState.Running,
-                    confirmedRecord,
-                    AlreadyRunning: true,
-                    "The gateway is already running.");
+                    retained.State,
+                    retained.Record!,
+                    AlreadyRunning: retained.State == GatewayState.Running,
+                    retained.Message);
             }
 
             if (inspection.Error is not null)
@@ -356,22 +369,39 @@ internal sealed class GatewayController
         }
 
         GatewayStartRequest request = await _startRequestFactory(cancellationToken).ConfigureAwait(false);
-        _store.Write(new GatewayRecord
+        request = request with { AttemptId = attemptId ?? request.AttemptId };
+        var pending = new GatewayRecord
         {
             SandboxId = session.SandboxId,
             LaunchPending = true,
+            AttemptId = request.AttemptId,
+            HelperPath = SessionHelperStager.ResolveStagedPath(session.WorkspacePath!),
             Port = request.Port,
             ProcessStartTimeUtc = _clock.GetUtcNow(),
-            StartedUtc = _clock.GetUtcNow()
-        });
+            StartedUtc = _clock.GetUtcNow(),
+            AutostartDisabled = autostartDisabledOverride ?? existing.Record?.AutostartDisabled ?? false
+        };
+        _store.Write(pending);
         Report(progress, GatewayStartStage.Launching, "Launching the gateway.");
-        GatewayStartOutcome started = await _client
-            .StartAsync(session, request, cancellationToken)
-            .ConfigureAwait(false);
+        GatewayStartOutcome started;
+        try
+        {
+            started = await _client.StartAsync(session, request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (
+            exception is SessionException or SessionLaunchException or Mxc.MxcException or IOException or UnauthorizedAccessException)
+        {
+            _log($"Gateway launch acknowledgement unavailable: {DiagnosticFailure.Describe(exception)}");
+            return new GatewayStartResult(GatewayState.Unknown, pending, AlreadyRunning: false,
+                "The gateway launch could not be confirmed; its attempt was retained. " +
+                $"Run `clawctl gateway-service status` before taking further action. {exception.Message}",
+                Created: true);
+        }
 
         var record = new GatewayRecord
         {
             SandboxId = session.SandboxId,
+            AttemptId = request.AttemptId,
             ProcessId = started.ProcessId,
             ProcessStartTimeUtc = started.ProcessStartTimeUtc,
             HelperPath = started.HelperPath,
@@ -423,7 +453,8 @@ internal sealed class GatewayController
                 GatewayState.Unknown => $"The gateway launch could not be verified: {observed.Error}",
                 GatewayState.Unhealthy => DescribeUnhealthy(record, observed),
                 _ => DescribeExitedDuringStartup(record, observed)
-            });
+            },
+            Created: true);
 
         // Every start path funnels through here: `gateway-service start` and
         // `restart`, and the automatic start after `openclaw`. Logging the
@@ -544,10 +575,31 @@ internal sealed class GatewayController
     /// </summary>
     public async Task<GatewayStopResult> StopAsync(
         string helperPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? ifAttemptId = null)
     {
+        if (ifAttemptId is not null && !GatewayLaunchAttempt.IsValid(ifAttemptId))
+        {
+            throw new ArgumentException("The launch attempt must be a nonempty lowercase GUID in N format.", nameof(ifAttemptId));
+        }
         using ISessionLockHandle handle = AcquireLock();
-        return await StopUnderLockAsync(helperPath, cancellationToken).ConfigureAwait(false);
+        if (ifAttemptId is not null)
+        {
+            GatewayStateResult current = _store.Read();
+            if (current.Record?.AttemptId != ifAttemptId)
+            {
+                return new GatewayStopResult(false,
+                    "The gateway launch attempt no longer matches; nothing was stopped.",
+                    current.Detail, Succeeded: false,
+                    AttemptId: ifAttemptId, Refusal: "attempt-mismatch");
+            }
+        }
+        GatewayStopResult result = await StopUnderLockAsync(helperPath, cancellationToken).ConfigureAwait(false);
+        return result with
+        {
+            AttemptId = ifAttemptId,
+            Refusal = ifAttemptId is not null && !result.Succeeded ? "ownership-unverified" : null
+        };
     }
 
     internal async Task<GatewayStopResult> StopUnderLockAsync(
@@ -558,7 +610,8 @@ internal sealed class GatewayController
         bool allowUnavailableInspection = false)
     {
         GatewayStateResult state = _store.Read();
-        if (state.Record?.LaunchPending == true)
+        if (state.Record is { LaunchPending: true, AttemptId: null } ||
+            state.Record?.LaunchPending == true && allowUnconfirmedLaunch)
         {
             if (allowUnconfirmedLaunch)
             {
@@ -634,9 +687,19 @@ internal sealed class GatewayController
                 "removed.");
         }
 
-        SessionInspectResult stopped = await _client
-            .StopAsync(session.Record, state.Record, helperPath, cancellationToken)
-            .ConfigureAwait(false);
+        SessionInspectResult stopped;
+        try
+        {
+            stopped = await _client.StopAsync(session.Record, state.Record, helperPath, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (
+            exception is SessionException or SessionLaunchException or Mxc.MxcException or IOException or UnauthorizedAccessException)
+        {
+            _log($"Gateway stop acknowledgement unavailable: {DiagnosticFailure.Describe(exception)}");
+            return new GatewayStopResult(false,
+                "The gateway stop could not be confirmed; its record was retained.",
+                exception.Message, Succeeded: false);
+        }
 
         if (stopped.Error is not null || (stopped.ProcessFound && stopped.StartTimeMatches))
         {
@@ -665,7 +728,7 @@ internal sealed class GatewayController
         }
 
         catch (Exception exception) when (
-            exception is SessionException or Mxc.MxcException or IOException or UnauthorizedAccessException)
+            exception is SessionException or SessionLaunchException or Mxc.MxcException or IOException or UnauthorizedAccessException)
         {
             _log($"Gateway inspection failed: {DiagnosticFailure.Describe(exception)}");
             return new SessionInspectResult { Error = exception.Message };

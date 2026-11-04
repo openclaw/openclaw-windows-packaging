@@ -91,7 +91,9 @@ internal static partial class SmokeProgram
             ("first agent launch provisions and forwards arguments", FirstAgentLaunchProvisionsAsync),
             ("prepared agent launch has no setup narration", PreparedAgentLaunchIsQuietAsync),
             ("automatic setup opt-out preserves missing-setup failure", AutomaticSetupOptOutPreservesFailureAsync),
-            ("gateway-start opt-out writes the gateway hint to stderr", GatewayStartOptOutWritesHintAsync)
+            ("gateway-start opt-out writes the gateway hint to stderr", GatewayStartOptOutWritesHintAsync),
+            // Last: it moves this driver into background scheduling for the rest of its life.
+            ("payload prewarm background mode and list survive NativeAOT", PayloadPrewarmWorks)
         ];
 
         if (args is ["--runtime-image-preflight-only"])
@@ -168,6 +170,46 @@ internal static partial class SmokeProgram
                 !output.Contains("fixture-secret", StringComparison.Ordinal),
                 "The plain helper fallback lost its path or kept a credential under NativeAOT.");
         }
+        return Task.CompletedTask;
+    }
+
+    private static Task PayloadPrewarmWorks()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"clawctl-aot-prewarm-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(directory, "app", "dist"));
+        try
+        {
+            File.WriteAllText(Path.Combine(directory, "app", "dist", "entry.js"), "fixture");
+            string listPath = OpenClaw.Launcher.PayloadPrewarm.GetListPath(directory);
+            Directory.CreateDirectory(Path.GetDirectoryName(listPath)!);
+            File.WriteAllText(listPath, """{"schemaVersion":1,"files":["dist/entry.js","../escape.js"]}""");
+            var log = new List<string>();
+
+            OpenClaw.Launcher.PayloadPrewarmResult result = OpenClaw.Launcher.PayloadPrewarm.RunRegisteredPass(
+                new NamedSessionLock(directory),
+                () => { },
+                Guid.NewGuid().ToString("N"),
+                isCancellationRequested => OpenClaw.Launcher.PayloadPrewarm.RunPass(
+                    OpenClaw.Launcher.PayloadPrewarmNative.TryEnterBackgroundMode,
+                    listPath,
+                    Path.Combine(directory, "app"),
+                    OpenClaw.Launcher.PayloadPrewarmLimits.Default,
+                    TimeProvider.System,
+                    log.Add,
+                    CancellationToken.None,
+                    isCancellationRequested));
+
+            Assert(result.Outcome == OpenClaw.Launcher.PayloadPrewarmOutcome.Completed &&
+                result.FilesRead == 1 &&
+                result.FilesSkipped == 1 &&
+                log.Count == 1,
+                $"The prewarm did not enter background mode or bind its list under NativeAOT: {string.Join(" | ", log)}");
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+
         return Task.CompletedTask;
     }
 
@@ -670,6 +712,17 @@ internal static partial class SmokeProgram
 
     private static async Task JsonFailureIsStructuredAsync()
     {
+        foreach (string action in new[] { "start", "stop" })
+        {
+            using Fixture fixture = Fixture.CreateWithoutApplication();
+            int exitCode = await fixture.RunAsync(
+                ["gateway-service", action, action == "start" ? "--attempt-id" : "--if-attempt-id", "invalid", "--json"])
+                .ConfigureAwait(false);
+            AssertExitCode(1, exitCode, fixture);
+            Assert((fixture.Output.ToString() + fixture.Error.ToString())
+                .Contains("lowercase GUID", StringComparison.Ordinal),
+                "The native attempt option did not reject malformed correlation data.");
+        }
         foreach (string command in new[] { "setup", "status" })
         {
             using Fixture fixture = Fixture.CreateWithoutApplication();
@@ -832,6 +885,7 @@ internal static partial class SmokeProgram
 
     private static Task PendingGatewayJsonIsStructured()
     {
+        const string attemptId = "1234567890abcdef1234567890abcdef";
         foreach (string action in new[] { "start", "restart", "status" })
         {
             using var output = new StringWriter();
@@ -840,12 +894,18 @@ internal static partial class SmokeProgram
                 GatewayState.Starting,
                 "The supervised gateway launch was accepted.",
                 null,
-                0));
+                0,
+                Launch: new GatewayLaunchReceipt(attemptId, action == "status" ? null : "created")));
             using JsonDocument document = JsonDocument.Parse(output.ToString());
             JsonElement root = document.RootElement;
             JsonElement gateway = root.GetProperty("gateway");
             Assert(root.GetProperty("ok").GetBoolean(), "An accepted launch was reported as failed.");
             Assert(root.GetProperty("schemaVersion").GetInt32() == 1, "The JSON schema version changed.");
+            Assert(root.GetProperty("integration").GetProperty("gatewayLaunch").GetProperty("version").GetInt32() == 1,
+                "The launch-attempt capability was trimmed.");
+            Assert(gateway.GetProperty("launch").GetProperty("attemptId").GetString() == attemptId &&
+                gateway.GetProperty("launch").GetProperty("version").GetInt32() == 1,
+                "The durable launch receipt was trimmed.");
             Assert(root.GetProperty("command").GetString() == $"gateway-service {action}",
                 "The accepted launch lost its command identity.");
             Assert(gateway.GetProperty("state").GetString() == "starting",
@@ -862,7 +922,7 @@ internal static partial class SmokeProgram
             new SessionStatus(SessionAvailability.Running, null, null, null),
             new GatewayStatusReport(
                 GatewayState.Starting,
-                new GatewayRecord { Port = 18789 },
+                new GatewayRecord { Port = 18789, AttemptId = attemptId },
                 "The supervised gateway launch is still starting."),
             new GatewayPersistenceStatus(
                 GatewayPersistenceState.Ready,
@@ -878,6 +938,28 @@ internal static partial class SmokeProgram
         Assert(!statusGateway.TryGetProperty("port", out _) &&
             !statusGateway.TryGetProperty("ownership", out _),
             "Overall status exposed a configured port or ownership as readiness.");
+        Assert(statusGateway.GetProperty("launch").GetProperty("attemptId").GetString() == attemptId,
+            "Overall status lost the attempt correlation.");
+
+        using var refusedOutput = new StringWriter();
+        ClawCtlJson.WriteResult(refusedOutput, new GatewayCommandResult(
+            "stop", GatewayState.Unknown, "Launch replaced.", null, 1,
+            Launch: new GatewayLaunchReceipt(attemptId, StopOutcome: "refused", Refusal: "attempt-mismatch")));
+        using JsonDocument refusal = JsonDocument.Parse(refusedOutput.ToString());
+        Assert(!refusal.RootElement.GetProperty("ok").GetBoolean() &&
+            refusal.RootElement.GetProperty("error").GetProperty("type").GetString() == "launch_ownership_refused" &&
+            refusal.RootElement.GetProperty("gateway").GetProperty("launch").GetProperty("stopOutcome").GetString() == "refused",
+            "Conditional stop lost its refusal contract.");
+
+        var supervisor = new SessionSupervisorStatus
+        {
+            RequestId = attemptId,
+            ProcessId = 123,
+            ProcessStartTimeUtc = DateTimeOffset.UnixEpoch,
+            HelperPath = @"C:\fixture\helper.exe"
+        };
+        Assert(SessionInspectProtocol.ReadStatus(SessionInspectProtocol.SerializeStatus(supervisor)) == supervisor,
+            "The supervisor launch receipt did not round-trip.");
         return Task.CompletedTask;
     }
 
