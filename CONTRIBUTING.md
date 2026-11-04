@@ -67,6 +67,7 @@ or package version logic:
 
 ```powershell
 .\scripts\Test-SigningInputs.Tests.ps1
+.\scripts\Test-PayloadStartupFiles.Tests.ps1
 .\scripts\Test-NodeRuntimeInputs.Tests.ps1
 .\scripts\Test-PackagingRelevance.Tests.ps1
 .\scripts\Test-OpenClawCacheKey.Tests.ps1

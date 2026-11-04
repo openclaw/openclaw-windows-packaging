@@ -14,6 +14,7 @@ internal sealed record ClawCtlHandlers
     public required Func<string?, CancellationToken, Task<int>> CollectLogs { get; init; }
     public required Func<bool, CancellationToken, Task<int>> Teardown { get; init; }
     public Func<CancellationToken, Task<int>> Open { get; init; } = _ => Task.FromResult(1);
+    public Func<CancellationToken, Task<int>> PayloadPrewarm { get; init; } = _ => Task.FromResult(0);
     public Func<CompletionOptions, CancellationToken, Task<int>> Completion { get; init; } = (_, _) => Task.FromResult(1);
     public required Func<PowerShellOptions, CancellationToken, Task<int>> PowerShell { get; init; }
     public required Func<GatewayStartOptions, CancellationToken, Task<int>> GatewayStart { get; init; }
@@ -408,6 +409,15 @@ internal static partial class ClawCtlCommandLine
         });
         companion.Subcommands.Add(companionPrepare);
 
+        // Started detached by setup; not a user-facing command.
+        Command payloadPrewarm = new(
+            OpenClaw.Launcher.PayloadPrewarm.CommandName,
+            "Read the packaged startup files once at background priority.")
+        {
+            Hidden = true
+        };
+        payloadPrewarm.SetAction((_, token) => handlers.PayloadPrewarm(token));
+
         RootCommand root = new(RootDescription)
         {
             setup,
@@ -418,7 +428,8 @@ internal static partial class ClawCtlCommandLine
             completion,
             powerShell,
             gateway,
-            companion
+            companion,
+            payloadPrewarm
         };
         root.Options.Add(rootJson);
         root.Options.Add(noColor);

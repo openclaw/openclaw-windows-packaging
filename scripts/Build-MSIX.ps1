@@ -533,6 +533,30 @@ $payloadInventoryPath = Join-Path $openClawContent 'payload-files.json'
     ConvertTo-Json -Depth 4 |
     Set-Content -LiteralPath $payloadInventoryPath -Encoding utf8
 
+# The startup list is a best-effort setup prewarm hint; every path must still
+# be a member of the verified payload inventory.
+$startupFiles = @(
+    & (Join-Path $PSScriptRoot 'Get-PayloadStartupFiles.ps1') `
+        -ApplicationDirectory $applicationTarget
+)
+$payloadPaths = [Collections.Generic.HashSet[string]]::new(
+    [string[]]@($payloadFiles | ForEach-Object { $_.path }),
+    [StringComparer]::Ordinal
+)
+foreach ($startupFile in $startupFiles) {
+    if (-not $payloadPaths.Contains($startupFile)) {
+        throw "The startup file list names a path outside the payload inventory: $startupFile"
+    }
+}
+$startupFilesPath = Join-Path $openClawContent 'startup-files.json'
+[ordered]@{
+    schemaVersion = 1
+    files = $startupFiles
+} |
+    ConvertTo-Json -Depth 2 |
+    Set-Content -LiteralPath $startupFilesPath -Encoding utf8
+Write-Host "Listed $($startupFiles.Count) startup payload files for setup prewarm."
+
 $mxcRuntimeDirectory = Join-Path $repositoryRoot "content\mxc\$Architecture"
 $mxcRuntime = & (Join-Path $PSScriptRoot 'Get-MxcSdkMetadata.ps1') `
     -Architecture $Architecture `
@@ -739,6 +763,16 @@ try {
             Hash = (
                 Get-FileHash `
                     -LiteralPath $payloadInventoryPath `
+                    -Algorithm SHA256
+            ).Hash.ToLowerInvariant()
+        }
+    )
+    $expectedPackageFiles.Add(
+        'payload/startup-files.json',
+        [pscustomobject]@{
+            Hash = (
+                Get-FileHash `
+                    -LiteralPath $startupFilesPath `
                     -Algorithm SHA256
             ).Hash.ToLowerInvariant()
         }

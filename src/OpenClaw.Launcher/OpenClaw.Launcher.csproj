@@ -170,6 +170,9 @@
     <Content Include="$(MSBuildThisFileDirectory)..\..\content\openclaw\payload-files.json"
              Link="payload\payload-files.json"
              CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(MSBuildThisFileDirectory)..\..\content\openclaw\startup-files.json"
+             Link="payload\startup-files.json"
+             CopyToOutputDirectory="PreserveNewest" />
     <Content Include="$(MSBuildThisFileDirectory)..\..\content\openclaw\runtime\$(NodeRuntimeArchiveFileName)"
              Condition="'$(NodeRuntimeArchiveFileName)' != ''"
              Link="runtime\%(Filename)%(Extension)"
@@ -194,6 +197,8 @@
            Text="Missing expanded OpenClaw application content." />
     <Error Condition="!Exists('$(MSBuildThisFileDirectory)..\..\content\openclaw\payload-files.json')"
            Text="Missing content\openclaw\payload-files.json." />
+    <Error Condition="!Exists('$(MSBuildThisFileDirectory)..\..\content\openclaw\startup-files.json')"
+           Text="Missing content\openclaw\startup-files.json." />
     <Error Condition="'$(NodeRuntimeArchiveFileName)' == '' Or !Exists('$(MSBuildThisFileDirectory)..\..\content\openclaw\runtime\$(NodeRuntimeArchiveFileName)')"
            Text="Missing architecture-specific bundled Node.js archive." />
     <Error Condition="'$(MxcRuntimeArchitecture)' == ''"

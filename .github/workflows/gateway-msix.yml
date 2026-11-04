@@ -237,6 +237,11 @@ jobs:
         run: >
           .\scripts\Test-SigningInputs.Tests.ps1
 
+      - name: Test payload startup file list
+        shell: pwsh
+        run: >
+          .\scripts\Test-PayloadStartupFiles.Tests.ps1
+
       - name: Test MSIX test signing
         shell: pwsh
         run: >

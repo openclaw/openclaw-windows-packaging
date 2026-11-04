@@ -146,6 +146,7 @@ public sealed class ClawCtlCommandLineTests
                 "pwsh",
                 "gateway-service",
                 "companion",
+                PayloadPrewarm.CommandName,
                 "backup",
                 "restore",
                 "recover"
