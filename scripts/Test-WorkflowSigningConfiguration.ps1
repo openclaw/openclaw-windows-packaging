@@ -47,7 +47,7 @@ foreach ($route in @('trusted', 'read-only')) {
         }
     }
 }
-foreach ($previewChannel in @('alpha', 'beta')) {
+foreach ($previewChannel in @('beta')) {
     $previewOutputs = $outputs | ConvertTo-Json | ConvertFrom-Json
     $previewOutputs.package_version = "2026.9.8-$previewChannel.1"
     $previewOutputs.source_tag = "v$($previewOutputs.package_version)"
@@ -319,7 +319,7 @@ Assert-WorkflowClassification `
     -EventName push `
     -SigningMode unsigned `
     -ExpectedVersioning $false
-foreach ($previewChannel in @('alpha', 'beta')) {
+foreach ($previewChannel in @('beta')) {
     Assert-WorkflowClassification -EventName workflow_dispatch -SigningMode official -ExpectedVersioning $true -ReleaseChannel $previewChannel
 }
 Write-Host 'Workflow dispatch classification contracts passed.'

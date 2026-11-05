@@ -111,7 +111,18 @@ function Save-Policy {
 New-Item -ItemType Directory -Path $testRoot | Out-Null
 try {
     $env:GH_TOKEN = 'offline-test-token'
-    foreach ($previewChannel in @('alpha', 'beta')) {
+    Invoke-Test 'alpha is rejected before source lookup or snapshot creation' {
+        Assert-Throws { & $workflowPath @workflow -ReleaseChannel alpha } 'ValidateSet|does not belong'
+        $policy.channel = 'alpha'
+        Assert-Throws { Resolve-OpenClawSource -Policy $policy } 'stable or beta'
+        Assert-Throws {
+            Get-OpenClawBuildRoute -WorkflowRef $workflow.WorkflowRef -GitHubRef $workflow.GitHubRef `
+                -EventName $workflow.EventName -SigningMode official -Channel alpha
+        } 'channel is unsupported'
+        Assert-Equal $http.Calls.Count 0
+        Assert-Equal (Test-Path $workflow.OutputPath) $false
+    }
+    foreach ($previewChannel in @('beta')) {
         foreach ($mode in @('unsigned', 'test', 'official')) {
             Invoke-Test "$previewChannel $mode resolves and replays immutable preview provenance" {
                 $previewVersion = "2026.9.5-$previewChannel.12"
@@ -148,10 +159,10 @@ try {
             } 'does not match the captured GatewayVersion'
             Assert-Equal $http.Calls.Count 0
         }
-        Invoke-Test "$previewChannel cannot silently select stable or the other preview channel" {
+        Invoke-Test "$previewChannel cannot silently select stable or an unsupported preview channel" {
             $http.Responses["Registry:$previewChannel"] = [pscustomobject]@{ name = 'openclaw'; version = $version }
             Assert-Throws { & $workflowPath @workflow -ReleaseChannel $previewChannel } 'packageVersion'
-            $otherChannel = if ($previewChannel -eq 'alpha') { 'beta' } else { 'alpha' }
+            $otherChannel = 'alpha'
             $http.Responses["Registry:$previewChannel"].version = "2026.9.5-$otherChannel.1"
             Assert-Throws { & $workflowPath @workflow -ReleaseChannel $previewChannel } 'packageVersion'
             Assert-Throws { & $workflowPath @workflow -ReleaseChannel $previewChannel -GatewayVersion '2026.9.5-rc.1' } 'packageVersion'

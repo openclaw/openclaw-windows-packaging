@@ -489,7 +489,7 @@ commit, and the source package version before building. A missing or invalid tag
 signature stops source selection; commit signatures are not required.
 Official publication uses the same selected channel and validates its recorded
 commit and version before signing. There is no automatic fallback to another
-version or channel. Extended-stable is rejected; alpha and beta require an
+version or channel. Extended-stable is rejected; beta requires an
 explicit prerelease channel selection.
 Source selection also checks the MSIX release-version rules before building:
 numeric correction suffixes must be `-2` through `-9`. Unsupported corrections
@@ -524,12 +524,12 @@ older than the release-identity source. Unsigned runs reject combining it with
 `openclaw_ref`; test, Store, and official runs preserve a full-SHA
 `openclaw_ref` as an assertion that the version resolved to the intended commit.
 
-For a GitHub prerelease, manually select `release_channel=alpha` or `beta`.
+For a GitHub prerelease, manually select `release_channel=beta`.
 An empty `gateway_version` resolves that public npm dist-tag; an exact
 matching preview version selects both payload and release identity. Stable
 compatibility pins do not apply. Previews use the existing sideload identity,
 are marked **Pre-release**, never become **Latest**, and produce no Store
-submission. See [prerelease dispatch and upgrade rules](docs/release-process.md#publish-an-alpha-or-beta-github-prerelease).
+submission. See [prerelease dispatch and upgrade rules](docs/release-process.md#publish-a-beta-github-prerelease).
 
 If compatibility requires an older known-good stable release, a reviewed
 `stableVersion` field in `release-policy.json` can pin its exact version, for

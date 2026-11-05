@@ -32,7 +32,7 @@ param(
 
     [string]$GatewayVersion = '',
 
-    [ValidateSet('stable', 'alpha', 'beta')]
+    [ValidateSet('stable', 'beta')]
     [string]$ReleaseChannel = 'stable',
 
     [ValidateSet('Store', 'Sideload')]

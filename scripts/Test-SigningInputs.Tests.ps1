@@ -1156,7 +1156,7 @@ try {
             Invoke-PolicyValidation -Root $testRoot -PreserveBundle
         }
 
-    foreach ($previewChannel in @('alpha', 'beta')) {
+    foreach ($previewChannel in @('beta')) {
         $previewVersion = "2026.9.8-$previewChannel.2"
         $previewRoot = Join-Path $suiteRoot $previewChannel
         $previewIdentity = & (Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1') `

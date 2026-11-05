@@ -12,7 +12,7 @@ $ErrorActionPreference = 'Stop'
 
 $match = [regex]::Match(
     $GatewayTag.Trim(),
-    '^v(?<year>\d{4})\.(?<month>\d{1,2})\.(?<patch>\d{1,5})(?:-(?:(?<correction>\d+)|(?<channel>alpha|beta)\.(?<sequence>[1-9][0-9]{0,3})))?$'
+    '^v(?<year>\d{4})\.(?<month>\d{1,2})\.(?<patch>\d{1,5})(?:-(?:(?<correction>\d+)|(?<channel>beta)\.(?<sequence>[1-9][0-9]{0,3})))?$'
 )
 if (-not $match.Success) {
     throw (
@@ -63,7 +63,6 @@ if ($match.Groups['channel'].Success) {
     # fourth component is deliberately not a Microsoft Store version.
     $packageBuild = ($patch * 100) - 1
     $previewRevision = ($sequence * 10) + $MSIXRevision
-    if ($channel -eq 'beta') { $previewRevision += 30000 }
     $packageVersion = "$year.$month.$packageBuild.$previewRevision"
 }
 $releaseTag = "$($GatewayTag.Trim())-msix.$MSIXRevision"

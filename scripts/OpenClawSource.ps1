@@ -20,7 +20,7 @@ function Get-OpenClawBuildRoute {
     if ($SigningMode -in @('official', 'store') -and $GitHubRef -cne 'refs/heads/main') {
         throw 'Release publication requires the main workflow ref.'
     }
-    if ($Channel -cnotin @('', 'stable', 'alpha', 'beta')) { throw 'The source channel is unsupported.' }
+    if ($Channel -cnotin @('', 'stable', 'beta')) { throw 'The source channel is unsupported.' }
     if ($GitHubRef -ceq 'refs/heads/main' -and $Channel -ceq 'stable') { return 'trusted' }
     return 'read-only'
 }
@@ -55,7 +55,7 @@ function Assert-OpenClawSourceText {
 }
 
 function Assert-OpenClawSourceVersion {
-    param([AllowNull()][object]$Version, [ValidateSet('stable', 'alpha', 'beta')][string]$Channel = 'stable')
+    param([AllowNull()][object]$Version, [ValidateSet('stable', 'beta')][string]$Channel = 'stable')
 
     # Patch 33+ is extended stable; numeric suffixes are regular stable corrections.
     $suffix = if ($Channel -eq 'stable') { '(?:-[1-9][0-9]*)?' } else { "-$Channel\.[1-9][0-9]*" }
@@ -84,8 +84,8 @@ function Get-OpenClawPolicyRef {
         throw 'The release policy repository must be https://github.com/openclaw/openclaw.'
     }
     $channel = Get-OpenClawSourceField $Policy 'channel' -Optional
-    if ($null -ne $channel -and ($channel -isnot [string] -or $channel -cnotin @('stable', 'alpha', 'beta'))) {
-        throw 'The release policy channel must be stable, alpha, or beta when specified.'
+    if ($null -ne $channel -and ($channel -isnot [string] -or $channel -cnotin @('stable', 'beta'))) {
+        throw 'The release policy channel must be stable or beta when specified.'
     }
     if ($null -eq $channel) { $channel = 'stable' }
     $pinName = if ($channel -eq 'stable') { 'stableVersion' } else { 'prereleaseVersion' }
@@ -187,11 +187,11 @@ function Resolve-OpenClawSource {
         }
         $version = $selection.version
         Assert-OpenClawSourceVersion $version -Channel $policyChannel
-        if ($policyRef -cnotin @('stable', 'alpha', 'beta') -and $version -cne $policyRef) {
+        if ($policyRef -cnotin @('stable', 'beta') -and $version -cne $policyRef) {
             throw 'The registry version does not match the stableVersion pin or prereleaseVersion pin.'
         }
         $manifest = $selection
-        if ($policyRef -cin @('stable', 'alpha', 'beta')) { $manifest = Invoke-OpenClawSourceRequest Registry $version }
+        if ($policyRef -cin @('stable', 'beta')) { $manifest = Invoke-OpenClawSourceRequest Registry $version }
         if ($manifest.name -isnot [string] -or $manifest.name -cne 'openclaw' -or
             $manifest.version -isnot [string] -or $manifest.version -cne $version) {
             throw 'The exact registry manifest does not match the selected package version.'
@@ -293,7 +293,7 @@ function Assert-OpenClawSource {
         if ($values.channel -cne $policyChannel -or $values.requestedRef -cne $policyRef) {
             throw 'The source channel and requestedRef must match the release policy.'
         }
-        if ($policyRef -cnotin @('stable', 'alpha', 'beta') -and $values.packageVersion -cne $policyRef) {
+        if ($policyRef -cnotin @('stable', 'beta') -and $values.packageVersion -cne $policyRef) {
             throw 'The source packageVersion must match the stableVersion pin or prereleaseVersion pin.'
         }
         if ($values.releaseTag -cne "v$($values.packageVersion)") {

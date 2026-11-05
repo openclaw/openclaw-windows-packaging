@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('stable', 'alpha', 'beta')][string]$ReleaseChannel = 'stable',
+    [ValidateSet('stable', 'beta')][string]$ReleaseChannel = 'stable',
 
     [string]$ManifestPath = (
         Join-Path $PSScriptRoot 'msix-upgrade-baselines.json'

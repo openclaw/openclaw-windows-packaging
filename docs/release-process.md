@@ -12,7 +12,7 @@ in the README.
 `release-policy.json` controls source selection and package identity. The default
 follows the latest Gateway stable release; a new upstream release does not need
 a policy update. The following defaults describe stable releases; use the
-[prerelease procedure](#publish-an-alpha-or-beta-github-prerelease) for alpha or beta. Change policy in a reviewed pull request when needed:
+[prerelease procedure](#publish-a-beta-github-prerelease) for beta. Change policy in a reviewed pull request when needed:
 
 | Field | Owner and purpose |
 |---|---|
@@ -57,20 +57,27 @@ bundle and sign the separate sideload-identity packages for GitHub Releases.
 Following stable does not automatically publish: both modes still require a
 manual dispatch from `main`.
 
-## Publish an alpha or beta GitHub prerelease
+## Publish a beta GitHub prerelease
 
 Dispatch **Build OpenClaw Gateway MSIX** from `main` with:
 
 | Input | Value |
 |---|---|
-| `release_channel` | `alpha` or `beta` (`stable` remains the default) |
+| `release_channel` | `beta` (`stable` remains the default) |
 | `signing_mode` | `official` |
 | `publish_release` | `true` |
 | `gateway_version` | Empty to resolve the matching public npm dist-tag, or an exact version such as `2026.9.8-beta.2` |
 | `openclaw_ref` | Empty normally; with an exact version, only its full commit SHA is accepted as an assertion |
 
+The normal beta source is upstream `openclaw@beta`; leave both source inputs
+empty to follow it. For a packaging-only fix, select the same exact beta
+`gateway_version` and increment the reviewed `msixRevision`. This rebuilds
+that beta with the packaging changes without requiring a new upstream beta.
+Publication still requires manual dispatch; upstream beta releases do not
+automatically trigger this workflow yet.
+
 Prerelease selection ignores the stable compatibility pin. The selected version
-must have the matching `-alpha.N` or `-beta.N` suffix, an exact npm manifest,
+must have the `-beta.N` suffix, an exact npm manifest,
 and a GitHub-verified signed annotated upstream Git tag pointing to the same package version. Missing
 channels or tags fail; they never fall back to stable. A ref-only override must
 also carry the selected preview suffix and cannot be newer than the separately
@@ -81,7 +88,7 @@ without resolving npm again.
 The workflow signs the sideload x64, ARM64, and bundle assets through the same
 protected signing environment and pre-credential integrity checks as stable.
 It publishes `<upstream-tag>-msix.<revision>` with `prerelease=true` and
-`make_latest=false`. No moving alpha/beta tag is created. Verify those flags,
+`make_latest=false`. No moving beta tag is created. Verify those flags,
 the permanent tag, and all three signed assets after publication.
 
 These are updates to the existing sideload package family, not side-by-side
@@ -93,11 +100,11 @@ GitHub channel.
 
 Stable numeric versions remain unchanged. Previews use
 `year.month.(releaseSequence*100-1).previewRevision`, where `previewRevision`
-is `N*10+msixRevision` for alpha and `30000+N*10+msixRevision` for beta.
+is `N*10+msixRevision`.
 `N` must be `1..2999`, with no leading zero; `msixRevision` remains `0..9`.
-For example, `v2026.9.8-beta.2-msix.0` is `2026.9.799.30020`, below stable
+For example, `v2026.9.8-beta.2-msix.0` is `2026.9.799.20`, below stable
 `2026.9.800.0` and above all rebuilds of the preceding stable release.
-Alpha precedes beta, and rebuilds precede the next preview number.
+Packaging rebuilds precede the next beta number.
 
 The nonzero fourth component is for sideload distribution only. Prerelease
 runs do not produce or retain Store-identity artifacts, and `signing_mode=store`

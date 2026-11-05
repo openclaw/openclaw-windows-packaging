@@ -386,9 +386,9 @@ bypassable, and required CI checks remain authoritative.
   correction digit `P`, and rebuild digit `N`. Use revision
   `0` for the first MSIX of a Gateway tag and increment only for packaging-only
   rebuilds of that exact tag. Do not assign package versions or release tags by
-  hand. Alpha/beta sideload versions use the preview ordering described in
-  [the release process](docs/release-process.md#publish-an-alpha-or-beta-github-prerelease);
-  verify preceding stable < alpha < beta < matching stable, including rebuilds.
+  hand. Beta sideload versions use the preview ordering described in
+  [the release process](docs/release-process.md#publish-a-beta-github-prerelease);
+  verify preceding stable < beta < matching stable, including rebuilds.
 - Treat published proof releases in `scripts/msix-upgrade-baselines.json` as
   immutable transition fixtures. Keep their release asset names and SHA-256
   digests pinned. The approved Partner Center identity reset must prove every

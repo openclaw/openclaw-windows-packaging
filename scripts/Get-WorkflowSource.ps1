@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory)][string]$OutputPath,
     [string]$Ref = '',
     [string]$GatewayVersion = '',
-    [ValidateSet('stable', 'alpha', 'beta')][string]$ReleaseChannel = 'stable',
+    [ValidateSet('stable', 'beta')][string]$ReleaseChannel = 'stable',
     [ValidateSet('unsigned', 'test', 'store', 'official')][string]$SigningMode = 'unsigned',
     [Parameter(Mandatory)][ValidatePattern('\A[1-9][0-9]*\z')][string]$WorkflowRunId,
     [Parameter(Mandatory)][ValidatePattern('\A[0-9a-fA-F]{40}\z')][string]$PackagingCommit,

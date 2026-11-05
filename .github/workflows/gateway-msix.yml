@@ -8,13 +8,12 @@ on:
   workflow_dispatch:
     inputs:
       release_channel:
-        description: GitHub release channel (alpha/beta are sideload prereleases)
+        description: GitHub release channel (beta is a sideload prerelease)
         required: true
         default: stable
         type: choice
         options:
           - stable
-          - alpha
           - beta
       openclaw_ref:
         description: Optional OpenClaw branch, tag, or full SHA to package; empty follows the selected channel
@@ -22,7 +21,7 @@ on:
         default: ''
         type: string
       gateway_version:
-        description: Optional older stable payload, or exact alpha/beta version for a prerelease
+        description: Optional older stable payload, or exact beta version for a prerelease
         required: false
         default: ''
         type: string

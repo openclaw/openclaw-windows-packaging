@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('stable', 'alpha', 'beta')][string]$ReleaseChannel = 'stable',
+    [ValidateSet('stable', 'beta')][string]$ReleaseChannel = 'stable',
     [Parameter(Mandatory)][bool]$PackagingExpected,
     [Parameter(Mandatory)][AllowEmptyString()][string]$ExpectedRoute,
     [Parameter(Mandatory)][object]$ExpectedSource,
