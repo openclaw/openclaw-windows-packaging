@@ -673,6 +673,22 @@ credential stores, and writes the collecting host's environment into its
 manifest. It also reads every recent gateway launch's output log and supervisor
 status from that workspace. It keeps a bounded tail of each and refuses reparse
 points, because the guest can write there.
+[`HostPackageDiagnostics`](../src/OpenClaw.Launcher/Gateway/HostPackageDiagnostics.cs)
+adds `host/package-diagnostics.json` independently of session reachability:
+collecting-process provenance and the manifest-qualified control alias,
+current-user Gateway/legacy/Companion registration metadata, and ordered
+clean-shell `clawctl` command resolution. It uses absolute inbox Windows
+PowerShell with no profiles, explicit inbox module imports, bounded streams,
+a 15-second deadline, and 32-entry inventory limits. It never invokes a
+discovered command or another `status` probe, which could start the session.
+Its declaration of the integration envelope shares `ClawCtlJson`'s producer;
+it is not evidence that a different package returned a compatible response.
+Exit/parse/launch failures and unavailable sources remain explicit, with no raw
+subprocess output in the ZIP. Structured paths preserve drive/depth, standard
+directory labels, and public package/alias identities while replacing private
+components consistently. Companion's historical selection, response mismatch,
+and active distribution remain unknown to this collector.
+
 [`DiagnosticsRedactor`](../src/OpenClaw.Launcher/Gateway/DiagnosticsRedactor.cs)
 redacts credential-shaped JSON members, URL parameters, environment-style
 assignments, and authorization header credentials in the remaining text, the

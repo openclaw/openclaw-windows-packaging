@@ -42,6 +42,11 @@ internal static partial class SmokeProgram
             "scenarios.")]
     private static async Task<int> Main(string[] args)
     {
+        if (args is ["--package-diagnostics-evidence", string evidenceRoot])
+        {
+            await WritePackageDiagnosticEvidenceAsync(evidenceRoot).ConfigureAwait(false);
+            return 0;
+        }
         if (args is ["--invocation-owner-fixture", string request, string ready, string release, string kind])
         {
             return RunInvocationOwnerFixture(request, ready, release, kind);
@@ -85,6 +90,7 @@ internal static partial class SmokeProgram
             ("MXC SDK loads and validates requests under NativeAOT", MxcSdkWorksInFreshProcessAsync),
             ("package provenance reads survive NativeAOT", PackageProvenanceReadsBind),
             ("diagnostics redaction survives NativeAOT", DiagnosticsRedactionWorks),
+            ("package diagnostics ZIP survives NativeAOT", PackageDiagnosticsAreStructuredAsync),
             ("plain helper failure fallback survives NativeAOT", HelperFailureFallbackWorks),
             ("missing application reports diagnostics", MissingApplicationReportsAsync),
             ("openclaw never parses its arguments", AgentNeverParsesItsArgumentsAsync),
