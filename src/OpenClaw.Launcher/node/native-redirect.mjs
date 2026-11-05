@@ -16,7 +16,7 @@
 import Module from "node:module";
 import { existsSync, realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { join, sep } from "node:path";
+import { dirname, join, sep } from "node:path";
 
 const appRoot = process.env.OPENCLAW_NATIVE_APP_ROOT;
 const stagedRoot = process.env.OPENCLAW_NATIVE_STAGED_ROOT;
@@ -53,6 +53,16 @@ if (appRoot && stagedRoot) {
   }
   const fromPrefixes = roots.map((root) => (join(root, "node_modules") + sep).toLowerCase());
   const to = join(stagedRoot, "node_modules") + sep;
+  const originalPrefix = join(roots.at(-1), "node_modules") + sep;
+  const stagedPrefix = to.toLowerCase();
+
+  // A mirrored package still belongs to the application's dependency tree.
+  // Resolve from its original location before redirecting the selected file,
+  // so hoisted dependencies, exports, and nested versions keep their ancestry.
+  const originalPath = (path) =>
+    typeof path === "string" && path.toLowerCase().startsWith(stagedPrefix)
+      ? originalPrefix + path.slice(to.length)
+      : null;
 
   // The one redirect rule. Every entry point below goes through it.
   const redirect = (resolved) => {
@@ -72,6 +82,14 @@ if (appRoot && stagedRoot) {
   // cross-thread round trip to every resolution in every process.
   Module.registerHooks({
     resolve(specifier, context, nextResolve) {
+      if (context.parentURL?.startsWith("file:")) {
+        const parent = originalPath(fileURLToPath(context.parentURL));
+        if (parent !== null) {
+          const parentURL = new URL(context.parentURL);
+          parentURL.pathname = pathToFileURL(parent).pathname;
+          context = { ...context, parentURL: parentURL.href };
+        }
+      }
       const result = nextResolve(specifier, context);
       if (typeof result.url !== "string" || !result.url.startsWith("file:")) {
         return result;
@@ -95,6 +113,15 @@ if (appRoot && stagedRoot) {
   // harmless: a path the patch already redirected no longer matches the rule.
   const resolveFilename = Module._resolveFilename;
   Module._resolveFilename = function (request, parent, isMain, options) {
+    const filename = originalPath(parent?.filename);
+    if (filename !== null) {
+      // CommonJS's default hook resolver retains its actual parent object;
+      // changing parentURL alone does not change its lookup paths.
+      parent = Object.assign(Object.create(parent), {
+        filename,
+        paths: Module._nodeModulePaths(dirname(filename)),
+      });
+    }
     const resolved = resolveFilename.call(this, request, parent, isMain, options);
     return redirect(resolved) ?? resolved;
   };
