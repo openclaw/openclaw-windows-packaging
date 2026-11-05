@@ -10,6 +10,8 @@ import nested from "nested-pkg";
 import native from "cjs-pkg";
 
 const require = createRequire(import.meta.url);
+const first = await import("./counter.mjs?one#alpha");
+const second = await import("./counter.mjs?two#beta");
 const where = (url) =>
   fileURLToPath(url).startsWith(process.env.FIXTURE_STAGED_ROOT) ? "staged" : "app";
 const errorCode = async (specifier) => {
@@ -22,6 +24,8 @@ const errorCode = async (specifier) => {
 };
 
 export default {
+  sameInstance: first === second,
+  relativeUrls: [first.url, second.url],
   location: where(import.meta.url),
   marked,
   width,

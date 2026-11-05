@@ -459,6 +459,7 @@ including through an application root reached by a junction. Imports from
 staged packages keep hoisted dependencies in the immutable
 application, while relative imports, package exports/imports, nested versions,
 and native dependencies retain their original resolution and redirection.
+Redirected ESM URLs retain query strings and fragments as separate module identities.
 Missing dependencies and invalid package metadata still fail. It also checks
 the preload's `NODE_OPTIONS` entry and its startup failure when
 `module.registerHooks()` is unavailable. The suite creates only temporary

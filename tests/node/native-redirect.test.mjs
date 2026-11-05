@@ -93,6 +93,7 @@ before(() => {
       cpSync(join(probes, `staged-dependencies.${extension}`), join(directory, "dist", `index.${extension}`));
     }
     writeFileSync(join(directory, "dist", "relative.cjs"), `module.exports = { copy: "${copy}" };\n`);
+    writeFileSync(join(directory, "dist", "counter.mjs"), "export const url = import.meta.url;\n");
     if (base === appRoot) {
       writeFileSync(join(directory, "dist", "unstaged.cjs"), 'module.exports = { copy: "app" };\n');
     }
@@ -220,6 +221,16 @@ for (const mode of ["esm", "cjs"]) {
     });
   });
 }
+
+test("relative ESM imports from staged packages preserve query and fragment identity", () => {
+  const { sameInstance, relativeUrls } = dependencyReport("esm");
+  assert.equal(sameInstance, false);
+  assert.deepEqual(relativeUrls.map((url) => {
+    const parsed = new URL(url);
+    assert.ok(fileURLToPath(parsed).startsWith(stagedRoot));
+    return [parsed.search, parsed.hash];
+  }), [["?one", "#alpha"], ["?two", "#beta"]]);
+});
 
 test("the application root matches regardless of case", () => {
   const swapped = [...appRoot]

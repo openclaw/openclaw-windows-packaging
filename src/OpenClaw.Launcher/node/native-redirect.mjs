@@ -101,9 +101,13 @@ if (appRoot && stagedRoot) {
         return result;
       }
       const candidate = redirect(path);
-      return candidate === null
-        ? result
-        : { ...result, url: pathToFileURL(candidate).href, shortCircuit: true };
+      if (candidate === null) return result;
+      const originalURL = new URL(result.url);
+      const redirectedURL = pathToFileURL(candidate);
+      // ESM queries and fragments identify separate module instances.
+      redirectedURL.search = originalURL.search;
+      redirectedURL.hash = originalURL.hash;
+      return { ...result, url: redirectedURL.href, shortCircuit: true };
     },
   });
 
