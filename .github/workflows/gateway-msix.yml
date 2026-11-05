@@ -273,6 +273,7 @@ jobs:
         shell: pwsh
         run: |
           ./scripts/Test-Submit-MicrosoftStore.Tests.ps1
+          ./scripts/Test-StoreFlightSubmission.Tests.ps1
           ./scripts/Test-StoreSubmissionSource.Tests.ps1
 
       - name: Test signing workflow configuration
