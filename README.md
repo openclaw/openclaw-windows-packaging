@@ -481,15 +481,16 @@ update does not remove a running process's runtime.
 
 ## Selecting the OpenClaw revision
 
-`.github\workflows\gateway-msix.yml` selects **stable** whenever a new packaging
+`.github\workflows\gateway-msix.yml` defaults to **stable** when a new packaging
 run starts: the exact `stableVersion` when `release-policy.json` pins one,
 otherwise public npm `openclaw@latest`. The resolver checks the exact
 published version, its GitHub-verified signed annotated upstream tag and target
 commit, and the source package version before building. A missing or invalid tag
 signature stops source selection; commit signatures are not required.
-Official publication uses the same stable selection and validates its recorded
+Official publication uses the same selected channel and validates its recorded
 commit and version before signing. There is no automatic fallback to another
-version or channel; extended-stable and named prereleases are rejected.
+version or channel. Extended-stable is rejected; alpha and beta require an
+explicit prerelease channel selection.
 Source selection also checks the MSIX release-version rules before building:
 numeric correction suffixes must be `-2` through `-9`. Unsupported corrections
 are rejected for channel selection, explicit refs, policy pins, and retries.
@@ -507,12 +508,12 @@ Package and payload metadata record the resolved source commit and version.
 
 For a one-time source override in any signing mode, provide an OpenClaw tag,
 branch, or full commit SHA in the manual `openclaw_ref` input. Empty means follow
-stable. The resolver records the ref's exact commit and package version once;
+the selected channel. The resolver records the ref's exact commit and package version once;
 retries use that immutable snapshot even if a branch later moves.
 Release-candidate modes (`test`, `store`, and `official`) also capture the
-unmodified stable selector as the MSIX and GitHub release identity source, so a
+unmodified channel selector as the MSIX and GitHub release identity source, so a
 hotfix payload does not create a second version owner.
-The override payload version may equal or precede that stable identity, but may
+The override payload version may equal or precede that channel identity, but may
 not be newer.
 For a one-run rollback of the bundled payload in any signing mode, set
 `gateway_version` to an older exact stable release. The payload uses that version,
@@ -522,20 +523,28 @@ captured in the immutable snapshot. The workflow rejects an override that is not
 older than the release-identity source. Unsigned runs reject combining it with
 `openclaw_ref`; test, Store, and official runs preserve a full-SHA
 `openclaw_ref` as an assertion that the version resolved to the intended commit.
+
+For a GitHub prerelease, manually select `release_channel=alpha` or `beta`.
+An empty `gateway_version` resolves that public npm dist-tag; an exact
+matching preview version selects both payload and release identity. Stable
+compatibility pins do not apply. Previews use the existing sideload identity,
+are marked **Pre-release**, never become **Latest**, and produce no Store
+submission. See [prerelease dispatch and upgrade rules](docs/release-process.md#publish-an-alpha-or-beta-github-prerelease).
+
 If compatibility requires an older known-good stable release, a reviewed
 `stableVersion` field in `release-policy.json` can pin its exact version, for
-example `"stableVersion": "2026.9.4"`. That pin applies to all modes until removed;
+example `"stableVersion": "2026.9.4"`. That pin applies to all stable-channel modes until removed;
 it is not automatic fallback.
 
 For `store` and `official`, `openclaw_ref` selects the payload source while the
-reviewed stable policy still owns release identity. Before authorization, the
+selected channel still owns release identity. Before authorization, the
 workflow restores the same run's payload and release-identity snapshot and
-checks its requested ref, workflow run ID, packaging commit, signing mode,
+checks its requested ref, release channel, workflow run ID, packaging commit, signing mode,
 workflow ref, event, and Git ref. Missing or incompatible snapshot context
 requires a new run.
 When `gateway_version` selects the payload instead, `openclaw_ref` may only be a
 full SHA and must match that release. The workflow does not resolve the moving
-branch or stable channel again.
+branch or channel again.
 
 Payload composition validates that the selected OpenClaw runtime discovers and
 activates the packaging-owned Windows Launcher plugin by default, both without
@@ -729,7 +738,7 @@ merged by
 [`openclaw/openclaw#145409`](https://github.com/openclaw/openclaw/pull/145409).
 OpenClaw `v2026.9.5` at `ec9c1a13db8938e5a3eaa51fca2e981cde2395a9`
 includes that forwarding and has been qualified with this default-on plugin.
-All build modes follow the stable-source selection above and validate plugin
+All build modes follow the source selection above and validate plugin
 compatibility during payload composition. Without theme
 forwarding, the page uses the browser or operating system light/dark preference
 with a safe built-in palette.
@@ -829,7 +838,7 @@ never official-signing inputs.
 Normal pull-request and push workflows publish unsigned packages for
 validation. Manual runs support four modes:
 
-- `unsigned` follows stable or an `openclaw_ref` override and publishes unsigned
+- `unsigned` follows the selected channel or an `openclaw_ref` override and publishes unsigned
   MSIX packages;
 - `test` uses the same source-selection rules, derives the release-candidate
   version, and runs the installed-upgrade matrix without release authorization
@@ -858,10 +867,10 @@ key is stored in the repository.
 
 Official releases derive their GitHub tag and four-part numeric MSIX identity
 from the recorded release-identity source and `msixRevision` in
-`release-policy.json`. Normally that source is also the packaged payload. A
+`release-policy.json`. Normally that source is also the packaged payload. For stable releases,
 `openclaw_ref` and `gateway_version` overrides keep the unmodified stable source
 as the release identity and record the selected payload separately. The GitHub tag is
-`<gateway-tag>-msix.<revision>`. The MSIX identity is
+`<gateway-tag>-msix.<revision>`. The stable MSIX identity is
 `year.month.VVPN.0`: `VV` is the two-digit monthly Gateway release sequence,
 `P` is the Gateway correction digit, and `N` is the MSIX rebuild digit. The
 digits are packed numerically into the third component, so leading zeroes are
@@ -904,7 +913,7 @@ contains a signed sideload
 `OpenClawGateway-<version>.msixbundle`, plus
 `OpenClawGateway-<version>-x64.msix` and
 `OpenClawGateway-<version>-arm64.msix` packages for architecture-specific
-deployment. The unsigned Store-identity bundle is retained separately as the
+deployment. For stable releases, the unsigned Store-identity bundle is retained separately as the
 `openclaw-gateway-msix-store-submission` Actions artifact for 90 days; Partner
 Center signs it during ingestion.
 

@@ -36,7 +36,7 @@ if ([string]$metadata.resolvedCommit -cne $normalizedCommit) {
     )
 }
 if ([string]$metadata.packageVersion -cne $ExpectedVersion) {
-    throw 'The OpenClaw package version does not match the resolved stable source.'
+    throw 'The OpenClaw package version does not match the resolved source.'
 }
 
 $actualHash = (

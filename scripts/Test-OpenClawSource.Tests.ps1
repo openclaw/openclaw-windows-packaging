@@ -111,6 +111,71 @@ function Save-Policy {
 New-Item -ItemType Directory -Path $testRoot | Out-Null
 try {
     $env:GH_TOKEN = 'offline-test-token'
+    foreach ($previewChannel in @('alpha', 'beta')) {
+        foreach ($mode in @('unsigned', 'test', 'official')) {
+            Invoke-Test "$previewChannel $mode resolves and replays immutable preview provenance" {
+                $previewVersion = "2026.9.5-$previewChannel.12"
+                Add-Release $previewVersion ('a' * 40) ('b' * 40)
+                $http.Responses["Registry:$previewChannel"] = [pscustomobject]@{ name = 'openclaw'; version = $previewVersion }
+                $source = & $workflowPath @workflow -ReleaseChannel $previewChannel -SigningMode $mode
+                Assert-Equal $source.channel $previewChannel
+                Assert-Equal $source.releaseChannel $previewChannel
+                Assert-Equal $source.buildRoute 'read-only'
+                Assert-Equal $source.releaseTag "v$previewVersion"
+                Assert-Equal $source.resolvedCommit ('a' * 40)
+                Assert-Equal $source.registryIntegrity $integrity
+                Assert-Equal @($http.Calls | Where-Object Key -eq 'Registry:latest').Count 0
+                $http.Responses.Clear()
+                $http.Calls.Clear()
+                $replayed = & $workflowPath @workflow -ReleaseChannel $previewChannel -SigningMode $mode -ReuseSnapshot
+                Assert-Equal $replayed.packageVersion $previewVersion
+                Assert-Throws { & $workflowPath @workflow -SigningMode $mode -ReuseSnapshot } 'packageVersion|channel'
+                Assert-Equal $http.Calls.Count 0
+            }
+        }
+        Invoke-Test "$previewChannel exact version selects both payload and release identity" {
+            $previewVersion = "2026.9.5-$previewChannel.1"
+            Add-Release $previewVersion
+            $source = & $workflowPath @workflow -ReleaseChannel $previewChannel -SigningMode official `
+                -GatewayVersion $previewVersion -Ref $commit
+            Assert-Equal $source.requestedRef $previewVersion
+            Assert-Equal $source.releaseTag "v$previewVersion"
+            Assert-Equal ($null -eq $source.PSObject.Properties['releaseIdentitySource']) $true
+            $http.Calls.Clear()
+            Assert-Throws {
+                & $workflowPath @workflow -ReleaseChannel $previewChannel -SigningMode official `
+                    -GatewayVersion $previewVersion -Ref ('a' * 40) -ReuseSnapshot
+            } 'does not match the captured GatewayVersion'
+            Assert-Equal $http.Calls.Count 0
+        }
+        Invoke-Test "$previewChannel cannot silently select stable or the other preview channel" {
+            $http.Responses["Registry:$previewChannel"] = [pscustomobject]@{ name = 'openclaw'; version = $version }
+            Assert-Throws { & $workflowPath @workflow -ReleaseChannel $previewChannel } 'packageVersion'
+            $otherChannel = if ($previewChannel -eq 'alpha') { 'beta' } else { 'alpha' }
+            $http.Responses["Registry:$previewChannel"].version = "2026.9.5-$otherChannel.1"
+            Assert-Throws { & $workflowPath @workflow -ReleaseChannel $previewChannel } 'packageVersion'
+            Assert-Throws { & $workflowPath @workflow -ReleaseChannel $previewChannel -GatewayVersion '2026.9.5-rc.1' } 'packageVersion'
+            Assert-Throws { & $workflowPath @workflow -ReleaseChannel $previewChannel -SigningMode store } 'not Store'
+            Assert-Equal (Test-Path $workflow.OutputPath) $false
+        }
+        Invoke-Test "$previewChannel ref override records channel identity independently of the stable pin" {
+            $policy | Add-Member stableVersion '2026.9.3'
+            Save-Policy
+            $previewVersion = "2026.9.5-$previewChannel.2"
+            Add-Release $previewVersion ('a' * 40) ('b' * 40)
+            $http.Responses["Registry:$previewChannel"] = [pscustomobject]@{ name = 'openclaw'; version = $previewVersion }
+            $http.Responses['GitHub:commits/preview-fix'] = [pscustomobject]@{ sha = $commit }
+            Set-Package -Version $previewVersion
+            $source = & $workflowPath @workflow -ReleaseChannel $previewChannel -SigningMode official -Ref 'preview-fix'
+            Assert-Equal $source.resolvedCommit $commit
+            Assert-Equal $source.releaseIdentitySource.resolvedCommit ('a' * 40)
+            Assert-Equal $source.releaseIdentitySource.releaseTag "v$previewVersion"
+            Assert-Equal @($http.Calls | Where-Object Key -eq 'Registry:2026.9.3').Count 0
+            $http.Calls.Clear()
+            $null = & $workflowPath @workflow -ReleaseChannel $previewChannel -SigningMode official -Ref 'preview-fix' -ReuseSnapshot
+            Assert-Equal $http.Calls.Count 0
+        }
+    }
     Invoke-Test 'default policy selects npm latest and verifies the exact signed release' {
         Assert-Equal (Get-OpenClawPolicyRef $policy) 'stable'
         $source = Resolve-OpenClawSource $policy

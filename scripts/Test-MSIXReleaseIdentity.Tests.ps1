@@ -126,8 +126,29 @@ if (
     throw 'Derived MSIX versions do not preserve release ordering.'
 }
 
-Assert-Fails -MessagePattern 'stable OpenClaw release tag' -Action {
-    & $scriptPath -GatewayTag 'v2026.9.4-beta.1' -MSIXRevision 0
+Assert-Identity -GatewayTag 'v2026.9.4-alpha.1' -MSIXRevision 0 `
+    -PackageVersion '2026.9.399.10' -ReleaseTag 'v2026.9.4-alpha.1-msix.0'
+Assert-Identity -GatewayTag 'v2026.9.4-beta.12' -MSIXRevision 3 `
+    -PackageVersion '2026.9.399.30123' -ReleaseTag 'v2026.9.4-beta.12-msix.3'
+$previous = [version]'2026.9.399.0' # All rebuilds of the preceding correction.
+foreach ($case in @(
+        @('v2026.9.4-alpha.1', 0), @('v2026.9.4-alpha.1', 9),
+        @('v2026.9.4-alpha.2', 0), @('v2026.9.4-alpha.2999', 9),
+        @('v2026.9.4-beta.1', 0), @('v2026.9.4-beta.2999', 9),
+        @('v2026.9.4', 0), @('v2026.9.4-2', 0))) {
+    $identity = & $scriptPath -GatewayTag $case[0] -MSIXRevision $case[1]
+    if ([version]$identity.PackageVersion -le $previous) { throw 'Preview upgrade ordering failed.' }
+    $previous = [version]$identity.PackageVersion
+    $preview = $case[0] -match '-(alpha|beta)\.'
+    if ($identity.Prerelease -ne $preview -or $identity.MakeLatest -eq $preview) {
+        throw 'Incorrect GitHub publication flags.'
+    }
+    $null = & $workflowVersionScriptPath -RunNumber 1 -RunAttempt 1 -ReleaseVersion $identity.PackageVersion
+}
+foreach ($suffix in @('rc.1', 'beta.0', 'alpha.01', 'beta.3000', 'beta.1+build')) {
+    Assert-Fails -MessagePattern 'release tag|prerelease sequence' -Action {
+        & $scriptPath -GatewayTag "v2026.9.4-$suffix" -MSIXRevision 0
+    }
 }
 Assert-Fails -MessagePattern 'month must be between 1 and 12' -Action {
     & $scriptPath -GatewayTag 'v2026.13.1' -MSIXRevision 0

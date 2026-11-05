@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory)][string]$OutputPath,
     [string]$Ref = '',
     [string]$GatewayVersion = '',
+    [ValidateSet('stable', 'alpha', 'beta')][string]$ReleaseChannel = 'stable',
     [ValidateSet('unsigned', 'test', 'store', 'official')][string]$SigningMode = 'unsigned',
     [Parameter(Mandatory)][ValidatePattern('\A[1-9][0-9]*\z')][string]$WorkflowRunId,
     [Parameter(Mandatory)][ValidatePattern('\A[0-9a-fA-F]{40}\z')][string]$PackagingCommit,
@@ -18,14 +19,20 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'OpenClawSource.ps1')
 
 $policy = Read-OpenClawReleasePolicy -Path $PolicyPath
+if ($ReleaseChannel -ne 'stable' -and $SigningMode -eq 'store') {
+    throw 'Prereleases are sideload releases, not Store submissions.'
+}
+$policy | Add-Member -NotePropertyName channel -NotePropertyValue $ReleaseChannel -Force
 $selectionPolicy = $policy | ConvertTo-Json -Depth 16 | ConvertFrom-Json -Depth 16 -NoEnumerate
 $null = Assert-OpenClawSourceText $GatewayVersion 'GatewayVersion' -AllowEmpty
 if ($GatewayVersion -ne '') {
-    Assert-OpenClawSourceVersion $GatewayVersion
+    Assert-OpenClawSourceVersion $GatewayVersion -Channel $ReleaseChannel
     # The payload selector is an effective one-run policy pin. Release identity
-    # continues from the unmodified stable selector and is captured beside it.
+    # continues from the unmodified stable selector for rollback. An exact
+    # prerelease selects both payload and identity, without resolving a dist-tag.
+    $pinName = if ($ReleaseChannel -eq 'stable') { 'stableVersion' } else { 'prereleaseVersion' }
     $selectionPolicy |
-        Add-Member -NotePropertyName stableVersion -NotePropertyValue $GatewayVersion -Force
+        Add-Member -NotePropertyName $pinName -NotePropertyValue $GatewayVersion -Force
 }
 $null = Get-OpenClawBuildRoute -WorkflowRef $WorkflowRef -GitHubRef $GitHubRef `
     -EventName $EventName -SigningMode $SigningMode -Channel ''
@@ -40,7 +47,7 @@ if ($Ref -ne '' -and $GatewayVersion -ne '') {
     }
 }
 $sourceRef = if ($refAssertion) { '' } else { $Ref }
-$separateReleaseIdentity = $GatewayVersion -ne '' -or ($releaseMode -and $sourceRef -ne '')
+$separateReleaseIdentity = ($ReleaseChannel -eq 'stable' -and $GatewayVersion -ne '') -or ($releaseMode -and $sourceRef -ne '')
 if ($ReuseSnapshot) {
     if (-not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) {
         throw 'The source snapshot is unavailable. Start a new workflow run; do not re-resolve a retry.'
@@ -60,7 +67,7 @@ Assert-OpenClawSource `
     -Policy $selectionPolicy `
     -RequireChannel:($releaseMode -and $sourceRef -eq '')
 $expectedRef = if ($sourceRef -eq '') { Get-OpenClawPolicyRef $selectionPolicy } else { $sourceRef }
-if ($source.requestedRef -cne $expectedRef -or (($sourceRef -eq '') -ne ($source.channel -ceq 'stable'))) {
+if ($source.requestedRef -cne $expectedRef -or (($sourceRef -eq '') -ne ($source.channel -ceq $ReleaseChannel))) {
     throw 'The source snapshot does not match the requested selector.'
 }
 $releaseIdentityProperty = $source.PSObject.Properties['releaseIdentitySource']
@@ -84,7 +91,7 @@ if ($separateReleaseIdentity) {
     }
     if ($sourceRef -ne '' -and
         [version]$releaseIdentity.PackageVersion -lt [version]$payloadIdentity.PackageVersion) {
-        throw 'Ref must select a payload version that is not newer than the current stable release identity.'
+        throw "Ref must select a payload version that is not newer than the current $ReleaseChannel release identity."
     }
 }
 elseif ($null -ne $releaseIdentityProperty) {
@@ -100,6 +107,7 @@ $context = [ordered]@{
     workflowRef = $WorkflowRef
     githubRef = $GitHubRef
     eventName = $EventName
+    releaseChannel = $ReleaseChannel
 }
 $route = Get-OpenClawBuildRoute -WorkflowRef $WorkflowRef -GitHubRef $GitHubRef `
     -EventName $EventName -SigningMode $SigningMode -Channel $source.channel

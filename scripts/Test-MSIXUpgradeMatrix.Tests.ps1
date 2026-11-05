@@ -65,6 +65,13 @@ try {
     ) {
         throw 'The matrix does not cover the authentic Store bundle update.'
     }
+    foreach ($previewChannel in @('alpha', 'beta')) {
+        $preview = & $scriptPath -ManifestPath $manifestPath -ReleaseChannel $previewChannel | ConvertFrom-Json
+        if (@($preview.include).Count -ne 6 -or
+            @($preview.include | Where-Object channel -CNE 'sideload').Count -ne 0) {
+            throw 'Previews must retain all six sideload upgrade scenarios and no Store scenarios.'
+        }
+    }
 }
 finally {
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
