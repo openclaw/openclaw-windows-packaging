@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       release_channel:
-        description: GitHub release channel (beta is a sideload prerelease)
+        description: Release channel (published beta releases can feed the Development Store flight)
         required: true
         default: stable
         type: choice
@@ -73,10 +73,9 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_CHANNEL: ${{ inputs.release_channel || 'stable' }}
           SIGNING_MODE: ${{ inputs.signing_mode || 'unsigned' }}
         run: |
-          $upgradeMatrix = .\scripts\Get-MSIXUpgradeMatrix.ps1 -ReleaseChannel $env:RELEASE_CHANNEL
+          $upgradeMatrix = .\scripts\Get-MSIXUpgradeMatrix.ps1
           "upgrade_matrix=$upgradeMatrix" >> $env:GITHUB_OUTPUT
 
           if ($env:GITHUB_EVENT_NAME -ne 'pull_request') {
@@ -794,12 +793,18 @@ jobs:
             $candidateRoot `
             'OpenClawGateway-test-signing.cer'
           $evidencePath = Join-Path evidence "$env:EVIDENCE_ID.json"
+          $candidateVersion = $identity.PackageVersion
+          if ($env:CANDIDATE_CHANNEL -ieq 'Store') {
+            $candidateVersion = .\scripts\Get-WorkflowPackageVersion.ps1 `
+              -RunNumber $env:GITHUB_RUN_NUMBER -RunAttempt $env:GITHUB_RUN_ATTEMPT `
+              -ReleaseVersion $identity.PackageVersion -Store
+          }
           New-Item -Path evidence -ItemType Directory -Force | Out-Null
           if ($env:TRANSITION_MODE -ceq 'store-in-place') {
             .\scripts\Test-MSIXStoreUpgrade.ps1 `
               -CandidatePath $candidatePath `
               -CandidateCertificatePath $certificatePath `
-              -ExpectedCandidateVersion $identity.PackageVersion `
+              -ExpectedCandidateVersion $candidateVersion `
               -StoreProductId '9NV70LV3D6XC' `
               -EvidencePath $evidencePath
           }
@@ -809,7 +814,7 @@ jobs:
               -BaselinesDirectory baselines `
               -CandidatePath $candidatePath `
               -CandidateCertificatePath $certificatePath `
-              -ExpectedCandidateVersion $identity.PackageVersion `
+              -ExpectedCandidateVersion $candidateVersion `
               -TransitionMode $env:TRANSITION_MODE `
               -BaselineAssetName $env:BASELINE_ASSET `
               -EvidencePath $evidencePath
@@ -863,21 +868,18 @@ jobs:
           persist-credentials: false
 
       - name: Download unsigned Store x64 package
-        if: ${{ (inputs.release_channel == '' || inputs.release_channel == 'stable') }}
         uses: actions/download-artifact@v8
         with:
           name: openclaw-gateway-msix-store-unsigned-x64
           path: artifacts\store\x64
 
       - name: Download unsigned Store ARM64 package
-        if: ${{ (inputs.release_channel == '' || inputs.release_channel == 'stable') }}
         uses: actions/download-artifact@v8
         with:
           name: openclaw-gateway-msix-store-unsigned-arm64
           path: artifacts\store\arm64
 
       - name: Download unsigned Store bundle
-        if: ${{ (inputs.release_channel == '' || inputs.release_channel == 'stable') }}
         uses: actions/download-artifact@v8
         with:
           name: openclaw-gateway-msix-store-unsigned-bundle
@@ -969,8 +971,7 @@ jobs:
           RELEASE_CHANNEL: ${{ inputs.release_channel || 'stable' }}
           PACKAGING_COMMIT: ${{ github.sha }}
         run: |
-          $channels = if ($env:RELEASE_CHANNEL -eq 'stable') { @('Store', 'Sideload') } else { @('Sideload') }
-          foreach ($channel in $channels) {
+          foreach ($channel in @('Store', 'Sideload')) {
             $channelDirectory = $channel.ToLowerInvariant()
             .\scripts\Test-SigningInputs.ps1 `
               -ArtifactsDirectory "artifacts\$channelDirectory" `
@@ -981,6 +982,7 @@ jobs:
               -GatewayVersion $env:GATEWAY_VERSION `
               -ReleaseChannel $env:RELEASE_CHANNEL `
               -WorkflowRunId $env:GITHUB_RUN_ID `
+              -WorkflowRunNumber $env:GITHUB_RUN_NUMBER `
               -SigningMode $env:SIGNING_MODE `
               -PackagingCommit $env:PACKAGING_COMMIT `
               -WorkflowRef $env:GITHUB_WORKFLOW_REF -GitHubRef $env:GITHUB_REF -EventName $env:GITHUB_EVENT_NAME `
@@ -1203,10 +1205,11 @@ jobs:
   retain-store-submission:
     cache-mode: none
     name: Retain authorized Microsoft Store submission bundle
-    if: ${{ !cancelled() && needs.build.result == 'success' && needs.authorize-signing.result == 'success' && (inputs.release_channel == '' || inputs.release_channel == 'stable') }}
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.authorize-signing.result == 'success' && ((inputs.release_channel == '' || inputs.release_channel == 'stable') || needs.publish-release.result == 'success') }}
     needs:
       - build
       - authorize-signing
+      - publish-release
     runs-on: windows-latest
     permissions:
       actions: read
@@ -1221,16 +1224,38 @@ jobs:
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ needs.authorize-signing.outputs.release_version }}
+          RELEASE_TAG: ${{ needs.authorize-signing.outputs.release_tag }}
+          RELEASE_CHANNEL: ${{ inputs.release_channel || 'stable' }}
         run: |
           Rename-Item `
             -LiteralPath store\OpenClawGateway.msixbundle `
             -NewName "OpenClawGateway-$env:RELEASE_VERSION-store.msixbundle"
+          $bundle = Get-Item "store/OpenClawGateway-$env:RELEASE_VERSION-store.msixbundle"
+          $witness = [ordered]@{
+            runId = $env:GITHUB_RUN_ID
+            runAttempt = [int]$env:GITHUB_RUN_ATTEMPT
+            packagingCommit = $env:GITHUB_SHA
+            releaseTag = $env:RELEASE_TAG
+            releaseChannel = $env:RELEASE_CHANNEL
+            bundleName = $bundle.Name
+            bundleSha256 = (Get-FileHash $bundle.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          New-Item witness -ItemType Directory | Out-Null
+          [IO.File]::WriteAllText((Join-Path $PWD 'witness/store-source.json'), ($witness | ConvertTo-Json))
 
       - name: Upload Store submission bundle
         uses: actions/upload-artifact@v7
         with:
-          name: openclaw-gateway-msix-store-submission
+          name: openclaw-gateway-msix-store-submission-${{ github.run_attempt }}
           path: store\OpenClawGateway-${{ needs.authorize-signing.outputs.release_version }}-store.msixbundle
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload Store source witness
+        uses: actions/upload-artifact@v7
+        with:
+          name: store-release-source-${{ github.run_attempt }}
+          path: witness/store-source.json
           if-no-files-found: error
           retention-days: 90
 
