@@ -31,7 +31,7 @@ function Reset-Fixture {
     }
     $global:StoreSourceTest_release = [pscustomobject]@{
         draft = $false; prerelease = $true; published_at = '2026-11-05'
-        tag_name = 'v2026.11.1-alpha.1-msix.0'
+        tag_name = 'v2026.11.1-beta.1-msix.0'
     }
     $global:StoreSourceTest_commit = [pscustomobject]@{ sha = ('a' * 40) }
 }
@@ -56,7 +56,7 @@ $result = Invoke-Source
 if ($result.artifactId -cne '456') { throw 'Authorized release selected the wrong artifact.' }
 $script:checks++
 
-foreach ($channel in @('alpha', 'beta')) {
+foreach ($channel in @('beta')) {
     Reset-Fixture
     $global:StoreSourceTest_witness.releaseChannel = $channel
     $global:StoreSourceTest_witness.releaseTag = "v2026.11.1-$channel.1-msix.0"

@@ -48,7 +48,7 @@ try {
     $witness = Get-Content (Join-Path $directory 'store-source.json') -Raw | ConvertFrom-Json
     if ([string]$witness.runId -cne $RunId -or [int]$witness.runAttempt -ne [int]$run.run_attempt -or
         $witness.packagingCommit -cne $run.head_sha -or $witness.packagingCommit -cnotmatch '^[0-9a-f]{40}$' -or
-        $witness.releaseChannel -cnotin @('stable', 'alpha', 'beta') -or
+        $witness.releaseChannel -cnotin @('stable', 'beta') -or
         $witness.bundleSha256 -cnotmatch '^[0-9a-f]{64}$') {
         throw 'Store release witness does not match this run and attempt.'
     }

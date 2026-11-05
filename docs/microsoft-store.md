@@ -91,7 +91,7 @@ and [application identity resource](https://learn.microsoft.com/en-us/windows/uw
 
 ## Development flight
 
-The same protected publisher sends published alpha and beta Gateway MSIX GitHub prereleases
+The same protected publisher sends published beta Gateway MSIX GitHub prereleases
 to a **Development** package flight, never to the public production submission.
 Stable releases still use the production destination and its separate activation flag.
 
