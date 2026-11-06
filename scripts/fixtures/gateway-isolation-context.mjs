@@ -105,6 +105,10 @@ const server = http.createServer(async (request, response) => {
         .includes(JSON.stringify(skillReads[0].text).slice(1, -1)),
       "Detailed skill instructions must not be eagerly injected into user context.");
       if (advertisedSkill) {
+        // Prompt wiring only: the fake provider does not select skills autonomously.
+        const description = advertisedSkill[0].match(/<description>([\s\S]*?)<\/description>/)?.[1];
+        assert.ok(description?.includes("Desktop/Documents/Downloads"),
+          "Runtime discovery must advertise human-folder handoff requests.");
         scenario.skillPath = advertisedSkill[1].replace(/^~(?=[\\/]|$)/, root);
         assert.equal(await fs.realpath(scenario.skillPath), await fs.realpath(skillReads[0].path),
           "Discovery must point to the packaged skill, not an ambient same-named copy.");

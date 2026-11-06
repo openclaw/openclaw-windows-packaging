@@ -397,6 +397,13 @@ eligibility using fresh session keys. The fake provider deliberately requests
 the reads; this proves runtime discovery and loading, not autonomous model
 selection or compliance with the procedures.
 
+Human-folder requests must keep the hard write boundary intact: no human-profile
+probe or permission request, no agent-folder substitution, and no connected-node
+workaround. The description advertises Desktop/Documents/Downloads requests;
+the runtime lane checks that advertised trigger, not whether a model follows it.
+Explicitly requested agent-local output and ordinary private headless work must
+not be mistaken for user delivery.
+
 Observational live-model cases are recorded in
 [`windows-agent-handoff.test-cases.json`](../scripts/fixtures/windows-agent-handoff.test-cases.json).
 They cover explicit invocation, natural selection, a headless-work negative
@@ -426,10 +433,16 @@ Verify that the result is an existing directory and the actual client visibly
 displays the complete destination in a fenced text code block, not just a filename
 chip. Check that only the intended file is copied, its bytes match the private
 original, and the requester can read it while private controls remain denied.
-Retain host-reported or user-selected destination precedence and refusal/no-copy
-coverage. Missing profiles/directories and denied access or failed copies must
-produce an explicit explanation and a request for a supported destination, not a
-Public Documents fallback, a newly created shared root or permission changes.
+Retain host-reported and approved user-selected supported shared roots, with
+concrete sharing evidence, an existing root, destination containment, and
+refusal/no-copy coverage. A selected supported root must work without a host
+report or the agent's default `Shared`. Human-folder cases must
+show no profile probes, access requests, or writes to either account's substitute
+folders; pair them with explicitly requested agent-local output and private
+headless work. Missing agent profiles/directories and denied access or failed
+copies must produce an explicit explanation and a request for a supported
+delivery route, not a Public Documents fallback, a newly created shared root,
+or permission changes.
 Separate copy success from verified recipient access. Repeat a representative case
 after observed real-model compaction.
 For in-chat requests, require a new attachment from the tested response before

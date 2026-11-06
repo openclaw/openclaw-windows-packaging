@@ -680,7 +680,13 @@ It is not a blanket prohibition on agent-only GUI work.
 
 The plugin also bundles the
 [`windows-agent-handoff` skill](plugins/gateway-isolation/skills/windows-agent-handoff/SKILL.md).
-The short context names it for user-facing GUI, sign-in, and file delivery.
+The short context names it for user-folder requests, GUI, sign-in, and file
+delivery. The isolated agent has no permission to write the human's actual
+Desktop, Documents, or Downloads. It must not probe human profiles, request
+broader access, or silently use the agent's similarly named folders. It can
+offer only the existing shared-folder contract or a supported download/attachment and
+must name the actual outcome. Explicitly requested agent-local output and
+ordinary private headless work remain local; they are not user delivery.
 OpenClaw advertises eligible skills and loads their instructions on demand;
 the detailed procedures are not inserted into every prompt. One successful
 `SKILL.md` read supplies the complete GUI/authentication, client delivery, and
@@ -694,12 +700,17 @@ plugin removes its skill; `skills.entries.windows-agent-handoff.enabled=false`
 disables the skill independently. Hook opt-outs do not disable manifest skills.
 
 The plugin supplies static guidance, not a shared-path environment variable.
-For filesystem handoff, prefer a host-reported or user-selected destination.
+For filesystem handoff, prefer a host-reported shared root or an approved
+user-selected existing supported shared root. User selection requires concrete
+supported shared-destination evidence, not just a folder name or permission.
+Verify the existing root and containment below it; selection does not grant
+human-profile access.
 The host reports `session.sharedFolder` through `clawctl status --json` in the
 user's normal terminal; that command can start the recorded session.
 The skill names the isolated agent's existing `Shared` folder as a handoff
-option. When neither destination is supplied, resolve it with a local tool
-inside that agent session, for example:
+option when neither a host-reported root nor an approved user-selected supported
+root is supplied. Resolve it with a local tool inside that agent session, for
+example:
 
 ```powershell
 (Resolve-Path -LiteralPath (Join-Path $env:USERPROFILE 'Shared') -ErrorAction Stop).Path
