@@ -2,12 +2,6 @@ namespace OpenClaw.Launcher.Tests;
 
 internal static class TestDirectory
 {
-    public static string Create()
-    {
-        string path = Path.Combine(
-            Path.GetTempPath(),
-            $"openclaw-msix-host-tests-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(path);
-        return path;
-    }
+    public static string Create() =>
+        Directory.CreateTempSubdirectory("openclaw-msix-host-tests-").FullName;
 }
