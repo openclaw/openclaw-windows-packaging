@@ -455,7 +455,12 @@ Run `.\scripts\Test-NativeRedirect.Tests.ps1` when you change
 `tests\node\native-redirect.test.mjs` with `node --test`. Each test starts
 Node.js with the preload against temporary application and staged roots, then
 checks where CommonJS, ESM, child-process, and worker-thread resolution lands,
-including through an application root reached by a junction. It also checks
+including through an application root reached by a junction. Imports from
+staged packages keep hoisted dependencies in the immutable
+application, while relative imports, package exports/imports, nested versions,
+and native dependencies retain their original resolution and redirection.
+Redirected ESM URLs retain query strings and fragments as separate module identities.
+Missing dependencies and invalid package metadata still fail. It also checks
 the preload's `NODE_OPTIONS` entry and its startup failure when
 `module.registerHooks()` is unavailable. The suite creates only temporary
 fixtures. It never touches an isolated session, a package registration, or
