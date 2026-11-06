@@ -190,6 +190,7 @@ internal sealed class HostPackageDiagnostics(
         {
             publicParts.Add(Path.GetFileName(ownAlias));
         }
+        publicParts.AddRange(items?.Commands.Select(command => command.Name) ?? []);
         DiagnosticPathRedactor redactor = new(publicParts);
         identity = identity with
         {
@@ -246,9 +247,22 @@ internal sealed class HostPackageDiagnostics(
             package.SignatureKind is "None" or "Developer" or "Enterprise" or "Store" or "System") &&
         items.Commands.All(command =>
             command is not null &&
-            command.Name is "clawctl" or "clawctl.exe" or "clawctl.cmd" or "clawctl.bat" or "clawctl.ps1" &&
+            IsControlCommandName(command.Name) &&
             command.CommandType is "Application" or "ExternalScript" &&
             command.Path is not null);
+
+    private static bool IsControlCommandName(string? name)
+    {
+        if (name is null ||
+            !Path.GetFileNameWithoutExtension(name).Equals("clawctl", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+        string extension = Path.GetExtension(name);
+        return extension.Length == 0 ||
+            (extension.Length is > 1 and <= 16 &&
+                extension[1..].All(char.IsAsciiLetterOrDigit));
+    }
 
     private static bool IsPublicIdentity(string? value) =>
         value is { Length: > 0 and <= 256 } &&

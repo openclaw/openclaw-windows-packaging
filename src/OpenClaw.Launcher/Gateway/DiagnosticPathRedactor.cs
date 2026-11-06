@@ -30,6 +30,13 @@ internal sealed class DiagnosticPathRedactor
         string normalized = path.Replace('/', '\\');
         string prefix = normalized.StartsWith(@"\\?\", StringComparison.Ordinal) ? @"\\?\" : string.Empty;
         normalized = normalized[prefix.Length..];
+        bool extendedNetwork = prefix.Length > 0 &&
+            normalized.StartsWith(@"UNC\", StringComparison.OrdinalIgnoreCase);
+        if (extendedNetwork)
+        {
+            prefix += normalized[..4];
+            normalized = normalized[4..];
+        }
         bool network = normalized.StartsWith(@"\\", StringComparison.Ordinal);
         string[] parts = normalized.Split('\\');
         for (int index = 0; index < parts.Length; index++)
@@ -40,7 +47,8 @@ internal sealed class DiagnosticPathRedactor
                 continue;
             }
             bool user = index > 0 && parts[index - 1].Equals("Users", StringComparison.OrdinalIgnoreCase);
-            bool networkIdentity = network && index is 2 or 3;
+            bool networkIdentity = (network && index is 2 or 3) ||
+                (extendedNetwork && index is 0 or 1);
             if (!user && !networkIdentity && _publicParts.Contains(part))
             {
                 continue;

@@ -101,6 +101,29 @@ public sealed class HostPackageDiagnosticsTests
     }
 
     [Theory]
+    [InlineData("ClawCtl.CMD")]
+    [InlineData("clawctl.com")]
+    [InlineData("CLAWCTL.EXE")]
+    [InlineData("clawctl.PS1")]
+    [InlineData("clawctl.py")]
+    public async Task ValidWindowsCommandNamesPreserveInventoryAndOrderedPaths(string name)
+    {
+        string inventory = InventoryJson.Replace("clawctl.cmd", name, StringComparison.Ordinal);
+        HostPackageDiagnostics diagnostics = new(_ => Task.FromResult(Output(inventory)), Collector);
+        List<string> notes = [];
+        using JsonDocument document = JsonDocument.Parse(
+            await diagnostics.CollectAsync(notes, CancellationToken.None));
+
+        JsonElement actual = document.RootElement.GetProperty("inventory");
+        Assert.Equal(2, actual.GetProperty("packages").GetArrayLength());
+        Assert.Equal(name, actual.GetProperty("commands")[0].GetProperty("name").GetString());
+        Assert.EndsWith(
+            "\\" + name, actual.GetProperty("commands")[0].GetProperty("path").GetString(), StringComparison.Ordinal);
+        Assert.Equal("clawctl.exe", actual.GetProperty("commands")[1].GetProperty("name").GetString());
+        Assert.Empty(notes);
+    }
+
+    [Theory]
     [InlineData("", 0, "empty-response")]
     [InlineData("plain text synthetic-secret", 0, "invalid-json")]
     [InlineData("{malformed synthetic-secret", 0, "invalid-json")]
@@ -349,6 +372,10 @@ public sealed class HostPackageDiagnosticsTests
         @"\\<private-1>\<private-2>\Users\<private-3>\clawctl.cmd")]
     [InlineData(@"\\Microsoft\Windows\Users\alice\clawctl.cmd",
         @"\\<private-1>\<private-2>\Users\<private-3>\clawctl.cmd")]
+    [InlineData(@"\\?\UNC\Microsoft\Windows\clawctl.cmd",
+        @"\\?\UNC\<private-1>\<private-2>\clawctl.cmd")]
+    [InlineData(@"\\?\unc\Microsoft\Windows\Users\alice\clawctl.cmd",
+        @"\\?\unc\<private-1>\<private-2>\Users\<private-3>\clawctl.cmd")]
     [InlineData(@"C:\Users\S-1-5-21-1-2-3-1001\AppData\Local\clawctl.exe",
         @"C:\Users\<private-1>\AppData\Local\clawctl.exe")]
     [InlineData(@"\\?\P:\Users\alice\AppData\Local\clawctl.exe",
