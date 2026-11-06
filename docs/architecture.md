@@ -457,6 +457,23 @@ permits replacement. No second launch registry or status-side repair is involved
 The receipt's `running` state still means application process, not listener
 readiness.
 
+For a Gateway-requested full-process restart, the same session supervisor keeps
+its identity, launch attempt, output log, state-access lease, and native-root
+lease across child generations. After the old child and its job descendants
+exit, it runs the bundled `gateway restart-handoff consume` command with
+`--expected-pid <pid> --json` under the agent identity, using the same Node.js runtime,
+preload, environment, and working directory. Upstream owns atomic consumption,
+expiry, and PID matching; packaging validates the versioned response and
+relaunches only an accepted `external` / `full-process` handoff. Missing or
+rejected handoffs, update-process handoffs, and ordinary crashes do not restart.
+An unavailable or unsupported consumer fails explicitly without a replacement.
+The named outer job remains open through handoff and successor launch, so
+explicit stop and teardown still terminate the whole owned tree. Each child
+generation has an inner job that must drain before the next begins.
+Only the outer job kills automatically on last-handle close: a stop retains
+that job before killing the supervisor, then pins and drains its members.
+Closing an inner handle must not kill them before that snapshot.
+
 Start distinguishes creating an attempt from adopting an existing starting or
 running attempt. Adoption preserves the existing ID. Conditional stop compares
 the requested attempt under the same lifecycle lock used for start and restart,

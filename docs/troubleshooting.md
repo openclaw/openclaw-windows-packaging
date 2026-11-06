@@ -218,6 +218,22 @@ Review approvals and messaging state, resolve reported upstream plugin
 installation requirements, and relink nonportable credentials before restarting
 with `clawctl gateway-service start`.
 
+## A Gateway-requested restart leaves the gateway stopped
+
+**Check.** Run `clawctl gateway-service status`, then `clawctl collect-logs`.
+Preserve the launch log and supervisor status. A clean exit code alone is not
+a restart request: the supervisor consumes the bundled application's
+PID-matched full-process restart handoff before launching a successor.
+
+**Recovery.** An ordinary failure, a shutdown deadline reached before a handoff
+was written, or an expired/rejected handoff leaves the Gateway stopped.
+Correct any startup refusal reported in its log, then run
+`clawctl gateway-service start`. If the supervisor reports a failed or
+unsupported restart-handoff command, retain the diagnostics and update the
+Gateway package; it does not guess at private application state or retry every
+failed exit. `clawctl gateway-service stop` and teardown never request a
+replacement.
+
 ## The gateway is not started, not listening, or is unhealthy
 
 **Check.** Inspect only the gateway first:

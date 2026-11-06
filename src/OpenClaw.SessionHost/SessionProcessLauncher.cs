@@ -56,15 +56,19 @@ internal sealed class SessionProcessLauncher(
 
     private static IDisposable EnterDefaultState() => SessionStateAccess.ForAgent().EnterReader();
 
-    internal static SessionProcessOutput Capture(SessionLaunchRequest request, TimeSpan? timeout = null) =>
-        RunCore(request, capture: true, timeout);
+    internal static SessionProcessOutput Capture(
+        SessionLaunchRequest request,
+        TimeSpan? timeout = null,
+        WindowsKillOnCloseJob? containingJob = null) =>
+        RunCore(request, capture: true, timeout, containingJob: containingJob);
 
     private static SessionProcessOutput RunCore(
         SessionLaunchRequest request,
         bool capture,
         TimeSpan? timeout = null,
         Action? initializeConsole = null,
-        string? invocationMode = null)
+        string? invocationMode = null,
+        WindowsKillOnCloseJob? containingJob = null)
     {
         string workingDirectory = request.WorkingDirectory!;
         if (!Directory.Exists(workingDirectory))
@@ -109,14 +113,16 @@ internal sealed class SessionProcessLauncher(
         {
             if (capture)
             {
-                return CaptureInJobAsync(startInfo, timeout).GetAwaiter().GetResult();
+                return CaptureInJobAsync(startInfo, timeout, containingJob).GetAwaiter().GetResult();
             }
             if (invocationMode is not null)
             {
                 WindowsInvocationJob.Join(invocationMode);
             }
             initializeConsole?.Invoke();
-            using WindowsKillOnCloseJob job = WindowsKillOnCloseJob.Create();
+            using WindowsKillOnCloseJob job = containingJob is null
+                ? WindowsKillOnCloseJob.Create()
+                : WindowsKillOnCloseJob.CreateContained(containingJob);
             using Process process = job.StartProcess(startInfo);
             process.WaitForExit();
             int exitCode = process.ExitCode;
@@ -137,7 +143,8 @@ internal sealed class SessionProcessLauncher(
 
     private static async Task<SessionProcessOutput> CaptureInJobAsync(
         ProcessStartInfo startInfo,
-        TimeSpan? timeout)
+        TimeSpan? timeout,
+        WindowsKillOnCloseJob? containingJob)
     {
         using WindowsKillOnCloseJob job = WindowsKillOnCloseJob.Create();
         using var input = new FileStream("NUL", FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
