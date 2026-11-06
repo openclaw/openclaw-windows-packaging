@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.IO.Compression;
 using System.Text;
+using System.Text.Json;
 using OpenClaw.Launcher.Gateway;
 using OpenClaw.Launcher.Mxc;
 using OpenClaw.Launcher.Session;
@@ -12,6 +13,47 @@ namespace OpenClaw.Launcher.Tests.Gateway;
 public sealed class DiagnosticsBundleTests : IDisposable
 {
     private readonly string _root = TestDirectory.Create();
+
+    [Theory]
+    [InlineData(false, "No session has been recorded.")]
+    [InlineData(true, "has not been staged")]
+    public async Task HostPackageEvidenceSurvivesMissingSessionOrHelperWithoutProvisioning(
+        bool recorded, string expectedNote)
+    {
+        string workspace = Path.Combine(_root, "shared");
+        Directory.CreateDirectory(workspace);
+        FakeMxcSessionClient backend = new()
+        {
+            Metadata = new MxcProvisionMetadata("agent_1", "S-1-5-21-0-0-0-1001", workspace)
+        };
+        (GatewayRuntime runtime, _, SessionRuntime session) = CreateRuntime(workspace, backend);
+        if (recorded)
+        {
+            await session.Coordinator.EnsureStartedAsync(CancellationToken.None);
+            backend.Calls.Clear();
+        }
+        HostPackageDiagnostics diagnostics = new(
+            _ => Task.FromResult(HostPackageDiagnosticsTests.Output()),
+            HostPackageDiagnosticsTests.Collector,
+            new FixedTimeProvider(new DateTimeOffset(2026, 11, 5, 12, 0, 0, TimeSpan.Zero)));
+        string bundlePath = Path.Combine(_root, "package-evidence.zip");
+
+        DiagnosticsBundleResult result = await runtime.CollectLogsAsync(
+            bundlePath, null, new RecordingProgress(), CancellationToken.None, diagnostics);
+
+        Assert.False(result.SessionReached);
+        Assert.Empty(backend.Calls);
+        Assert.Equal(bundlePath, result.BundlePath);
+        using ZipArchive archive = ZipFile.OpenRead(bundlePath);
+        string evidence = await ReadEntryAsync(archive, "host/package-diagnostics.json");
+        using JsonDocument json = JsonDocument.Parse(evidence);
+        Assert.Equal(
+            "2026-11-05T12:00:00+00:00", json.RootElement.GetProperty("collectedAtUtc").GetString());
+        Assert.Equal(2, json.RootElement.GetProperty("inventory").GetProperty("packages").GetArrayLength());
+        Assert.Contains(expectedNote, await ReadEntryAsync(archive, "manifest.txt"), StringComparison.Ordinal);
+        Assert.DoesNotContain("alice", evidence, StringComparison.Ordinal);
+        Assert.DoesNotContain("synthetic-pairing-secret", evidence, StringComparison.Ordinal);
+    }
 
     [Fact]
     public async Task CollectionPreservesHostLogsAndRedactsEveryTextSource()
