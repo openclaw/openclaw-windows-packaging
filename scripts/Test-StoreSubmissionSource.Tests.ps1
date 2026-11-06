@@ -66,6 +66,10 @@ foreach ($channel in @('beta')) {
     if ($result.channel -cne 'development' -or $result.bundleSha256 -cne ('b' * 64)) { throw 'Preview destination or hash drifted.' }
     if ($null -ne (Invoke-Source production)) { throw 'Preview reached production.' }
     if ((Invoke-Source development).channel -cne 'development') { throw 'Manual development selection failed.' }
+    foreach ($selection in @('Auto', 'AUTO', 'Development', 'DEVELOPMENT')) {
+        if ((Invoke-Source $selection).channel -cne 'development') { throw 'Case-variant preview selection failed.' }
+        $script:checks++
+    }
     $script:checks += 3
     $global:StoreSourceTest_release.prerelease = $false
     Assert-Fails { Invoke-Source } 'published GitHub prerelease'
