@@ -90,7 +90,8 @@ public sealed class NaturalExitJobSnapshotTests
                 CreateNoWindow = true,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
-                RedirectStandardError = true
+                RedirectStandardError = true,
+                Environment = { ["OPENCLAW_SESSION_STATE_DIRECTORY"] = Path.Combine(directory, "state-access") }
             }) ?? throw new InvalidOperationException("Unable to start the natural-exit fixture.");
             stdout = helper.StandardOutput.ReadToEndAsync();
             stderr = helper.StandardError.ReadToEndAsync();

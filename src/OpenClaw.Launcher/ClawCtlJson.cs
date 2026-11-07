@@ -90,7 +90,9 @@ internal sealed partial class ClawCtlJsonContext : JsonSerializerContext;
 
 internal static class ClawCtlJson
 {
-    private const int SchemaVersion = 1;
+    internal const int SchemaVersion = 1;
+
+    internal static ClawCtlJsonIntegration Integration { get; } = new("isolated-session", 1);
 
     internal static void WriteResult(TextWriter output, IClawCtlResult result)
     {
@@ -139,7 +141,7 @@ internal static class ClawCtlJson
         };
 
         output.WriteLine(JsonSerializer.Serialize(
-            document with { Integration = new ClawCtlJsonIntegration("isolated-session", 1) },
+            document with { Integration = Integration },
             ClawCtlJsonContext.Default.ClawCtlJsonDocument));
     }
 
@@ -176,7 +178,7 @@ internal static class ClawCtlJson
             Error: new ClawCtlJsonError("cli_error", NormalizeMessage(message)),
             // Capability is a package fact, not proof that setup or status succeeded.
             // Companion must still be able to reach explicit setup after a probe fails.
-            Integration: new ClawCtlJsonIntegration("isolated-session", 1)));
+            Integration: Integration));
     }
 
     private static ClawCtlJsonDocument FromSetup(SetupCommandResult result)
