@@ -51,6 +51,7 @@ public sealed class InvocationConsoleCancellationTests
         }
         start.Environment["TEMP"] = root;
         start.Environment["TMP"] = root;
+        start.Environment["OPENCLAW_SESSION_STATE_DIRECTORY"] = Path.Combine(root, "state-access");
         start.Environment["PSModuleAnalysisCachePath"] = Path.Combine(root, "module-cache");
         start.Environment["POWERSHELL_TELEMETRY_OPTOUT"] = "1";
         start.Environment["POWERSHELL_UPDATECHECK"] = "Off";
@@ -75,6 +76,7 @@ public sealed class InvocationConsoleCancellationTests
             await exit.WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(true);
             _ = await stdout.ConfigureAwait(true);
             _ = await stderr.ConfigureAwait(true);
+            Assert.True(File.Exists(Path.Combine(root, "state-access", "access.lock")));
         }
         finally
         {
