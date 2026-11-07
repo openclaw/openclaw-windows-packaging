@@ -81,6 +81,11 @@ Run from the repository root. Supply the independently verified producer values
 at these prompts (no credentials). Use a new output directory; do not enable
 staged-install reuse:
 
+Ordinary local builds do not need `RUNNER_TEMP`: `Build-Payload.ps1` owns a
+unique temporary staging/cache root and removes it on success or failure.
+Caller-provided `RUNNER_TEMP` retains the existing CI cache/reuse paths;
+`-ReuseStagedInstall` requires that explicit caller-owned root.
+
 
 ```powershell
 $packageDirectory = Read-Host 'Directory containing original openclaw.tgz and source.json'

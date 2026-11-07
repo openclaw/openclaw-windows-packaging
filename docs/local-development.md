@@ -12,6 +12,11 @@ pinned .NET SDK, Developer Mode for loose registration, and Visual Studio Build
 Tools with the Desktop development with C++ workload plus the Windows SDK for
 NativeAOT publishing and MSIX work.
 
+Direct `scripts\Build-Payload.ps1` runs without `RUNNER_TEMP` use a unique
+temporary staging/cache root that the script removes on success or failure.
+An explicit `RUNNER_TEMP` keeps the existing architecture-specific CI cache
+and staged-install paths; `-ReuseStagedInstall` requires that caller-owned root.
+
 ## Choose the loop
 
 | Need | Authority and outcome |
