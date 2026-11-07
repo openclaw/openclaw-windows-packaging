@@ -382,11 +382,13 @@ bypassable, and required CI checks remain authoritative.
   tests.
 - Keep official release identity derived from the run's resolved Gateway tag
   and the policy's `msixRevision`, using `scripts\Get-MSIXReleaseIdentity.ps1`.
-  The MSIX identity uses `year.month.VVPN.0`: Gateway release sequence `VV`,
+  The stable MSIX identity uses `year.month.VVPN.0`: Gateway release sequence `VV`,
   correction digit `P`, and rebuild digit `N`. Use revision
   `0` for the first MSIX of a Gateway tag and increment only for packaging-only
   rebuilds of that exact tag. Do not assign package versions or release tags by
-  hand.
+  hand. Beta sideload versions use the preview ordering described in
+  [the release process](docs/release-process.md#publish-a-beta-github-prerelease);
+  verify preceding stable < beta < matching stable, including rebuilds.
 - Treat published proof releases in `scripts/msix-upgrade-baselines.json` as
   immutable transition fixtures. Keep their release asset names and SHA-256
   digests pinned. The approved Partner Center identity reset must prove every

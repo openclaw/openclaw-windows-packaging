@@ -7,13 +7,21 @@ on:
       - main
   workflow_dispatch:
     inputs:
+      release_channel:
+        description: GitHub release channel (beta is a sideload prerelease)
+        required: true
+        default: stable
+        type: choice
+        options:
+          - stable
+          - beta
       openclaw_ref:
-        description: Optional OpenClaw branch, tag, or full SHA to package; empty follows stable
+        description: Optional OpenClaw branch, tag, or full SHA to package; empty follows the selected channel
         required: false
         default: ''
         type: string
       gateway_version:
-        description: Optional older exact stable payload; MSIX identity remains on release-policy stableVersion or npm latest
+        description: Optional older stable payload, or exact beta version for a prerelease
         required: false
         default: ''
         type: string
@@ -65,9 +73,10 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_CHANNEL: ${{ inputs.release_channel || 'stable' }}
           SIGNING_MODE: ${{ inputs.signing_mode || 'unsigned' }}
         run: |
-          $upgradeMatrix = .\scripts\Get-MSIXUpgradeMatrix.ps1
+          $upgradeMatrix = .\scripts\Get-MSIXUpgradeMatrix.ps1 -ReleaseChannel $env:RELEASE_CHANNEL
           "upgrade_matrix=$upgradeMatrix" >> $env:GITHUB_OUTPUT
 
           if ($env:GITHUB_EVENT_NAME -ne 'pull_request') {
@@ -427,6 +436,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_REF: ${{ inputs.openclaw_ref }}
           GATEWAY_VERSION: ${{ inputs.gateway_version }}
+          RELEASE_CHANNEL: ${{ inputs.release_channel || 'stable' }}
           SIGNING_MODE: ${{ inputs.signing_mode || 'unsigned' }}
           SNAPSHOT_MODE: ${{ steps.snapshot.outputs.mode }}
         run: |
@@ -439,6 +449,7 @@ jobs:
             -OutputPath $snapshotPath `
             -Ref $env:SOURCE_REF `
             -GatewayVersion $env:GATEWAY_VERSION `
+            -ReleaseChannel $env:RELEASE_CHANNEL `
             -SigningMode $env:SIGNING_MODE `
             -WorkflowRunId $env:GITHUB_RUN_ID `
             -PackagingCommit $env:GITHUB_SHA `
@@ -551,6 +562,7 @@ jobs:
     with:
       source_ref: ${{ inputs.openclaw_ref || '' }}
       gateway_version: ${{ inputs.gateway_version || '' }}
+      release_channel: ${{ inputs.release_channel || 'stable' }}
       signing_mode: ${{ inputs.signing_mode || 'unsigned' }}
       versioning: ${{ needs.changes.outputs.versioning }}
       payload_artifact: ${{ needs.changes.outputs.payload_artifact }}
@@ -568,6 +580,7 @@ jobs:
     with:
       source_ref: ${{ inputs.openclaw_ref || '' }}
       gateway_version: ${{ inputs.gateway_version || '' }}
+      release_channel: ${{ inputs.release_channel || 'stable' }}
       signing_mode: ${{ inputs.signing_mode || 'unsigned' }}
       versioning: ${{ needs.changes.outputs.versioning }}
       payload_artifact: ${{ needs.changes.outputs.payload_artifact }}
@@ -597,6 +610,7 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
           PACKAGING_EXPECTED: ${{ github.event_name != 'pull_request' || needs.changes.outputs.packaging == 'true' }}
           EXPECTED_ROUTE: ${{ needs.source-preflight.outputs.route }}
+          RELEASE_CHANNEL: ${{ inputs.release_channel || 'stable' }}
         run: |
           $results = $env:RESULTS | ConvertFrom-Json
           if ($results.changes.result -cne 'success') { throw 'Change classification failed.' }
@@ -605,6 +619,7 @@ jobs:
           $outputs = ./scripts/Select-WorkflowBuild.ps1 `
             -PackagingExpected $expected `
             -ExpectedRoute $env:EXPECTED_ROUTE `
+            -ReleaseChannel $env:RELEASE_CHANNEL `
             -ExpectedSource $results.'source-preflight'.outputs `
             -Trusted $results.'build-trusted' -ReadOnly $results.'build-read-only'
           if ($null -ne $outputs) {
@@ -633,21 +648,24 @@ jobs:
       - name: Download unsigned x64 package
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-store-unsigned-x64
+          name: openclaw-gateway-msix-${{ inputs.release_channel == 'stable' && 'store' || 'sideload' }}-unsigned-x64
           path: artifacts\x64
 
       - name: Download unsigned ARM64 package
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-store-unsigned-arm64
+          name: openclaw-gateway-msix-${{ inputs.release_channel == 'stable' && 'store' || 'sideload' }}-unsigned-arm64
           path: artifacts\arm64
 
       - name: Apply temporary test signature
         shell: pwsh
+        env:
+          IDENTITY_CHANNEL: ${{ inputs.release_channel == 'stable' && 'Store' || 'Sideload' }}
         run: |
           .\scripts\Sign-TestMSIX.ps1 `
             -ArtifactsDirectory artifacts `
-            -OutputDirectory test-signed
+            -OutputDirectory test-signed `
+            -IdentityChannel $env:IDENTITY_CHANNEL
 
       - name: Upload test-signed x64 MSIX
         uses: actions/upload-artifact@v7
@@ -832,6 +850,8 @@ jobs:
       release_tag: ${{ steps.release.outputs.release_tag }}
       release_version: ${{ steps.release.outputs.release_version }}
       publisher: ${{ steps.release.outputs.publisher }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+      make_latest: ${{ steps.release.outputs.make_latest }}
     permissions:
       actions: read
       contents: read
@@ -842,18 +862,21 @@ jobs:
           persist-credentials: false
 
       - name: Download unsigned Store x64 package
+        if: ${{ (inputs.release_channel == '' || inputs.release_channel == 'stable') }}
         uses: actions/download-artifact@v8
         with:
           name: openclaw-gateway-msix-store-unsigned-x64
           path: artifacts\store\x64
 
       - name: Download unsigned Store ARM64 package
+        if: ${{ (inputs.release_channel == '' || inputs.release_channel == 'stable') }}
         uses: actions/download-artifact@v8
         with:
           name: openclaw-gateway-msix-store-unsigned-arm64
           path: artifacts\store\arm64
 
       - name: Download unsigned Store bundle
+        if: ${{ (inputs.release_channel == '' || inputs.release_channel == 'stable') }}
         uses: actions/download-artifact@v8
         with:
           name: openclaw-gateway-msix-store-unsigned-bundle
@@ -902,6 +925,7 @@ jobs:
           SIGNING_MODE: ${{ inputs.signing_mode }}
           SOURCE_REF: ${{ inputs.openclaw_ref }}
           GATEWAY_VERSION: ${{ inputs.gateway_version }}
+          RELEASE_CHANNEL: ${{ inputs.release_channel || 'stable' }}
         run: |
           $source = .\scripts\Get-WorkflowSource.ps1 `
             -PolicyPath .\release-policy.json `
@@ -912,6 +936,7 @@ jobs:
             -SigningMode $env:SIGNING_MODE `
             -Ref $env:SOURCE_REF `
             -GatewayVersion $env:GATEWAY_VERSION `
+            -ReleaseChannel $env:RELEASE_CHANNEL `
             -ReuseSnapshot
           $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
             ConvertFrom-Json
@@ -930,6 +955,8 @@ jobs:
           "package_version=$packageVersion" >> $env:GITHUB_OUTPUT
           "release_tag=$($identity.ReleaseTag)" >> $env:GITHUB_OUTPUT
           "release_version=$($identity.ReleaseVersion)" >> $env:GITHUB_OUTPUT
+          "prerelease=$($identity.Prerelease.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "make_latest=$($identity.MakeLatest.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           "publisher=$($policy.sideloadPackageIdentity.publisher)" >> $env:GITHUB_OUTPUT
 
       - name: Enforce reviewed release policy
@@ -938,9 +965,11 @@ jobs:
           SIGNING_MODE: ${{ inputs.signing_mode }}
           SOURCE_REF: ${{ inputs.openclaw_ref }}
           GATEWAY_VERSION: ${{ inputs.gateway_version }}
+          RELEASE_CHANNEL: ${{ inputs.release_channel || 'stable' }}
           PACKAGING_COMMIT: ${{ github.sha }}
         run: |
-          foreach ($channel in @('Store', 'Sideload')) {
+          $channels = if ($env:RELEASE_CHANNEL -eq 'stable') { @('Store', 'Sideload') } else { @('Sideload') }
+          foreach ($channel in $channels) {
             $channelDirectory = $channel.ToLowerInvariant()
             .\scripts\Test-SigningInputs.ps1 `
               -ArtifactsDirectory "artifacts\$channelDirectory" `
@@ -949,6 +978,7 @@ jobs:
               -SourcePath source-resolution\source-resolution.json `
               -RequestedRef $env:SOURCE_REF `
               -GatewayVersion $env:GATEWAY_VERSION `
+              -ReleaseChannel $env:RELEASE_CHANNEL `
               -WorkflowRunId $env:GITHUB_RUN_ID `
               -SigningMode $env:SIGNING_MODE `
               -PackagingCommit $env:PACKAGING_COMMIT `
@@ -1151,8 +1181,8 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: OpenClaw Gateway MSIX ${{ needs.authorize-signing.outputs.release_tag }}
           generate_release_notes: true
-          prerelease: false
-          make_latest: true
+          prerelease: ${{ needs.authorize-signing.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.authorize-signing.outputs.make_latest }}
           overwrite_files: false
           fail_on_unmatched_files: true
           files: |
@@ -1172,7 +1202,7 @@ jobs:
   retain-store-submission:
     cache-mode: none
     name: Retain authorized Microsoft Store submission bundle
-    if: ${{ !cancelled() && needs.build.result == 'success' && needs.authorize-signing.result == 'success' }}
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.authorize-signing.result == 'success' && (inputs.release_channel == '' || inputs.release_channel == 'stable') }}
     needs:
       - build
       - authorize-signing

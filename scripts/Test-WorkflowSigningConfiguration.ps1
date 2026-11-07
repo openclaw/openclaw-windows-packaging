@@ -47,6 +47,19 @@ foreach ($route in @('trusted', 'read-only')) {
         }
     }
 }
+foreach ($previewChannel in @('beta')) {
+    $previewOutputs = $outputs | ConvertTo-Json | ConvertFrom-Json
+    $previewOutputs.package_version = "2026.9.8-$previewChannel.1"
+    $previewOutputs.source_tag = "v$($previewOutputs.package_version)"
+    $previewOutputs.release_identity_tag = $previewOutputs.source_tag
+    $previewResult = [pscustomobject]@{ result = 'success'; outputs = $previewOutputs }
+    $null = & $selector -PackagingExpected $true -ExpectedRoute read-only -ReleaseChannel $previewChannel `
+        -ExpectedSource $previewOutputs -Trusted (New-Result skipped) -ReadOnly $previewResult
+    Assert-Rejected {
+        & $selector -PackagingExpected $true -ExpectedRoute read-only `
+            -ExpectedSource $previewOutputs -Trusted (New-Result skipped) -ReadOnly $previewResult
+    }
+}
 $skipped = New-Result skipped
 if (@(& $selector -PackagingExpected $false -ExpectedRoute '' -ExpectedSource ([pscustomobject]@{}) -Trusted $skipped -ReadOnly $skipped).Count -ne 0) {
     throw 'Documentation-only builds must emit no package outputs.'
@@ -231,7 +244,8 @@ function Assert-WorkflowClassification {
     param(
         [string]$EventName,
         [string]$SigningMode,
-        [bool]$ExpectedVersioning
+        [bool]$ExpectedVersioning,
+        [string]$ReleaseChannel = 'stable'
     )
 
     function gh {
@@ -242,7 +256,7 @@ function Assert-WorkflowClassification {
         "openclaw-workflow-classification-$([guid]::NewGuid().ToString('N'))"
     )
     $savedEnvironment = @{}
-    foreach ($name in @('GITHUB_EVENT_NAME', 'GITHUB_OUTPUT', 'SIGNING_MODE')) {
+    foreach ($name in @('GITHUB_EVENT_NAME', 'GITHUB_OUTPUT', 'SIGNING_MODE', 'RELEASE_CHANNEL')) {
         $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
     }
     $location = Get-Location
@@ -251,6 +265,7 @@ function Assert-WorkflowClassification {
         $env:GITHUB_EVENT_NAME = $EventName
         $env:GITHUB_OUTPUT = $outputPath
         $env:SIGNING_MODE = $SigningMode
+        $env:RELEASE_CHANNEL = $ReleaseChannel
         & $classificationScript
 
         $outputs = @{}
@@ -277,8 +292,8 @@ function Assert-WorkflowClassification {
             throw "$EventName/$SigningMode did not emit the upgrade matrix."
         }
         $matrix = $outputs['upgrade_matrix'] | ConvertFrom-Json
-        if (@($matrix.include).Count -ne 13) {
-            throw "$EventName/$SigningMode did not select all upgrade scenarios."
+        if (@($matrix.include).Count -ne $(if ($ReleaseChannel -eq 'stable') { 13 } else { 6 })) {
+            throw "$EventName/$SigningMode did not select the channel upgrade scenarios."
         }
     }
     finally {
@@ -304,6 +319,9 @@ Assert-WorkflowClassification `
     -EventName push `
     -SigningMode unsigned `
     -ExpectedVersioning $false
+foreach ($previewChannel in @('beta')) {
+    Assert-WorkflowClassification -EventName workflow_dispatch -SigningMode official -ExpectedVersioning $true -ReleaseChannel $previewChannel
+}
 Write-Host 'Workflow dispatch classification contracts passed.'
 
 # Run the real Store preparation step against a fake Windows directory and

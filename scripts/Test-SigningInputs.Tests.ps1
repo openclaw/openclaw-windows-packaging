@@ -80,6 +80,7 @@ $source = [ordered]@{
     workflowRef = 'openclaw/openclaw-windows-packaging/.github/workflows/gateway-msix.yml@refs/heads/main'
     githubRef = 'refs/heads/main'
     eventName = 'workflow_dispatch'
+    releaseChannel = 'stable'
 }
 
 function Save-TestSource {
@@ -354,6 +355,8 @@ function Invoke-PolicyValidation {
 
         [string]$GatewayVersion = '',
 
+        [string]$ReleaseChannel = 'stable',
+
         [switch]$PreserveBundle
     )
 
@@ -391,6 +394,7 @@ function Invoke-PolicyValidation {
         -SigningMode official `
         -RequestedRef $RequestedRef `
         -GatewayVersion $GatewayVersion `
+        -ReleaseChannel $ReleaseChannel `
         -PackagingCommit $packagingCommit `
         -WorkflowRef 'openclaw/openclaw-windows-packaging/.github/workflows/gateway-msix.yml@refs/heads/main' `
         -GitHubRef 'refs/heads/main' -EventName 'workflow_dispatch' `
@@ -1151,6 +1155,42 @@ try {
         -Action {
             Invoke-PolicyValidation -Root $testRoot -PreserveBundle
         }
+
+    foreach ($previewChannel in @('beta')) {
+        $previewVersion = "2026.9.8-$previewChannel.2"
+        $previewRoot = Join-Path $suiteRoot $previewChannel
+        $previewIdentity = & (Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1') `
+            -GatewayTag "v$previewVersion" -MSIXRevision ([int]$policy.msixRevision)
+        $approvedPackageVersion = $previewIdentity.PackageVersion
+        $source.packageVersion = $previewVersion
+        $source.releaseTag = "v$previewVersion"
+        $source.requestedRef = $previewChannel
+        $source.channel = $previewChannel
+        $source.releaseChannel = $previewChannel
+        Save-TestSource
+        foreach ($architecture in @('x64', 'arm64')) {
+            New-TestArtifact -Root $previewRoot -Architecture $architecture `
+                -IdentityChannel Sideload -PayloadPackageVersion $previewVersion
+        }
+        Invoke-PolicyValidation -Root $previewRoot -IdentityChannel Sideload -ReleaseChannel $previewChannel
+        Assert-Fails -MessagePattern 'packageVersion|channel' -Action {
+            Invoke-PolicyValidation -Root $previewRoot -IdentityChannel Sideload
+        }
+        Assert-Fails -MessagePattern 'cannot authorize Store' -Action {
+            Invoke-PolicyValidation -Root $previewRoot -ReleaseChannel $previewChannel -PreserveBundle
+        }
+        $source.releaseChannel = 'stable'
+        Save-TestSource
+        Assert-Fails -MessagePattern 'workflow identity: releaseChannel' -Action {
+            Invoke-PolicyValidation -Root $previewRoot -IdentityChannel Sideload -ReleaseChannel $previewChannel
+        }
+        $source.releaseChannel = $previewChannel
+        Save-TestSource
+        Add-Content -LiteralPath (Join-Path $previewRoot 'arm64/OpenClawGateway-arm64.msix') -Value 'tampered'
+        Assert-Fails -MessagePattern 'MSIX hash does not match' -Action {
+            Invoke-PolicyValidation -Root $previewRoot -IdentityChannel Sideload -ReleaseChannel $previewChannel -PreserveBundle
+        }
+    }
 
     foreach ($canonicalFile in $canonicalFileHashes.Keys) {
         $currentHash = (

@@ -32,6 +32,9 @@ param(
 
     [string]$GatewayVersion = '',
 
+    [ValidateSet('stable', 'beta')]
+    [string]$ReleaseChannel = 'stable',
+
     [ValidateSet('Store', 'Sideload')]
     [string]$IdentityChannel = 'Store'
 )
@@ -39,6 +42,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
+if ($ReleaseChannel -ne 'stable' -and $IdentityChannel -eq 'Store') {
+    throw 'Prereleases cannot authorize Store submission artifacts.'
+}
 
 function New-PackageEntryIndex {
     param(
@@ -211,6 +217,7 @@ $source = & (Join-Path $PSScriptRoot 'Get-WorkflowSource.ps1') `
     -SigningMode $SigningMode `
     -Ref $RequestedRef `
     -GatewayVersion $GatewayVersion `
+    -ReleaseChannel $ReleaseChannel `
     -ReuseSnapshot
 $releaseIdentitySource = if ($null -ne $source.PSObject.Properties['releaseIdentitySource']) {
     $source.releaseIdentitySource

@@ -20,7 +20,7 @@ function Get-OpenClawBuildRoute {
     if ($SigningMode -in @('official', 'store') -and $GitHubRef -cne 'refs/heads/main') {
         throw 'Release publication requires the main workflow ref.'
     }
-    if ($Channel -cnotin @('', 'stable')) { throw 'The source channel is unsupported.' }
+    if ($Channel -cnotin @('', 'stable', 'beta')) { throw 'The source channel is unsupported.' }
     if ($GitHubRef -ceq 'refs/heads/main' -and $Channel -ceq 'stable') { return 'trusted' }
     return 'read-only'
 }
@@ -55,11 +55,12 @@ function Assert-OpenClawSourceText {
 }
 
 function Assert-OpenClawSourceVersion {
-    param([AllowNull()][object]$Version)
+    param([AllowNull()][object]$Version, [ValidateSet('stable', 'beta')][string]$Channel = 'stable')
 
     # Patch 33+ is extended stable; numeric suffixes are regular stable corrections.
+    $suffix = if ($Channel -eq 'stable') { '(?:-[1-9][0-9]*)?' } else { "-$Channel\.[1-9][0-9]*" }
     Assert-OpenClawSourceText $Version 'packageVersion' -Pattern (
-        '\A[1-9][0-9]{3}\.(?:[1-9]|1[0-2])\.(?:[1-9]|[12][0-9]|3[0-2])(?:-[1-9][0-9]*)?\z')
+        '\A[1-9][0-9]{3}\.(?:[1-9]|1[0-2])\.(?:[1-9]|[12][0-9]|3[0-2])' + $suffix + '\z')
     # Keep package-version limits owned by the release identity helper.
     $null = & (Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1') `
         -GatewayTag "v$Version" -MSIXRevision 0
@@ -83,15 +84,17 @@ function Get-OpenClawPolicyRef {
         throw 'The release policy repository must be https://github.com/openclaw/openclaw.'
     }
     $channel = Get-OpenClawSourceField $Policy 'channel' -Optional
-    if ($null -ne $channel -and ($channel -isnot [string] -or $channel -cne 'stable')) {
-        throw 'The release policy channel must be stable when specified.'
+    if ($null -ne $channel -and ($channel -isnot [string] -or $channel -cnotin @('stable', 'beta'))) {
+        throw 'The release policy channel must be stable or beta when specified.'
     }
-    $pin = Get-OpenClawSourceField $Policy 'stableVersion' -Optional
+    if ($null -eq $channel) { $channel = 'stable' }
+    $pinName = if ($channel -eq 'stable') { 'stableVersion' } else { 'prereleaseVersion' }
+    $pin = Get-OpenClawSourceField $Policy $pinName -Optional
     if ($null -ne $pin) {
-        Assert-OpenClawSourceVersion $pin
+        Assert-OpenClawSourceVersion $pin -Channel $channel
         return $pin
     }
-    return 'stable'
+    return $channel
 }
 
 function Read-OpenClawReleasePolicy {
@@ -136,7 +139,7 @@ function Invoke-OpenClawSourceRequest {
 }
 
 function Get-OpenClawCommitPackageVersion {
-    param([string]$Commit)
+    param([string]$Commit, [string]$Channel = 'stable')
 
     $file = Invoke-OpenClawSourceRequest GitHub "contents/package.json?ref=$Commit"
     if ($file.type -cne 'file' -or $file.encoding -cne 'base64' -or $file.content -isnot [string]) {
@@ -148,7 +151,7 @@ function Get-OpenClawCommitPackageVersion {
     if ($package.name -isnot [string] -or $package.name -cne 'openclaw') {
         throw 'The source package name must be openclaw.'
     }
-    Assert-OpenClawSourceVersion $package.version
+    Assert-OpenClawSourceVersion $package.version -Channel $Channel
     return $package.version
 }
 
@@ -159,6 +162,8 @@ function Resolve-OpenClawSource {
     Set-StrictMode -Version Latest
     $ErrorActionPreference = 'Stop'
     $policyRef = Get-OpenClawPolicyRef $Policy
+    $policyChannel = Get-OpenClawSourceField $Policy 'channel' -Optional
+    if ($null -eq $policyChannel) { $policyChannel = 'stable' }
     Assert-OpenClawSourceText $Ref 'Ref' -AllowEmpty
     $channel = $releaseTag = $tagObject = $integrity = ''
     if ($Ref.Length -gt 0) {
@@ -170,10 +175,10 @@ function Resolve-OpenClawSource {
         if ($Ref -match '\A[0-9a-fA-F]{40}\z' -and $Ref -ine $commit) {
             throw 'The resolved commit does not match the full SHA override.'
         }
-        $version = Get-OpenClawCommitPackageVersion $commit
+        $version = Get-OpenClawCommitPackageVersion $commit -Channel $policyChannel
     }
     else {
-        $channel = 'stable'
+        $channel = $policyChannel
         $requestedRef = $policyRef
         $selector = if ($policyRef -ceq 'stable') { 'latest' } else { $policyRef }
         $selection = Invoke-OpenClawSourceRequest Registry $selector
@@ -181,12 +186,12 @@ function Resolve-OpenClawSource {
             throw 'The registry selector must resolve to the openclaw package.'
         }
         $version = $selection.version
-        Assert-OpenClawSourceVersion $version
-        if ($policyRef -cne 'stable' -and $version -cne $policyRef) {
-            throw 'The registry version does not match the stableVersion pin.'
+        Assert-OpenClawSourceVersion $version -Channel $policyChannel
+        if ($policyRef -cnotin @('stable', 'beta') -and $version -cne $policyRef) {
+            throw 'The registry version does not match the stableVersion pin or prereleaseVersion pin.'
         }
         $manifest = $selection
-        if ($policyRef -ceq 'stable') { $manifest = Invoke-OpenClawSourceRequest Registry $version }
+        if ($policyRef -cin @('stable', 'beta')) { $manifest = Invoke-OpenClawSourceRequest Registry $version }
         if ($manifest.name -isnot [string] -or $manifest.name -cne 'openclaw' -or
             $manifest.version -isnot [string] -or $manifest.version -cne $version) {
             throw 'The exact registry manifest does not match the selected package version.'
@@ -225,7 +230,7 @@ function Resolve-OpenClawSource {
         }
         Assert-OpenClawSourceText $tag.object.sha 'commit' -Pattern '\A[0-9a-fA-F]{40}\z'
         $commit = $tag.object.sha.ToLowerInvariant()
-        if ((Get-OpenClawCommitPackageVersion $commit) -cne $version) {
+        if ((Get-OpenClawCommitPackageVersion $commit -Channel $policyChannel) -cne $version) {
             throw 'The source package version does not match the selected registry version.'
         }
         $gitHead = Get-OpenClawSourceField $manifest 'gitHead' -Optional
@@ -256,6 +261,8 @@ function Assert-OpenClawSource {
     Set-StrictMode -Version Latest
     $ErrorActionPreference = 'Stop'
     $policyRef = Get-OpenClawPolicyRef $Policy
+    $policyChannel = Get-OpenClawSourceField $Policy 'channel' -Optional
+    if ($null -eq $policyChannel) { $policyChannel = 'stable' }
     $values = @{}
     foreach ($field in @(
             'repository', 'requestedRef', 'resolvedCommit', 'packageVersion',
@@ -274,7 +281,7 @@ function Assert-OpenClawSource {
     }
     Assert-OpenClawSourceRef $values.requestedRef
     Assert-OpenClawSourceText $values.resolvedCommit 'resolvedCommit' -Pattern '\A[0-9a-f]{40}\z'
-    Assert-OpenClawSourceVersion $values.packageVersion
+    Assert-OpenClawSourceVersion $values.packageVersion -Channel $policyChannel
     Assert-OpenClawSourceText $values.resolvedAt 'resolvedAt' -Pattern (
         '\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,7})?(?:Z|\+00:00)\z')
     $timestamp = [DateTimeOffset]::MinValue
@@ -283,11 +290,11 @@ function Assert-OpenClawSource {
         throw 'resolvedAt must be a valid UTC RFC3339 timestamp.'
     }
     if ($values.channel.Length -gt 0) {
-        if ($values.channel -cne 'stable' -or $values.requestedRef -cne $policyRef) {
+        if ($values.channel -cne $policyChannel -or $values.requestedRef -cne $policyRef) {
             throw 'The source channel and requestedRef must match the release policy.'
         }
-        if ($policyRef -cne 'stable' -and $values.packageVersion -cne $policyRef) {
-            throw 'The source packageVersion must match the stableVersion pin.'
+        if ($policyRef -cnotin @('stable', 'beta') -and $values.packageVersion -cne $policyRef) {
+            throw 'The source packageVersion must match the stableVersion pin or prereleaseVersion pin.'
         }
         if ($values.releaseTag -cne "v$($values.packageVersion)") {
             throw 'The releaseTag must match the source package version.'

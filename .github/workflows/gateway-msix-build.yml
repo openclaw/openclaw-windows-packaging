@@ -3,6 +3,9 @@ name: Build captured OpenClaw Gateway MSIX
 on:
   workflow_call:
     inputs:
+      release_channel:
+        type: string
+        required: true
       source_ref:
         type: string
         required: true
@@ -90,6 +93,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_REF: ${{ inputs.source_ref }}
           GATEWAY_VERSION: ${{ inputs.gateway_version }}
+          RELEASE_CHANNEL: ${{ inputs.release_channel }}
           SIGNING_MODE: ${{ inputs.signing_mode || 'unsigned' }}
         run: |
           $snapshotPath = Join-Path $env:RUNNER_TEMP 'openclaw-source/source-resolution.json'
@@ -98,6 +102,7 @@ jobs:
             -OutputPath $snapshotPath `
             -Ref $env:SOURCE_REF `
             -GatewayVersion $env:GATEWAY_VERSION `
+            -ReleaseChannel $env:RELEASE_CHANNEL `
             -SigningMode $env:SIGNING_MODE `
             -WorkflowRunId $env:GITHUB_RUN_ID `
             -PackagingCommit $env:GITHUB_SHA `
@@ -368,7 +373,7 @@ jobs:
       - name: Compose unsigned Gateway MSIX packages
         shell: pwsh
         env:
-          BUILD_STORE_PACKAGE: ${{ github.event_name != 'pull_request' || inputs.bundle_build == 'true' || inputs.versioning == 'true' }}
+          BUILD_STORE_PACKAGE: ${{ inputs.release_channel == 'stable' && (github.event_name != 'pull_request' || inputs.bundle_build == 'true' || inputs.versioning == 'true') }}
           SIGNING_MODE: ${{ inputs.signing_mode }}
           VERSIONING_CHANGE: ${{ inputs.versioning }}
           GATEWAY_TAG: ${{ needs.build-package.outputs.release_identity_tag }}
@@ -407,7 +412,7 @@ jobs:
           .\scripts\Build-MSIX.ps1 @packageParameters
 
       - name: Upload unsigned Store MSIX
-        if: ${{ github.event_name != 'pull_request' || inputs.bundle_build == 'true' || inputs.versioning == 'true' }}
+        if: ${{ inputs.release_channel == 'stable' && (github.event_name != 'pull_request' || inputs.bundle_build == 'true' || inputs.versioning == 'true') }}
         uses: actions/upload-artifact@v7
         with:
           name: openclaw-gateway-msix-store-unsigned-${{ matrix.architecture }}
@@ -441,12 +446,14 @@ jobs:
           persist-credentials: false
 
       - name: Download unsigned Store x64 package
+        if: ${{ inputs.release_channel == 'stable' }}
         uses: actions/download-artifact@v8
         with:
           name: openclaw-gateway-msix-store-unsigned-x64
           path: artifacts\store\x64
 
       - name: Download unsigned Store ARM64 package
+        if: ${{ inputs.release_channel == 'stable' }}
         uses: actions/download-artifact@v8
         with:
           name: openclaw-gateway-msix-store-unsigned-arm64
@@ -467,6 +474,7 @@ jobs:
       - name: Compose unsigned Store and sideload MSIX bundles
         shell: pwsh
         env:
+          RELEASE_CHANNEL: ${{ inputs.release_channel }}
           SIGNING_MODE: ${{ inputs.signing_mode }}
           VERSIONING_CHANGE: ${{ inputs.versioning }}
           GATEWAY_TAG: ${{ needs.build-package.outputs.release_identity_tag }}
@@ -489,7 +497,8 @@ jobs:
           $packageVersion = .\scripts\Get-WorkflowPackageVersion.ps1 `
             @versionParameters
 
-          foreach ($channel in @('store', 'sideload')) {
+          $channels = if ($env:RELEASE_CHANNEL -eq 'stable') { @('store', 'sideload') } else { @('sideload') }
+          foreach ($channel in $channels) {
             .\scripts\Build-MSIXBundle.ps1 `
               -X64Package "artifacts\$channel\x64\OpenClawGateway-x64.msix" `
               -Arm64Package "artifacts\$channel\arm64\OpenClawGateway-arm64.msix" `
@@ -498,7 +507,7 @@ jobs:
           }
 
       - name: Upload unsigned Store MSIX bundle
-        if: ${{ github.event_name != 'pull_request' || inputs.versioning == 'true' }}
+        if: ${{ inputs.release_channel == 'stable' && (github.event_name != 'pull_request' || inputs.versioning == 'true') }}
         uses: actions/upload-artifact@v7
         with:
           name: openclaw-gateway-msix-store-unsigned-bundle

@@ -1,5 +1,7 @@
 [CmdletBinding()]
 param(
+    [ValidateSet('stable', 'beta')][string]$ReleaseChannel = 'stable',
+
     [string]$ManifestPath = (
         Join-Path $PSScriptRoot 'msix-upgrade-baselines.json'
     )
@@ -101,4 +103,6 @@ $include.Add([pscustomobject]@{
     baseline_asset = ''
 })
 
-@{ include = $include } | ConvertTo-Json -Depth 4 -Compress
+$selected = if ($ReleaseChannel -eq 'stable') { @($include.ToArray()) }
+else { @($include | Where-Object channel -CEQ 'sideload') }
+@{ include = $selected } | ConvertTo-Json -Depth 4 -Compress
