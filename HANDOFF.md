@@ -46,7 +46,7 @@ implementation SHA for the branch's additional documentation commit:
 
 
 ```powershell
-git clone --single-branch --branch openclaw/gateway-isolation-human-folders https://github.com/openclaw/openclaw-windows-packaging.git
+git clone --single-branch --branch openclaw/gateway-isolation-human-folders https://github.com/roboclaw-bot/openclaw-windows-packaging.git
 if ($LASTEXITCODE -ne 0) { throw 'Clone failed' }
 Set-Location openclaw-windows-packaging
 $repositoryRoot = (Get-Location).Path
