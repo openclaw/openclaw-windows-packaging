@@ -608,3 +608,39 @@ driver into a fixture-owned temporary directory, runs it as `clawctl.exe`, and
 removes that directory. Its collaborators, including diagnostics, are
 fixture-owned so the test cannot append to the real
 `%LOCALAPPDATA%\OpenClawGatewayMSIX` log or launch a real process.
+
+## Store servicing example
+
+Use only a disposable Windows account and test package. Build and install the
+candidate through the package lanes above, then configure its isolated Gateway.
+Do not run this experiment against the user's normal Gateway.
+
+1. Start the installed package-qualified `openclaw-gateway-recovery.exe` alias
+   with `--store-update-host`. Use the alias declared by that package's manifest,
+   including its patched name when applicable. Do not launch the loose binary
+   outside package activation. The helper is windowless; inspect the host log
+   for `Store update example is listening for Windows servicing shutdown.`
+2. Wait at least 60 seconds: Windows restart registration has a minimum process
+   lifetime. Launch a second copy and verify that it refuses the duplicate.
+3. In the disposable account, deploy a newer same-family, same-publisher test
+   package using deployment's force-target-shutdown option. Record the helper
+   and isolated Gateway process identities before and after, package versions,
+   launch receipts, host log, and Gateway health. Verify that the original
+   attempt stops and the updated helper restores exactly one healthy Gateway.
+4. Repeat with a cancelled shutdown, an explicitly stopped Gateway, and a
+   replaced launch attempt. The example must not stop a replacement or restart
+   a Gateway that it did not positively stop. Also test a Node.js runtime change;
+   automatic runtime preparation is not implemented in this example.
+5. Separately exercise a real Store-delivered update while the Gateway is running.
+   A successful forced `Add-AppxPackage` replacement does not prove unattended
+   Store delivery or its shutdown/deferral policy.
+6. Close the example helper's hidden top-level window with `WM_CLOSE` to opt out.
+   This unregisters restart and exits the helper without stopping the Gateway.
+   Stop/tear down and unregister only the test-owned package using the lanes above.
+
+No scheduler or automatic-update setting is installed. The usual no-argument
+recovery helper and Companion start commands do not enroll in the example.
+Do not use success from managed tests as NativeAOT, Windows message delivery,
+Store update, or isolated-Gateway restart proof. Run the repository NativeAOT
+lane and publish/execute the recovery helper on both supported architectures;
+the existing CLI smoke driver alone does not exercise the hidden window.
