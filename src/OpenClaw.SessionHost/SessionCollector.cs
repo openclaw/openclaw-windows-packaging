@@ -29,17 +29,17 @@ internal static class SessionCollector
         Action<string, string> writeFile,
         string? profileRoot = null,
         Func<string, string, SearchOption, IEnumerable<string>>? enumerateFiles = null,
-        Action? beforeDestinationOpen = null)
+        Action? beforeDestinationOpen = null,
+        TextWriter? errorOutput = null)
     {
         string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
         string? requestId = null;
-        string profile = profileRoot ?? AgentProfile.GetPath();
-
         try
         {
             SessionCollectRequest request =
                 SessionCollectProtocol.ReadRequest(readFile(requestPath));
             requestId = request.RequestId;
+            string profile = profileRoot ?? AgentProfile.GetPath();
             string destination = ResolveInWorkspace(
                 Path.GetDirectoryName(Path.GetFullPath(requestPath))
                 ?? throw new SessionLaunchException(
@@ -79,7 +79,12 @@ internal static class SessionCollector
             exception is SessionLaunchException or IOException or
             UnauthorizedAccessException)
         {
-            TryWriteFailure(writeFile, resultPath, requestId, exception.Message);
+            TryWriteFailure(
+                writeFile,
+                resultPath,
+                requestId,
+                exception.Message,
+                errorOutput ?? Console.Error);
             return SessionLaunchProtocol.HelperFailureExitCode;
         }
     }
@@ -692,7 +697,8 @@ internal static class SessionCollector
         Action<string, string> writeFile,
         string resultPath,
         string? requestId,
-        string error)
+        string error,
+        TextWriter errorOutput)
     {
         try
         {
@@ -707,7 +713,11 @@ internal static class SessionCollector
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException)
         {
-            // The exit code is the only remaining channel.
+            Program.ReportResultWriteFailure(
+                errorOutput,
+                requestId,
+                error,
+                exception);
         }
     }
 

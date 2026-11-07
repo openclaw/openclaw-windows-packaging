@@ -34,20 +34,41 @@ $result = & $scriptPath @canonical
 $expected = @(
     'workflow', 'run', 'windows-store-publish.yml',
     '--repo', 'openclaw/releases', '--ref', 'main',
-    '-f', 'product=gateway', '-f', 'run_id=123'
+    '-f', 'product=gateway', '-f', 'run_id=123', '-f', 'channel=production', '-f', 'automatic=false'
 )
 if ($fixture.calls.Count -ne 1 -or
     ($fixture.calls[0] | ConvertTo-Json -Compress) -cne ($expected | ConvertTo-Json -Compress)) {
     throw 'The request did not dispatch exactly the fixed central workflow and source run.'
 }
-if ($result.product -cne 'gateway' -or $result.sourceRunId -cne '123' -or $result.status -cne 'requested') {
+if ($result.product -cne 'gateway' -or $result.sourceRunId -cne '123' -or $result.status -cne 'requested' -or $result.channel -cne 'production') {
     throw 'A request must report request acceptance, not Microsoft Store acceptance.'
 }
 $script:checks++
 
+foreach ($channel in @('development', 'Development', 'DEVELOPMENT')) {
+    $parameters = $canonical.Clone()
+    $parameters.Channel = $channel
+    $fixture.calls = @()
+    $result = & $scriptPath @parameters
+    $expectedDevelopment = @(
+        'workflow', 'run', 'windows-store-publish.yml',
+        '--repo', 'openclaw/releases', '--ref', 'main',
+        '-f', 'product=gateway', '-f', 'run_id=123', '-f', 'channel=development', '-f', 'automatic=false'
+    )
+    if ($fixture.calls.Count -ne 1 -or
+        ($fixture.calls[0] | ConvertTo-Json -Compress) -cne ($expectedDevelopment | ConvertTo-Json -Compress) -or
+        $result.channel -cne 'development') { throw 'The request did not preserve the Development destination.' }
+    $script:checks++
+}
+
 foreach ($runId in @('0', '-1', '01', '1.0', '1e2', ' 123', '123 ', "123`n", '123;command', '')) {
     $parameters = $canonical.Clone()
     $parameters.RunId = $runId
+    Assert-Rejected $parameters
+}
+foreach ($channel in @('beta', 'development;command')) {
+    $parameters = $canonical.Clone()
+    $parameters.Channel = $channel
     Assert-Rejected $parameters
 }
 foreach ($override in @(

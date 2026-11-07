@@ -1,6 +1,10 @@
 using System.Text.RegularExpressions;
 
+#if OPENCLAW_SESSION_HOST
+namespace OpenClaw.SessionHost.Diagnostics;
+#else
 namespace OpenClaw.Launcher.Gateway;
+#endif
 
 /// <summary>
 /// Removes credential-shaped values from text before it enters a bundle.

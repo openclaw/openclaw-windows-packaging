@@ -35,7 +35,7 @@ public sealed class SessionRuntimeInstallerTests : IDisposable
     /// </summary>
     private string ApplicationDirectory => Path.Combine(_root, "app");
 
-    private SessionRuntimeInstallResult Run(string archivePath)
+    private SessionRuntimeInstallResult Run(string archivePath, TextWriter? errorOutput = null)
     {
         File.WriteAllText(
             RequestPath,
@@ -55,7 +55,8 @@ public sealed class SessionRuntimeInstallerTests : IDisposable
             File.ReadAllText,
             File.WriteAllText,
             () => _root,
-            getRuntimeVersion: ReadFixtureVersion);
+            getRuntimeVersion: ReadFixtureVersion,
+            errorOutput: errorOutput);
         Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode, exitCode);
 
         return SessionRuntimeProtocol.ReadResult(
@@ -242,11 +243,198 @@ public sealed class SessionRuntimeInstallerTests : IDisposable
     [Fact]
     public void AMissingArchiveIsReportedThroughTheResultFile()
     {
+        var errors = new StringWriter();
         SessionRuntimeInstallResult result = Run(
-            Path.Combine(_root, "node-v24.15.0-win-x64.zip"));
+            Path.Combine(_root, "node-v24.15.0-win-x64.zip"),
+            errors);
 
+        Assert.Equal("r1", result.RequestId);
         Assert.NotNull(result.Error);
         Assert.Null(result.ExecutablePath);
+        Assert.Empty(errors.ToString());
+    }
+
+    [Fact]
+    public void AnUnwritableFailureResultRetainsBothFailuresOnRedactedStderr()
+    {
+        const string requestId = "runtime-write-failure";
+        string archivePath = Path.Combine(_root, "node-v24.15.0-win-x64.zip");
+        string operationPath = Path.Combine(_root, "private profile", "runtime.zip");
+        string operationError =
+            $"runtime operation failed for '{operationPath}' OPENAI_API_KEY=operation-secret";
+        string publicationError =
+            $"failure result denied for '{RequestPath}.result.json' GATEWAY_TOKEN=write-secret";
+        File.WriteAllText(
+            RequestPath,
+            SessionRuntimeProtocol.SerializeRequest(new SessionRuntimeInstallRequest
+            {
+                RequestId = requestId,
+                ArchivePath = archivePath,
+                ApplicationDirectory = ApplicationDirectory,
+                UpdateUserPath = false
+            }));
+        string? attemptedResult = null;
+        var errors = new StringWriter();
+
+        int exitCode = SessionRuntimeInstaller.Run(
+            RequestPath,
+            File.ReadAllText,
+            (path, contents) =>
+            {
+                Assert.Equal(SessionLaunchProtocol.ResultPathFor(RequestPath), path);
+                attemptedResult = contents;
+                throw new UnauthorizedAccessException(publicationError);
+            },
+            getLocalApplicationData: () => throw new IOException(operationError),
+            errorOutput: errors);
+
+        Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode, exitCode);
+        SessionRuntimeInstallResult result = SessionRuntimeProtocol.ReadResult(
+            Assert.IsType<string>(attemptedResult));
+        Assert.Equal(requestId, result.RequestId);
+        Assert.Equal(operationError, result.Error);
+
+        string output = errors.ToString();
+        Assert.Contains(requestId, output, StringComparison.Ordinal);
+        Assert.Contains("runtime operation failed", output, StringComparison.Ordinal);
+        Assert.Contains("failure result denied", output, StringComparison.Ordinal);
+        Assert.Contains(operationPath, output, StringComparison.Ordinal);
+        Assert.Contains("<redacted>", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("operation-secret", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("write-secret", output, StringComparison.Ordinal);
+        _ = Assert.Single(output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+        Assert.True(output.Length < 1200);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AFailedSuccessResultWriteReportsThePublicationFailure(bool failureWriteDenied)
+    {
+        const string requestId = "runtime-success-write-failure";
+        string archivePath = CreateArchive("24.20.0");
+        string primaryError = $"success result denied for '{RequestPath}' OPENAI_API_KEY=success-secret";
+        string publicationError =
+            $"failure result denied for '{RequestPath}.result.json' GATEWAY_TOKEN=write-secret";
+        string? successResult = null;
+        string? failureResult = null;
+        int writes = 0;
+        var errors = new StringWriter();
+        File.WriteAllText(
+            RequestPath,
+            SessionRuntimeProtocol.SerializeRequest(new SessionRuntimeInstallRequest
+            {
+                RequestId = requestId,
+                ArchivePath = archivePath,
+                ApplicationDirectory = ApplicationDirectory,
+                UpdateUserPath = false
+            }));
+
+        int exitCode = SessionRuntimeInstaller.Run(
+            RequestPath,
+            File.ReadAllText,
+            (_, contents) =>
+            {
+                writes++;
+                if (writes == 1)
+                {
+                    successResult = contents;
+                    throw new IOException(primaryError);
+                }
+
+                failureResult = contents;
+                if (failureWriteDenied)
+                {
+                    throw new UnauthorizedAccessException(publicationError);
+                }
+                File.WriteAllText(SessionLaunchProtocol.ResultPathFor(RequestPath), contents);
+            },
+            () => _root,
+            getRuntimeVersion: ReadFixtureVersion,
+            stageNativeModules: (_, _) => null,
+            errorOutput: errors);
+
+        Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode, exitCode);
+        Assert.Equal(2, writes);
+        Assert.Equal(requestId, SessionRuntimeProtocol.ReadResult(
+            Assert.IsType<string>(successResult)).RequestId);
+        SessionRuntimeInstallResult result = SessionRuntimeProtocol.ReadResult(
+            Assert.IsType<string>(failureResult));
+        Assert.Equal(requestId, result.RequestId);
+        Assert.Equal(primaryError, result.Error);
+
+        string output = errors.ToString();
+        if (!failureWriteDenied)
+        {
+            Assert.Equal(result, SessionRuntimeProtocol.ReadResult(
+                File.ReadAllText(SessionLaunchProtocol.ResultPathFor(RequestPath))));
+            Assert.Empty(output);
+            return;
+        }
+        Assert.Contains("success result denied", output, StringComparison.Ordinal);
+        Assert.Contains("failure result denied", output, StringComparison.Ordinal);
+        Assert.Contains(RequestPath, output, StringComparison.Ordinal);
+        Assert.Contains("<redacted>", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("success-secret", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("write-secret", output, StringComparison.Ordinal);
+        _ = Assert.Single(output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+        Assert.True(output.Length < 1200);
+    }
+
+    [Theory]
+    [InlineData("""{"token":"json-secret"}""", "json-secret")]
+    [InlineData("https://example.invalid/#token=url-secret", "url-secret")]
+    [InlineData("OPENAI_API_KEY=environment-secret", "environment-secret")]
+    [InlineData("Authorization: Bearer header-secret", "header-secret")]
+    [InlineData("operation failed\r\n\tprivate detail", "\r")]
+    public void FailureFallbackRedactsCredentialsAndStaysOnOneLine(string detail, string excluded)
+    {
+        var errors = new StringWriter();
+        int exitCode = SessionRuntimeInstaller.Run(
+            RequestPath,
+            _ => throw new IOException(detail),
+            (_, _) => throw new IOException(detail),
+            errorOutput: errors);
+
+        Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode, exitCode);
+        string output = errors.ToString();
+        Assert.DoesNotContain(excluded, output.TrimEnd('\r', '\n'), StringComparison.Ordinal);
+        _ = Assert.Single(output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    [Fact]
+    public void OversizedFailureDetailDoesNotExposeATruncatedSecret()
+    {
+        string detail = "{\"token\":\"" + new string('s', 5000) + "\"}";
+        var errors = new StringWriter();
+        int exitCode = SessionRuntimeInstaller.Run(
+            RequestPath,
+            _ => throw new IOException(detail),
+            (_, _) => throw new IOException("result publication denied"),
+            errorOutput: errors);
+
+        Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode, exitCode);
+        Assert.Contains("error detail omitted (too long)", errors.ToString(), StringComparison.Ordinal);
+        Assert.Contains("result publication denied", errors.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(new string('s', 10), errors.ToString(), StringComparison.Ordinal);
+        Assert.True(errors.ToString().Length < 1200);
+    }
+
+    [Fact]
+    public void ABrokenStderrDoesNotReplaceTheHelperFailureExitCode()
+    {
+        int exitCode = SessionRuntimeInstaller.Run(
+            RequestPath,
+            _ => throw new IOException("operation failed"),
+            (_, _) => throw new IOException("result publication denied"),
+            errorOutput: new FailingWriter());
+
+        Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode, exitCode);
+    }
+
+    private sealed class FailingWriter : StringWriter
+    {
+        public override void WriteLine(string? value) => throw new IOException("stderr unavailable");
     }
 
     // An archive whose name does not carry a version cannot be installed, and

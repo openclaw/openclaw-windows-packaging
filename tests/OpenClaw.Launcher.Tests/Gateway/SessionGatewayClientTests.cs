@@ -182,8 +182,16 @@ public sealed class SessionGatewayClientTests : IDisposable
         Assert.EndsWith("openclaw.mjs", delivered.Arguments![0], StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RuntimeStartStagesUpdatedHelperWithoutSetupOrIdentityChanges(bool recordedGateway)
+    {
+        await StartGatewayAsync(nativeRootPath: null, packageUpdated: true, recordedGateway);
+    }
+
     private async Task<(SessionLaunchRequest Delivered, string AgentNodePath, SessionRuntime Session)>
-        StartGatewayAsync(string? nativeRootPath)
+        StartGatewayAsync(string? nativeRootPath, bool packageUpdated = false, bool recordedGateway = false)
     {
         string applicationDirectory = Path.Combine(_root, "app");
         string runtimeDirectory = Path.Combine(_root, "runtime");
@@ -219,10 +227,29 @@ public sealed class SessionGatewayClientTests : IDisposable
             },
             startupEnabled: true);
         Directory.CreateDirectory(Path.GetDirectoryName(session.HelperPath)!);
-        await File.WriteAllTextAsync(session.HelperPath, string.Empty).ConfigureAwait(false);
+        await File.WriteAllTextAsync(session.HelperPath, "current packaged helper").ConfigureAwait(false);
         string stagedHelperPath = SessionHelperStager.ResolveStagedPath(record.WorkspacePath!);
-        Directory.CreateDirectory(Path.GetDirectoryName(stagedHelperPath)!);
-        await File.WriteAllTextAsync(stagedHelperPath, string.Empty).ConfigureAwait(false);
+        string oldHelperPath = Path.Combine(record.WorkspacePath!, ".openclaw-session-host", "previous-version", SessionRuntime.HelperFileName);
+        Directory.CreateDirectory(Path.GetDirectoryName(oldHelperPath)!);
+        File.WriteAllText(oldHelperPath, "previous helper");
+        if (!packageUpdated)
+        {
+            session.StageHelper(record);
+        }
+        if (recordedGateway)
+        {
+            session.GatewayState.Write(new GatewayRecord
+            {
+                SandboxId = record.SandboxId,
+                ProcessId = 999,
+                ProcessStartTimeUtc = DateTimeOffset.UnixEpoch,
+                HelperPath = oldHelperPath,
+                AutostartDisabled = true
+            });
+        }
+        string setupBefore = File.ReadAllText(paths.SetupStatePath);
+        string sessionBefore = File.ReadAllText(paths.SessionStatePath);
+        _backend.Calls.Clear();
 
         SessionLaunchRequest? delivered = null;
         _backend.ExecuteBehavior = _ =>
@@ -238,10 +265,10 @@ public sealed class SessionGatewayClientTests : IDisposable
                     SessionInspectProtocol.SerializeResult(new SessionInspectResult
                     {
                         RequestId = inspection.RequestId,
-                        ProcessFound = true,
-                        StartTimeMatches = true,
-                        PortListening = true,
-                        ListenerOwned = true,
+                        ProcessFound = inspection.ProcessId != 999,
+                        StartTimeMatches = inspection.ProcessId != 999,
+                        PortListening = inspection.ProcessId != 999,
+                        ListenerOwned = inspection.ProcessId != 999,
                     }));
                 return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
             }
@@ -266,10 +293,24 @@ public sealed class SessionGatewayClientTests : IDisposable
             paths,
             session,
             _ => { });
+        if (packageUpdated)
+        {
+            GatewayStatusReport status = await runtime.Controller.GetStatusAsync(runtime.HelperPath, CancellationToken.None).ConfigureAwait(false);
+            Assert.Equal(recordedGateway ? GatewayState.Unknown : GatewayState.NotStarted, status.State);
+            Assert.False(File.Exists(stagedHelperPath));
+            Assert.Equal(setupBefore, File.ReadAllText(paths.SetupStatePath));
+            Assert.Equal(sessionBefore, File.ReadAllText(paths.SessionStatePath));
+        }
         await runtime.Controller.StartAsync(runtime.HelperPath, CancellationToken.None)
             .ConfigureAwait(false);
 
         Assert.NotNull(delivered);
+        Assert.Equal("current packaged helper", File.ReadAllText(stagedHelperPath));
+        Assert.Equal("previous helper", File.ReadAllText(oldHelperPath));
+        Assert.Equal(setupBefore, File.ReadAllText(paths.SetupStatePath));
+        Assert.Equal(sessionBefore, File.ReadAllText(paths.SessionStatePath));
+        Assert.DoesNotContain("provision", _backend.Calls);
+        Assert.Equal(recordedGateway, session.GatewayState.Read().Record!.AutostartDisabled);
         return (delivered, agentNodePath, session);
     }
 }

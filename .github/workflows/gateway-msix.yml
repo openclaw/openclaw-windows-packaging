@@ -7,13 +7,21 @@ on:
       - main
   workflow_dispatch:
     inputs:
+      release_channel:
+        description: Release channel (published beta releases can feed the Development Store flight)
+        required: true
+        default: stable
+        type: choice
+        options:
+          - stable
+          - beta
       openclaw_ref:
-        description: Optional OpenClaw branch, tag, or full SHA to package; empty follows stable
+        description: Optional OpenClaw branch, tag, or full SHA to package; empty follows the selected channel
         required: false
         default: ''
         type: string
       gateway_version:
-        description: Optional older exact stable payload; MSIX identity remains on release-policy stableVersion or npm latest
+        description: Optional older stable payload, or exact beta version for a prerelease
         required: false
         default: ''
         type: string
@@ -237,6 +245,11 @@ jobs:
         run: >
           .\scripts\Test-SigningInputs.Tests.ps1
 
+      - name: Test payload startup file list
+        shell: pwsh
+        run: >
+          .\scripts\Test-PayloadStartupFiles.Tests.ps1
+
       - name: Test MSIX test signing
         shell: pwsh
         run: >
@@ -255,9 +268,10 @@ jobs:
         shell: pwsh
         run: .\scripts\Test-Get-MxcSdkMetadata.Tests.ps1
 
-      - name: Test Microsoft Store publication requests
+      - name: Test Microsoft Store submission
         shell: pwsh
-        run: ./scripts/Test-Request-MicrosoftStorePublish.Tests.ps1
+        run: |
+          ./scripts/Test-Request-MicrosoftStorePublish.Tests.ps1
 
       - name: Test signing workflow configuration
         shell: pwsh
@@ -301,7 +315,9 @@ jobs:
 
       - name: Test OpenClaw source selection
         shell: pwsh
-        run: .\scripts\Test-OpenClawSource.Tests.ps1
+        run: |
+          .\scripts\Test-OpenClawSource.Tests.ps1
+          .\scripts\Test-WorkflowSourceSnapshotMode.Tests.ps1
 
       - name: Test local package deployment
         shell: pwsh
@@ -358,6 +374,10 @@ jobs:
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.packaging == 'true' }}
     needs: changes
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
     outputs:
       source_sha: ${{ steps.resolve.outputs.sha }}
       source_tag: ${{ steps.resolve.outputs.tag }}
@@ -370,12 +390,42 @@ jobs:
         with:
           persist-credentials: false
 
+      # An earlier attempt may have ended without running this job, such as a
+      # fork pull request run that waited for approval. Reuse only a snapshot
+      # that some attempt could have produced.
+      - name: Find captured source selection
+        id: snapshot
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $mode = ./scripts/Get-WorkflowSourceSnapshotMode.ps1 `
+            -Repository $env:GITHUB_REPOSITORY `
+            -RunId $env:GITHUB_RUN_ID `
+            -RunAttempt $env:GITHUB_RUN_ATTEMPT `
+            -PreflightJobName 'Capture source and validate build route' `
+            -SaveStepName 'Save immutable source selection'
+          "mode=$mode" >> $env:GITHUB_OUTPUT
+          "Source selection for attempt ${env:GITHUB_RUN_ATTEMPT}: $mode." >> $env:GITHUB_STEP_SUMMARY
+
       - name: Restore source selection for a retry
-        if: ${{ github.run_attempt != 1 }}
+        if: ${{ steps.snapshot.outputs.mode == 'reuse' }}
+        id: restore-source
         uses: actions/download-artifact@v8
         with:
           name: openclaw-source-resolution
           path: ${{ runner.temp }}/openclaw-source
+
+      - name: Explain preflight source snapshot restore failure
+        if: ${{ !cancelled() && steps.restore-source.outcome == 'failure' }}
+        shell: pwsh
+        run: |
+          throw (
+            "The immutable source snapshot artifact 'openclaw-source-resolution' could not be restored for run " +
+            "$env:GITHUB_RUN_ID (attempt $env:GITHUB_RUN_ATTEMPT). " +
+            'Inspect the download step logs. If the original artifact is unavailable, start a new workflow run; ' +
+            'do not re-resolve the source for this retry.'
+          )
 
       - name: Resolve immutable OpenClaw source
         id: resolve
@@ -384,19 +434,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_REF: ${{ inputs.openclaw_ref }}
           GATEWAY_VERSION: ${{ inputs.gateway_version }}
+          RELEASE_CHANNEL: ${{ inputs.release_channel || 'stable' }}
           SIGNING_MODE: ${{ inputs.signing_mode || 'unsigned' }}
+          SNAPSHOT_MODE: ${{ steps.snapshot.outputs.mode }}
         run: |
+          if ($env:SNAPSHOT_MODE -cnotin @('resolve', 'reuse')) {
+            throw "Unknown source snapshot mode '$env:SNAPSHOT_MODE'."
+          }
           $snapshotPath = Join-Path $env:RUNNER_TEMP 'openclaw-source/source-resolution.json'
           $source = ./scripts/Get-WorkflowSource.ps1 `
             -PolicyPath ./release-policy.json `
             -OutputPath $snapshotPath `
             -Ref $env:SOURCE_REF `
             -GatewayVersion $env:GATEWAY_VERSION `
+            -ReleaseChannel $env:RELEASE_CHANNEL `
             -SigningMode $env:SIGNING_MODE `
             -WorkflowRunId $env:GITHUB_RUN_ID `
             -PackagingCommit $env:GITHUB_SHA `
             -WorkflowRef $env:GITHUB_WORKFLOW_REF -GitHubRef $env:GITHUB_REF -EventName $env:GITHUB_EVENT_NAME `
-            -ReuseSnapshot:($env:GITHUB_RUN_ATTEMPT -ne '1')
+            -ReuseSnapshot:($env:SNAPSHOT_MODE -ceq 'reuse')
           "route=$($source.buildRoute)" >> $env:GITHUB_OUTPUT
           "sha=$($source.resolvedCommit)" >> $env:GITHUB_OUTPUT
           "tag=v$($source.packageVersion)" >> $env:GITHUB_OUTPUT
@@ -409,7 +465,7 @@ jobs:
           "OpenClaw $($source.packageVersion) ($($source.resolvedCommit)), selected by $($source.requestedRef); release identity $($releaseIdentitySource.releaseTag)." >> $env:GITHUB_STEP_SUMMARY
 
       - name: Save immutable source selection
-        if: ${{ github.run_attempt == 1 }}
+        if: ${{ steps.snapshot.outputs.mode == 'resolve' }}
         uses: actions/upload-artifact@v7
         with:
           name: openclaw-source-resolution
@@ -504,6 +560,7 @@ jobs:
     with:
       source_ref: ${{ inputs.openclaw_ref || '' }}
       gateway_version: ${{ inputs.gateway_version || '' }}
+      release_channel: ${{ inputs.release_channel || 'stable' }}
       signing_mode: ${{ inputs.signing_mode || 'unsigned' }}
       versioning: ${{ needs.changes.outputs.versioning }}
       payload_artifact: ${{ needs.changes.outputs.payload_artifact }}
@@ -521,6 +578,7 @@ jobs:
     with:
       source_ref: ${{ inputs.openclaw_ref || '' }}
       gateway_version: ${{ inputs.gateway_version || '' }}
+      release_channel: ${{ inputs.release_channel || 'stable' }}
       signing_mode: ${{ inputs.signing_mode || 'unsigned' }}
       versioning: ${{ needs.changes.outputs.versioning }}
       payload_artifact: ${{ needs.changes.outputs.payload_artifact }}
@@ -550,6 +608,7 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
           PACKAGING_EXPECTED: ${{ github.event_name != 'pull_request' || needs.changes.outputs.packaging == 'true' }}
           EXPECTED_ROUTE: ${{ needs.source-preflight.outputs.route }}
+          RELEASE_CHANNEL: ${{ inputs.release_channel || 'stable' }}
         run: |
           $results = $env:RESULTS | ConvertFrom-Json
           if ($results.changes.result -cne 'success') { throw 'Change classification failed.' }
@@ -558,6 +617,7 @@ jobs:
           $outputs = ./scripts/Select-WorkflowBuild.ps1 `
             -PackagingExpected $expected `
             -ExpectedRoute $env:EXPECTED_ROUTE `
+            -ReleaseChannel $env:RELEASE_CHANNEL `
             -ExpectedSource $results.'source-preflight'.outputs `
             -Trusted $results.'build-trusted' -ReadOnly $results.'build-read-only'
           if ($null -ne $outputs) {
@@ -586,21 +646,24 @@ jobs:
       - name: Download unsigned x64 package
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-store-unsigned-x64
+          name: openclaw-gateway-msix-${{ inputs.release_channel == 'stable' && 'store' || 'sideload' }}-unsigned-x64
           path: artifacts\x64
 
       - name: Download unsigned ARM64 package
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-store-unsigned-arm64
+          name: openclaw-gateway-msix-${{ inputs.release_channel == 'stable' && 'store' || 'sideload' }}-unsigned-arm64
           path: artifacts\arm64
 
       - name: Apply temporary test signature
         shell: pwsh
+        env:
+          IDENTITY_CHANNEL: ${{ inputs.release_channel == 'stable' && 'Store' || 'Sideload' }}
         run: |
           .\scripts\Sign-TestMSIX.ps1 `
             -ArtifactsDirectory artifacts `
-            -OutputDirectory test-signed
+            -OutputDirectory test-signed `
+            -IdentityChannel $env:IDENTITY_CHANNEL
 
       - name: Upload test-signed x64 MSIX
         uses: actions/upload-artifact@v7
@@ -728,12 +791,18 @@ jobs:
             $candidateRoot `
             'OpenClawGateway-test-signing.cer'
           $evidencePath = Join-Path evidence "$env:EVIDENCE_ID.json"
+          $candidateVersion = $identity.PackageVersion
+          if ($env:CANDIDATE_CHANNEL -ieq 'Store') {
+            $candidateVersion = .\scripts\Get-WorkflowPackageVersion.ps1 `
+              -RunNumber $env:GITHUB_RUN_NUMBER -RunAttempt $env:GITHUB_RUN_ATTEMPT `
+              -ReleaseVersion $identity.PackageVersion -Store
+          }
           New-Item -Path evidence -ItemType Directory -Force | Out-Null
           if ($env:TRANSITION_MODE -ceq 'store-in-place') {
             .\scripts\Test-MSIXStoreUpgrade.ps1 `
               -CandidatePath $candidatePath `
               -CandidateCertificatePath $certificatePath `
-              -ExpectedCandidateVersion $identity.PackageVersion `
+              -ExpectedCandidateVersion $candidateVersion `
               -StoreProductId '9NV70LV3D6XC' `
               -EvidencePath $evidencePath
           }
@@ -743,7 +812,7 @@ jobs:
               -BaselinesDirectory baselines `
               -CandidatePath $candidatePath `
               -CandidateCertificatePath $certificatePath `
-              -ExpectedCandidateVersion $identity.PackageVersion `
+              -ExpectedCandidateVersion $candidateVersion `
               -TransitionMode $env:TRANSITION_MODE `
               -BaselineAssetName $env:BASELINE_ASSET `
               -EvidencePath $evidencePath
@@ -785,6 +854,8 @@ jobs:
       release_tag: ${{ steps.release.outputs.release_tag }}
       release_version: ${{ steps.release.outputs.release_version }}
       publisher: ${{ steps.release.outputs.publisher }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+      make_latest: ${{ steps.release.outputs.make_latest }}
     permissions:
       actions: read
       contents: read
@@ -831,10 +902,22 @@ jobs:
           path: artifacts\sideload\bundle
 
       - name: Download captured source selection
+        id: restore-source
         uses: actions/download-artifact@v8
         with:
           name: openclaw-source-resolution
           path: source-resolution
+
+      - name: Explain signing source snapshot restore failure
+        if: ${{ !cancelled() && steps.restore-source.outcome == 'failure' }}
+        shell: pwsh
+        run: |
+          throw (
+            "The immutable source snapshot artifact 'openclaw-source-resolution' could not be restored for run " +
+            "$env:GITHUB_RUN_ID (attempt $env:GITHUB_RUN_ATTEMPT). " +
+            'Inspect the download step logs. If the original artifact is unavailable, start a new workflow run; ' +
+            'do not re-resolve the source for this retry.'
+          )
 
       - name: Resolve official release metadata
         id: release
@@ -843,6 +926,7 @@ jobs:
           SIGNING_MODE: ${{ inputs.signing_mode }}
           SOURCE_REF: ${{ inputs.openclaw_ref }}
           GATEWAY_VERSION: ${{ inputs.gateway_version }}
+          RELEASE_CHANNEL: ${{ inputs.release_channel || 'stable' }}
         run: |
           $source = .\scripts\Get-WorkflowSource.ps1 `
             -PolicyPath .\release-policy.json `
@@ -853,6 +937,7 @@ jobs:
             -SigningMode $env:SIGNING_MODE `
             -Ref $env:SOURCE_REF `
             -GatewayVersion $env:GATEWAY_VERSION `
+            -ReleaseChannel $env:RELEASE_CHANNEL `
             -ReuseSnapshot
           $policy = Get-Content -LiteralPath .\release-policy.json -Raw |
             ConvertFrom-Json
@@ -871,6 +956,8 @@ jobs:
           "package_version=$packageVersion" >> $env:GITHUB_OUTPUT
           "release_tag=$($identity.ReleaseTag)" >> $env:GITHUB_OUTPUT
           "release_version=$($identity.ReleaseVersion)" >> $env:GITHUB_OUTPUT
+          "prerelease=$($identity.Prerelease.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "make_latest=$($identity.MakeLatest.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           "publisher=$($policy.sideloadPackageIdentity.publisher)" >> $env:GITHUB_OUTPUT
 
       - name: Enforce reviewed release policy
@@ -879,6 +966,7 @@ jobs:
           SIGNING_MODE: ${{ inputs.signing_mode }}
           SOURCE_REF: ${{ inputs.openclaw_ref }}
           GATEWAY_VERSION: ${{ inputs.gateway_version }}
+          RELEASE_CHANNEL: ${{ inputs.release_channel || 'stable' }}
           PACKAGING_COMMIT: ${{ github.sha }}
         run: |
           foreach ($channel in @('Store', 'Sideload')) {
@@ -890,7 +978,9 @@ jobs:
               -SourcePath source-resolution\source-resolution.json `
               -RequestedRef $env:SOURCE_REF `
               -GatewayVersion $env:GATEWAY_VERSION `
+              -ReleaseChannel $env:RELEASE_CHANNEL `
               -WorkflowRunId $env:GITHUB_RUN_ID `
+              -WorkflowRunNumber $env:GITHUB_RUN_NUMBER `
               -SigningMode $env:SIGNING_MODE `
               -PackagingCommit $env:PACKAGING_COMMIT `
               -WorkflowRef $env:GITHUB_WORKFLOW_REF -GitHubRef $env:GITHUB_REF -EventName $env:GITHUB_EVENT_NAME `
@@ -1092,8 +1182,8 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: OpenClaw Gateway MSIX ${{ needs.authorize-signing.outputs.release_tag }}
           generate_release_notes: true
-          prerelease: false
-          make_latest: true
+          prerelease: ${{ needs.authorize-signing.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.authorize-signing.outputs.make_latest }}
           overwrite_files: false
           fail_on_unmatched_files: true
           files: |
@@ -1113,10 +1203,11 @@ jobs:
   retain-store-submission:
     cache-mode: none
     name: Retain authorized Microsoft Store submission bundle
-    if: ${{ !cancelled() && needs.build.result == 'success' && needs.authorize-signing.result == 'success' }}
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.authorize-signing.result == 'success' && ((inputs.release_channel == '' || inputs.release_channel == 'stable') || needs.publish-release.result == 'success') }}
     needs:
       - build
       - authorize-signing
+      - publish-release
     runs-on: windows-latest
     permissions:
       actions: read
@@ -1131,16 +1222,38 @@ jobs:
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ needs.authorize-signing.outputs.release_version }}
+          RELEASE_TAG: ${{ needs.authorize-signing.outputs.release_tag }}
+          RELEASE_CHANNEL: ${{ inputs.release_channel || 'stable' }}
         run: |
           Rename-Item `
             -LiteralPath store\OpenClawGateway.msixbundle `
             -NewName "OpenClawGateway-$env:RELEASE_VERSION-store.msixbundle"
+          $bundle = Get-Item "store/OpenClawGateway-$env:RELEASE_VERSION-store.msixbundle"
+          $witness = [ordered]@{
+            runId = $env:GITHUB_RUN_ID
+            runAttempt = [int]$env:GITHUB_RUN_ATTEMPT
+            packagingCommit = $env:GITHUB_SHA
+            releaseTag = $env:RELEASE_TAG
+            releaseChannel = $env:RELEASE_CHANNEL
+            bundleName = $bundle.Name
+            bundleSha256 = (Get-FileHash $bundle.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          New-Item witness -ItemType Directory | Out-Null
+          [IO.File]::WriteAllText((Join-Path $PWD 'witness/store-source.json'), ($witness | ConvertTo-Json))
 
       - name: Upload Store submission bundle
         uses: actions/upload-artifact@v7
         with:
-          name: openclaw-gateway-msix-store-submission
+          name: openclaw-gateway-msix-store-submission-${{ github.run_attempt }}
           path: store\OpenClawGateway-${{ needs.authorize-signing.outputs.release_version }}-store.msixbundle
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload Store source witness
+        uses: actions/upload-artifact@v7
+        with:
+          name: store-release-source-${{ github.run_attempt }}
+          path: witness/store-source.json
           if-no-files-found: error
           retention-days: 90
 

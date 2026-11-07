@@ -99,6 +99,15 @@ $compose = {
                     -p:PublishAot=true `
                     "-p:Platform=$Architecture"
             }
+        Invoke-CheckedCommand `
+            -FailureMessage 'Sign-in helper dependency restore failed.' `
+            -Command {
+                & dotnet restore `
+                    .\src\OpenClaw.GatewayRecovery\OpenClaw.GatewayRecovery.csproj `
+                    --runtime "win-$Architecture" `
+                    -p:PublishAot=true `
+                    "-p:Platform=$Architecture"
+            }
 
         $sourceCommit = (& git rev-parse HEAD) -join ''
         if ($LASTEXITCODE -ne 0 -or

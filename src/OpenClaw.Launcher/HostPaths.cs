@@ -264,15 +264,14 @@ internal sealed class HostPaths
     public string SetupStatePath => Path.Combine(StateRoot, "setup.json");
 
     /// <summary>
-    /// The script the logon task runs.
+    /// The launcher an earlier generation's logon task ran through Windows
+    /// Script Host, beside its <c>.ps1</c> activation script and the older
+    /// <c>.cmd</c> launcher.
     /// </summary>
     /// <remarks>
-    /// The task deliberately does not invoke the app alias directly. This file
-    /// is rewritten without elevation on every install, whereas changing the
-    /// task's own arguments requires re-registering it. Routing through it
-    /// keeps the launch command free to change, and keeps the Startup-folder
-    /// lane calling the same single definition instead of a second one that
-    /// can drift.
+    /// Recovery now runs the windowless sign-in helper and writes none of these
+    /// files. They are read only to recognize a task that has not been migrated
+    /// yet, collected for diagnostics, and removed once nothing references them.
     /// </remarks>
     public string GatewayLauncherPath =>
         Path.Combine(StateRoot, "gateway-launcher.js");

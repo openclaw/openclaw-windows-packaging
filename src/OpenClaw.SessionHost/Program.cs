@@ -1,4 +1,5 @@
 using OpenClaw.SessionProtocol;
+using OpenClaw.SessionHost.Diagnostics;
 using System.Text;
 
 namespace OpenClaw.SessionHost;
@@ -59,7 +60,11 @@ internal static class Program
             case "--stop":
                 return SessionTerminator.Run(requestPath, readFile, File.WriteAllText);
             case "--install-runtime":
-                return SessionRuntimeInstaller.Run(requestPath, readFile, File.WriteAllText);
+                return SessionRuntimeInstaller.Run(
+                    requestPath,
+                    readFile,
+                    File.WriteAllText,
+                    errorOutput: errorOutput);
             case "--install-tools":
                 return SessionToolInstaller.Run(requestPath, readFile, File.WriteAllText);
             case "--check-config":
@@ -78,7 +83,11 @@ internal static class Program
 
         if (args[0] == "--collect")
         {
-            return SessionCollector.Run(requestPath, readFile, File.WriteAllText);
+            return SessionCollector.Run(
+                requestPath,
+                readFile,
+                File.WriteAllText,
+                errorOutput: errorOutput);
         }
 
         string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
@@ -197,4 +206,40 @@ internal static class Program
 
     internal static void WriteResult(string path, SessionLaunchResult result) =>
         File.WriteAllText(path, SessionLaunchProtocol.SerializeResult(result));
+
+    internal static void ReportResultWriteFailure(
+        TextWriter errorOutput,
+        string? requestId,
+        string primaryError,
+        Exception writeException)
+    {
+        string correlation = string.IsNullOrWhiteSpace(requestId)
+            ? string.Empty
+            : $" (request {FormatFailureDetail(requestId)})";
+        try
+        {
+            errorOutput.WriteLine(
+                $"openclaw-session-host: primary failure{correlation}: {FormatFailureDetail(primaryError)}; " +
+                $"failure-result publication failure: {FormatFailureDetail(writeException.Message)}");
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            // A broken stderr must not replace the helper's failure exit code.
+        }
+    }
+
+    private static string FormatFailureDetail(string message)
+    {
+        // Truncating before redaction can expose an unterminated secret value.
+        if (message.Length > 4096)
+        {
+            return "error detail omitted (too long)";
+        }
+
+        string singleLine = string.Concat(
+            DiagnosticsRedactor.Redact(message)
+                .Select(character => char.IsControl(character) ? ' ' : character)).Trim();
+        return singleLine.Length <= 512 ? singleLine : singleLine[..512] + "…";
+    }
 }

@@ -26,6 +26,11 @@ identities are intentional, rather than two copies of a host:
   separate after startup. The agent surface forwards OpenClaw arguments; the
   control surface owns the package commands.
 
+A third package application, `GatewayRecovery`, is not a host entry point. It is
+the separate windowless sign-in helper that logon recovery starts, and it only
+runs the control surface's `gateway-service start --recovery`; see
+[Gateway lifecycle](#gateway-lifecycle-is-recorded-observed-and-restarted-at-logon).
+
 This arrangement makes the user-facing distinction enforceable by package
 activation, while avoiding two launchers that could drift in AOT settings,
 diagnostics, or runtime composition. It also protects transparent forwarding:
@@ -99,6 +104,68 @@ The separation is consequential: state says what this installation recorded,
 whereas inspection asks the isolated session what is actually running. A stale
 record is therefore not treated as proof that the session is healthy.
 
+## Setup starts a best-effort payload prewarm
+
+The first Gateway start in a new isolated session can spend much of its time
+waiting for on-access antivirus scans of payload files that a later start does
+not repeat. MSIX runs no package code at install or update, so the earliest
+point this repository owns is a successful `clawctl setup`, explicit or
+automatic. After setup records its completion,
+[`PayloadPrewarm`](../src/OpenClaw.Launcher/PayloadPrewarm.cs) starts the
+package's own `clawctl` alias with the hidden `payload-prewarm` command as a
+detached, windowless, below-normal-priority process that does not inherit
+handles, then setup continues without waiting for it. Setup itself keeps its
+normal priority. Because a priority class alone does not lower file I/O, the
+worker then enters `PROCESS_MODE_BACKGROUND_BEGIN`, which Windows lets only
+the process itself set, to lower its CPU, I/O, and memory scheduling; if that
+fails, it records the error and reads nothing. Otherwise it reads each file
+named by `payload\startup-files.json` once.
+
+The pass is a hint, not a dependency:
+
+- It never changes setup's result. Start and worker failures, a missing or
+  invalid list, and each outcome are written only to the host diagnostic log.
+- It reads only package files, and only list entries that are plain relative
+  paths under `app\`. It stops at the first exhausted budget: 8,000 files,
+  256 MiB, or five minutes, checked before each file and after each 64 KiB
+  read. A blocked open or read cannot observe that deadline, so the worker
+  also ends its own process 15 seconds after it, recording the stop in the
+  diagnostic log when the log accepts the line within 5 seconds. Teardown
+  signals a running worker to stop under the installation lifecycle lock.
+  The worker validates completed setup and registers its cancellation event
+  under that same lock before reading: teardown either sees the event or
+  removes setup first, so a delayed worker refuses to read. A second worker
+  for the same installation exits immediately.
+- Worker coordination uses the same cross-logon-session scope as installation
+  lifecycle operations. Named objects include a hash of the per-user,
+  per-package state root so a console/RDP transition can cancel the worker
+  without colliding with another user's installation.
+- It adds no Defender exclusions and changes no Defender or system settings.
+  `CLAWCTL_PAYLOAD_PREWARM=0` skips it.
+
+`Build-MSIX.ps1` and the loose-layout owner `LocalPackage.psm1` generate the list with
+[`Get-PayloadStartupFiles.ps1`](../scripts/Get-PayloadStartupFiles.ps1), which
+walks literal `import`, `export ... from`, `import()`, and `require()`
+specifiers from `openclaw.mjs` and from each `dist\extensions\*\index` entry,
+resolving packages through `package.json` `exports` or `main`. The build
+refuses a listed path outside the payload inventory, and
+`Test-SigningInputs.ps1` repeats that check before signing. A static graph only
+approximates startup: CommonJS patterns, computed specifiers, conditional
+exports, and plugin discovery can be missed, and deferred imports can be
+included, so the list does not guarantee coverage of the files a start opens.
+
+Benefit is unproven. The worker reads as the invoking user, whereas the
+Gateway reads the same package files later as the isolated agent identity;
+[Microsoft documents Defender's scan cache](https://learn.microsoft.com/en-us/defender-endpoint/troubleshoot-performance-issues)
+but not whether a verdict produced for one process helps a later process under
+another identity. The Defender verdict cache is separate from the OS file
+cache; warming either does not imply the other, and signature updates can
+invalidate cached verdicts. A Gateway start that happens without setup, such as
+the sign-in start after a package update, is not preceded by a prewarm. A
+worker still running when an update arrives can hold package files until its
+deadline. Make no startup-time claim without a comparable packaged, isolated
+before-and-after measurement.
+
 ## The guest helper carries data, not a user command line
 
 MXC's current execution route accepts a command-line string and flattens it
@@ -111,11 +178,11 @@ as JSON, and launches the requested process with the original argument vector.
 [`OpenClaw.SessionProtocol`](../src/OpenClaw.SessionProtocol/SessionLaunchProtocol.cs)
 defines the AOT-safe JSON contracts shared by host and helper. Each contract
 has a schema version and explicit JSON property names; the protocol validates
-the expected version and writes a correlated result file. Helper failures are
-reported in that result when a request path exists, so the host can distinguish
-an operation failure from a transport failure. The one exception is malformed
-helper invocation without a request path, which can only report usage on
-stderr and exit with the helper failure code.
+the expected version and writes a correlated result file. When publication
+succeeds, helper failures are reported in that result so the host can
+distinguish an operation failure from a transport failure. A malformed helper
+invocation without a request path can only report usage on stderr and exit
+with the helper failure code.
 
 The helper must be copied before it can run. [`SessionHelperStager`](../src/OpenClaw.Launcher/Session/SessionHelperStager.cs)
 stages the immutable packaged helper in the session's shared workspace because
@@ -123,7 +190,27 @@ the isolated agent identity cannot execute a binary directly from another
 package identity's WindowsApps directory. The shared workspace is visible to
 both identities. This is a required execution bridge, not a caching or startup
 optimization; staging verifies the packaged source and reports a staging
-failure rather than silently substituting another executable.
+failure rather than silently substituting another executable. Gateway start
+(including logon recovery) refreshes this versioned helper under the installation
+lifecycle lock before inspecting a retained Gateway process. It reuses the
+configured session without rewriting setup, identity, or profile data. Status
+only requires an already staged helper and never stages one.
+
+Runtime installation and log collection report a correlated failure result
+when the operation fails. If that failure result cannot be published, the
+helper reports the primary and publication errors together on stderr and
+retains failure exit code `64`. Those messages keep file paths, are bounded in
+length, and have credential-shaped values redacted on a best-effort basis.
+This fallback requires helper entry; a successful MXC spawn alone does not
+prove that the staged helper loaded or ran.
+
+When a plain helper exchange such as runtime installation, tool installation,
+config readiness, or collection leaves no result file, the host reports how the
+helper ended, followed by the guest's output. Exit code `64` means the helper
+failed and could not write its result, and `0` means it exited without one.
+Any other code means `cmd.exe` could not start the staged helper or the helper
+stopped before reporting, for example when `cmd.exe` prints `Access is denied`
+and exits `1`.
 
 Before starting an attached child, the helper initializes its own console's
 input and output to UTF-8. Host-side encoding does not set the isolated
@@ -180,8 +267,9 @@ This branch prototypes per-invocation cleanup with
 The host creates a job and per-invocation lifecycle events. The helper's internal
 `--request-in-job=<id>` mode joins the job before starting any workload, then
 checks the event so a delayed, already-cancelled spawn cannot start late work.
-An outside-job helper coordinator uses query-only job access and its agent
-identity to pin member process handles.
+An outside-job helper coordinator uses its agent identity to pin member process
+handles. Its job access is limited to this unique invocation's query,
+admission-control, and termination operations.
 Console Ctrl+C and Ctrl+Break leave that coordinator alive to finish pinning
 and drain acknowledgement; its process-local handler is not inherited by the
 worker, which retains normal console interruption behavior.
@@ -204,12 +292,26 @@ belong to the exact job remain explicit failures. Every retained handle still
 requires a signaled wait; no exit-code or job-count shortcut replaces it.
 Failed drain closes supported SDK output readers before joining them; closing
 readers does not count as process exit. The agent receives no host-process
-duplication or job-termination access.
+access or duplication rights.
 
 This is ordinary process-leak control, not an authorization boundary against
 hostile same-identity code. Explicit termination does not depend on the last
-job handle closing; kill-on-close remains only a host-death fallback and is not
-guaranteed against retained handles. Older helpers reject the new
+job handle closing. Before publishing an invocation, the host establishes a
+named mutex owned by a dedicated thread for that invocation's lifetime.
+The coordinator watches it alongside stop, worker-exit, and termination
+signals. Kernel-confirmed abandonment identifies hard owner death; ordinary
+disposal releases it normally, after the host's drain attempt. If ownership
+ends before termination is confirmed, the coordinator closes admission,
+latches stop, pins members, and terminates and drains only that job itself.
+This also rejects a late worker after owner death. No timeout, process ID, or
+job-handle closure stands in for owner or process-exit confirmation.
+The coordinator reports ownership ending and confirmed orphan drain without
+logging command arguments. Kill-on-close remains a secondary fallback, not
+the owner-death mechanism. If owner-ended admission, snapshot, pinning, or drain
+fails, the coordinator still requests emergency termination and reports the
+failure. An unconfirmed drain with a native-root lease deliberately retains
+that waiter and lease until explicit `clawctl teardown`; termination success
+alone does not authorize native-root reclamation. Older helpers reject the new
 `--coordinate-invocation=<id>` mode without starting a workload. State-transfer
 workers (backup, restore, recovery) use the same lifetime through the paired
 `--coordinate-state-transfer=<id>` and `--state-transfer-in-job=<id>` modes, so
@@ -218,9 +320,8 @@ cancelled restore whose prepare step already recorded its activation is rolled
 back automatically. The other helper modes (runtime/tool installation,
 inspection, collection, configuration checks) still run as plain executions. The JSON
 protocol version is unchanged; the branch-local modes and events require a
-matching host/helper. Local regressions, managed quality, the full Release
-suite, and the observed cross-identity NativeAOT scenarios pass; the remaining
-limits and unrun lanes are recorded in the
+matching host/helper. Local owner-death fixtures supplement the earlier
+cross-identity evidence; the current proof limits and unrun lanes are recorded in the
 [operational evidence](mxc-compatibility-evidence.md#branch-local-descendant-cancellation-prototype).
 Dispatched lifecycle calls are not abandoned, so a provision's identity can
 always be recorded.
@@ -257,30 +358,58 @@ from a persisted record. [`GatewayConfigurationStore`](../src/OpenClaw.Launcher/
 persists launch choices because the later logon task has no interactive caller
 from which to recover them. [`SchTasksGatewayScheduler`](../src/OpenClaw.Launcher/Gateway/SchTasksGatewayScheduler.cs)
 uses the inbox `schtasks.exe` and a task registered for the signed-in user's
-logon, avoiding NativeAOT-incompatible Task Scheduler COM interop and avoiding
-elevation that would make the task user-unmanageable. After registration, the
+logon. XML readback uses the Task Scheduler API through inbox Windows PowerShell
+and explicit UTF-8 output, preserving Unicode profile paths that `schtasks`
+would convert lossily to the system code page. This keeps COM outside the
+NativeAOT launcher and avoids elevation that would make the task
+user-unmanageable. After registration, the
 persistence manager reads the task back before reporting recovery ready or
-removing a Startup-folder fallback. Trigger or principal drift reports the
+removing a Startup-folder shortcut. Trigger or principal drift reports the
 expected and observed identities; an unreadable result remains unknown. The
 owning token SID and the interactive logon SID remain separate for account
 compatibility, rather than silently redirecting recovery to another user.
 
-Logon recovery runs the generated `gateway-launcher.js` through the windowless
-Windows Script Host. Both the task and the Startup-folder fallback invoke the
-same launcher, which runs Windows PowerShell hidden and waits for its exit code.
-The Startup-folder `.wsf` selects JScript explicitly and references that launcher,
-so a user's `.js` editor association does not intercept recovery.
-The PowerShell script resolves the owning package's Control execution alias from
-its manifest, invokes the package-qualified alias with `CreateNoWindow`, and
-waits for `clawctl gateway-service start --recovery`. Interactive CLI commands
-keep their normal terminal output. The background command retains normal host
-diagnostics and the task receives its exit code. Existing CMD registrations
-migrate through an explicit `clawctl setup` without `--fresh`, reusing the recorded
-session and keeping its data and gateway settings. Successful setup and teardown
-remove only marked legacy files. If an existing task cannot be replaced,
-fallback setup retains its previous recovery files and
-reports that migration still requires action. Windows Script Host
-and its JScript engine must be available for this recovery lane.
+Both recovery lanes start the windowless sign-in helper,
+[`openclaw-gateway-recovery.exe`](../src/OpenClaw.GatewayRecovery/Program.cs), a
+Windows-subsystem NativeAOT executable that the package declares as its own
+`GatewayRecovery` application. It has no console, so nothing at sign-in opens a
+window, even when Windows Terminal is the default terminal. The logon task's
+only action is the helper's quoted package-qualified execution alias,
+`%LOCALAPPDATA%\Microsoft\WindowsApps\<package family>\openclaw-gateway-recovery.exe`,
+with no arguments. Windows recreates that alias on every package update, unlike
+the versioned install directory, so the registration survives updates. Setup
+reads the alias name from the installed manifest through
+[`PackageExecutionAlias`](../src/OpenClaw.Launcher/PackageExecutionAlias.cs), so a
+side-by-side development identity registers its own renamed alias. When Task
+Scheduler refuses the registration, setup instead writes a Startup-folder
+shortcut, `OpenClaw Gateway <package family>.lnk`, to the same alias through the
+shell's ShellLink object. Its description marks it as OpenClaw's; a same-named
+shortcut without that marker is reported, never replaced or removed. Setup writes
+only into an existing Startup folder: a folder created from inside the package
+would be redirected into the package's private AppData, which Explorer does not
+read at sign-in. Status and install report recovery as needing action when the
+helper alias is missing, rather than registering a lane that would fail silently.
+
+The helper resolves this package's `Control` alias from the same manifest,
+starts `clawctl gateway-service start --recovery` with `CreateNoWindow` and the
+user profile as its working directory, waits, and returns that command's exit
+code, so the task's last-run result is the recovery result. It appends what
+happens before that command starts, including a missing alias, to the host
+diagnostic log, and it never shows UI. Interactive CLI commands keep their
+normal terminal output.
+
+Earlier generations ran a generated launcher instead: a CMD file, then
+`gateway-launcher.js` through Windows Script Host, each calling a PowerShell
+activation script, with a Startup-folder `.cmd` or `.wsf` fallback. Those files
+carry a generator marker. Status reports a task that still runs them as not
+matching this installation, and reports a marked file that remains as needing
+action. An explicit `clawctl setup` without `--fresh` reuses the recorded session,
+keeps its data and gateway settings, replaces the logon action, and then removes
+only marked legacy files; teardown removes them too. If an existing task cannot
+be replaced, the new shortcut is written but the files that task still runs are
+retained, and setup reports that migration still requires action. Recovery no
+longer depends on Windows Script Host, so a host disabled by policy cannot block
+sign-in once the task has been migrated.
 
 The real control command is `gateway-service`, not `gateway`. The configured
 port is distinct from the upstream default. The launcher does not force the
@@ -301,6 +430,41 @@ supervisor with no listener can then return successful acceptance with
 The record remains available for inspection and stop, and clients keep their
 own bounded readiness wait. Inspection failures, terminal supervisor failures,
 and listener conflicts remain unsuccessful starts.
+
+Start and status share one classification of the inspected launch. Inspection
+failure takes precedence over supervisor exit, which takes precedence over a
+listener observation. A matching live process with no listener and no recorded
+`observedPorts` remains `starting`, without an age-based cutoff. Loss of recorded
+listeners and listener conflicts remain `unhealthy`; a missing or replaced
+process is `stopped`. Configuration eligibility is independent of these process
+and listener observations.
+
+Status never writes the launch record. Consequently, readiness first observed
+after the start wait is not durably latched: a later observation with no listener
+can return to `starting` when the record has no `observedPorts`. This contract
+does not provide a monotonic first-readiness history. Stop/restart and session
+teardown remain explicit lifecycle operations.
+
+Launch correlation is an additive v1 capability inside the existing integration
+envelope. The controller persists a fresh caller-selected (or generated) attempt
+ID in its existing launch intent before dispatch. The same ID names the
+supervisor exchange, and the supervisor writes its own ID, creation time, helper
+image, and request ID before entering application state. If the launch
+acknowledgement is lost, the session client resolves that receipt through the
+validated shared workspace and performs the usual guest identity inspection.
+Missing or mismatched evidence remains unknown; it never proves absence or
+permits replacement. No second launch registry or status-side repair is involved.
+The receipt's `running` state still means application process, not listener
+readiness.
+
+Start distinguishes creating an attempt from adopting an existing starting or
+running attempt. Adoption preserves the existing ID. Conditional stop compares
+the requested attempt under the same lifecycle lock used for start and restart,
+then verifies and stops only the recorded supervisor. A mismatch or unavailable
+identity refuses without clearing state or falling back to plain stop. Callers
+must choose a fresh ID for every new attempt and retain it across lost
+acknowledgements; a receipt encountered through adoption does not confer cleanup
+ownership. See the [Companion contract](../README.md#clawctl) for its JSON fields.
 
 Process access denial is not evidence that a recorded PID belongs to another
 process. Inspection uses query rights instead of requesting a full-access
@@ -386,7 +550,7 @@ ID and public key, then approves only that exact request.
 ## State transfer preserves the current session identity
 
 [`StateTransferCoordinator`](../src/OpenClaw.Launcher/StateTransfer/StateTransferCoordinator.cs)
-owns host-side backup, restore, and recovery orchestration. It requires ready
+owns host-side backup, restore, recovery, and protected Doctor orchestration. It requires ready
 setup, starts only the recorded session, binds exchanges to its generation, and
 uses its staged helper and agent-owned Node.js runtime. The archive store
 publishes hash/length-checked files without overwriting an existing destination.
@@ -397,6 +561,9 @@ gain access. The shared `TrustedPath` owner also creates the per-command
 exchange for the invoking user and recorded agent, excluding broad parent
 readers. Upstream scratch remains in that private exchange. Guest transaction
 and normalization roots are private to the agent, SYSTEM, and administrators.
+Exchange and scratch names retain full random identifiers but stay short so the
+bundled Windows SQLite helper has room for its nested snapshot paths. Generation
+checks remain bound to the workspace handles and request/result contract.
 Existing folder, profile, and archive permissions are not rewritten.
 
 [`SessionStateTransfer`](../src/OpenClaw.SessionHost/SessionStateTransfer.cs)
@@ -409,6 +576,14 @@ documents in staging, never arbitrary credential/history strings. Missing,
 external, relative, or environment-dependent required paths remain explicit
 automatic-recovery refusals. Windows/profile portability is not account or
 package migration.
+
+Explicit `clawctl gateway-service repair --yes` uses that same lifecycle lock,
+backup pipeline, and recorded identity. It refuses pending activation, stops
+through the gateway owner, and publishes a verified archive before invoking
+the packaged Doctor. Doctor owns the schema/data mutations, with external
+service repair policy retained. It never automatically starts the gateway or
+runs in the update/logon path. Failure retains the archive and the stopped
+state; an unavailable backup prevents Doctor from running.
 
 Restore verifies and prepares before asking the existing gateway owner to stop
 the managed gateway. It acquires exclusive state access, captures and retains
@@ -544,5 +719,7 @@ flowchart LR
 | MXC SDK API and redistribution notice | [`Directory.Packages.props`](../Directory.Packages.props), [`Get-MxcSdkMetadata.ps1`](../scripts/Get-MxcSdkMetadata.ps1), [`MxcRuntimeLocator.cs`](../src/OpenClaw.Launcher/Mxc/MxcRuntimeLocator.cs), [`MxcSdkSessionClient.cs`](../src/OpenClaw.Launcher/Mxc/MxcSdkSessionClient.cs) |
 | State transfer and activation | [`SessionStateTransferProtocol.cs`](../src/OpenClaw.SessionProtocol/SessionStateTransferProtocol.cs), [`StateTransferCoordinator.cs`](../src/OpenClaw.Launcher/StateTransfer/StateTransferCoordinator.cs), [`SessionStateTransfer.cs`](../src/OpenClaw.SessionHost/SessionStateTransfer.cs), [`SessionStateAccess.cs`](../src/OpenClaw.SessionHost/SessionStateAccess.cs), [`StateActivationJournal.cs`](../src/OpenClaw.SessionHost/StateActivationJournal.cs) |
 | Agent runtime installation | [`SessionRuntimeInstaller.cs`](../src/OpenClaw.SessionHost/SessionRuntimeInstaller.cs) |
+| Payload prewarm and startup file list | [`PayloadPrewarm.cs`](../src/OpenClaw.Launcher/PayloadPrewarm.cs), [`PayloadPrewarmNative.cs`](../src/OpenClaw.Launcher/PayloadPrewarmNative.cs), [`Get-PayloadStartupFiles.ps1`](../scripts/Get-PayloadStartupFiles.ps1), [`Build-MSIX.ps1`](../scripts/Build-MSIX.ps1) |
 | Gateway lifecycle | [`SchTasksGatewayScheduler.cs`](../src/OpenClaw.Launcher/Gateway/SchTasksGatewayScheduler.cs), [`GatewayController.cs`](../src/OpenClaw.Launcher/Gateway/GatewayController.cs), [`GatewayConfigurationStore.cs`](../src/OpenClaw.Launcher/Gateway/GatewayConfigurationStore.cs) |
+| Logon recovery and the sign-in helper | [`GatewayPersistenceManager.cs`](../src/OpenClaw.Launcher/Gateway/GatewayPersistenceManager.cs), [`ShellStartupLinkStore.cs`](../src/OpenClaw.Launcher/Gateway/ShellStartupLinkStore.cs), [`PackageExecutionAlias.cs`](../src/OpenClaw.Launcher/PackageExecutionAlias.cs), [`GatewayRecoveryStart.cs`](../src/OpenClaw.GatewayRecovery/GatewayRecoveryStart.cs) |
 | Diagnostics and payload integrity | [`HostDiagnosticLog.cs`](../src/OpenClaw.Launcher/HostDiagnosticLog.cs), [`HostEnvironment.cs`](../src/OpenClaw.Launcher/HostEnvironment.cs), [`DiagnosticFailure.cs`](../src/OpenClaw.Launcher/DiagnosticFailure.cs), [`DiagnosticsBundle.cs`](../src/OpenClaw.Launcher/Gateway/DiagnosticsBundle.cs), [`DiagnosticsRedactor.cs`](../src/OpenClaw.Launcher/Gateway/DiagnosticsRedactor.cs), [`Build-MSIX.ps1`](../scripts/Build-MSIX.ps1) |

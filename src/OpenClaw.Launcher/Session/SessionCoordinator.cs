@@ -66,6 +66,28 @@ internal sealed class InteractiveLogonRequiredException : SessionException
 }
 
 /// <summary>
+/// Setup evidence names an isolated session whose ownership record is
+/// missing, so the command refuses rather than replace, clear, or start it.
+/// </summary>
+/// <remarks>
+/// The message names the evidence to preserve and the deliberate recovery,
+/// so it is reported as an expected refusal rather than a defect.
+/// </remarks>
+[SuppressMessage(
+    "Design",
+    "CA1032:Implement standard exception constructors",
+    Justification =
+        "The message must name the surviving setup record and its recovery; " +
+        "a caller-supplied message could omit either.")]
+internal sealed class UnownedSetupEvidenceException : SessionException
+{
+    public UnownedSetupEvidenceException(string setupPath)
+        : base(SessionCoordinator.DescribeUnownedSetupEvidence(setupPath))
+    {
+    }
+}
+
+/// <summary>
 /// The recorded session exists but cannot be used, and replacing it silently
 /// would risk abandoning a live backend session.
 /// </summary>
@@ -454,6 +476,40 @@ internal sealed class SessionCoordinator
         using ISessionLockHandle handle = AcquireLock();
         return await RemoveUnderLockAsync(cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>Checks ownership evidence while the caller holds the lifecycle lock.</summary>
+    internal void RequireRecordedOwnershipOrCleanState(SetupStateStore setup)
+    {
+        if (RequireUsableRecordOrNull() is null &&
+            MayLocateProvision(setup.Read(_applicationId)))
+        {
+            // A surviving marker can locate a lost provision, but cannot authorize
+            // backend operations without the complete owned-session record.
+            throw new UnownedSetupEvidenceException(setup.FilePath);
+        }
+    }
+
+    /// <summary>
+    /// Whether setup evidence could identify a provision whose session record is missing.
+    /// </summary>
+    /// <remarks>
+    /// Setup writes its Preparing marker before provisioning and records a
+    /// sandbox ID only when it completes, so a readable marker without one
+    /// locates nothing and stays ordinary setup or teardown recovery. A marker
+    /// this build cannot interpret is kept, because it may name a provision.
+    /// </remarks>
+    internal static bool MayLocateProvision(SetupStateResult setup) =>
+        setup.Record is { } record
+            ? !string.IsNullOrWhiteSpace(record.SandboxId)
+            : setup.Fault != SetupStateFault.Missing;
+
+    /// <summary>Explains why setup evidence without a session record is kept.</summary>
+    internal static string DescribeUnownedSetupEvidence(string setupPath) =>
+        $"The session record is missing, but setup evidence remains at '{setupPath}'. " +
+        "The original isolated session may still exist. Setup and teardown cannot " +
+        "replace or clear this evidence without the ownership record. Preserve it " +
+        "for investigation, or use `clawctl setup --fresh --force` only to deliberately " +
+        "abandon unresolved resources, not to reclaim them.";
 
     internal async Task<SessionRemovalResult> RemoveUnderLockAsync(
         CancellationToken cancellationToken)

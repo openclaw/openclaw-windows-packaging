@@ -110,7 +110,7 @@ variables](#environment-variables) to restore the prior start hint.
 ### Environment variables
 
 These host-side variables are not passed to the OpenClaw child. Automatic
-behavior is enabled by default. Set either variable to `0`, `false`, `no`, or
+behavior is enabled by default. Set any of these variables to `0`, `false`, `no`, or
 `off` (case-insensitive and with surrounding whitespace ignored) to suppress
 its automatic behavior; any other value, including an unset variable, leaves
 it enabled.
@@ -119,6 +119,7 @@ it enabled.
 | --- | --- |
 | `CLAWCTL_AUTO_SETUP` | Restores the previous clean-machine failure: `openclaw` reports that it has not been set up and directs you to `clawctl setup`; it provisions, records, and registers nothing. |
 | `CLAWCTL_AUTO_GATEWAY_START` | Restores the previous `clawctl gateway-service start` hint instead of automatically starting an eligible gateway. |
+| `CLAWCTL_PAYLOAD_PREWARM` | Skips the best-effort [payload prewarm](docs/architecture.md#setup-starts-a-best-effort-payload-prewarm) that a successful setup starts in the background. |
 
 ### `clawctl`
 
@@ -145,6 +146,7 @@ it enabled.
 | `clawctl gateway-service status` | Inspect the gateway without starting it. It may start/probe only the already-recorded isolated session to inspect activation state and, when the gateway is not running and activation is not pending, file-only config readiness; it never provisions a replacement or starts the gateway. |
 | `clawctl gateway-service stop` | Stop the gateway while retaining the session and its data. |
 | `clawctl gateway-service restart` | Stop the gateway and start it again as one lifecycle operation. If the stop cannot be verified, it retains the gateway record and does not start a replacement. If no gateway is running, it starts one. |
+| `clawctl gateway-service repair --yes` | Explicitly stop the owned gateway, retain a verified full-state backup, and run packaged `openclaw doctor --fix --non-interactive --no-workspace-suggestions` inside the recorded agent. Leaves the gateway stopped. Refuses uncertain stop, pending state activation, or unavailable backup; never provisions a replacement. |
 | `clawctl companion prepare --port <port> --json` | Prepare the agent account's Gateway for the Windows Companion app after `clawctl setup`. Read its effective upstream configuration, including JSON5 and `$include` values. Return a complete local token configuration unchanged, initialize an absent Gateway, or fill missing port/token values in a compatible local Gateway. A partially configured Gateway without local mode, password authentication, and agent-side profile/Gateway overrides require explicit recovery. Concurrent configuration changes fail rather than being overwritten. The JSON response includes `companion.port` and `companion.token`, so keep it private. |
 | `clawctl companion prepare --check --json` | Read the existing effective agent Gateway port and token without restoring backups, rewriting configuration, or recording config-health observations. Missing, incomplete, or incompatible configuration fails without a patch. Keep the credential-bearing response private. |
 | `clawctl --version` | Print the packaged launcher version. |
@@ -200,6 +202,41 @@ listener and process-sequence snapshots before sending credentials; a port or
 session ID alone is not ownership proof. No `openclaw.json` is created under Companion's
 Windows account for this path. Older Gateway packages without the supported
 integration contract cannot be treated as isolated.
+
+Packages advertising `integration.gatewayLaunch.version: 1` also support
+correlated launches and conditional cleanup. Before dispatch, generate a fresh
+lowercase GUID with no separators and keep it for that attempt. Pass it to
+`clawctl gateway-service start --attempt-id <id> --json`. The package durably
+records it before launch; `gateway.launch` reports `version: 1`, `attemptId`,
+and a start-only `disposition` of `created` or `adopted`. Adoption returns the
+existing launch's ID, not the requested ID, and grants no cleanup ownership.
+Both status commands retain `gateway.launch` for starting, running, stopped,
+unhealthy, and unknown recorded attempts, including failed status responses.
+Legacy records can omit it. It is correlation, not listener readiness or
+credential-handoff ownership proof.
+
+After a lost acknowledgement, compare status's attempt ID with the ID selected
+before dispatch. A match correlates the retained launch to that caller;
+absence, a different ID, or a timeout is not proof of failure or rollback.
+The supervisor's durable receipt can recover the process identity even when
+the start acknowledgement never arrives. Until that receipt is usable, status
+remains unknown and cleanup refuses. Status does not repair records or latch
+first listener readiness.
+
+To clean up only an owned attempt, use
+`clawctl gateway-service stop --if-attempt-id <id> --json`. Under the lifecycle
+lock, the package compares the durable attempt and then verifies process
+identity inside the session before stopping anything. `gateway.launch` echoes
+the requested ID and returns `stopOutcome: stopped` or `not-running` on success.
+A refusal returns exit code 1, `ok: false`,
+`error.type: launch_ownership_refused`, `stopOutcome: refused`, and
+`refusal: attempt-mismatch` or `ownership-unverified`. It retains state and never
+falls back to unconditional stop. Never retry a refusal using plain `stop` as
+onboarding cleanup, and never reuse an ID for a different launch attempt.
+An absent capability means unsupported; malformed advertised capability or
+receipt data is an integration error, not permission to use unconditional stop.
+Existing clients can continue using the unchanged v1 integration envelope and
+plain lifecycle commands.
 
 Interactive terminals use color for headings and status marks. `--no-color`,
 the `NO_COLOR` environment variable, redirected output, and CI disable color;
@@ -296,6 +333,19 @@ running listener before using the Gateway or sending credentials. A failed
 inspection, exited process, or conflicting listener does not receive this
 acknowledgement.
 
+Status keeps reporting `starting` while that recorded process is verified live,
+has no listener, and has no previously recorded listener. A failed inspection
+reports `unknown`; an exited supervisor or missing/replaced process reports
+`stopped`. Conflicting listeners or loss of a previously recorded listener
+remain `unhealthy`. Configuration `startup-eligible` only admits a launch; it
+does not establish that the Gateway is serving.
+
+Status is read-only: a listener first seen after the start command returns is
+reported as running but is not saved to the launch record. If that late
+listener disappears, status can report `starting` again. There is no elapsed-time
+deadline that turns a still-owned launch into success or failure; clients must
+bound their own wait and explicitly stop the launch if they choose to abandon it.
+
 `clawctl` reports the gateway port only when it can identify that listener
 unambiguously:
 
@@ -315,7 +365,9 @@ rule, with `gateway.port` present only when identified and no URL promised.
 `clawctl open` uses packaged OpenClaw's verified, authenticated browser handoff
 instead of constructing a URL from that port. It does not start or recover the
 gateway: start it first with `clawctl gateway-service start` if the probe says
-it is not running. The command does not print authenticated URLs or tokens.
+it is not running. If the launched dashboard exits nonzero, the command reports
+its exit code and directs you to `clawctl collect-logs` without exposing
+captured output. The command does not print authenticated URLs or tokens.
 
 Help and version requests take precedence over the rest of the command line.
 `clawctl --version bogus` reports the build identity and exits `0` rather than
@@ -429,32 +481,39 @@ update does not remove a running process's runtime.
 
 ## Selecting the OpenClaw revision
 
-`.github\workflows\gateway-msix.yml` selects **stable** whenever a new packaging
+`.github\workflows\gateway-msix.yml` defaults to **stable** when a new packaging
 run starts: the exact `stableVersion` when `release-policy.json` pins one,
 otherwise public npm `openclaw@latest`. The resolver checks the exact
 published version, its GitHub-verified signed annotated upstream tag and target
 commit, and the source package version before building. A missing or invalid tag
 signature stops source selection; commit signatures are not required.
-Official publication uses the same stable selection and validates its recorded
+Official publication uses the same selected channel and validates its recorded
 commit and version before signing. There is no automatic fallback to another
-version or channel; extended-stable and named prereleases are rejected.
+version or channel. Extended-stable is rejected; beta requires an
+explicit prerelease channel selection.
 Source selection also checks the MSIX release-version rules before building:
 numeric correction suffixes must be `-2` through `-9`. Unsupported corrections
 are rejected for channel selection, explicit refs, policy pins, and retries.
 
 The `openclaw-source-resolution` artifact records this choice once per run.
-Retries reuse it without querying the moving channel again. If the snapshot
-is missing or expired (90-day retention), start a new run instead of retrying.
+The first attempt that captures source uploads it; later attempts reuse it
+without querying the moving channel again. An earlier attempt that never ran the
+capture job, such as a fork pull request run that waited for approval, leaves no
+snapshot, so the approved attempt captures it then. If an earlier attempt ran the
+upload, or its outcome is unknown, a missing or expired (90-day retention)
+snapshot fails the retry; start a new run instead. **Re-run all jobs** discards
+the earlier attempt's artifacts, so retry with **Re-run failed jobs** or by
+re-running individual jobs, which keep the snapshot.
 Package and payload metadata record the resolved source commit and version.
 
 For a one-time source override in any signing mode, provide an OpenClaw tag,
 branch, or full commit SHA in the manual `openclaw_ref` input. Empty means follow
-stable. The resolver records the ref's exact commit and package version once;
+the selected channel. The resolver records the ref's exact commit and package version once;
 retries use that immutable snapshot even if a branch later moves.
 Release-candidate modes (`test`, `store`, and `official`) also capture the
-unmodified stable selector as the MSIX and GitHub release identity source, so a
+unmodified channel selector as the MSIX and GitHub release identity source, so a
 hotfix payload does not create a second version owner.
-The override payload version may equal or precede that stable identity, but may
+The override payload version may equal or precede that channel identity, but may
 not be newer.
 For a one-run rollback of the bundled payload in any signing mode, set
 `gateway_version` to an older exact stable release. The payload uses that version,
@@ -464,20 +523,30 @@ captured in the immutable snapshot. The workflow rejects an override that is not
 older than the release-identity source. Unsigned runs reject combining it with
 `openclaw_ref`; test, Store, and official runs preserve a full-SHA
 `openclaw_ref` as an assertion that the version resolved to the intended commit.
+
+For a GitHub prerelease, manually select `release_channel=beta`.
+An empty `gateway_version` resolves that public npm dist-tag; an exact
+matching preview version selects both payload and release identity. Stable
+compatibility pins do not apply. Previews use the existing sideload identity,
+are marked **Pre-release**, and never become **Latest**. Published previews also
+retain a Store-identity bundle for the opt-in
+[Development flight](docs/microsoft-store.md#development-flight), not public
+production. See [prerelease dispatch and upgrade rules](docs/release-process.md#publish-a-beta-github-prerelease).
+
 If compatibility requires an older known-good stable release, a reviewed
 `stableVersion` field in `release-policy.json` can pin its exact version, for
-example `"stableVersion": "2026.9.4"`. That pin applies to all modes until removed;
+example `"stableVersion": "2026.9.4"`. That pin applies to all stable-channel modes until removed;
 it is not automatic fallback.
 
 For `store` and `official`, `openclaw_ref` selects the payload source while the
-reviewed stable policy still owns release identity. Before authorization, the
+selected channel still owns release identity. Before authorization, the
 workflow restores the same run's payload and release-identity snapshot and
-checks its requested ref, workflow run ID, packaging commit, signing mode,
+checks its requested ref, release channel, workflow run ID, packaging commit, signing mode,
 workflow ref, event, and Git ref. Missing or incompatible snapshot context
 requires a new run.
 When `gateway_version` selects the payload instead, `openclaw_ref` may only be a
 full SHA and must match that release. The workflow does not resolve the moving
-branch or stable channel again.
+branch or channel again.
 
 Payload composition validates that the selected OpenClaw runtime discovers and
 activates the packaging-owned Windows Launcher plugin by default, both without
@@ -671,7 +740,7 @@ merged by
 [`openclaw/openclaw#145409`](https://github.com/openclaw/openclaw/pull/145409).
 OpenClaw `v2026.9.5` at `ec9c1a13db8938e5a3eaa51fca2e981cde2395a9`
 includes that forwarding and has been qualified with this default-on plugin.
-All build modes follow the stable-source selection above and validate plugin
+All build modes follow the source selection above and validate plugin
 compatibility during payload composition. Without theme
 forwarding, the page uses the browser or operating system light/dark preference
 with a safe built-in palette.
@@ -771,7 +840,7 @@ never official-signing inputs.
 Normal pull-request and push workflows publish unsigned packages for
 validation. Manual runs support four modes:
 
-- `unsigned` follows stable or an `openclaw_ref` override and publishes unsigned
+- `unsigned` follows the selected channel or an `openclaw_ref` override and publishes unsigned
   MSIX packages;
 - `test` uses the same source-selection rules, derives the release-candidate
   version, and runs the installed-upgrade matrix without release authorization
@@ -800,10 +869,10 @@ key is stored in the repository.
 
 Official releases derive their GitHub tag and four-part numeric MSIX identity
 from the recorded release-identity source and `msixRevision` in
-`release-policy.json`. Normally that source is also the packaged payload. A
+`release-policy.json`. Normally that source is also the packaged payload. For stable releases,
 `openclaw_ref` and `gateway_version` overrides keep the unmodified stable source
 as the release identity and record the selected payload separately. The GitHub tag is
-`<gateway-tag>-msix.<revision>`. The MSIX identity is
+`<gateway-tag>-msix.<revision>`. The stable sideload MSIX version is
 `year.month.VVPN.0`: `VV` is the two-digit monthly Gateway release sequence,
 `P` is the Gateway correction digit, and `N` is the MSIX rebuild digit. The
 digits are packed numerically into the third component, so leading zeroes are
@@ -824,7 +893,9 @@ contract. Set `msixRevision` from `0` through `9`, starting at `0` for each
 Gateway tag and incrementing it only when that exact Gateway tag is repackaged.
 Decimal place value guarantees Gateway release > Gateway correction > MSIX
 rebuild while keeping every component at four digits or fewer and reserving the
-fourth component as `0` for Microsoft Store submission.
+fourth component as `0`. Store packages have a separate
+[run-number allocation](docs/microsoft-store.md#store-package-versions) shared
+by stable and Development-flight releases.
 
 For a new Gateway release, keep `msixRevision` at `0`; if a previous packaging
 rebuild increased it, reset it in a reviewed pull request first. Increment it
@@ -846,8 +917,8 @@ contains a signed sideload
 `OpenClawGateway-<version>.msixbundle`, plus
 `OpenClawGateway-<version>-x64.msix` and
 `OpenClawGateway-<version>-arm64.msix` packages for architecture-specific
-deployment. The unsigned Store-identity bundle is retained separately as the
-`openclaw-gateway-msix-store-submission` Actions artifact for 90 days; Partner
+deployment. For stable releases and published previews, the unsigned Store-identity bundle is retained separately as the
+`openclaw-gateway-msix-store-submission-<attempt>` Actions artifact for 90 days; Partner
 Center signs it during ingestion.
 
 Direct GitHub distribution and Store submission intentionally use distinct

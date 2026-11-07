@@ -51,7 +51,8 @@ internal sealed record StatusCommandResult(
     GatewayPersistenceStatus Recovery,
     string? NodeVersion,
     AgentConfigReadinessStatus? Readiness = null,
-    SessionStateTransferResult? StateTransfer = null) : IClawCtlResult
+    SessionStateTransferResult? StateTransfer = null,
+    string? UnownedSetupEvidence = null) : IClawCtlResult
 {
     public string Command => "status";
 
@@ -115,7 +116,8 @@ internal sealed record GatewayCommandResult(
     string? AgentUserSid = null,
     IReadOnlyList<OpenClaw.SessionProtocol.SessionOwnedListener>? OwnedListeners = null,
     SessionAvailability? SessionAvailability = null,
-    SessionStateTransferResult? StateTransfer = null) : IClawCtlResult
+    SessionStateTransferResult? StateTransfer = null,
+    GatewayLaunchReceipt? Launch = null) : IClawCtlResult
 {
     public string Command => $"gateway-service {Action}";
 }

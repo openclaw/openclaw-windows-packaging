@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param(
+    [ValidateSet('stable', 'beta')][string]$ReleaseChannel = 'stable',
     [Parameter(Mandatory)][bool]$PackagingExpected,
     [Parameter(Mandatory)][AllowEmptyString()][string]$ExpectedRoute,
     [Parameter(Mandatory)][object]$ExpectedSource,
@@ -41,7 +42,7 @@ foreach ($field in @('source_sha', 'source_tag', 'release_identity_tag', 'packag
 Assert-OpenClawSourceText $outputs.source_sha 'source_sha' -Pattern '\A[0-9a-f]{40}\z'
 Assert-OpenClawSourceText $outputs.package_sha256 'package_sha256' -Pattern '\A[0-9a-f]{64}\z'
 Assert-OpenClawSourceText $outputs.node_version 'node_version' -Pattern '\A[0-9]+\.[0-9]+\.[0-9]+\z'
-Assert-OpenClawSourceVersion $outputs.package_version
+Assert-OpenClawSourceVersion $outputs.package_version -Channel $ReleaseChannel
 if ($outputs.source_tag -cne "v$($outputs.package_version)") {
     throw 'The selected build source tag and package version differ.'
 }

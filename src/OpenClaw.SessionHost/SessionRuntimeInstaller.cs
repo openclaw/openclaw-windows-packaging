@@ -35,7 +35,8 @@ internal static class SessionRuntimeInstaller
         Func<string>? getLocalApplicationData = null,
         Func<string, bool>? tryPrependUserPath = null,
         Func<string, string?>? getRuntimeVersion = null,
-        Func<string, string, string?>? stageNativeModules = null)
+        Func<string, string, string?>? stageNativeModules = null,
+        TextWriter? errorOutput = null)
     {
         string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
         string? requestId = null;
@@ -132,7 +133,12 @@ internal static class SessionRuntimeInstaller
             InvalidDataException or BadImageFormatException or
             System.ComponentModel.Win32Exception)
         {
-            TryWriteFailure(writeFile, resultPath, requestId, exception.Message);
+            TryWriteFailure(
+                writeFile,
+                resultPath,
+                requestId,
+                exception.Message,
+                errorOutput ?? Console.Error);
             return SessionLaunchProtocol.HelperFailureExitCode;
         }
     }
@@ -331,7 +337,8 @@ internal static class SessionRuntimeInstaller
         Action<string, string> writeFile,
         string resultPath,
         string? requestId,
-        string message)
+        string message,
+        TextWriter errorOutput)
     {
         try
         {
@@ -346,6 +353,11 @@ internal static class SessionRuntimeInstaller
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException)
         {
+            Program.ReportResultWriteFailure(
+                errorOutput,
+                requestId,
+                message,
+                exception);
         }
     }
 

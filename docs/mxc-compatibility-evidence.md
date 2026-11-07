@@ -72,7 +72,7 @@ to one while its four existing members remained alive. A synchronized new
 child creation failed with Win32 error 1816 and produced no sentinel, while
 the original members and unrelated sibling survived.
 
-The updated candidate keeps a query-only guest coordinator outside the job.
+The earlier pin/drain candidate kept a query-only guest coordinator outside the job.
 After the host closes admission, it pins the workload members under the agent
 identity, asks the host to terminate, and waits those exact handles before
 acknowledging drain. Targeted local tests now pass strict exit checks for the
@@ -110,6 +110,28 @@ The full x64 NativeAOT driver passed 33 scenarios and its expected wrong-alias
 negative. Real keyboard/PTY
 cancellation, abrupt host death with a retained handle, installed-package
 execution, and ARM64 execution are not established by this run.
+
+A subsequent local owner-death regression confirmed the retained-handle
+failure independently: the fixture owner's process handle was signaled after
+forced termination, but the outside coordinator did not exit and the workload
+remained alive. The coordinator's query handle prevented kill-on-close, and
+the dead host could not signal stop. The corrected lifetime establishes a
+per-invocation mutex on a dedicated host thread before dispatch. The
+coordinator watches abandonment or normal release, closes admission, pins
+processes, and terminates that exact job when its owner is no longer present.
+The agent's job grant now includes admission control and termination, scoped
+to the unique invocation; it grants no access to host processes.
+An owner-ended snapshot failure remains a reported failure, still requests
+emergency termination, and retains the coordinator's native-root lease until
+explicit teardown when complete exit drain cannot be confirmed.
+
+Owned local fixtures cover hard death with a retained job handle, death before
+dispatch with late admission, normal release without abandonment, natural
+foreground completion, cancellation, sibling survival, and state-transfer
+owner death. These are same-identity Windows process tests, not fresh
+cross-identity MXC or installed-package evidence for the changed grants.
+The earlier disposable-session results above do not establish those new
+contracts across identities or architectures.
 
 An additional deterministic natural-exit fixture closes admission, takes a real
 exact-job snapshot, then proves a member's natural exit with an independent

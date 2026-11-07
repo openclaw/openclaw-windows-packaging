@@ -11,6 +11,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -73,6 +74,42 @@ before(() => {
   writePackage(appRoot, "esm-pkg", "app", { type: "module", files: ["index.js", "extra.js"] });
   writePackage(stagedRoot, "esm-pkg", "staged", { type: "module" });
   writePackage(appRoot, "unstaged-pkg", "app");
+
+  for (const [base, copy] of [[appRoot, "app"], [stagedRoot, "staged"]]) {
+    const directory = join(base, "node_modules", "@earendil-works", "pi-tui");
+    mkdirSync(join(directory, "dist"), { recursive: true });
+    writeFileSync(join(directory, "package.json"), JSON.stringify({
+      name: "@earendil-works/pi-tui",
+      version: "1.0.3",
+      type: "module",
+      dependencies: { marked: "18.0.11", "get-east-asian-width": "1.6.0" },
+      exports: {
+        ".": { import: "./dist/index.mjs", require: "./dist/index.cjs" },
+        "./relative": "./dist/relative.cjs",
+      },
+      imports: { "#internal": "./dist/relative.cjs" },
+    }));
+    for (const extension of ["cjs", "mjs"]) {
+      cpSync(join(probes, `staged-dependencies.${extension}`), join(directory, "dist", `index.${extension}`));
+    }
+    writeFileSync(join(directory, "dist", "relative.cjs"), `module.exports = { copy: "${copy}" };\n`);
+    writeFileSync(join(directory, "dist", "counter.mjs"), "export const url = import.meta.url;\n");
+    if (base === appRoot) {
+      writeFileSync(join(directory, "dist", "unstaged.cjs"), 'module.exports = { copy: "app" };\n');
+    }
+    writePackage(directory, "nested-pkg", `${copy}-nested`);
+  }
+  for (const name of ["marked", "get-east-asian-width"]) {
+    writePackage(appRoot, name, "app", { type: "module" });
+  }
+  writePackage(appRoot, "nested-pkg", "app");
+  writePackage(join(appRoot, "custom"), "marked", "custom");
+  writePackage(stagedRoot, "staged-only-pkg", "staged");
+  writePackage(appRoot, "exported-pkg", "app", { files: ["index.js", "private.cjs"] });
+  writeFileSync(join(appRoot, "node_modules", "exported-pkg", "package.json"),
+    JSON.stringify({ name: "exported-pkg", exports: "./index.js" }));
+  writePackage(appRoot, "broken-pkg", "app");
+  writeFileSync(join(appRoot, "node_modules", "broken-pkg", "package.json"), "{ invalid json");
 });
 
 after(() => {
@@ -144,6 +181,57 @@ test("direct Module._resolveFilename callers reach the staged copy", () => {
   assertReport(probe("commonjs.cjs"), { resolveFilename: "staged" });
 });
 
+function dependencyReport(mode, environment = {}) {
+  const source = mode === "esm"
+    ? 'import report from "@earendil-works/pi-tui"; process.stdout.write(JSON.stringify(report));'
+    : 'process.stdout.write(JSON.stringify(require("@earendil-works/pi-tui")));';
+  const entry = join(appRoot, `dependencies.${mode === "esm" ? "mjs" : "cjs"}`);
+  writeFileSync(entry, source);
+  const result = runNode(["--import", preloadUrl, entry], environment);
+  assert.equal(result.stderr, "");
+  assert.equal(result.status, 0);
+  return JSON.parse(result.stdout);
+}
+
+for (const mode of ["esm", "cjs"]) {
+  test(`${mode} dependencies of a staged package keep application ancestry`, () => {
+    assertReport(dependencyReport(mode), {
+      location: "staged",
+      marked: "app",
+      width: "app",
+      relative: "staged",
+      missingStagedFile: "app",
+      internal: "staged",
+      self: "staged",
+      nested: "staged-nested",
+      native: "staged",
+      resolve: "app",
+      ...(mode === "esm" ? { createRequire: "app" } : {
+        direct: "app",
+        directRelative: "staged",
+        explicitPaths: "custom",
+        directMissing: "MODULE_NOT_FOUND",
+        directBlocked: "ERR_PACKAGE_PATH_NOT_EXPORTED",
+        invalidPaths: "ERR_INVALID_ARG_VALUE",
+        parentUnchanged: true,
+      }),
+      missing: mode === "esm" ? "ERR_MODULE_NOT_FOUND" : "MODULE_NOT_FOUND",
+      blocked: "ERR_PACKAGE_PATH_NOT_EXPORTED",
+      broken: "ERR_INVALID_PACKAGE_CONFIG",
+    });
+  });
+}
+
+test("relative ESM imports from staged packages preserve query and fragment identity", () => {
+  const { sameInstance, relativeUrls } = dependencyReport("esm");
+  assert.equal(sameInstance, false);
+  assert.deepEqual(relativeUrls.map((url) => {
+    const parsed = new URL(url);
+    assert.ok(fileURLToPath(parsed).startsWith(stagedRoot));
+    return [parsed.search, parsed.hash];
+  }), [["?one", "#alpha"], ["?two", "#beta"]]);
+});
+
 test("the application root matches regardless of case", () => {
   const swapped = [...appRoot]
     .map((character) =>
@@ -154,6 +242,33 @@ test("the application root matches regardless of case", () => {
 
   assertReport(probe("commonjs.cjs", { environment }), { requireBare: "staged", resolveBare: "staged" });
   assertReport(probe("esm.mjs", { environment }), { importBare: "staged", metaResolveBare: "staged" });
+});
+
+test("an application root reached through a junction reaches the staged copy", () => {
+  // A package installed on a secondary AppX volume is reached through a
+  // junction at its Program Files\WindowsApps location. Node.js resolves
+  // modules, and so every package's own __dirname, through the junction's
+  // target, while the launcher passes the junction path.
+  const linkedPackageRoot = join(root, "Program Files", "OpenClaw (volume)");
+  symlinkSync(join(root, "Program Files", "OpenClaw"), linkedPackageRoot, "junction");
+  const linkedAppRoot = join(linkedPackageRoot, "app");
+  const linkedPreloadUrl = pathToFileURL(join(linkedPackageRoot, "node", "native-redirect.mjs")).href;
+  const environment = { OPENCLAW_NATIVE_APP_ROOT: linkedAppRoot };
+
+  for (const [entry, expected] of [
+    ["commonjs.cjs", { requireBare: "staged", requireAbsolute: "staged", resolveFilename: "staged", unstaged: "app" }],
+    ["esm.mjs", { importBare: "staged", importAbsolute: "staged", createRequire: "staged", unstaged: "app" }],
+  ]) {
+    const result = runNode(["--import", linkedPreloadUrl, join(linkedAppRoot, entry)], environment);
+    assert.equal(result.stderr, "");
+    assert.equal(result.status, 0);
+    assertReport(JSON.parse(result.stdout), expected);
+  }
+  for (const mode of ["esm", "cjs"]) {
+    assertReport(dependencyReport(mode, environment), {
+      location: "staged", marked: "app", relative: "staged", nested: "staged-nested",
+    });
+  }
 });
 
 test("child processes inherit the redirect through NODE_OPTIONS", () => {

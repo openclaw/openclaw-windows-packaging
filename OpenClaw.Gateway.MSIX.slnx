@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/OpenClaw.GatewayRecovery/OpenClaw.GatewayRecovery.csproj" />
     <Project Path="src/OpenClaw.Launcher/OpenClaw.Launcher.csproj" />
     <Project Path="src/OpenClaw.SessionHost/OpenClaw.SessionHost.csproj" />
     <Project Path="src/OpenClaw.SessionProtocol/OpenClaw.SessionProtocol.csproj" />

@@ -3,8 +3,14 @@ using System.Text;
 namespace OpenClaw.Launcher.Gateway;
 
 /// <summary>
-/// Generates the launcher files both persistence lanes invoke.
+/// Recognizes the launcher files earlier generations of logon recovery wrote.
 /// </summary>
+/// <remarks>
+/// Recovery now starts the windowless sign-in helper directly and generates no
+/// script. Earlier generations ran a CMD or Windows Script Host launcher that
+/// called a PowerShell activation script. Their markers identify those files
+/// for removal, and a task that has not been migrated yet still runs them.
+/// </remarks>
 internal static class GatewayLauncherScript
 {
     /// <summary>
@@ -13,7 +19,7 @@ internal static class GatewayLauncherScript
     /// </summary>
     public const string Marker = "@rem openclaw-gateway-launcher v1";
 
-    private const string ScriptHostMarker = "// openclaw-gateway-launcher v1";
+    internal const string ScriptHostMarker = "// openclaw-gateway-launcher v1";
 
     private const string PowerShellMarker = "# openclaw-gateway-launcher v1";
 
@@ -23,27 +29,11 @@ internal static class GatewayLauncherScript
 
     private const string LegacyControlArguments = "gateway-service start";
 
-    public static string Create(string workingDirectory, string activationScriptPath)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
-        ArgumentException.ThrowIfNullOrWhiteSpace(activationScriptPath);
-
-        string encodedCommand = Convert.ToBase64String(Encoding.Unicode.GetBytes(
-            $"& '{QuotePowerShell(activationScriptPath)}'; exit $LASTEXITCODE"));
-
-        // WScript has no console. Run hidden and wait so both persistence lanes
-        // retain the recovery command's exit status rather than reporting spawn success.
-        return string.Join(
-            "\r\n",
-            ScriptHostMarker,
-            "var shell = new ActiveXObject(\"WScript.Shell\");",
-            $"shell.CurrentDirectory = \"{QuoteJavaScript(workingDirectory)}\";",
-            "var command = '\"' + shell.ExpandEnvironmentStrings(\"%SystemRoot%\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\") + '\"';",
-            $"command += \" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {encodedCommand}\";",
-            "WScript.Quit(shell.Run(command, 0, true));",
-            string.Empty);
-    }
-
+    /// <summary>
+    /// The activation script the Windows Script Host generation ran. It is
+    /// written only to upgrade a shipped pre-marker script in place, so a task
+    /// that has not been migrated yet still starts recovery hidden.
+    /// </summary>
     public static string CreateActivationScript(string packageFamilyName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(packageFamilyName);
@@ -279,26 +269,6 @@ internal static class GatewayLauncherScript
             string.Empty);
     }
 
-    /// <summary>
-    /// The Startup-folder fallback calls the same launcher rather than
-    /// repeating its contents, so the two lanes cannot drift apart.
-    /// </summary>
-    public static string CreateFallback(string launcherPath)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(launcherPath);
-
-        // WSF explicitly selects JScript even when the user associates .js with
-        // an editor. Its external script remains the same owner the task invokes.
-        return string.Join(
-            "\r\n",
-            "<?xml version=\"1.0\" encoding=\"utf-8\"?>",
-            "<job>",
-            $"<!-- {ScriptHostMarker} -->",
-            $"<script language=\"JScript\" src=\"{System.Security.SecurityElement.Escape(launcherPath)}\" />",
-            "</job>",
-            string.Empty);
-    }
-
     public static bool LooksGenerated(string content)
     {
         ArgumentNullException.ThrowIfNull(content);
@@ -306,14 +276,6 @@ internal static class GatewayLauncherScript
                content.Contains(PowerShellMarker, StringComparison.Ordinal) ||
                content.Contains(ScriptHostMarker, StringComparison.Ordinal);
     }
-
-    private static string QuoteJavaScript(string value) =>
-        value.Replace("\\", "\\\\", StringComparison.Ordinal)
-            .Replace("\"", "\\\"", StringComparison.Ordinal)
-            .Replace("\r", "\\r", StringComparison.Ordinal)
-            .Replace("\n", "\\n", StringComparison.Ordinal)
-            .Replace("\u2028", "\\u2028", StringComparison.Ordinal)
-            .Replace("\u2029", "\\u2029", StringComparison.Ordinal);
 
     private static string QuotePowerShell(string value) =>
         value.Replace("'", "''", StringComparison.Ordinal);

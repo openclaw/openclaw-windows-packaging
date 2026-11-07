@@ -43,7 +43,8 @@ $releaseIdentity = & (
 ) `
     -GatewayTag 'v2026.9.7' `
     -MSIXRevision ([int]$policy.msixRevision)
-$approvedPackageVersion = $releaseIdentity.PackageVersion
+$approvedPackageVersion = & (Join-Path $PSScriptRoot 'Get-WorkflowPackageVersion.ps1') `
+    -RunNumber 1234 -RunAttempt 1 -ReleaseVersion $releaseIdentity.PackageVersion -Store
 $approvedPayloadVersion = '2026.9.7'
 $packagingCommit = '1111111111111111111111111111111111111111'
 $suiteRoot = Join-Path $env:TEMP (
@@ -57,7 +58,7 @@ $validationScripts = Join-Path $validationRoot 'scripts'
 New-Item -Path $validationScripts -ItemType Directory -Force | Out-Null
 foreach ($name in @(
     'Test-SigningInputs.ps1', 'Get-WorkflowSource.ps1',
-    'Get-MSIXReleaseIdentity.ps1', 'OpenClawSource.ps1'
+    'Get-MSIXReleaseIdentity.ps1', 'OpenClawSource.ps1', 'Get-WorkflowPackageVersion.ps1'
 )) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) `
         -Destination (Join-Path $validationScripts $name)
@@ -80,6 +81,7 @@ $source = [ordered]@{
     workflowRef = 'openclaw/openclaw-windows-packaging/.github/workflows/gateway-msix.yml@refs/heads/main'
     githubRef = 'refs/heads/main'
     eventName = 'workflow_dispatch'
+    releaseChannel = 'stable'
 }
 
 function Save-TestSource {
@@ -115,6 +117,10 @@ function New-TestArtifact {
         [bool]$IncludeEncodedScopedDependency = $false
     )
 
+    if ($IdentityChannel -eq 'Sideload') {
+        $approvedPackageVersion = (& (Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1') `
+            -GatewayTag $source.releaseTag -MSIXRevision ([int]$policy.msixRevision)).PackageVersion
+    }
     $directory = Join-Path $Root $Architecture
     $staging = Join-Path $Root ".$Architecture-package"
     $payloadDirectory = Join-Path $staging 'payload'
@@ -183,6 +189,14 @@ function New-TestArtifact {
         ConvertTo-Json -Depth 4 |
         Set-Content `
             -LiteralPath (Join-Path $payloadDirectory 'payload-files.json') `
+            -Encoding utf8
+    [ordered]@{
+        schemaVersion = 1
+        files = @('openclaw.mjs')
+    } |
+        ConvertTo-Json |
+        Set-Content `
+            -LiteralPath (Join-Path $payloadDirectory 'startup-files.json') `
             -Encoding utf8
 
     $selectedIdentity = if ($IdentityChannel -eq 'Sideload') {
@@ -280,6 +294,18 @@ function New-TestArtifact {
             }
     )
 
+    $recoveryHelperPath = Join-Path $staging 'openclaw-gateway-recovery.exe'
+    [IO.File]::WriteAllText($recoveryHelperPath, "gateway-recovery-$Architecture")
+    $recoveryHelperFiles = @(
+        [ordered]@{
+            path = 'openclaw-gateway-recovery.exe'
+            length = (Get-Item -LiteralPath $recoveryHelperPath).Length
+            sha256 = (
+                Get-FileHash -LiteralPath $recoveryHelperPath -Algorithm SHA256
+            ).Hash.ToLowerInvariant()
+        }
+    )
+
     $msixName = "OpenClawGateway-$Architecture.msix"
     $msixPath = Join-Path $directory $msixName
     [IO.Compression.ZipFile]::CreateFromDirectory($staging, $msixPath)
@@ -305,6 +331,7 @@ function New-TestArtifact {
         mxcRuntimeVersion = $mxcRuntimeVersion
         mxcRuntimePackage = 'Microsoft.Mxc.Sdk'
         sessionHostFiles = $sessionHostFiles
+        gatewayRecoveryFiles = $recoveryHelperFiles
         architecture = $Architecture
         archive = $msixName
         sha256 = $msixHash
@@ -332,6 +359,8 @@ function Invoke-PolicyValidation {
         [string]$RequestedRef = '',
 
         [string]$GatewayVersion = '',
+
+        [string]$ReleaseChannel = 'stable',
 
         [switch]$PreserveBundle
     )
@@ -367,9 +396,11 @@ function Invoke-PolicyValidation {
         -BundlePath (Join-Path $Root 'bundle\OpenClawGateway.msixbundle') `
         -SourcePath $sourcePath `
         -WorkflowRunId '123456' `
+        -WorkflowRunNumber 1234 `
         -SigningMode official `
         -RequestedRef $RequestedRef `
         -GatewayVersion $GatewayVersion `
+        -ReleaseChannel $ReleaseChannel `
         -PackagingCommit $packagingCommit `
         -WorkflowRef 'openclaw/openclaw-windows-packaging/.github/workflows/gateway-msix.yml@refs/heads/main' `
         -GitHubRef 'refs/heads/main' -EventName 'workflow_dispatch' `
@@ -391,6 +422,11 @@ function New-TestBundle {
         [string]$IdentityChannel = 'Store'
     )
 
+    if ($IdentityChannel -eq 'Sideload') {
+        $approvedPackageVersion = (& (Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1') `
+            -GatewayTag $source.releaseTag -MSIXRevision ([int]$policy.msixRevision)).PackageVersion
+        if (-not $PSBoundParameters.ContainsKey('BundleVersion')) { $BundleVersion = $approvedPackageVersion }
+    }
     $selectedIdentity = if ($IdentityChannel -eq 'Sideload') {
         $policy.sideloadPackageIdentity
     }
@@ -878,6 +914,30 @@ try {
         -Action { Invoke-PolicyValidation -Root $testRoot }
 
     Reset-TestArtifacts
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        Set-Content `
+            -LiteralPath (Join-Path $Expanded 'openclaw-gateway-recovery.exe') `
+            -Value 'tampered' `
+            -Encoding utf8
+    }
+    Assert-Fails `
+        -MessagePattern 'sign-in helper is invalid' `
+        -Action { Invoke-PolicyValidation -Root $testRoot }
+
+    Reset-TestArtifacts
+    $x64MetadataPath = Join-Path $testRoot 'x64\msix-metadata.json'
+    $x64Metadata = Get-Content -LiteralPath $x64MetadataPath -Raw |
+        ConvertFrom-Json
+    $x64Metadata.PSObject.Properties.Remove('gatewayRecoveryFiles')
+    $x64Metadata |
+        ConvertTo-Json |
+        Set-Content -LiteralPath $x64MetadataPath -Encoding utf8
+    Assert-Fails `
+        -MessagePattern 'sign-in helper inventory is invalid' `
+        -Action { Invoke-PolicyValidation -Root $testRoot }
+
+    Reset-TestArtifacts
     $x64MetadataPath = Join-Path $testRoot 'x64\msix-metadata.json'
     $x64Metadata = Get-Content -LiteralPath $x64MetadataPath -Raw |
         ConvertFrom-Json
@@ -1065,6 +1125,24 @@ try {
         }
 
     Reset-TestArtifacts
+    Update-TestMsix -Root $testRoot -Architecture x64 -Mutator {
+        param($Expanded)
+        [ordered]@{
+            schemaVersion = 1
+            files = @('openclaw.mjs', '../outside.js')
+        } |
+            ConvertTo-Json |
+            Set-Content `
+                -LiteralPath (Join-Path $Expanded 'payload\startup-files.json') `
+                -Encoding utf8
+    }
+    Assert-Fails `
+        -MessagePattern 'startup file list is invalid' `
+        -Action {
+            Invoke-PolicyValidation -Root $testRoot
+        }
+
+    Reset-TestArtifacts
     Add-Content `
         -LiteralPath (Join-Path $testRoot 'x64\OpenClawGateway-x64.msix') `
         -Value 'tampered'
@@ -1088,6 +1166,52 @@ try {
         -Action {
             Invoke-PolicyValidation -Root $testRoot -PreserveBundle
         }
+
+    foreach ($previewChannel in @('beta')) {
+        $previewVersion = "2026.9.8-$previewChannel.2"
+        $previewRoot = Join-Path $suiteRoot $previewChannel
+        $previewIdentity = & (Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1') `
+            -GatewayTag "v$previewVersion" -MSIXRevision ([int]$policy.msixRevision)
+        $approvedPackageVersion = $previewIdentity.PackageVersion
+        $source.packageVersion = $previewVersion
+        $source.releaseTag = "v$previewVersion"
+        $source.requestedRef = $previewChannel
+        $source.channel = $previewChannel
+        $source.releaseChannel = $previewChannel
+        Save-TestSource
+        foreach ($architecture in @('x64', 'arm64')) {
+            New-TestArtifact -Root $previewRoot -Architecture $architecture `
+                -IdentityChannel Sideload -PayloadPackageVersion $previewVersion
+        }
+        Invoke-PolicyValidation -Root $previewRoot -IdentityChannel Sideload -ReleaseChannel $previewChannel
+        Assert-Fails -MessagePattern 'packageVersion|channel' -Action {
+            Invoke-PolicyValidation -Root $previewRoot -IdentityChannel Sideload
+        }
+        Assert-Fails -MessagePattern 'metadata|identity|package' -Action {
+            Invoke-PolicyValidation -Root $previewRoot -ReleaseChannel $previewChannel -PreserveBundle
+        }
+        $approvedPackageVersion = & (Join-Path $PSScriptRoot 'Get-WorkflowPackageVersion.ps1') `
+            -RunNumber 1234 -RunAttempt 1 -ReleaseVersion $previewIdentity.PackageVersion -Store
+        $flightRoot = Join-Path $suiteRoot "$previewChannel-store"
+        foreach ($architecture in @('x64', 'arm64')) {
+            New-TestArtifact -Root $flightRoot -Architecture $architecture -PayloadPackageVersion $previewVersion
+        }
+        Invoke-PolicyValidation -Root $flightRoot -ReleaseChannel $previewChannel
+        Assert-Fails -MessagePattern 'metadata|identity|package' -Action {
+            Invoke-PolicyValidation -Root $flightRoot -IdentityChannel Sideload -ReleaseChannel $previewChannel -PreserveBundle
+        }
+        $source.releaseChannel = 'stable'
+        Save-TestSource
+        Assert-Fails -MessagePattern 'workflow identity: releaseChannel' -Action {
+            Invoke-PolicyValidation -Root $previewRoot -IdentityChannel Sideload -ReleaseChannel $previewChannel
+        }
+        $source.releaseChannel = $previewChannel
+        Save-TestSource
+        Add-Content -LiteralPath (Join-Path $previewRoot 'arm64/OpenClawGateway-arm64.msix') -Value 'tampered'
+        Assert-Fails -MessagePattern 'MSIX hash does not match' -Action {
+            Invoke-PolicyValidation -Root $previewRoot -IdentityChannel Sideload -ReleaseChannel $previewChannel -PreserveBundle
+        }
+    }
 
     foreach ($canonicalFile in $canonicalFileHashes.Keys) {
         $currentHash = (

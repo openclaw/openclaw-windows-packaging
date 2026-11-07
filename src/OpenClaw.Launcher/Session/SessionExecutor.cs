@@ -82,6 +82,7 @@ internal sealed record SessionCommandRequest(
 /// Captured output from a non-interactive command run in the isolated session.
 /// </summary>
 internal sealed record SessionCommandCaptureResult(
+    int ExitCode,
     string StandardOutput,
     string StandardError);
 
@@ -137,29 +138,32 @@ internal sealed partial class SessionExecutor
         ArgumentNullException.ThrowIfNull(record);
         ArgumentNullException.ThrowIfNull(request);
 
-        string nodeDirectory = Path.GetDirectoryName(request.NodePath)
-            ?? throw new SessionException(
-                "The agent Node.js executable has no parent directory.");
-        IReadOnlyDictionary<string, string> environment = _buildEnvironment();
-
         return await ExecuteCommandAsync(
-            record,
-            new SessionCommandRequest(
-                request.HelperPath,
-                request.NodePath,
-                BuildNodeArguments(request),
-                request.WorkingDirectory)
-            {
-                PathPrefix = nodeDirectory,
-                AdditionalEnvironment = MergeEnvironment(
-                    environment,
-                    request.AdditionalEnvironment),
-                NodeOptionsSuffix = request.NodeOptionsSuffix,
-                NativeRootPath = request.NativeRootPath
-            },
-            "Running OpenClaw in the isolated session.",
-            "OpenClaw",
+            record, CreateOpenClawCommandRequest(request),
+            "Running OpenClaw in the isolated session.", "OpenClaw",
             cancellationToken).ConfigureAwait(false);
+    }
+
+    public Task<SessionCommandCaptureResult> ExecuteCaptureAsync(
+        SessionRecord record,
+        SessionExecutionRequest request,
+        CancellationToken cancellationToken) =>
+        ExecuteCommandCaptureAsync(
+            record, CreateOpenClawCommandRequest(request),
+            "Running OpenClaw in the isolated session.", "OpenClaw", cancellationToken);
+
+    private SessionCommandRequest CreateOpenClawCommandRequest(SessionExecutionRequest request)
+    {
+        string nodeDirectory = Path.GetDirectoryName(request.NodePath)
+            ?? throw new SessionException("The agent Node.js executable has no parent directory.");
+        return new SessionCommandRequest(
+            request.HelperPath, request.NodePath, BuildNodeArguments(request), request.WorkingDirectory)
+        {
+            PathPrefix = nodeDirectory,
+            AdditionalEnvironment = MergeEnvironment(_buildEnvironment(), request.AdditionalEnvironment),
+            NodeOptionsSuffix = request.NodeOptionsSuffix,
+            NativeRootPath = request.NativeRootPath
+        };
     }
 
     /// <summary>
@@ -441,7 +445,7 @@ internal sealed partial class SessionExecutor
                 exception is FileNotFoundException or DirectoryNotFoundException or IOException)
             {
                 throw new SessionException(
-                    "The isolated session did not report a collection result " +
+                    "The isolated session did not report a collection " +
                     DescribeMissingResult(execution),
                     exception);
             }
@@ -871,10 +875,9 @@ internal sealed partial class SessionExecutor
     /// Establishes what actually happened from the helper's control result.
     /// </summary>
     /// <remarks>
-    /// The executor's exit code alone is ambiguous. The helper's failure code
-    /// is a value OpenClaw itself can return, and an attached execution
-    /// captures nothing, so a dispatch failure is indistinguishable from an
-    /// application exit without this file.
+    /// The helper returns the child exit code after a launch and its own
+    /// failure code otherwise. Either code can also be returned by OpenClaw,
+    /// so the correlated result is required to interpret the executor outcome.
     /// </remarks>
     private static SessionCommandCaptureResult ReadCapturedOutcome(
         SessionWorkspaceOperation operation,
@@ -923,23 +926,22 @@ internal sealed partial class SessionExecutor
                 (result.Error ?? "no reason was reported."));
         }
 
-        if (execution.ExitCode != 0)
+        if (result.ExitCode is not int childExitCode)
         {
             throw new SessionException(
-                $"The isolated session backend failed to run {subject} " +
-                $"(executor exit code {execution.ExitCode}).");
+                $"The isolated session reported that it launched {subject} without an exit code.");
         }
 
-        if (result.ExitCode is not 0)
+        if (execution.ExitCode != childExitCode)
         {
-            string exitCode = result.ExitCode is int value
-                ? value.ToString(CultureInfo.InvariantCulture)
-                : "no exit code";
             throw new SessionException(
-                $"{subject} exited with code {exitCode}.");
+                $"The isolated session reported {subject} exit code " +
+                $"{childExitCode.ToString(CultureInfo.InvariantCulture)}, but the " +
+                $"executor returned exit code {execution.ExitCode.ToString(CultureInfo.InvariantCulture)}.");
         }
 
         return new SessionCommandCaptureResult(
+            childExitCode,
             execution.StandardOutput,
             execution.StandardError);
     }
@@ -1002,14 +1004,24 @@ internal sealed partial class SessionExecutor
         return result.ExitCode ?? executorExitCode;
     }
 
+    // Plain helpers exit 0 or with the helper failure code. Any other code
+    // means cmd.exe could not start the staged helper, or the helper stopped
+    // before it could report; the guest's output carries the reason.
     private static string DescribeMissingResult(MxcExecutionResult execution)
     {
+        string cause = execution.ExitCode switch
+        {
+            0 => "the session helper exited without writing it",
+            SessionLaunchProtocol.HelperFailureExitCode =>
+                "the session helper failed and could not write it",
+            _ => "the session helper did not start or stopped before reporting",
+        };
         string detail = string.Join(
             " ",
             new[] { execution.StandardOutput, execution.StandardError }
                 .Where(static value => !string.IsNullOrWhiteSpace(value)));
         return string.IsNullOrWhiteSpace(detail)
-            ? $"result (executor exit code {execution.ExitCode})."
-            : $"result (executor exit code {execution.ExitCode}): {detail}";
+            ? $"result: {cause} (executor exit code {execution.ExitCode})."
+            : $"result: {cause} (executor exit code {execution.ExitCode}): {detail}";
     }
 }

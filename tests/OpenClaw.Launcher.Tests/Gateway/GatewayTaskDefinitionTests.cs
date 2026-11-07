@@ -42,8 +42,10 @@ public sealed class GatewayTaskDefinitionTests
     private static GatewayTaskSnapshot Desired() =>
         GatewayTaskDefinition.CreateSnapshot(
             "S-1-5-21-1",
-            @"C:\Windows\System32\wscript.exe",
-            @"C:\state\gateway-launcher.js");
+            HelperPath);
+
+    private const string HelperPath =
+        @"C:\Users\some one\AppData\Local\Microsoft\WindowsApps\OpenClaw.Gateway_test\openclaw-gateway-recovery.exe";
 
     [Fact]
     public void TheGeneratedDefinitionRoundTrips()
@@ -64,8 +66,7 @@ public sealed class GatewayTaskDefinitionTests
     {
         GatewayTaskSnapshot snapshot = GatewayTaskDefinition.CreateSnapshot(
             "S-1-12-1-1-2-3-4",
-            @"C:\Windows\System32\wscript.exe",
-            @"C:\state\gateway-launcher.js",
+            HelperPath,
             "S-1-5-21-1-2-3-4");
 
         Assert.Equal("S-1-12-1-1-2-3-4", snapshot.UserId);
@@ -100,12 +101,17 @@ public sealed class GatewayTaskDefinitionTests
     }
 
     [Fact]
-    public void TheActionRunsTheLauncherThroughWindowlessScriptHost()
+    public void TheActionRunsOnlyTheWindowlessHelper()
     {
+        // No script host, console, or argument is part of the action, so
+        // nothing between Task Scheduler and the helper can open a window.
         GatewayTaskSnapshot desired = Desired();
+        string xml = GatewayTaskDefinition.CreateXml(desired, "OpenClaw Gateway test");
 
-        Assert.Equal(@"C:\Windows\System32\wscript.exe", desired.Command);
-        Assert.Equal("//B //Nologo \"C:\\state\\gateway-launcher.js\"", desired.Arguments);
+        // A profile path can contain spaces, so the whole path stays one command.
+        Assert.Equal($"\"{HelperPath}\"", desired.Command);
+        Assert.Equal(string.Empty, desired.Arguments);
+        Assert.DoesNotContain("<Arguments", xml, StringComparison.Ordinal);
     }
 
     [Fact]

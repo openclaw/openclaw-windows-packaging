@@ -82,6 +82,19 @@ Use options for a concrete reason:
 | `-ReplaceExistingInstall` | You explicitly accept removal of an installed MSIX, another checkout's registration, or an owned development registration needing destructive repair. Removal can delete the isolated profile; packaged app data also cannot survive a loose/installed transition. |
 | `-Patch <name>` | You are iterating on a change; this is the recommended default. Name it for the work so its commands, app data, and isolated session stay separate from the base package. See [side-by-side patched identities](#side-by-side-patched-identities). |
 
+Local deployment and local MSIX composition verify every acquired, cached, or
+supplied payload against the file inventory in `payload-metadata.json` before
+using it. `Build-Payload.ps1` records the file count and a SHA-256 digest of the
+ordinal-sorted, app-relative paths and lengths, including dot-directories such
+as plugin `.setup` trees and hidden files. This confirms file presence and size,
+not the contents of same-length files. Validation also runs before
+`-ReplaceExistingInstall` removes a current or legacy registration, so a rejected
+payload leaves those installations and their data intact. Older payloads without
+an inventory are rejected. Select a newer successful run with
+`-RefreshPayload -PayloadRunId <id>`,
+or rebuild with `scripts\Build-Payload.ps1` and pass `-PayloadDirectory`.
+Re-downloading an older artifact cannot recover files omitted during upload.
+
 The command is idempotent, not timestamp-driven. `LocalPackage.psm1` records
 two content-hash fingerprints:
 
@@ -441,17 +454,25 @@ Run `.\scripts\Test-NativeRedirect.Tests.ps1` when you change
 `src\OpenClaw.Launcher\node\native-redirect.mjs`. It requires Node.js and runs
 `tests\node\native-redirect.test.mjs` with `node --test`. Each test starts
 Node.js with the preload against temporary application and staged roots, then
-checks where CommonJS, ESM, child-process, and worker-thread resolution lands.
-It also checks the preload's `NODE_OPTIONS` entry and its startup failure when
+checks where CommonJS, ESM, child-process, and worker-thread resolution lands,
+including through an application root reached by a junction. Imports from
+staged packages keep hoisted dependencies in the immutable
+application, while relative imports, package exports/imports, nested versions,
+and native dependencies retain their original resolution and redirection.
+Redirected ESM URLs retain query strings and fragments as separate module identities.
+Missing dependencies and invalid package metadata still fail. It also checks
+the preload's `NODE_OPTIONS` entry and its startup failure when
 `module.registerHooks()` is unavailable. The suite creates only temporary
 fixtures. It never touches an isolated session, a package registration, or
 installed OpenClaw data.
 
-The loose-registration layout does not exercise the redirect. Its `app`
-directory is a junction to the payload, and Node.js resolves modules through
-real paths, which never fall under the configured application root. To prove
-redirection inside the isolated session, use a package installed as described
-in [Compose, sign, and install an artifact](#compose-sign-and-install-an-artifact).
+Node.js resolves modules through real paths, so the redirect matches both the
+configured application root and its real path. A package installed on a
+secondary AppX volume is reached through a junction at its `WindowsApps`
+location, and the loose-registration `app` directory is a junction to the
+payload; both resolve to the junction's target. To prove redirection inside the
+isolated session, use a package installed as described in
+[Compose, sign, and install an artifact](#compose-sign-and-install-an-artifact).
 
 ### Managed code and packaging
 
@@ -465,6 +486,12 @@ dotnet test .\OpenClaw.Gateway.MSIX.slnx --configuration Release --no-restore
 The branch-local invocation-job prototype's `InvocationCancellationTests`
 exercise real helper/process trees only in temporary fixtures, including
 retained job handles, cancellation, deadlines, and sibling survival.
+The owner-death regression uses the managed scenario driver's temporary
+process tree and kernel waits: it kills only its fixture owner, pins every
+workload member, and checks coordinator exit and sibling survival. Paused
+dispatch proves a dead owner cannot admit late work. Mutex tests distinguish
+established ownership, normal release, and abandonment. State-transfer tests
+exercise the same owner-death contract against the real helper worker.
 They never provision an isolated account. The separately callable disposable
 MXC probe is not part of this lane; running it requires explicit authorization
 and exact-ID cleanup with independent account/profile/workspace verification.
@@ -476,6 +503,7 @@ cover that contract.
 
 Run PowerShell policy suites by owning surface rather than indiscriminately:
 `Test-SigningInputs.Tests.ps1` for signing inputs,
+`Test-PayloadStartupFiles.Tests.ps1` for the generated startup file list,
 `Test-NodeRuntimeInputs.Tests.ps1` for Node runtime inputs,
 `Test-PackagingRelevance.Tests.ps1`, `Test-OpenClawCacheKey.Tests.ps1`, and
 `Test-OpenClawPackage.Tests.ps1` for payload/package workflow behavior,
@@ -484,7 +512,8 @@ Run PowerShell policy suites by owning surface rather than indiscriminately:
 `Build-Payload.ps1` and `Build-MSIX.ps1`,
 `Test-MSIXReleaseIdentity.Tests.ps1` and
 `Test-WorkflowPackageVersion.Tests.ps1` for release/version identity,
-`Test-OpenClawSource.Tests.ps1` and
+`Test-OpenClawSource.Tests.ps1`,
+`Test-WorkflowSourceSnapshotMode.Tests.ps1`, and
 `Test-WorkflowSigningConfiguration.ps1` for source capture, retry context,
 cache routing, and selected-build outcomes,
 `Test-MSIXUpgradeMatrix.Tests.ps1` for parallel upgrade scenario selection,
@@ -492,7 +521,13 @@ cache routing, and selected-build outcomes,
 handoff (synthetic command fixtures, never a live dispatch),
 `Test-Deploy-LocalPackage.Tests.ps1` for the loose-registration flow, and
 `Test-Sign-TestMSIX.Tests.ps1` for test signing. The Node input suite requires
-Node.js and npm; it uses a dependency-free local fixture.
+Node.js and npm; its local fixture exercises the approved OpenClaw install hook,
+an unapproved dependency hook, staged reuse, and lifecycle-pending refusals
+without downloading OpenClaw. Payload installation follows upstream's
+version-aware npm consumer approvals inside an explicit temporary prefix,
+not the source build's pnpm policy. Use the source-selected Node.js runtime;
+see the [Node input prerequisites](../CONTRIBUTING.md) for policy details and
+toolchain isolation.
 
 Cache-boundary checks are offline contracts, not platform proof. The workflow
 grants writes only to main/stable builds; arbitrary-ref unsigned/test dispatch

@@ -36,6 +36,8 @@ function New-Fixture {
     [IO.File]::WriteAllText((Join-Path $project 'Program.cs'), 'launcher source')
     New-Item -Path (Join-Path $root 'src\OpenClaw.SessionHost') -ItemType Directory -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $root 'src\OpenClaw.SessionHost\Program.cs'), 'session host source')
+    New-Item -Path (Join-Path $root 'src\OpenClaw.GatewayRecovery') -ItemType Directory -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $root 'src\OpenClaw.GatewayRecovery\Program.cs'), 'sign-in helper source')
     New-Item -Path (Join-Path $root 'src\OpenClaw.SessionProtocol') -ItemType Directory -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $root 'src\OpenClaw.SessionProtocol\Protocol.cs'), 'protocol source')
     [IO.File]::WriteAllText((Join-Path $project 'Package.appxmanifest'), @'
@@ -65,6 +67,16 @@ function New-Fixture {
         <uap5:Extension Category="windows.appExecutionAlias" Executable="openclaw.exe">
           <uap5:AppExecutionAlias>
             <uap5:ExecutionAlias Alias="clawctl.exe" />
+          </uap5:AppExecutionAlias>
+        </uap5:Extension>
+      </Extensions>
+    </Application>
+    <Application Id="GatewayRecovery" Executable="openclaw-gateway-recovery.exe">
+      <uap:VisualElements DisplayName="OpenClaw Gateway" />
+      <Extensions>
+        <uap5:Extension Category="windows.appExecutionAlias" Executable="openclaw-gateway-recovery.exe">
+          <uap5:AppExecutionAlias>
+            <uap5:ExecutionAlias Alias="openclaw-gateway-recovery.exe" />
           </uap5:AppExecutionAlias>
         </uap5:Extension>
       </Extensions>
@@ -115,12 +127,17 @@ function New-Fixture {
         [IO.File]::WriteAllText(
             (Join-Path $completionDirectory 'openclaw.ps1'),
             'Register-ArgumentCompleter -Native -CommandName openclaw')
+        $setupDirectory = Join-Path $directory 'app\dist\extensions\fixture\.setup'
+        New-Item -Path $setupDirectory -ItemType Directory -Force | Out-Null
+        [IO.File]::WriteAllText((Join-Path $setupDirectory 'entry.mjs'), 'export {};')
         [IO.File]::WriteAllText((Join-Path $directory 'payload-metadata.json'), (@{
             architecture = $architecture
             layout = 'expanded-directory'
             nodeVersion = $nodeVersion
             packageVersion = '2026.9.4'
             resolvedCommit = '0965053fe6b9341776df147a6934b7485c60b5ca'
+            inventory = & (Join-Path $PSScriptRoot 'Get-PayloadInventory.ps1') `
+                -ApplicationDirectory (Join-Path $directory 'app')
         } | ConvertTo-Json))
     }
     $state.Operations = @{
@@ -183,7 +200,12 @@ function New-Fixture {
                     Join-Path $state.Root 'src\OpenClaw.SessionProtocol\Protocol.cs') -Raw
             ) -join '|'
             $isSessionHost = $project -like '*OpenClaw.SessionHost*'
-            if ($isSessionHost) {
+            if ($project -like '*OpenClaw.GatewayRecovery*') {
+                [IO.File]::WriteAllText(
+                    (Join-Path $output 'openclaw-gateway-recovery.exe'),
+                    "sign-in helper $($state.HostVersion) [$sources]")
+            }
+            elseif ($isSessionHost) {
                 [IO.File]::WriteAllText(
                     (Join-Path $output 'openclaw-session-host.exe'),
                     "session host $($state.HostVersion) [$sources]")
@@ -283,7 +305,7 @@ try {
     $f = New-Fixture
     $first = Invoke-Fixture $f
     Assert-True ($first.Changed -and $f.Downloads -eq 1 -and $f.RuntimeDownloads -eq 1 -and
-        $f.MxcStages -eq 1 -and $f.Publishes -eq 2 -and
+        $f.MxcStages -eq 1 -and $f.Publishes -eq 3 -and
         $f.Registrations -eq 1) 'First deployment did not acquire, build, and register exactly once.'
     Assert-True ($f.Setups -eq 1) 'Deployment did not leave the package runnable by preparing the runtime.'
     Assert-True (
@@ -309,12 +331,22 @@ try {
         Test-Path (Join-Path $layout 'session-host\x64\openclaw-session-host.exe')
     ) 'Layout is missing the session host.'
     Assert-True (
+        Test-Path (Join-Path $layout 'openclaw-gateway-recovery.exe')
+    ) 'Layout is missing the sign-in helper.'
+    Assert-True (
         (Get-Content (Join-Path $layout 'dependency-owned-asset.bin') -Raw) -ceq 'dependency asset x64'
     ) 'Layout did not copy an opaque normal publish asset.'
     Assert-True (
         (Test-Path (Join-Path $layout 'mxc-runtime.json')) -and
         (Test-Path (Join-Path $layout 'mxc-LICENSE.md'))
     ) 'Layout omitted SDK API metadata or the redistribution notice.'
+    $startupListPath = Join-Path $layout 'payload\startup-files.json'
+    $startupList = Get-Content -LiteralPath $startupListPath -Raw | ConvertFrom-Json
+    Assert-True (
+        $startupList.schemaVersion -eq 1 -and
+        @($startupList.files).Count -eq 1 -and
+        $startupList.files[0] -ceq 'openclaw.mjs'
+    ) 'A clean layout did not generate the startup list without manually staged metadata.'
     Assert-True (Test-Path (Join-Path $layout 'Images\StoreLogo.png')) 'Layout is missing package images.'
     Assert-True (@(Get-ChildItem (Join-Path $layout 'runtime') -File).Name -eq 'node-v24.20.0-win-x64.zip') 'Layout is missing the bundled Node.js runtime.'
     [xml]$m = Get-Content (Join-Path $layout 'AppxManifest.xml') -Raw
@@ -340,6 +372,18 @@ try {
         [IO.File]::ReadAllText($profileCanary) -ceq 'authenticated workspace state'
     ) 'Ordinary re-registration replaced the isolated account or erased its workspace.'
     Assert-True (@($f.Removals).Count -eq 0) 'Ordinary re-registration unregistered the package.'
+
+    $missingList = New-Fixture
+    $missingListFirst = Invoke-Fixture $missingList
+    $missingListPath = Join-Path $missingListFirst.LayoutDirectory 'payload\startup-files.json'
+    Remove-Item -LiteralPath $missingListPath
+    $repaired = Invoke-Fixture $missingList
+    Assert-True ($repaired.Changed -and (Test-Path -LiteralPath $missingListPath)) `
+        'An older layout without a startup list was incorrectly reported as up to date.'
+    $regenerated = Get-Content -LiteralPath $missingListPath -Raw | ConvertFrom-Json
+    Assert-True (
+        $regenerated.schemaVersion -eq 1 -and $regenerated.files[0] -ceq 'openclaw.mjs'
+    ) 'The repair did not regenerate usable startup metadata.'
 
     $replacement = New-Fixture
     $replacementFirst = Invoke-Fixture $replacement
@@ -388,6 +432,7 @@ try {
         'A first deployment did not publish the launcher once with its version.'
     $spLauncher = Join-Path $spFirst.LayoutDirectory 'openclaw.exe'
     $spSessionHost = Join-Path $spFirst.LayoutDirectory 'session-host\x64\openclaw-session-host.exe'
+    $spRecoveryHelper = Join-Path $spFirst.LayoutDirectory 'openclaw-gateway-recovery.exe'
     $sourceEdits = @(
         @{
             Name = 'launcher source'; Binary = $spLauncher; Marker = 'edited launcher source'
@@ -401,6 +446,13 @@ try {
             Apply = {
                 [IO.File]::WriteAllText(
                     (Join-Path $sp.Root 'src\OpenClaw.SessionHost\Program.cs'), 'edited session host source')
+            }
+        }
+        @{
+            Name = 'sign-in helper source'; Binary = $spRecoveryHelper; Marker = 'edited sign-in helper source'
+            Apply = {
+                [IO.File]::WriteAllText(
+                    (Join-Path $sp.Root 'src\OpenClaw.GatewayRecovery\Program.cs'), 'edited sign-in helper source')
             }
         }
         @{
@@ -942,6 +994,151 @@ try {
     $supplied = Invoke-Fixture $j @{ PayloadDirectory = $external }
     Assert-True ($j.Downloads -eq 0 -and $j.Queries -eq 0) 'A supplied payload still contacted GitHub.'
     Assert-True ((Get-Content (Join-Path $supplied.LayoutDirectory 'app\openclaw.mjs') -Raw) -eq 'supplied') 'A supplied payload was not used.'
+    foreach ($architecture in @('x64', 'arm64')) {
+        foreach ($damage in @('missing-setup', 'missing-inventory', 'invalid-inventory', 'renamed-file', 'resized-file', 'added-file')) {
+            $broken = New-Fixture
+            $brokenPayload = Join-Path $broken.Root 'broken-payload'
+            & $broken.WritePayload $brokenPayload $architecture 'payload' '24.20.0'
+            $brokenMetadataPath = Join-Path $brokenPayload 'payload-metadata.json'
+            $brokenMetadata = Get-Content -LiteralPath $brokenMetadataPath -Raw |
+                ConvertFrom-Json -AsHashtable
+            $expectedFailure = 'Payload file inventory does not match'
+            switch ($damage) {
+                'missing-setup' {
+                    Remove-Item -LiteralPath (
+                        Join-Path $brokenPayload 'app\dist\extensions\fixture\.setup'
+                    ) -Recurse -Force
+                }
+                'missing-inventory' {
+                    $brokenMetadata.Remove('inventory')
+                    $expectedFailure = 'no supported file inventory'
+                }
+                'invalid-inventory' {
+                    $brokenMetadata['inventory']['fileCount'] = '3'
+                    $expectedFailure = 'no supported file inventory'
+                }
+                'renamed-file' {
+                    Rename-Item -LiteralPath (
+                        Join-Path $brokenPayload 'app\dist\extensions\fixture\.setup\entry.mjs'
+                    ) -NewName 'other.mjs'
+                }
+                'resized-file' {
+                    [IO.File]::AppendAllText((Join-Path $brokenPayload 'app\openclaw.mjs'), 'changed')
+                }
+                'added-file' {
+                    [IO.File]::WriteAllText((Join-Path $brokenPayload 'app\extra.mjs'), 'extra')
+                }
+            }
+            [IO.File]::WriteAllText($brokenMetadataPath, ($brokenMetadata | ConvertTo-Json))
+            Assert-Fails {
+                Invoke-Fixture $broken @{ Architecture = $architecture; PayloadDirectory = $brokenPayload }
+            } "$expectedFailure.*-PayloadRunId.*Build-Payload.ps1"
+            Assert-True (
+                $broken.Publishes -eq 0 -and $broken.Registrations -eq 0 -and $broken.Setups -eq 0
+            ) "A $damage $architecture payload reached deployment."
+            if ($damage -in @('missing-setup', 'missing-inventory')) {
+                foreach ($replacement in @('packaged', 'legacy-packaged', 'legacy-loose', 'both')) {
+                    $names = switch ($replacement) {
+                        'packaged' { 'OpenClawFoundation.OpenClawGateway' }
+                        'both' { 'OpenClawFoundation.OpenClawGateway'; 'OpenClaw.Gateway' }
+                        default { 'OpenClaw.Gateway' }
+                    }
+                    $broken.Installed = @(
+                        foreach ($name in $names) {
+                            [pscustomobject]@{
+                                Name = $name
+                                Version = '1.2.3.4'
+                                PackageFullName = "${name}_1.2.3.4_${architecture}__fixture"
+                                PackageFamilyName = "${name}_fixture"
+                                InstallLocation = Join-Path $broken.Root "installed\$name"
+                                IsDevelopmentMode = ($replacement -eq 'legacy-loose')
+                                Status = 'Ok'
+                            }
+                        }
+                    )
+                    foreach ($package in $broken.Installed) {
+                        $profile = Join-Path $broken.Root "profiles\$($package.PackageFamilyName)"
+                        New-Item -Path $profile -ItemType Directory -Force | Out-Null
+                        [IO.File]::WriteAllText((Join-Path $profile 'settings.json'), '{"preserve":true}')
+                        $broken.Profiles[$package.PackageFamilyName] = @{ Path = $profile }
+                    }
+                    Assert-Fails {
+                        Invoke-Fixture $broken @{
+                            Architecture = $architecture
+                            PayloadDirectory = $brokenPayload
+                            ReplaceExistingInstall = $true
+                        }
+                    } $expectedFailure
+                    Assert-True (
+                        $broken.Removals.Count -eq 0 -and $broken.Publishes -eq 0 -and
+                        $broken.Registrations -eq 0 -and $broken.Setups -eq 0 -and
+                        @($broken.Installed).Count -eq @($names).Count
+                    ) "A rejected $damage $architecture payload modified the $replacement installation."
+                    foreach ($package in $broken.Installed) {
+                        $settings = Join-Path $broken.Profiles[$package.PackageFamilyName].Path 'settings.json'
+                        Assert-True (
+                            [IO.File]::ReadAllText($settings) -ceq '{"preserve":true}'
+                        ) "Rejected replacement lost the $($package.Name) profile settings."
+                    }
+                }
+            }
+            Assert-Fails {
+                Invoke-LocalPackageMsixBuild -RepositoryRoot $broken.Root -Architecture $architecture `
+                    -PayloadDirectory $brokenPayload -Operations $broken.Operations `
+                    -Compose { throw 'An incomplete payload reached MSIX composition.' }
+            } $expectedFailure
+        }
+    }
+
+    $damagedCache = New-Fixture
+    $cachedDeployment = Invoke-Fixture $damagedCache
+    Remove-Item -LiteralPath (
+        Join-Path $cachedDeployment.LayoutDirectory 'app\dist\extensions\fixture\.setup'
+    ) -Recurse -Force
+    Assert-Fails { Invoke-Fixture $damagedCache } 'Payload file inventory does not match'
+    Assert-True ($damagedCache.Registrations -eq 1) 'A damaged cached payload was registered again.'
+
+    $olderCache = New-Fixture
+    $olderDeployment = Invoke-Fixture $olderCache
+    $olderFamily = @($olderCache.SetupPackageFamilyNames)[0]
+    $olderProfile = $olderCache.Profiles[$olderFamily]
+    $olderSettings = Join-Path $olderProfile.Path 'settings.json'
+    [IO.File]::WriteAllText($olderSettings, '{"preserve":"existing configuration"}')
+    $olderState = Get-Content -LiteralPath (
+        Join-Path (Split-Path $olderDeployment.LayoutDirectory -Parent) 'state.json'
+    ) -Raw | ConvertFrom-Json
+    $olderMetadataPath = Join-Path $olderState.payloadDirectory 'payload-metadata.json'
+    $olderMetadata = Get-Content -LiteralPath $olderMetadataPath -Raw | ConvertFrom-Json -AsHashtable
+    $olderMetadata.Remove('inventory')
+    [IO.File]::WriteAllText($olderMetadataPath, ($olderMetadata | ConvertTo-Json))
+    Assert-Fails { Invoke-Fixture $olderCache } 'no supported file inventory'
+    Assert-True (
+        $olderCache.Registrations -eq 1 -and $olderCache.Removals.Count -eq 0
+    ) 'An older cached payload changed its installed registration before recovery.'
+    $recoveredCache = Invoke-Fixture $olderCache @{ RefreshPayload = $true }
+    Assert-True (
+        $recoveredCache.Changed -and $olderCache.Downloads -eq 2 -and
+        $olderCache.Removals.Count -eq 0 -and
+        $olderCache.Profiles[$olderFamily].Identity -ceq $olderProfile.Identity -and
+        [IO.File]::ReadAllText($olderSettings) -ceq '{"preserve":"existing configuration"}' -and
+        (Test-Path -LiteralPath (
+            Join-Path $recoveredCache.LayoutDirectory 'app\dist\extensions\fixture\.setup\entry.mjs'))
+    ) 'Refreshing an older payload lost the existing profile/settings or omitted plugin setup.'
+
+    $damagedDownload = New-Fixture
+    $damagedDownload.Operations.Download = {
+        param($runId, $architecture, $directory)
+        & $damagedDownload.WritePayload $directory $architecture 'payload' '24.20.0'
+        Remove-Item -LiteralPath (
+            Join-Path $directory 'app\dist\extensions\fixture\.setup'
+        ) -Recurse -Force
+    }.GetNewClosure()
+    Assert-Fails { Invoke-Fixture $damagedDownload } 'Payload file inventory does not match'
+    Assert-True (
+        $damagedDownload.Publishes -eq 0 -and $damagedDownload.Registrations -eq 0 -and
+        -not (Test-Path -LiteralPath (
+            Join-Path $damagedDownload.Root 'artifacts\local-package\x64\payloads\current.json'))
+    ) 'An incomplete download was accepted or selected.'
     $incomplete = New-Fixture
     $incompletePayload = Join-Path $testRoot 'incomplete supplied payload'
     & $incomplete.WritePayload $incompletePayload 'x64' 'incomplete' '24.20.0'
@@ -1161,7 +1358,7 @@ try {
         $pm.Package.Identity.Name -ceq 'OpenClawFoundation.OpenClawGateway-foo' -and
         $pm.Package.Properties.DisplayName -ceq 'OpenClaw Gateway (foo)' -and
         ($patchedTiles -join ',') -ceq 'OpenClaw Gateway (foo)' -and
-        ($patchedAliases -join ',') -ceq 'clawctl-foo.exe,openclaw-foo.exe'
+        ($patchedAliases -join ',') -ceq 'clawctl-foo.exe,openclaw-foo.exe,openclaw-gateway-recovery-foo.exe'
     ) 'The patched manifest does not carry its own identity, display name, and aliases.'
     Assert-True (
         @($p.SetupPackageNames)[0] -ceq 'OpenClawFoundation.OpenClawGateway-foo' -and

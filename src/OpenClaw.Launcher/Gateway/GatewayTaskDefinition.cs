@@ -51,8 +51,7 @@ internal static class GatewayTaskDefinition
 
     public static GatewayTaskSnapshot CreateSnapshot(
         string userSid,
-        string scriptHostPath,
-        string launcherPath,
+        string helperPath,
         string? logonTriggerUserSid = null) =>
         new(
             UserId: userSid,
@@ -73,8 +72,12 @@ internal static class GatewayTaskDefinition
             DisallowStartIfOnBatteries: false,
             StopIfGoingOnBatteries: false,
             ExecutionTimeLimit: NoExecutionTimeLimit,
-            Command: scriptHostPath,
-            Arguments: $"//B //Nologo \"{launcherPath}\"");
+            // The windowless helper takes no arguments, so the action is only
+            // its stable alias path. It is quoted because a user profile path
+            // can contain spaces, and an unquoted one would be searched as
+            // successive shorter paths.
+            Command: $"\"{helperPath}\"",
+            Arguments: string.Empty);
 
     public static string CreateXml(GatewayTaskSnapshot snapshot, string taskName)
     {
@@ -137,7 +140,9 @@ internal static class GatewayTaskDefinition
                     new XElement(
                         ns + "Exec",
                         new XElement(ns + "Command", snapshot.Command),
-                        new XElement(ns + "Arguments", snapshot.Arguments)))));
+                        string.IsNullOrEmpty(snapshot.Arguments)
+                            ? null
+                            : new XElement(ns + "Arguments", snapshot.Arguments)))));
 
         using var writer = new StringWriter();
         using (var xml = XmlWriter.Create(

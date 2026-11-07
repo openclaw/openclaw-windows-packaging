@@ -16,17 +16,17 @@ param(
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path $PSScriptRoot -Parent
 
-$package = @(Get-ChildItem -Path $PackageDirectory -Filter '*.tgz' -File)
+$package = @(Get-ChildItem -LiteralPath $PackageDirectory -Filter '*.tgz' -File)
 if ($package.Count -ne 1) {
     throw "Expected exactly one .tgz package in '$PackageDirectory'; found $($package.Count)."
 }
 
 $sourceMetadataPath = Join-Path $PackageDirectory 'source.json'
-if (-not (Test-Path $sourceMetadataPath -PathType Leaf)) {
+if (-not (Test-Path -LiteralPath $sourceMetadataPath -PathType Leaf)) {
     throw "Missing source metadata: $sourceMetadataPath"
 }
 
-$sourceMetadata = Get-Content $sourceMetadataPath -Raw | ConvertFrom-Json
+$sourceMetadata = Get-Content -LiteralPath $sourceMetadataPath -Raw | ConvertFrom-Json
 $nodeVersion = & node -p 'process.versions.node'
 if ($LASTEXITCODE -ne 0 -or $nodeVersion -notmatch '^\d+\.\d+\.\d+$') {
     throw 'Unable to determine the payload build Node.js version.'
@@ -59,14 +59,28 @@ if ($nodeArchitecture -cne $Architecture) {
     )
 }
 $npmVersion = & npm --version
-if ($LASTEXITCODE -ne 0) {
+if ($LASTEXITCODE -ne 0 -or $npmVersion -isnot [string] -or
+    $npmVersion -cnotmatch '^[vV]?(?<version>\d+\.\d+\.\d+)(?:[-+][0-9A-Za-z.-]+)?$') {
     throw 'Unable to determine the payload build npm version.'
+}
+$npmLifecycleArguments = @()
+if ([version]$Matches.version -ge [version]'11.16.0') {
+    if ($package[0].FullName.Contains(',')) {
+        throw 'npm lifecycle approvals require a package archive path without commas. Move the package directory before building.'
+    }
+    # Match upstream's consumer installer: approve only the verified install target.
+    $npmLifecycleArguments = @(
+        "--allow-scripts=file:$($package[0].FullName)"
+        '--dangerously-allow-all-scripts=false'
+    )
 }
 
 $packageHash = (
     Get-FileHash -LiteralPath $package[0].FullName -Algorithm SHA256
 ).Hash.ToLowerInvariant()
-$stagingDirectory = Join-Path $env:RUNNER_TEMP "openclaw-stage-$Architecture"
+$stagingDirectory = [IO.Path]::GetFullPath(
+    (Join-Path $env:RUNNER_TEMP "openclaw-stage-$Architecture"))
+$npmCacheDirectory = Join-Path $env:RUNNER_TEMP "openclaw-npm-cache-$Architecture"
 $stagingMetadataPath = Join-Path $stagingDirectory '.openclaw-install.json'
 $expectedStagingMetadata = [ordered]@{
     architecture = $Architecture
@@ -75,6 +89,7 @@ $expectedStagingMetadata = [ordered]@{
     nodeVersion = $nodeVersion
     nodeArchitecture = $nodeArchitecture
     npmVersion = $npmVersion
+    installPolicy = 'upstream-consumer-target-v1'
     packageSha256 = $packageHash
 }
 if ($ReuseStagedInstall) {
@@ -113,6 +128,7 @@ else {
         $env:npm_config_target_arch = $Architecture
 
         & npm install `
+            --global `
             --install-strategy=nested `
             --omit=dev `
             --no-audit `
@@ -120,6 +136,8 @@ else {
             --os=win32 `
             --cpu=$Architecture `
             --prefix $stagingDirectory `
+            --cache $npmCacheDirectory `
+            @npmLifecycleArguments `
             $package[0].FullName
 
         if ($LASTEXITCODE -ne 0) {
@@ -130,11 +148,7 @@ else {
         $env:npm_config_arch = $previousArch
         $env:npm_config_target_arch = $previousTargetArch
     }
-    $expectedStagingMetadata |
-        ConvertTo-Json |
-        Set-Content -LiteralPath $stagingMetadataPath -Encoding utf8
 }
-New-Item $OutputDirectory -ItemType Directory -Force | Out-Null
 
 $installedPackage = Join-Path $stagingDirectory 'node_modules\openclaw'
 foreach ($requiredPath in @('package.json', 'openclaw.mjs', 'dist')) {
@@ -142,6 +156,20 @@ foreach ($requiredPath in @('package.json', 'openclaw.mjs', 'dist')) {
     if (-not (Test-Path $path)) {
         throw "Staged package is missing required path: $path"
     }
+    foreach ($guard in @('.openclaw-lifecycle-pending', 'dist\openclaw-install-guard')) {
+        if (Test-Path -LiteralPath (Join-Path $installedPackage $guard)) {
+            throw (
+                'The OpenClaw install lifecycle did not complete. Check npm script policy ' +
+                'and rebuild without -ReuseStagedInstall; no payload was emitted.'
+            )
+        }
+    }
+    if (-not $ReuseStagedInstall) {
+        $expectedStagingMetadata |
+            ConvertTo-Json |
+            Set-Content -LiteralPath $stagingMetadataPath -Encoding utf8
+    }
+    New-Item $OutputDirectory -ItemType Directory -Force | Out-Null
 }
 
 & (Join-Path $PSScriptRoot 'Test-OpenClawBuildIdentity.ps1') `
@@ -408,9 +436,11 @@ if ($bundledNodeFiles.Count -ne 0) {
     layout           = 'expanded-directory'
     nodeVersion      = $nodeVersion
     npmVersion       = $npmVersion
+    inventory        = & (Join-Path $PSScriptRoot 'Get-PayloadInventory.ps1') `
+        -ApplicationDirectory $applicationDirectory
 } | ConvertTo-Json | Set-Content (Join-Path $OutputDirectory 'payload-metadata.json') -Encoding utf8
 
-$files = @(Get-ChildItem -LiteralPath $applicationDirectory -File -Recurse)
+$files = @(Get-ChildItem -LiteralPath $applicationDirectory -File -Recurse -Force)
 $size = ($files | Measure-Object -Property Length -Sum).Sum / 1MB
 Write-Host (
     "Created expanded payload at {0} ({1} files, {2:N1} MiB)" -f

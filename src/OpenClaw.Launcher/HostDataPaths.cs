@@ -1,6 +1,10 @@
 using System.Runtime.InteropServices;
 
+#if OPENCLAW_GATEWAY_RECOVERY
+namespace OpenClaw.GatewayRecovery;
+#else
 namespace OpenClaw.Launcher;
+#endif
 
 internal static class HostDataPaths
 {

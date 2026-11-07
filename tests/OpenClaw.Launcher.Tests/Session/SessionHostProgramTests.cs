@@ -295,4 +295,36 @@ public sealed class SessionHostProgramTests : IDisposable
         Assert.Contains("node.exe is missing", written, StringComparison.Ordinal);
         Assert.Contains("workspace is read-only", written, StringComparison.Ordinal);
     }
+
+    [Theory]
+    [InlineData("--install-runtime")]
+    [InlineData("--collect")]
+    public void PlainModeReportsFailedFailureResultPublicationToInjectedStderr(string mode)
+    {
+        string workspace = Path.Combine(_root, "workspace");
+        _ = Directory.CreateDirectory(workspace);
+        string requestPath = Path.Combine(workspace, "runtime.json");
+        File.WriteAllText(requestPath, "{ not json");
+        _ = Directory.CreateDirectory(SessionLaunchProtocol.ResultPathFor(requestPath));
+        var launcher = new RecordingLauncher(0);
+        var errors = new StringWriter();
+
+        int exitCode = SessionHostProgram.Run(
+            [mode, requestPath],
+            launcher,
+            errors,
+            File.ReadAllText,
+            (_, _) => throw new InvalidOperationException(
+                "The plain runtime helper does not write launch results."));
+
+        Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode, exitCode);
+        Assert.Null(launcher.Request);
+        Assert.Null(launcher.DetachedRequest);
+        Assert.Contains("primary failure", errors.ToString(), StringComparison.Ordinal);
+        Assert.Contains("failure-result publication failure", errors.ToString(), StringComparison.Ordinal);
+        Assert.Contains(
+            SessionLaunchProtocol.ResultPathFor(requestPath),
+            errors.ToString(),
+            StringComparison.OrdinalIgnoreCase);
+    }
 }

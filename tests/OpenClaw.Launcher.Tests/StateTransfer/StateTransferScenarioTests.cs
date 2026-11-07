@@ -31,6 +31,9 @@ public sealed class StateTransferScenarioTests : IDisposable
     private bool _holdOriginalAfterMove;
     private FileStream? _cleanupBlocker;
     private Action<SessionStateTransferRequest>? _beforeTransfer;
+    private int _doctorExitCode;
+    private SessionLaunchRequest? _doctorRequest;
+    private Action? _beforeDoctor;
 
     private string Current => Path.Combine(_root, "C3-D4");
     private string Old => Path.Combine(_root, "A1-B2");
@@ -72,6 +75,21 @@ public sealed class StateTransferScenarioTests : IDisposable
         _backend.Calls.Clear();
         _backend.ExecuteBehavior = _ =>
         {
+            string? launchPath = Directory.GetFiles(record.WorkspacePath!, "launch-*.json", SearchOption.AllDirectories)
+                .SingleOrDefault(path => !path.EndsWith(".result.json", StringComparison.Ordinal));
+            if (launchPath is not null)
+            {
+                _doctorRequest = SessionLaunchProtocol.ReadRequest(File.ReadAllText(launchPath));
+                _beforeDoctor?.Invoke();
+                File.WriteAllText(SessionLaunchProtocol.ResultPathFor(launchPath),
+                    SessionLaunchProtocol.SerializeResult(new SessionLaunchResult
+                    {
+                        RequestId = _doctorRequest.RequestId,
+                        Launched = true,
+                        ExitCode = _doctorExitCode
+                    }));
+                return Task.FromResult(new MxcExecutionResult(_doctorExitCode, "private doctor output", "private doctor error"));
+            }
             string requestPath = Directory.GetFiles(
                 record.WorkspacePath!, "state-transfer-*.json", SearchOption.AllDirectories)
                 .Single(path => !path.EndsWith(".result.json", StringComparison.Ordinal));
@@ -111,12 +129,86 @@ public sealed class StateTransferScenarioTests : IDisposable
     }
 
     [Fact]
+    public async Task RepairRequiresExplicitConfirmationBeforeAnySessionWork()
+    {
+        StateTransferCoordinator coordinator = await PrepareAsync();
+        StateArchiveCommandResult result = await coordinator.RepairAsync(false, CancellationToken.None);
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("--yes", result.Error, StringComparison.Ordinal);
+        Assert.Empty(_backend.Calls);
+        Assert.Equal("running", File.ReadAllText(GatewayMarker));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RepairNeverRunsDoctorWithoutAStoppedGatewayAndVerifiedBackup(bool failedBackup)
+    {
+        StateTransferCoordinator coordinator = await PrepareAsync();
+        WriteProfile(Current, "before repair");
+        _rejectGatewayStop = !failedBackup;
+        _beforeTransfer = request =>
+        {
+            if (failedBackup && request.Action == SessionStateTransferAction.Capture)
+            {
+                throw new SessionException("fixture backup unavailable");
+            }
+        };
+        StateArchiveCommandResult result = await coordinator.RepairAsync(true, CancellationToken.None);
+        Assert.Equal(1, result.ExitCode);
+        Assert.Null(_doctorRequest);
+        Assert.Equal(failedBackup ? "stopped" : "running", File.ReadAllText(GatewayMarker));
+        Assert.Empty(Store.List());
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(78)]
+    public async Task RepairRetainsPreDoctorStateAndLeavesGatewayStopped(int doctorExitCode)
+    {
+        StateTransferCoordinator coordinator = await PrepareAsync();
+        WriteProfile(Current, "before repair");
+        _doctorExitCode = doctorExitCode;
+        _beforeDoctor = () =>
+        {
+            Assert.Equal("stopped", File.ReadAllText(GatewayMarker));
+            Assert.Single(Store.List());
+            File.WriteAllText(Path.Combine(Current, ".openclaw", "history.txt"), "after doctor");
+        };
+        StateArchiveCommandResult result = await coordinator.RepairAsync(true, CancellationToken.None);
+        Assert.Equal(doctorExitCode == 0 ? 0 : 1, result.ExitCode);
+        Assert.Equal(doctorExitCode == 0 ? "doctor-completed" : "repair-failed", result.Transfer!.Phase);
+        Assert.Equal("gateway-service repair", result.Command);
+        Assert.True(result.Transfer!.GatewayStopped);
+        Assert.True(File.Exists(result.Transfer.Archive!.Path));
+        string extracted = Path.Combine(_root, "check-repair-backup");
+        _application.Extract(Current, result.Transfer.Archive.Path, extracted);
+        Assert.Contains(Directory.GetFiles(extracted, "history.txt", SearchOption.AllDirectories),
+            path => File.ReadAllText(path) == "before repair-history");
+        Assert.Equal("stopped", File.ReadAllText(GatewayMarker));
+        Assert.NotNull(_doctorRequest);
+        Assert.Equal([Path.Combine(_options!.PackagedApplicationDirectory!, "openclaw.mjs"),
+            "doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"], _doctorRequest.Arguments);
+        Assert.Equal("external", _doctorRequest.Environment![OpenClawRuntimeEnvironment.ServiceRepairPolicyVariable]);
+        Assert.DoesNotContain(_log, line => line.Contains("private doctor", StringComparison.Ordinal));
+        if (doctorExitCode != 0)
+        {
+            Assert.StartsWith($"OpenClaw Doctor exited with code {doctorExitCode}.", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain(result.Transfer.Warnings,
+                warning => warning.Contains("Doctor completed", StringComparison.Ordinal));
+            Assert.DoesNotContain("private doctor", result.Error, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public async Task RecoveryUsesPrivateExchangeAndProtectionDespiteBroadParentReaders()
     {
         StateTransferCoordinator coordinator = await PrepareAsync();
         WriteProfile(Current, "current");
         WriteProfile(Old, "old");
         var workspace = new DirectoryInfo(_backend.Metadata!.EphemeralWorkspacePath);
+        string[] directoriesBefore = Directory.GetDirectories(workspace.FullName);
         DirectorySecurity security = workspace.GetAccessControl();
         security.AddAccessRule(new FileSystemAccessRule(
             new SecurityIdentifier(WellKnownSidType.WorldSid, null),
@@ -153,7 +245,9 @@ public sealed class StateTransferScenarioTests : IDisposable
         Assert.True(inspectedSource);
         StateArchiveStoreTests.AssertPrivateFile(result.Transfer!.Archive!.Path);
         StateArchiveStoreTests.AssertPrivateFile(result.Transfer.ProtectionArchive!);
-        Assert.Empty(Directory.GetDirectories(workspace.FullName, "state-private-*"));
+        Assert.Equal(
+            directoriesBefore.Order(StringComparer.Ordinal),
+            Directory.GetDirectories(workspace.FullName).Order(StringComparer.Ordinal));
         Assert.DoesNotContain(_log, entry => entry.Contains("cleanup failed", StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain("old-synthetic-token", string.Join('\n', _log), StringComparison.Ordinal);
     }
@@ -406,6 +500,24 @@ public sealed class StateTransferScenarioTests : IDisposable
     }
 
     [Fact]
+    public async Task RepairCancellationAfterBackupRetainsArchiveAndStoppedGateway()
+    {
+        StateTransferCoordinator coordinator = await PrepareAsync();
+        WriteProfile(Current, "before cancellation");
+        _beforeDoctor = () => throw new OperationCanceledException();
+
+        StateArchiveCommandResult result = await coordinator.RepairAsync(true, CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("Repair was cancelled", result.Error, StringComparison.Ordinal);
+        Assert.True(result.Transfer!.GatewayStopped);
+        Assert.True(File.Exists(result.Transfer.Archive!.Path));
+        Assert.Single(Store.List());
+        Assert.Equal("before cancellation-history", File.ReadAllText(Path.Combine(Current, ".openclaw", "history.txt")));
+        Assert.Equal("stopped", File.ReadAllText(GatewayMarker));
+    }
+
+    [Fact]
     public async Task PendingActivationBlocksAttachedDetachedAndCompanionWritersAtTheirEntryPoints()
     {
         StateTransferCoordinator coordinator = await PrepareAsync();
@@ -416,6 +528,11 @@ public sealed class StateTransferScenarioTests : IDisposable
             new RestoreOptions(CreateArchive(), false, true, false), CancellationToken.None);
         Assert.Equal(1, interrupted.ExitCode);
         Dictionary<string, string> pendingData = Data(Current);
+        StateArchiveCommandResult repair = await coordinator.RepairAsync(true, CancellationToken.None);
+        Assert.Equal(1, repair.ExitCode);
+        Assert.Contains("activation is pending", repair.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(_doctorRequest);
+        Assert.Equal(pendingData, Data(Current));
         string marker = Path.Combine(_root, "writer-started.txt");
         SessionLaunchRequest launch = new()
         {

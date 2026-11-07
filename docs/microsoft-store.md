@@ -37,8 +37,11 @@ An administrator must complete and verify these separate changes:
    `microsoft-store` federated credential and any other publishing writer; an
    old trusted workflow revision otherwise remains a bypass. Keep the dedicated
    Store application separate from the unchanged Azure sideload-signing identity.
-5. Remove obsolete native Store environment variables and the `MSSTORE_ENABLED`
-   toggle after the coordinated cutover. Do not start a legacy publisher while
+5. Move the Gateway flight GUID into the central repository variable
+   `MSSTORE_GATEWAY_DEVELOPMENT_FLIGHT_ID`. After manual qualification, use the
+   central `MSSTORE_GATEWAY_DEVELOPMENT_ENABLED` activation flag. Remove obsolete
+   native Store environment variables and both `MSSTORE_ENABLED` and
+   `MSSTORE_DEVELOPMENT_ENABLED` toggles after the cutover. Do not start a legacy publisher while
    changing its cloud trust, and reconcile any in-flight submission first.
 
 No new PAT or persistent Store client secret is required. GitHub App availability,
@@ -51,20 +54,22 @@ this document does not claim they have already been activated.
 
 Choose the successful run ID for a canonical main-branch **Build OpenClaw Gateway
 MSIX** dispatch in `store` or `official` mode. It must have completed successfully
-and retained the unexpired `openclaw-gateway-msix-store-submission` artifact. The
+and retained the unexpired `openclaw-gateway-msix-store-submission-<attempt>`
+bundle and `store-release-source-<attempt>` witness. The
 central publisher independently authorizes the run and validates the exact bundle;
 the request adapter does not make an eligibility decision.
 
 From **Actions > Request Microsoft Store publication > Run workflow**, select
-`main` and enter `run_id`. The equivalent CLI command is:
+`main`, enter `run_id`, and select `production` for stable or `development` for
+a published beta. The equivalent Development-flight command is:
 
 ```powershell
 gh workflow run submit-microsoft-store.yml `
   --repo openclaw/openclaw-windows-packaging --ref main `
-  -f run_id=RELEASE_RUN_ID
+  -f run_id=RELEASE_RUN_ID -f channel=development
 ```
 
-This sends `{product: gateway, run_id: RELEASE_RUN_ID}` to the standalone central
+This sends `{product: gateway, run_id: RELEASE_RUN_ID, channel, automatic: false}` to the standalone central
 workflow on `main`. Follow the central run for its source commit, version,
 run/attempt, and bundle hash, then release-manager approval and Store receipt.
 A successful request means GitHub accepted the request, not that Microsoft
@@ -80,6 +85,28 @@ recovery adapter for the same candidate. Manual recovery and automatic callers
 share the central publisher's approval and replay policy, not a second local
 publisher.
 
+## Development flight
+
+The coordinated core release handoff requests `channel=production` after stable
+builds and `channel=development` after beta builds, with `automatic=true`.
+Beta builds use `official` mode and publish their signed GitHub prerelease before
+retaining the separate unsigned Store bundle and attempt-bound witness.
+The central publisher checks that published prerelease and keeps Development
+delivery in its configured flight, never in the public production submission.
+Both destinations require release-manager approval. A Store flight is an opt-in
+update path for enrolled Microsoft Store accounts, not a separate public `/beta`
+listing; sideload GitHub packages retain their separate identity.
+
+Before activating automatic Development delivery, finish or explicitly resolve
+the initial flight draft, qualify a manual submission, and verify certification
+plus a tester's Store install/upgrade and retained data. Leave the central
+activation flag unset until then. Its
+[administrator guide](https://github.com/openclaw/releases/blob/main/docs/windows-store-publishing.md)
+owns the flight GUID, activation, approval policy, and API execution. No new Store
+credential or per-flight federation is introduced by this adapter.
+
+## Verify and recover
+
 Before retrying an uncertain request, inspect the central runs and Partner Center
 state. A central receipt containing `CommitStarted` proves commit acceptance,
 not certification or public availability. Preserve the central workflow URL and
@@ -93,3 +120,18 @@ The unsigned multi-architecture Store bundle and its build/upgrade evidence rema
 owned by this repository. Signed sideload release assets are not Store inputs.
 The packaging repository no longer contains a Store API engine, Store submission
 policy, or Store source authorizer; centrally reviewed code owns those decisions.
+
+## Store package versions
+
+Store bundles keep the builder's shared stable/beta sequence:
+`year.month.(10000 + github.run_number).0`. The year and month come from the
+captured release identity, not the payload compatibility pin or wall clock.
+Run numbers must stay within `1..55534`; retries reuse the same allocated version.
+Do not reset or rename the release workflow to reset its counter. The offset
+keeps these packages above the earlier source-derived range; leaving a newer
+flight does not downgrade an installation to an older production package.
+
+[`Get-WorkflowPackageVersion.ps1`](../scripts/Get-WorkflowPackageVersion.ps1)
+owns allocation and bounds. Store and sideload composition remain independent
+so compiled CLI versions match their manifests. The central publisher neither
+allocates another version nor rebuilds these bundles.

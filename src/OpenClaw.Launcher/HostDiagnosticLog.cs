@@ -2,7 +2,13 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 
+// The windowless sign-in helper links this file so both executables append
+// to the same packaged log under the same cross-process write lock.
+#if OPENCLAW_GATEWAY_RECOVERY
+namespace OpenClaw.GatewayRecovery;
+#else
 namespace OpenClaw.Launcher;
+#endif
 
 internal sealed class HostDiagnosticLog : IDisposable
 {

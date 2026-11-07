@@ -16,6 +16,8 @@ param(
     [ValidatePattern('\A[1-9][0-9]*\z')]
     [string]$WorkflowRunId,
 
+    [long]$WorkflowRunNumber,
+
     [Parameter(Mandatory)]
     [ValidateSet('official', 'store')]
     [string]$SigningMode,
@@ -31,6 +33,9 @@ param(
     [string]$RequestedRef = '',
 
     [string]$GatewayVersion = '',
+
+    [ValidateSet('stable', 'beta')]
+    [string]$ReleaseChannel = 'stable',
 
     [ValidateSet('Store', 'Sideload')]
     [string]$IdentityChannel = 'Store'
@@ -211,6 +216,7 @@ $source = & (Join-Path $PSScriptRoot 'Get-WorkflowSource.ps1') `
     -SigningMode $SigningMode `
     -Ref $RequestedRef `
     -GatewayVersion $GatewayVersion `
+    -ReleaseChannel $ReleaseChannel `
     -ReuseSnapshot
 $releaseIdentitySource = if ($null -ne $source.PSObject.Properties['releaseIdentitySource']) {
     $source.releaseIdentitySource
@@ -220,6 +226,10 @@ $releaseIdentity = & (Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1') `
     -GatewayTag $releaseIdentitySource.releaseTag `
     -MSIXRevision ([int]$policy.msixRevision)
 $approvedPackageVersion = $releaseIdentity.PackageVersion
+if ($IdentityChannel -eq 'Store') {
+    $approvedPackageVersion = & (Join-Path $PSScriptRoot 'Get-WorkflowPackageVersion.ps1') `
+        -RunNumber $WorkflowRunNumber -RunAttempt 1 -ReleaseVersion $releaseIdentity.PackageVersion -Store
+}
 $approvedPayloadVersion = $source.packageVersion
 $approvedCommit = $source.resolvedCommit
 
@@ -430,6 +440,34 @@ foreach ($architecture in @('x64', 'arm64')) {
             throw "The embedded $architecture session host file set is invalid."
         }
 
+        # Both logon recovery lanes start this executable, so it is held to the
+        # same published-inventory check as the session host.
+        $recoveryHelperProperty = $metadata.PSObject.Properties['gatewayRecoveryFiles']
+        $recoveryHelperFiles = @(
+            if ($null -ne $recoveryHelperProperty) {
+                $recoveryHelperProperty.Value
+            }
+        )
+        if (
+            $recoveryHelperFiles.Count -ne 1 -or
+            [string]$recoveryHelperFiles[0].path -cne 'openclaw-gateway-recovery.exe' -or
+            $recoveryHelperFiles[0].length -isnot [int64] -or
+            $recoveryHelperFiles[0].length -lt 0 -or
+            $recoveryHelperFiles[0].sha256 -notmatch '^[0-9a-fA-F]{64}$'
+        ) {
+            throw "The embedded $architecture sign-in helper inventory is invalid."
+        }
+        $recoveryHelperEntry = Get-PackageEntry `
+            -EntriesByPath $entriesByPath `
+            -Path 'openclaw-gateway-recovery.exe'
+        if (
+            $recoveryHelperEntry.Length -ne $recoveryHelperFiles[0].length -or
+            (Get-PackageEntrySha256 -Entry $recoveryHelperEntry) -ine
+                $recoveryHelperFiles[0].sha256
+        ) {
+            throw "The embedded $architecture sign-in helper is invalid."
+        }
+
         [xml]$manifest = Read-ZipEntryText `
             -EntriesByPath $entriesByPath `
             -Path 'AppxManifest.xml'
@@ -541,6 +579,23 @@ foreach ($architecture in @('x64', 'arm64')) {
             throw (
                 "The embedded $architecture application file set is invalid."
             )
+        }
+
+        # The setup prewarm reads only inventoried application files, so the
+        # startup list may name nothing outside the verified payload.
+        $startupFiles = Read-ZipEntryText `
+            -EntriesByPath $entriesByPath `
+            -Path 'payload/startup-files.json' |
+            ConvertFrom-Json
+        if (
+            $startupFiles.schemaVersion -ne 1 -or
+            $null -eq $startupFiles.files -or
+            @($startupFiles.files | Where-Object {
+                $_ -isnot [string] -or
+                -not $expectedApplicationPaths.Contains("app/$_")
+            }).Count -ne 0
+        ) {
+            throw "The embedded $architecture startup file list is invalid."
         }
     }
     finally {

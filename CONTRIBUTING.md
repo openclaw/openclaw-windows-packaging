@@ -11,6 +11,12 @@ summary below:
 - [Architecture](docs/architecture.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Local development](docs/local-development.md)
+- [Local Windows checks with Crabbox](docs/crabbox-local-windows.md)
+
+The public image-preparation helpers have an isolated fixture suite (Pester 5):
+`Invoke-Pester .\scripts\Test-WindowsImageSkills.Tests.ps1`. It mocks disk,
+Hyper-V, deployment-tool, and account operations; it does not convert an ISO,
+boot a template, or change Defender.
 - [Official release process](docs/release-process.md)
 
 ## Prerequisites
@@ -67,6 +73,7 @@ or package version logic:
 
 ```powershell
 .\scripts\Test-SigningInputs.Tests.ps1
+.\scripts\Test-PayloadStartupFiles.Tests.ps1
 .\scripts\Test-NodeRuntimeInputs.Tests.ps1
 .\scripts\Test-PackagingRelevance.Tests.ps1
 .\scripts\Test-OpenClawCacheKey.Tests.ps1
@@ -74,6 +81,7 @@ or package version logic:
 .\scripts\Test-Measure-Coverage.Tests.ps1
 .\scripts\Test-MSIXReleaseIdentity.Tests.ps1
 .\scripts\Test-OpenClawSource.Tests.ps1
+.\scripts\Test-WorkflowSourceSnapshotMode.Tests.ps1
 .\scripts\Test-WorkflowSigningConfiguration.ps1
 .\scripts\Test-MSIXUpgradeMatrix.Tests.ps1
 .\scripts\Test-WorkflowPackageVersion.Tests.ps1
@@ -167,6 +175,23 @@ architecture; it does not download or build OpenClaw. CI also runs this suite
 on the native x64 and ARM64 packaging runners. Payload installation requires
 Node.js to match the target architecture; npm's CPU flags alone do not change
 the architecture seen by dependency install scripts.
+
+Payload installation follows the
+[upstream npm consumer policy](https://github.com/openclaw/openclaw/blob/1ca0669dbe3982369463b921397027f3727f51fd/docs/install/index.md):
+npm 11.16 and later receive explicit lifecycle approval for only the verified
+OpenClaw archive; older npm remains unflagged. npm 12 intentionally skips
+unapproved dependency hooks, while npm 11 retains its advisory behavior. This
+does not translate the source build's pnpm `allowBuilds` policy into npm.
+The global-install layout is confined to the explicit temporary staging
+prefix and cache, not the user's global modules or shims. Unreadable npm
+version probes, comma-containing archive paths on approval-aware npm, missing
+staged files, and upstream lifecycle-pending guards fail the build.
+Staged installs from the earlier policy must be rebuilt.
+
+Use the source-selected Node.js runtime. When isolating an extracted toolchain,
+set process-local `npm_config_prefix` to that directory as well as putting it
+first on `PATH`, then verify `node --version` and `npm --version` in the child
+shell: npm's shim can otherwise redirect to a globally installed npm.
 
 Run the NativeAOT publish when you change host JSON, reflection, interop, or
 anything else that is trimming-sensitive. A JIT `dotnet build` does not
@@ -344,9 +369,10 @@ bypassable, and required CI checks remain authoritative.
   lifetime, and a held root is left whole for a later setup.
 - Keep x64 and ARM64 behavior synchronized across the workflow matrix, scripts,
   project runtime identifiers, manifest content, and signing validation.
-- Restore `src\OpenClaw.SessionHost\OpenClaw.SessionHost.csproj` separately
+- Restore `src\OpenClaw.SessionHost\OpenClaw.SessionHost.csproj` and
+  `src\OpenClaw.GatewayRecovery\OpenClaw.GatewayRecovery.csproj` separately
   with the target runtime and `PublishAot=true` before `Build-MSIX.ps1`
-  publishes it with `--no-restore`; the ordinary solution restore is not
+  publishes them with `--no-restore`; the ordinary solution restore is not
   sufficient.
 - Do not add a packaging-side Node.js version pin or support range. The
   selected upstream toolchain owns the version; package composition supplies
@@ -356,11 +382,13 @@ bypassable, and required CI checks remain authoritative.
   tests.
 - Keep official release identity derived from the run's resolved Gateway tag
   and the policy's `msixRevision`, using `scripts\Get-MSIXReleaseIdentity.ps1`.
-  The MSIX identity uses `year.month.VVPN.0`: Gateway release sequence `VV`,
+  The stable MSIX identity uses `year.month.VVPN.0`: Gateway release sequence `VV`,
   correction digit `P`, and rebuild digit `N`. Use revision
   `0` for the first MSIX of a Gateway tag and increment only for packaging-only
   rebuilds of that exact tag. Do not assign package versions or release tags by
-  hand.
+  hand. Beta sideload versions use the preview ordering described in
+  [the release process](docs/release-process.md#publish-a-beta-github-prerelease);
+  verify preceding stable < beta < matching stable, including rebuilds.
 - Treat published proof releases in `scripts/msix-upgrade-baselines.json` as
   immutable transition fixtures. Keep their release asset names and SHA-256
   digests pinned. The approved Partner Center identity reset must prove every

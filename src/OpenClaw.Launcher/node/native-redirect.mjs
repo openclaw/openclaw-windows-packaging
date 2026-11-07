@@ -14,9 +14,9 @@
 // Redirection is gated on the staged file existing, so a package that was not
 // staged keeps resolving to the immutable package exactly as before.
 import Module from "node:module";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { join, sep } from "node:path";
+import { dirname, join, sep } from "node:path";
 
 const appRoot = process.env.OPENCLAW_NATIVE_APP_ROOT;
 const stagedRoot = process.env.OPENCLAW_NATIVE_STAGED_ROOT;
@@ -40,17 +40,38 @@ if (appRoot && stagedRoot) {
       : preloadOption;
   }
 
-  const from = join(appRoot, "node_modules") + sep;
-  const fromLower = from.toLowerCase();
+  // Node.js resolves modules through real paths. A package on a secondary AppX
+  // volume is reached through a junction at its WindowsApps location, so the
+  // modules it loads, and each package's own __dirname, carry the junction's
+  // target rather than the root the launcher passes. Match both forms.
+  const roots = [appRoot];
+  try {
+    const realRoot = realpathSync(appRoot);
+    if (realRoot.toLowerCase() !== appRoot.toLowerCase()) roots.push(realRoot);
+  } catch {
+    // An unreadable root leaves only the launcher's form to match.
+  }
+  const fromPrefixes = roots.map((root) => (join(root, "node_modules") + sep).toLowerCase());
   const to = join(stagedRoot, "node_modules") + sep;
+  const originalPrefix = join(roots.at(-1), "node_modules") + sep;
+  const stagedPrefix = to.toLowerCase();
+
+  // A mirrored package still belongs to the application's dependency tree.
+  // Resolve from its original location before redirecting the selected file,
+  // so hoisted dependencies, exports, and nested versions keep their ancestry.
+  const originalPath = (path) =>
+    typeof path === "string" && path.toLowerCase().startsWith(stagedPrefix)
+      ? originalPrefix + path.slice(to.length)
+      : null;
 
   // The one redirect rule. Every entry point below goes through it.
   const redirect = (resolved) => {
     if (typeof resolved !== "string") return null;
     // Windows paths are case-insensitive, and the two roots are produced by
     // different components, so the prefix is compared case-insensitively.
-    if (resolved.length <= from.length) return null;
-    if (resolved.slice(0, from.length).toLowerCase() !== fromLower) return null;
+    const lower = resolved.toLowerCase();
+    const from = fromPrefixes.find((prefix) => lower.length > prefix.length && lower.startsWith(prefix));
+    if (from === undefined) return null;
     const candidate = to + resolved.slice(from.length);
     return existsSync(candidate) ? candidate : null;
   };
@@ -61,6 +82,14 @@ if (appRoot && stagedRoot) {
   // cross-thread round trip to every resolution in every process.
   Module.registerHooks({
     resolve(specifier, context, nextResolve) {
+      if (context.parentURL?.startsWith("file:")) {
+        const parent = originalPath(fileURLToPath(context.parentURL));
+        if (parent !== null) {
+          const parentURL = new URL(context.parentURL);
+          parentURL.pathname = pathToFileURL(parent).pathname;
+          context = { ...context, parentURL: parentURL.href };
+        }
+      }
       const result = nextResolve(specifier, context);
       if (typeof result.url !== "string" || !result.url.startsWith("file:")) {
         return result;
@@ -72,9 +101,13 @@ if (appRoot && stagedRoot) {
         return result;
       }
       const candidate = redirect(path);
-      return candidate === null
-        ? result
-        : { ...result, url: pathToFileURL(candidate).href, shortCircuit: true };
+      if (candidate === null) return result;
+      const originalURL = new URL(result.url);
+      const redirectedURL = pathToFileURL(candidate);
+      // ESM queries and fragments identify separate module instances.
+      redirectedURL.search = originalURL.search;
+      redirectedURL.hash = originalURL.hash;
+      return { ...result, url: redirectedURL.href, shortCircuit: true };
     },
   });
 
@@ -84,6 +117,15 @@ if (appRoot && stagedRoot) {
   // harmless: a path the patch already redirected no longer matches the rule.
   const resolveFilename = Module._resolveFilename;
   Module._resolveFilename = function (request, parent, isMain, options) {
+    const filename = originalPath(parent?.filename);
+    if (filename !== null) {
+      // CommonJS's default hook resolver retains its actual parent object;
+      // changing parentURL alone does not change its lookup paths.
+      parent = Object.assign(Object.create(parent), {
+        filename,
+        paths: Module._nodeModulePaths(dirname(filename)),
+      });
+    }
     const resolved = resolveFilename.call(this, request, parent, isMain, options);
     return redirect(resolved) ?? resolved;
   };

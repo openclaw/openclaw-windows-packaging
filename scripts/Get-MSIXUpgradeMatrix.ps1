@@ -101,4 +101,5 @@ $include.Add([pscustomobject]@{
     baseline_asset = ''
 })
 
-@{ include = $include } | ConvertTo-Json -Depth 4 -Compress
+$selected = @($include.ToArray())
+@{ include = $selected } | ConvertTo-Json -Depth 4 -Compress

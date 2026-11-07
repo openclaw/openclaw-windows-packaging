@@ -22,9 +22,7 @@ param(
     [switch]$SourceTreeDirty,
 
     [Parameter(Mandatory)]
-    [string]$OutputDirectory,
-
-    [string]$SideloadOutputDirectory
+    [string]$OutputDirectory
 )
 
 $ErrorActionPreference = 'Stop'
@@ -79,9 +77,6 @@ $selectedIdentity = Get-PackageIdentity -Channel $IdentityChannel
 $packageIdentityName = [string]$selectedIdentity.name
 $packageFamilyName = [string]$selectedIdentity.familyName
 $publisher = [string]$selectedIdentity.publisher
-if ($SideloadOutputDirectory -and $IdentityChannel -ne 'Store') {
-    throw 'SideloadOutputDirectory requires IdentityChannel Store.'
-}
 $msbuildPublisher = & (
     Join-Path $PSScriptRoot 'ConvertTo-MSBuildPropertyValue.ps1'
 ) -Value $publisher
@@ -110,6 +105,32 @@ function Remove-DirectoryIfPresent {
     if ([IO.Directory]::Exists($Path)) {
         [IO.Directory]::Delete($Path, $true)
     }
+}
+
+function Get-PortableExecutableSubsystem {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -lt 0x40 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
+        throw "'$Path' is not a Windows executable image."
+    }
+
+    # The subsystem is at offset 68 of the optional header in both PE32 and
+    # PE32+, and the optional header follows the 4-byte signature and the
+    # 20-byte file header.
+    $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+    if (
+        $peOffset -lt 0x40 -or
+        $peOffset + 24 + 70 -gt $bytes.Length -or
+        [BitConverter]::ToUInt32($bytes, $peOffset) -ne 0x00004550
+    ) {
+        throw "'$Path' is not a Windows executable image."
+    }
+
+    return [BitConverter]::ToUInt16($bytes, $peOffset + 24 + 68)
 }
 
 function Test-PackageVersion {
@@ -232,152 +253,6 @@ function Add-VswhereToPath {
     }
 
     $env:Path = "$vswhereDirectory;$env:Path"
-}
-
-function Resolve-MakeAppx {
-    $command = Get-Command `
-        MakeAppx.exe `
-        -CommandType Application `
-        -ErrorAction SilentlyContinue
-    if ($null -ne $command) {
-        return $command.Source
-    }
-
-    $windowsKits = Join-Path `
-        ${env:ProgramFiles(x86)} `
-        'Windows Kits\10\bin'
-    $candidate = Get-ChildItem `
-        -LiteralPath $windowsKits `
-        -Filter MakeAppx.exe `
-        -File `
-        -Recurse `
-        -ErrorAction SilentlyContinue |
-        Where-Object { $_.Directory.Name -eq 'x64' } |
-        Sort-Object FullName -Descending |
-        Select-Object -First 1
-    if ($null -eq $candidate) {
-        throw 'MakeAppx.exe was not found in PATH or the Windows 10 SDK.'
-    }
-
-    $candidate.FullName
-}
-
-function New-SideloadIdentityVariant {
-    param(
-        [Parameter(Mandatory)]
-        [string]$SourcePath,
-
-        [Parameter(Mandatory)]
-        [string]$OutputPath,
-
-        [Parameter(Mandatory)]
-        [string]$LayoutPath
-    )
-
-    $makeAppx = Resolve-MakeAppx
-    Invoke-CheckedCommand `
-        -FailureMessage 'MakeAppx.exe failed to unpack the Store MSIX.' `
-        -Command {
-            & $makeAppx unpack /v /o /p $SourcePath /d $LayoutPath
-        }
-
-    $variantIdentity = Get-PackageIdentity -Channel Sideload
-    $variantManifestPath = Join-Path $LayoutPath 'AppxManifest.xml'
-    [xml]$variantManifest = Get-Content `
-        -LiteralPath $variantManifestPath `
-        -Raw
-    $variantManifest.Package.Identity.Name = [string]$variantIdentity.name
-    $variantManifest.Package.Identity.Publisher = [string]$variantIdentity.publisher
-    $writerSettings = [Xml.XmlWriterSettings]::new()
-    $writerSettings.Encoding = [Text.UTF8Encoding]::new($false)
-    $writerSettings.Indent = $false
-    $writer = [Xml.XmlWriter]::Create($variantManifestPath, $writerSettings)
-    try {
-        $variantManifest.Save($writer)
-    }
-    finally {
-        $writer.Dispose()
-    }
-
-    Invoke-CheckedCommand `
-        -FailureMessage 'MakeAppx.exe failed to pack the sideload MSIX.' `
-        -Command {
-            & $makeAppx pack /v /o /d $LayoutPath /p $OutputPath
-        }
-    if (-not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) {
-        throw 'MakeAppx.exe completed without producing the sideload MSIX.'
-    }
-}
-
-function Get-MSIXIdentityVariantEvidence {
-    param(
-        [Parameter(Mandatory)]
-        [string]$Path
-    )
-
-    $files = [System.Collections.Generic.Dictionary[string, string]]::new(
-        [System.StringComparer]::OrdinalIgnoreCase
-    )
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $archive = [IO.Compression.ZipFile]::OpenRead($Path)
-    try {
-        $manifest = $null
-        foreach ($entry in $archive.Entries) {
-            if ([string]::IsNullOrEmpty($entry.Name)) {
-                continue
-            }
-
-            $decodedPath = [Uri]::UnescapeDataString($entry.FullName)
-            if ($decodedPath -ieq 'AppxManifest.xml') {
-                $stream = $entry.Open()
-                $reader = [IO.StreamReader]::new($stream)
-                try {
-                    [xml]$manifest = $reader.ReadToEnd()
-                }
-                finally {
-                    $reader.Dispose()
-                    $stream.Dispose()
-                }
-                continue
-            }
-            if ($decodedPath -iin @(
-                'AppxBlockMap.xml',
-                'AppxSignature.p7x',
-                '[Content_Types].xml'
-            )) {
-                continue
-            }
-            if ($files.ContainsKey($decodedPath)) {
-                throw "The MSIX contains a duplicate decoded path: $decodedPath"
-            }
-
-            $stream = $entry.Open()
-            $sha256 = [Security.Cryptography.SHA256]::Create()
-            try {
-                $files.Add(
-                    $decodedPath,
-                    [Convert]::ToHexString(
-                        $sha256.ComputeHash($stream)
-                    ).ToLowerInvariant()
-                )
-            }
-            finally {
-                $sha256.Dispose()
-                $stream.Dispose()
-            }
-        }
-        if ($null -eq $manifest) {
-            throw 'The MSIX does not contain AppxManifest.xml.'
-        }
-
-        [pscustomobject]@{
-            Files = $files
-            Manifest = $manifest
-        }
-    }
-    finally {
-        $archive.Dispose()
-    }
 }
 
 Test-PackageVersion
@@ -507,6 +382,30 @@ $payloadInventoryPath = Join-Path $openClawContent 'payload-files.json'
     ConvertTo-Json -Depth 4 |
     Set-Content -LiteralPath $payloadInventoryPath -Encoding utf8
 
+# The startup list is a best-effort setup prewarm hint; every path must still
+# be a member of the verified payload inventory.
+$startupFiles = @(
+    & (Join-Path $PSScriptRoot 'Get-PayloadStartupFiles.ps1') `
+        -ApplicationDirectory $applicationTarget
+)
+$payloadPaths = [Collections.Generic.HashSet[string]]::new(
+    [string[]]@($payloadFiles | ForEach-Object { $_.path }),
+    [StringComparer]::Ordinal
+)
+foreach ($startupFile in $startupFiles) {
+    if (-not $payloadPaths.Contains($startupFile)) {
+        throw "The startup file list names a path outside the payload inventory: $startupFile"
+    }
+}
+$startupFilesPath = Join-Path $openClawContent 'startup-files.json'
+[ordered]@{
+    schemaVersion = 1
+    files = $startupFiles
+} |
+    ConvertTo-Json -Depth 2 |
+    Set-Content -LiteralPath $startupFilesPath -Encoding utf8
+Write-Host "Listed $($startupFiles.Count) startup payload files for setup prewarm."
+
 $mxcRuntimeDirectory = Join-Path $repositoryRoot "content\mxc\$Architecture"
 $mxcRuntime = & (Join-Path $PSScriptRoot 'Get-MxcSdkMetadata.ps1') `
     -Architecture $Architecture `
@@ -525,17 +424,7 @@ $workRoot = Join-Path `
     $temporaryRoot `
     "openclaw-msix-$Architecture-$([guid]::NewGuid().ToString('N'))"
 $msixBuildDirectory = Join-Path $workRoot 'appx'
-$outputDirectories = @($OutputDirectory)
-if ($SideloadOutputDirectory) {
-    if (
-        [IO.Path]::GetFullPath($SideloadOutputDirectory) -eq
-        [IO.Path]::GetFullPath($OutputDirectory)
-    ) {
-        throw 'Store and sideload output directories must be different.'
-    }
-    $outputDirectories += $SideloadOutputDirectory
-}
-$directoriesToCreate = @($msixBuildDirectory) + $outputDirectories
+$directoriesToCreate = @($msixBuildDirectory, $OutputDirectory)
 New-Item `
     -Path $directoriesToCreate `
     -ItemType Directory `
@@ -587,6 +476,62 @@ try {
     )
     if (-not ($sessionHostFiles.path -contains 'openclaw-session-host.exe')) {
         throw "The published $Architecture session host is incomplete."
+    }
+
+    $recoveryHelperProject = Join-Path `
+        $repositoryRoot `
+        'src\OpenClaw.GatewayRecovery\OpenClaw.GatewayRecovery.csproj'
+    $recoveryHelperOutput = Join-Path `
+        $repositoryRoot `
+        "content\gateway-recovery\$Architecture"
+    Remove-DirectoryIfPresent -Path $recoveryHelperOutput
+    New-Item -Path $recoveryHelperOutput -ItemType Directory -Force | Out-Null
+    Write-Host "Publishing the NativeAOT win-$Architecture sign-in helper."
+    Invoke-CheckedCommand `
+        -FailureMessage 'NativeAOT sign-in helper publish failed.' `
+        -Command {
+            & dotnet publish $recoveryHelperProject `
+                --configuration Release `
+                --runtime "win-$Architecture" `
+                --self-contained `
+                --no-restore `
+                "-p:Platform=$Architecture" `
+                -p:PublishAot=true `
+                --output $recoveryHelperOutput `
+                --nologo
+        }
+    $recoveryHelperFiles = @(
+        Get-ChildItem -LiteralPath $recoveryHelperOutput -File -Force -Recurse |
+            Where-Object Extension -notin '.pdb', '.xml' |
+            ForEach-Object {
+                [ordered]@{
+                    path = (
+                        [IO.Path]::GetRelativePath(
+                            $recoveryHelperOutput,
+                            $_.FullName
+                        )
+                    ).Replace('\', '/')
+                    length = $_.Length
+                    sha256 = (
+                        Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256
+                    ).Hash.ToLowerInvariant()
+                }
+            }
+    )
+    if (
+        $recoveryHelperFiles.Count -ne 1 -or
+        $recoveryHelperFiles[0].path -cne 'openclaw-gateway-recovery.exe'
+    ) {
+        throw "The published $Architecture sign-in helper must be exactly openclaw-gateway-recovery.exe."
+    }
+    # A console-subsystem helper would open a terminal window at every sign-in.
+    $recoveryHelperSubsystem = Get-PortableExecutableSubsystem `
+        -Path (Join-Path $recoveryHelperOutput 'openclaw-gateway-recovery.exe')
+    if ($recoveryHelperSubsystem -ne 2) {
+        throw (
+            "The published $Architecture sign-in helper must be a Windows GUI " +
+            "executable; its subsystem is $recoveryHelperSubsystem."
+        )
     }
 
     $appxOutput = $msixBuildDirectory.TrimEnd('\') + '\'
@@ -662,6 +607,16 @@ try {
         }
     )
     $expectedPackageFiles.Add(
+        'payload/startup-files.json',
+        [pscustomobject]@{
+            Hash = (
+                Get-FileHash `
+                    -LiteralPath $startupFilesPath `
+                    -Algorithm SHA256
+            ).Hash.ToLowerInvariant()
+        }
+    )
+    $expectedPackageFiles.Add(
         "runtime/$expectedNodeArchiveName",
         [pscustomobject]@{
             Hash = $nodeArchiveHash
@@ -680,6 +635,14 @@ try {
             "session-host/$Architecture/$($sessionHostFile.path)",
             [pscustomobject]@{
                 Hash = $sessionHostFile.sha256
+            }
+        )
+    }
+    foreach ($recoveryHelperFile in $recoveryHelperFiles) {
+        $expectedPackageFiles.Add(
+            $recoveryHelperFile.path,
+            [pscustomobject]@{
+                Hash = $recoveryHelperFile.sha256
             }
         )
     }
@@ -757,12 +720,25 @@ try {
                 "//*[local-name()='Extension' and @Category='windows.appExecutionAlias']"
             )
         )
-        if ($aliasExtension.Count -ne 2) {
-            throw 'The MSIX must contain public and control app execution alias extensions.'
+        if ($aliasExtension.Count -ne 3) {
+            throw 'The MSIX must contain public, control, and sign-in helper app execution alias extensions.'
+        }
+        $aliasTargets = @{
+            'openclaw.exe' = 'openclaw.exe'
+            'clawctl.exe' = 'openclaw.exe'
+            'openclaw-gateway-recovery.exe' = 'openclaw-gateway-recovery.exe'
         }
         foreach ($extension in $aliasExtension) {
-            if ($extension.Executable -ne 'openclaw.exe') {
-                throw 'Both command aliases must target openclaw.exe.'
+            $extensionAliases = @(
+                $extension.SelectNodes(".//*[local-name()='ExecutionAlias']") |
+                    ForEach-Object { $_.Alias }
+            )
+            if (
+                $extensionAliases.Count -ne 1 -or
+                -not $aliasTargets.ContainsKey([string]$extensionAliases[0]) -or
+                $extension.Executable -cne $aliasTargets[[string]$extensionAliases[0]]
+            ) {
+                throw 'Each command alias must target its own executable.'
             }
         }
 
@@ -771,7 +747,7 @@ try {
                 ForEach-Object { $_.SelectNodes(".//*[local-name()='ExecutionAlias']") } |
                 ForEach-Object { $_.Alias }
         )
-        foreach ($requiredAlias in @('openclaw.exe', 'clawctl.exe')) {
+        foreach ($requiredAlias in $aliasTargets.Keys) {
             if ($requiredAlias -notin $registeredAliases) {
                 throw "The MSIX does not register $requiredAlias."
             }
@@ -840,6 +816,7 @@ try {
         mxcRuntimeVersion = [string]$mxcProvenance.version
         mxcRuntimePackage = [string]$mxcProvenance.package
         sessionHostFiles = $sessionHostFiles
+        gatewayRecoveryFiles = $recoveryHelperFiles
         architecture = $Architecture
         archive = $msixName
         sha256 = $msixHash
@@ -855,77 +832,6 @@ try {
             -Encoding utf8
 
     Write-Host "Created unsigned MSIX: $msixPath"
-
-    if ($SideloadOutputDirectory) {
-        $sideloadMsixPath = Join-Path $SideloadOutputDirectory $msixName
-        $sideloadLayout = Join-Path $workRoot 'sideload-layout'
-        New-SideloadIdentityVariant `
-            -SourcePath $msixPath `
-            -OutputPath $sideloadMsixPath `
-            -LayoutPath $sideloadLayout
-
-        $storeEvidence = Get-MSIXIdentityVariantEvidence -Path $msixPath
-        $sideloadEvidence = Get-MSIXIdentityVariantEvidence `
-            -Path $sideloadMsixPath
-        if ($storeEvidence.Files.Count -ne $sideloadEvidence.Files.Count) {
-            throw 'The sideload MSIX payload differs from the Store MSIX payload.'
-        }
-        foreach ($entryPath in $storeEvidence.Files.Keys) {
-            if (
-                -not $sideloadEvidence.Files.ContainsKey($entryPath) -or
-                $sideloadEvidence.Files[$entryPath] -cne
-                $storeEvidence.Files[$entryPath]
-            ) {
-                throw "The sideload MSIX changed package content: $entryPath"
-            }
-        }
-
-        $sideloadIdentity = Get-PackageIdentity -Channel Sideload
-        $builtSideloadIdentity = $sideloadEvidence.Manifest.Package.Identity
-        if (
-            $null -eq $builtSideloadIdentity -or
-            [string]$builtSideloadIdentity.Name -cne
-            [string]$sideloadIdentity.name -or
-            [string]$builtSideloadIdentity.Publisher -cne
-            [string]$sideloadIdentity.publisher -or
-            [string]$builtSideloadIdentity.ProcessorArchitecture -cne
-            $Architecture -or
-            [string]$builtSideloadIdentity.Version -cne $PackageVersion
-        ) {
-            throw 'The built Sideload MSIX manifest identity is unexpected.'
-        }
-
-        $builtSideloadIdentity.Name = [string]$storeEvidence.Manifest.Package.Identity.Name
-        $builtSideloadIdentity.Publisher = `
-            [string]$storeEvidence.Manifest.Package.Identity.Publisher
-        if (
-            $sideloadEvidence.Manifest.OuterXml -cne
-            $storeEvidence.Manifest.OuterXml
-        ) {
-            throw 'The sideload MSIX changed manifest content beyond its identity.'
-        }
-
-        $sideloadHash = (
-            Get-FileHash -LiteralPath $sideloadMsixPath -Algorithm SHA256
-        ).Hash.ToLowerInvariant()
-        $sideloadMetadata = Get-Content `
-            -LiteralPath (Join-Path $OutputDirectory 'msix-metadata.json') `
-            -Raw |
-            ConvertFrom-Json
-        $sideloadMetadata.sha256 = $sideloadHash
-        $sideloadMetadata.identityChannel = 'sideload'
-        $sideloadMetadata.packageIdentityName = [string]$sideloadIdentity.name
-        $sideloadMetadata.packageFamilyName = [string]$sideloadIdentity.familyName
-        $sideloadMetadata.publisher = [string]$sideloadIdentity.publisher
-        $sideloadMetadata | ConvertTo-Json |
-            Set-Content `
-                -LiteralPath (
-                    Join-Path $SideloadOutputDirectory 'msix-metadata.json'
-                ) `
-                -Encoding utf8
-
-        Write-Host "Created unsigned sideload MSIX: $sideloadMsixPath"
-    }
 }
 finally {
     Remove-DirectoryIfPresent -Path $workRoot

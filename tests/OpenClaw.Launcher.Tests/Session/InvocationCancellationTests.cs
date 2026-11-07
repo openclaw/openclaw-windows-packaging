@@ -37,6 +37,86 @@ public sealed class InvocationCancellationTests
         CancellationPrototypeProbe.RunLocalAsync(false, false, naturalRights: true);
 
     [Fact]
+    public Task HardOwnerDeathStopsTheCoordinatorAndDescendantsDespiteARetainedJobHandle() =>
+        CancellationPrototypeProbe.RunOwnerDeathAsync();
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task ConfirmedCancellationAndNaturalExitDrainTheTreeWithoutStoppingASibling(bool naturalExit) =>
+        CancellationPrototypeProbe.RunOwnerDeathAsync(killOwner: false, naturalExit: naturalExit);
+
+    [Fact]
+    public Task OwnerEndedSnapshotFailureTerminatesTheTreeAndRetainsItsNativeRootUntilRecovery() =>
+        CancellationPrototypeProbe.RunOrphanSnapshotFailureAsync();
+
+    [Fact]
+    public async Task HardOwnerDeathBeforeDispatchCannotAdmitALateWorkload()
+    {
+        string root = TestDirectory.Create();
+        string events = @"Local\OpenClaw.LateOwnerTest." + Guid.NewGuid().ToString("N");
+        using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, events + ".ready");
+        using var release = new EventWaitHandle(false, EventResetMode.ManualReset, events + ".release");
+        string request = Path.Combine(root, "request.json");
+        string marker = Path.Combine(root, "unexpected.txt");
+        File.WriteAllText(request, OpenClaw.SessionProtocol.SessionLaunchProtocol.SerializeRequest(
+            new OpenClaw.SessionProtocol.SessionLaunchRequest
+            {
+                RequestId = "late-owner",
+                Executable = Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+                Arguments = ["/d", "/c", $"echo late > \"{marker}\""],
+                WorkingDirectory = root
+            }));
+        using Process owner = Process.Start(new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            ArgumentList = { Path.Combine(AppContext.BaseDirectory, "OpenClaw.Launcher.AotSmoke.dll"),
+                "--invocation-owner-fixture", request, events + ".ready", events + ".release", "launch-paused" },
+            UseShellExecute = false
+        })!;
+        var lifecycle = new List<EventWaitHandle>();
+        try
+        {
+            Assert.True(ready.WaitOne(TimeSpan.FromSeconds(30)));
+            string mode = File.ReadAllText(request + ".owner-mode");
+            string name = @"Global\OpenClaw.Invocation." + WindowsInvocationJob.InvocationId(mode);
+            using var mutex = Mutex.OpenExisting(name + ".owner");
+            Assert.False(mutex.WaitOne(0));
+            foreach (string suffix in new[] { ".stopping", ".completed", ".pinned", ".terminated", ".drained" })
+            {
+                lifecycle.Add(EventWaitHandle.OpenExisting(name + suffix));
+            }
+            using var job = CancellationPrototypeProbe.OpenFixtureJob(name);
+            owner.Kill();
+            await owner.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(true);
+            using Process coordinator = Process.Start(new ProcessStartInfo
+            {
+                FileName = Path.Combine(AppContext.BaseDirectory, "openclaw-session-host.exe"),
+                ArgumentList = { mode, request },
+                UseShellExecute = false
+            })!;
+            await coordinator.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(true);
+            Assert.Equal(130, coordinator.ExitCode);
+            Assert.Empty(OpenClaw.SessionHost.SessionInvocationCoordinator.ReadMembers(job));
+            Assert.False(File.Exists(marker));
+        }
+        finally
+        {
+            release.Set();
+            if (!owner.HasExited)
+            {
+                owner.Kill();
+            }
+            await owner.WaitForExitAsync().ConfigureAwait(true);
+            foreach (EventWaitHandle signal in lifecycle)
+            {
+                signal.Dispose();
+            }
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public async Task CancellationBeforeGuestAdmissionCannotStartLateWork()
     {
         string root = TestDirectory.Create();
@@ -83,6 +163,246 @@ public sealed class InvocationCancellationTests
 public static class CancellationPrototypeProbe
 {
     private const string InvocationJobNamePrefix = @"Global\OpenClaw.Invocation.";
+
+    public static async Task RunOrphanSnapshotFailureAsync()
+    {
+        string root = TestDirectory.Create();
+        string events = @"Local\OpenClaw.OrphanFailureTest." + Guid.NewGuid().ToString("N");
+        using var treeReady = new EventWaitHandle(false, EventResetMode.ManualReset, events + ".tree-ready");
+        using var treeRelease = new EventWaitHandle(false, EventResetMode.ManualReset, events + ".tree-release");
+        using var exitParent = new EventWaitHandle(false, EventResetMode.ManualReset, events + ".exit-parent");
+        using var blocked = new EventWaitHandle(false, EventResetMode.ManualReset);
+        using var recovery = new EventWaitHandle(false, EventResetMode.ManualReset);
+        string nativeRoot = Path.Combine(root, "native");
+        Directory.CreateDirectory(nativeRoot);
+        File.WriteAllText(Path.Combine(nativeRoot, ".staged-content-id"), "fixture");
+        string request = Path.Combine(root, "request.json");
+        WriteFixtureRequest(request, root, events, nativeRoot);
+        using WindowsIdentity identity = WindowsIdentity.GetCurrent();
+        WindowsInvocationJob job = WindowsInvocationJob.Create(identity.User!.Value);
+        bool disposed = false;
+        string mode = job.Mode;
+        using SafeFileHandle query = OpenFixtureJob(InvocationJobNamePrefix + WindowsInvocationJob.InvocationId(mode));
+        Task<int> execution = Task.Run(() => OpenClaw.SessionHost.SessionInvocationCoordinator.Run(
+            mode, request,
+            readMembers: _ => throw new System.ComponentModel.Win32Exception(5, "Fixture snapshot denied."),
+            startWorker: start =>
+            {
+                start.FileName = Path.Combine(AppContext.BaseDirectory, "openclaw-session-host.exe");
+                return Process.Start(start);
+            },
+            waitForRecovery: () =>
+            {
+                blocked.Set();
+                recovery.WaitOne();
+            }));
+        try
+        {
+            Assert.True(treeReady.WaitOne(TimeSpan.FromSeconds(30)));
+            using var handles = new ProcessHandles(_ => { }, "failed-orphan");
+            handles.Capture(OpenClaw.SessionHost.SessionInvocationCoordinator.ReadMembers(query));
+            job.Dispose();
+            disposed = true;
+            Assert.True(blocked.WaitOne(TimeSpan.FromSeconds(10)));
+            handles.WaitForExit();
+            Assert.False(execution.IsCompleted);
+            Assert.Throws<IOException>(() => Directory.Move(nativeRoot, nativeRoot + "-moved"));
+            OpenClaw.SessionProtocol.SessionLaunchResult result =
+                OpenClaw.SessionProtocol.SessionLaunchProtocol.ReadResult(
+                    File.ReadAllText(OpenClaw.SessionProtocol.SessionLaunchProtocol.ResultPathFor(request)));
+            Assert.Contains("Fixture snapshot denied", result.Error, StringComparison.Ordinal);
+            Assert.False(File.Exists(Path.Combine(root, "late-effect")));
+            recovery.Set();
+            Assert.Equal(64, await execution.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false));
+            Directory.Move(nativeRoot, nativeRoot + "-moved");
+        }
+        finally
+        {
+            recovery.Set();
+            treeRelease.Set();
+            StopFixtureJob(query);
+            if (!disposed)
+            {
+                job.Dispose();
+            }
+            await execution.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+            Directory.Delete(root, true);
+        }
+    }
+
+    public static async Task RunOwnerDeathAsync(bool killOwner = true, bool naturalExit = false)
+    {
+        string root = TestDirectory.Create();
+        string events = @"Local\OpenClaw.OwnerTest." + Guid.NewGuid().ToString("N");
+        using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, events + ".ready");
+        using var release = new EventWaitHandle(false, EventResetMode.ManualReset, events + ".release");
+        using var treeReady = new EventWaitHandle(false, EventResetMode.ManualReset, events + ".tree-ready");
+        using var treeRelease = new EventWaitHandle(false, EventResetMode.ManualReset, events + ".tree-release");
+        using var exitParent = new EventWaitHandle(false, EventResetMode.ManualReset, events + ".exit-parent");
+        using var siblingReady = new EventWaitHandle(false, EventResetMode.ManualReset, events + ".sibling.tree-ready");
+        using var siblingRelease = new EventWaitHandle(false, EventResetMode.ManualReset, events + ".sibling.tree-release");
+        using var siblingExit = new EventWaitHandle(false, EventResetMode.ManualReset, events + ".sibling.exit-parent");
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        string request = Path.Combine(root, "request.json");
+        WriteFixtureRequest(request, root, events);
+        string siblingRoot = Path.Combine(root, "sibling");
+        Directory.CreateDirectory(siblingRoot);
+        string siblingRequest = Path.Combine(siblingRoot, "request.json");
+        WriteFixtureRequest(siblingRequest, siblingRoot, events + ".sibling");
+        using WindowsIdentity identity = WindowsIdentity.GetCurrent();
+        using WindowsInvocationJob siblingJob = WindowsInvocationJob.Create(identity.User!.Value);
+        File.WriteAllText(Path.Combine(siblingRoot, "invocation-mode.txt"),
+            WindowsInvocationJob.ModePrefix + WindowsInvocationJob.InvocationId(siblingJob.Mode));
+        using Process sibling = Process.Start(new ProcessStartInfo
+        {
+            FileName = Path.Combine(AppContext.BaseDirectory, "openclaw-session-host.exe"),
+            ArgumentList = { siblingJob.Mode, siblingRequest },
+            UseShellExecute = false
+        })!;
+        siblingJob.MarkDispatched();
+        using var siblingHandles = new ProcessHandles(_ => { }, "sibling");
+        using SafeFileHandle siblingQuery = OpenJobObjectW(0x0004, false,
+            InvocationJobNamePrefix + WindowsInvocationJob.InvocationId(siblingJob.Mode));
+        using Process owner = Process.Start(new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            ArgumentList = { Path.Combine(AppContext.BaseDirectory, "OpenClaw.Launcher.AotSmoke.dll"),
+                "--invocation-owner-fixture", request, events + ".ready", events + ".release", "launch" },
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        })!;
+        Task<string> stdout = owner.StandardOutput.ReadToEndAsync();
+        Task<string> stderr = owner.StandardError.ReadToEndAsync();
+        Process? coordinator = null;
+        SafeFileHandle? retained = null;
+        try
+        {
+            Assert.True(siblingReady.WaitOne(TimeSpan.FromSeconds(30)), "The sibling tree did not become ready.");
+            siblingHandles.Capture(OpenClaw.SessionHost.SessionInvocationCoordinator.ReadMembers(siblingQuery));
+            Assert.True(ready.WaitOne(TimeSpan.FromSeconds(30)), "The fixture owner did not dispatch.");
+            coordinator = OpenFixtureCoordinator(request);
+            string id = WindowsInvocationJob.InvocationId(File.ReadAllText(request + ".owner-mode"));
+            retained = OpenJobObjectW(0x000c, false, InvocationJobNamePrefix + id);
+            Assert.False(retained.IsInvalid);
+            Assert.True(treeReady.WaitOne(TimeSpan.FromSeconds(30)), "The fixture tree did not become ready.");
+            using var handles = new ProcessHandles(_ => { }, "owner-death");
+            handles.Capture(OpenClaw.SessionHost.SessionInvocationCoordinator.ReadMembers(retained));
+            handles.AssertInInvocationJob(root);
+            handles.AssertRunning("before-stop");
+            if (killOwner)
+            {
+                owner.Kill();
+                Assert.Equal(0u, WaitForSingleObject(owner.SafeHandle, 10_000));
+            }
+            else if (naturalExit)
+            {
+                exitParent.Set();
+            }
+            else
+            {
+                release.Set();
+            }
+            await coordinator.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+            handles.AssertExited("coordinator-return");
+            siblingHandles.AssertRunning("after-first-return");
+            Assert.False(File.Exists(Path.Combine(root, "late-effect")));
+            if (naturalExit)
+            {
+                Assert.Equal(37, coordinator.ExitCode);
+                release.Set();
+            }
+            await owner.WaitForExitAsync(deadline.Token).ConfigureAwait(false);
+            siblingRelease.Set();
+            await sibling.WaitForExitAsync(deadline.Token).ConfigureAwait(false);
+            siblingJob.ForegroundExited();
+            siblingHandles.AssertExited("sibling-return");
+            Assert.Equal(0, sibling.ExitCode);
+            Assert.True(File.Exists(Path.Combine(siblingRoot, "late-effect")));
+        }
+        finally
+        {
+            // Only the exact fixture jobs and explicitly owned coordinator are reclaimed.
+            StopFixtureJob(retained);
+            treeRelease.Set();
+            siblingRelease.Set();
+            siblingJob.Stop();
+            await sibling.WaitForExitAsync(deadline.Token).ConfigureAwait(false);
+            if (coordinator is not null)
+            {
+                if (!coordinator.HasExited)
+                {
+                    coordinator.Kill();
+                }
+                await coordinator.WaitForExitAsync(deadline.Token).ConfigureAwait(false);
+                coordinator.Dispose();
+            }
+            release.Set();
+            if (!owner.HasExited)
+            {
+                owner.Kill();
+            }
+            await owner.WaitForExitAsync(deadline.Token).ConfigureAwait(false);
+            _ = await stdout.WaitAsync(deadline.Token).ConfigureAwait(false);
+            _ = await stderr.WaitAsync(deadline.Token).ConfigureAwait(false);
+            retained?.Dispose();
+            Directory.Delete(root, true);
+        }
+    }
+
+    private static void WriteFixtureRequest(string request, string root, string events, string? nativeRoot = null) =>
+        File.WriteAllText(request, OpenClaw.SessionProtocol.SessionLaunchProtocol.SerializeRequest(
+            new OpenClaw.SessionProtocol.SessionLaunchRequest
+            {
+                RequestId = "owner-death",
+                Executable = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                    "dotnet", "dotnet.exe"),
+                Arguments = [Path.Combine(AppContext.BaseDirectory, "OpenClaw.Launcher.AotSmoke.dll"),
+                    "--invocation-tree-fixture", root, "parent", events],
+                WorkingDirectory = root,
+                NativeRootPath = nativeRoot,
+                Environment = new Dictionary<string, string> { ["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1" }
+            }));
+
+    private static Process OpenFixtureCoordinator(string request)
+    {
+        int id = int.Parse(File.ReadAllText(request + ".coordinator"),
+            System.Globalization.CultureInfo.InvariantCulture);
+        try
+        {
+            Process coordinator = Process.GetProcessById(id);
+            _ = coordinator.SafeHandle;
+            return coordinator;
+        }
+        catch (ArgumentException exception)
+        {
+            string resultPath = OpenClaw.SessionProtocol.SessionLaunchProtocol.ResultPathFor(request);
+            string detail = File.Exists(resultPath)
+                ? File.ReadAllText(resultPath) : "No fixture result was written.";
+            throw new InvalidOperationException(
+                $"The owned fixture coordinator exited before observation. Fixture result: {detail}", exception);
+        }
+    }
+
+    private static void StopFixtureJob(SafeFileHandle? job)
+    {
+        if (job is { IsInvalid: false } && !TerminateJobObject(job, 130))
+        {
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        }
+    }
+
+    internal static SafeFileHandle OpenFixtureJob(string name)
+    {
+        SafeFileHandle job = OpenJobObjectW(0x000c, false, name);
+        if (job.IsInvalid)
+        {
+            int error = Marshal.GetLastWin32Error();
+            job.Dispose();
+            throw new System.ComponentModel.Win32Exception(error);
+        }
+        return job;
+    }
 
     public static async Task RunLateSpawnAsync(bool completedBeforeReturn = false)
     {
@@ -614,6 +934,15 @@ public static class CancellationPrototypeProbe
     private static extern SafeFileHandle OpenJobObjectW(
         uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, string name);
 
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool TerminateJobObject(SafeFileHandle job, uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern uint WaitForSingleObject(SafeProcessHandle process, uint milliseconds);
+
     private sealed class ProcessHandles(Action<string> report, string subject) : IDisposable
     {
         private readonly List<(int Id, SafeProcessHandle Handle)> _processes = [];
@@ -676,6 +1005,9 @@ public static class CancellationPrototypeProbe
                 Assert.True(status == 0,
                     $"{subject} fixture process {process.Id} has not exited; wait status 0x{status:X8}.");
             });
+        public void WaitForExit() =>
+            Assert.All(_processes, process =>
+                Assert.Equal(0u, WaitForSingleObject(process.Handle, 10_000)));
         public void AssertRunning(string phase) =>
             Assert.All(_processes, process =>
             {

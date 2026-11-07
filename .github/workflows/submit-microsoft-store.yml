@@ -7,6 +7,12 @@ on:
         description: Successful release workflow run containing the authorized Store bundle
         type: string
         required: true
+      channel:
+        description: Store destination (must match the qualified release type)
+        type: choice
+        options: [production, development]
+        default: production
+        required: true
 
 permissions:
   contents: read
@@ -42,7 +48,8 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.release-token.outputs.token }}
           SOURCE_RUN_ID: ${{ inputs.run_id }}
+          STORE_CHANNEL: ${{ inputs.channel }}
         run: |
-          $request = ./scripts/Request-MicrosoftStorePublish.ps1 -RunId $env:SOURCE_RUN_ID
-          "Store publication requested for Gateway source run $($request.sourceRunId)." >> $env:GITHUB_STEP_SUMMARY
+          $request = ./scripts/Request-MicrosoftStorePublish.ps1 -RunId $env:SOURCE_RUN_ID -Channel $env:STORE_CHANNEL
+          "Store $($request.channel) publication requested for Gateway source run $($request.sourceRunId)." >> $env:GITHUB_STEP_SUMMARY
           'Follow [Windows Store publication](https://github.com/openclaw/releases/actions/workflows/windows-store-publish.yml) for release-manager approval and the Store receipt. This request is not Store acceptance.' >> $env:GITHUB_STEP_SUMMARY
