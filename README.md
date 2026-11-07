@@ -91,6 +91,9 @@ isolation status without claiming independent attestation. The selected OpenClaw
 mutation and OpenClaw self-update with guidance to use the external supervisor's
 workflow. This behavior belongs to upstream OpenClaw; the launcher does not
 reserve, reject, or rewrite upstream command arguments.
+The managed Gateway supervisor relaunches the bundled application only after
+consuming its PID-matched full-process restart handoff. Ordinary exits and
+failures without that handoff remain stopped; this is not crash-loop recovery.
 OpenClaw inherits the terminal's working directory; the launcher does not make
 the read-only application directory the workspace.
 

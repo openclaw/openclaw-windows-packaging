@@ -167,6 +167,8 @@ public sealed class SessionGatewayClientTests : IDisposable
             StringComparison.Ordinal);
         Assert.EndsWith("openclaw.mjs", delivered.Arguments[2], StringComparison.Ordinal);
         Assert.Equal(["gateway", "run"], delivered.Arguments.Skip(3));
+        Assert.Equal(delivered.Arguments.Take(3).Concat(["gateway", "restart-handoff", "consume"]),
+            delivered.RestartHandoffArguments);
         Assert.Null(delivered.NodeOptionsSuffix);
         Assert.False(delivered.Environment!.ContainsKey("NODE_OPTIONS"));
     }
@@ -180,6 +182,8 @@ public sealed class SessionGatewayClientTests : IDisposable
         Assert.Null(delivered.NativeRootPath);
         Assert.Null(delivered.NodeOptionsSuffix);
         Assert.EndsWith("openclaw.mjs", delivered.Arguments![0], StringComparison.Ordinal);
+        Assert.Equal([delivered.Arguments[0], "gateway", "restart-handoff", "consume"],
+            delivered.RestartHandoffArguments);
     }
 
     [Theory]
