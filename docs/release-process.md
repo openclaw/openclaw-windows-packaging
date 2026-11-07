@@ -312,10 +312,12 @@ authorized disposition is backed by actual platform denial evidence.
 Cache deletion, dispatch, alert disposition, signing, and publication are
 separate authorized operations, not part of local implementation validation.
 
-## Automated Store submission
+## Store publication requests
 
-See [Microsoft Store submission](microsoft-store.md) for protected OIDC setup,
-manual submission, the Development tester group and flight, automatic activation,
-and recovery. Production uses `MSSTORE_ENABLED`; Development uses the independent
-`MSSTORE_DEVELOPMENT_ENABLED` flag. Neither flag substitutes for first-submission
-certification and tester install/upgrade proof.
+See [Microsoft Store publication](microsoft-store.md) for the central approval
+cutover, manual requests, the Development tester group/flight, activation, and
+recovery. The coordinated upstream handoff requests production for stable and
+Development for beta. The central publisher owns activation and release-manager
+approval; this repository keeps only a manual request adapter, not a Store API
+engine or automatic trigger. Development activation still requires manual
+submission, certification, and tester install/upgrade proof.
