@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.Text.Json;
+using Microsoft.Win32.SafeHandles;
 using OpenClaw.SessionHost;
 using OpenClaw.SessionProtocol;
 
@@ -183,6 +184,44 @@ public sealed partial class SessionSupervisorTests
         using IDisposable maintenance = access.EnterMaintenance();
     }
 
+    [Theory]
+    [InlineData("accepted")]
+    [InlineData("accepted-failure")]
+    public async Task DetachedHelperConsumesTheHandoffAndReturnsTheSuccessorExit(string scenario)
+    {
+        SessionLaunchRequest request = GatewayRequest(scenario);
+        string requestPath = SessionSupervisor.RequestPathFor(request.StatusPath!);
+        File.WriteAllText(requestPath, SessionLaunchProtocol.SerializeRequest(request));
+        ProcessStartInfo start = new(Path.Combine(AppContext.BaseDirectory, "openclaw-session-host.exe"))
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            ArgumentList = { "--supervise", requestPath }
+        };
+        start.Environment[SessionStateAccess.DirectoryVariable] = Path.Combine(_root, "state");
+        using Process supervisor = Process.Start(start)!;
+        try
+        {
+            await supervisor.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(true);
+            Assert.Equal(7, supervisor.ExitCode);
+            Assert.Equal("2", File.ReadAllText(Path.Combine(_root, "generations.txt")));
+            SessionSupervisorStatus status = SessionInspectProtocol.ReadStatus(
+                File.ReadAllText(request.StatusPath!));
+            Assert.Equal(request.RequestId, status.RequestId);
+            Assert.Equal(supervisor.Id, status.ProcessId);
+            Assert.Equal(SessionSupervisorStatus.ExitedState, status.State);
+            Assert.False(File.Exists(requestPath));
+        }
+        finally
+        {
+            if (!supervisor.HasExited)
+            {
+                supervisor.Kill(entireProcessTree: true);
+                await supervisor.WaitForExitAsync().ConfigureAwait(true);
+            }
+        }
+    }
+
     [Fact]
     public async Task TheOldGenerationTreeExitsBeforeASuccessorStarts()
     {
@@ -263,6 +302,16 @@ public sealed partial class SessionSupervisorTests
             string? line = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(true);
             using Process consumer = Process.GetProcessById(int.Parse(line!, System.Globalization.CultureInfo.InvariantCulture));
             _ = consumer.SafeHandle;
+            using WindowsKillOnCloseJob? tree = WindowsKillOnCloseJob.TryOpen(
+                WindowsKillOnCloseJob.GatewayJobName(
+                    supervisor.Id, supervisor.StartTime.ToUniversalTime().Ticks));
+            Assert.NotNull(tree);
+            Assert.True(tree.ActiveProcessCount > 0,
+                "The paused handoff consumer is outside the supervisor's owned tree.");
+            using var consumerExit = new EventWaitHandle(false, EventResetMode.AutoReset);
+            consumerExit.SafeWaitHandle = new SafeWaitHandle(
+                consumer.SafeHandle.DangerousGetHandle(), ownsHandle: false);
+            Assert.False(consumerExit.WaitOne(0));
             SessionInspectResult stopped = SessionTerminator.Stop(new SessionInspectRequest
             {
                 RequestId = "stop",
@@ -273,7 +322,8 @@ public sealed partial class SessionSupervisorTests
             }, File.ReadAllText);
             Assert.Null(stopped.Error);
             Assert.False(stopped.ProcessFound && stopped.StartTimeMatches);
-            Assert.True(consumer.WaitForExit(TimeSpan.FromSeconds(10)));
+            Assert.True(consumerExit.WaitOne(0),
+                "The handoff consumer was not signaled when stop returned.");
             Assert.Equal("1", File.ReadAllText(Path.Combine(_root, "generations.txt")));
         }
         finally

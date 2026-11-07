@@ -120,9 +120,7 @@ internal sealed class SessionProcessLauncher(
                 WindowsInvocationJob.Join(invocationMode);
             }
             initializeConsole?.Invoke();
-            using WindowsKillOnCloseJob job = containingJob is null
-                ? WindowsKillOnCloseJob.Create()
-                : WindowsKillOnCloseJob.CreateContained(containingJob);
+            using WindowsKillOnCloseJob job = WindowsKillOnCloseJob.Create();
             using Process process = job.StartProcess(startInfo);
             process.WaitForExit();
             int exitCode = process.ExitCode;
@@ -146,7 +144,9 @@ internal sealed class SessionProcessLauncher(
         TimeSpan? timeout,
         WindowsKillOnCloseJob? containingJob)
     {
-        using WindowsKillOnCloseJob job = WindowsKillOnCloseJob.Create();
+        using WindowsKillOnCloseJob job = containingJob is null
+            ? WindowsKillOnCloseJob.Create()
+            : WindowsKillOnCloseJob.CreateContained(containingJob);
         using var input = new FileStream("NUL", FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         using var stdout = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.None);
         using var stderr = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.None);
