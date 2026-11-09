@@ -140,6 +140,10 @@ const server = http.createServer(async (request, response) => {
       }
     } else {
       scenario.summaries++;
+      const kind = JSON.stringify(body.messages).includes(
+        "This is the PREFIX of a turn that was too large to keep. The SUFFIX (recent work) is retained.",
+      ) ? "turn-prefix" : "history";
+      scenario.summaryKinds.push(kind);
     }
     const lastUser = body.messages.findLastIndex(message => message.role === "user");
     const toolResults = body.messages.slice(lastUser + 1).filter(message => message.role === "tool");
@@ -242,7 +246,7 @@ async function agent(name, {
 } = {}) {
   const reads = [...(readSkill ? skillReads : []), { path: sentinelPath, text: sentinel }];
   scenario = { name, overflow, guidance, skillAvailable, readSkill, skillReadDenied, reads,
-    agentRequests: 0, summaries: 0, toolResults: 0 };
+    agentRequests: 0, summaries: 0, summaryKinds: [], toolResults: 0 };
   const result = await run([
     "agent", "--local", "--agent", "main", "--session-key", sessionKey,
     "--message", `${readSkill ? "Consult the complete windows-agent-handoff SKILL.md before reading" : "Read"} the fixture deliverable. Scenario: ${name}.`,
@@ -256,7 +260,10 @@ async function agent(name, {
     // Retained-turn compaction can finish without a separate summary-model request.
     assert.equal(result.meta.agentMeta.compactionCount, 1, JSON.stringify(result));
     assert.equal(result.meta.contextManagement.lastTurnCompactions, 1);
-    if (summaryExpected) assert.equal(scenario.summaries, 1);
+    if (summaryExpected) {
+      // This cut splits the live turn: the pinned runtime summarizes history, then its prefix.
+      assert.deepEqual(scenario.summaryKinds, ["history", "turn-prefix"]);
+    }
     assert.ok(scenario.agentRequests >= 3, "The overflowed request must be retried after compaction.");
   }
   assert.equal(await fs.readFile(sentinelPath, "utf8"), sentinel);
