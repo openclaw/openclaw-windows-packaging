@@ -123,7 +123,11 @@ const server = http.createServer(async (request, response) => {
             "The entire instruction block must reach the model, not just its heading.");
         }
       }
-      assert.deepEqual(body.tools.map(tool => tool.function.name), ["read"]);
+      // The pinned runtime exposes installed-skill reads under the ordinary read grant.
+      const availableSkills = systemText.match(/<available_skills>[\s\S]*?<\/available_skills>/)?.[0] ?? "";
+      const expectedTools = availableSkills.includes("<skill>") && !scenario.skillReadDenied
+        ? ["read", "skills_read"] : ["read"];
+      assert.deepEqual(body.tools.map(tool => tool.function.name), expectedTools);
       scenario.agentRequests++;
       if (scenario.overflow && !scenario.overflowSent) {
         scenario.overflowSent = true;
@@ -233,11 +237,11 @@ async function run(args) {
 
 async function agent(name, {
   overflow = false, summaryExpected = false, guidance = true,
-  skillAvailable = true, readSkill = false,
+  skillAvailable = true, readSkill = false, skillReadDenied = false,
   sessionKey = "agent:main:isolation-context-fixture",
 } = {}) {
   const reads = [...(readSkill ? skillReads : []), { path: sentinelPath, text: sentinel }];
-  scenario = { name, overflow, guidance, skillAvailable, readSkill, reads,
+  scenario = { name, overflow, guidance, skillAvailable, readSkill, skillReadDenied, reads,
     agentRequests: 0, summaries: 0, toolResults: 0 };
   const result = await run([
     "agent", "--local", "--agent", "main", "--session-key", sessionKey,
@@ -303,6 +307,11 @@ try {
   denied.plugins.entries = { "gateway-isolation": { hooks: { allowPromptInjection: false } } };
   await fs.writeFile(configPath, JSON.stringify(denied));
   await agent("prompt-injection opt-out", { guidance: false, sessionKey: "agent:main:opt-out-fixture" });
+  const skillReadDenied = structuredClone(config);
+  skillReadDenied.tools.deny = ["skills_read"];
+  await fs.writeFile(configPath, JSON.stringify(skillReadDenied));
+  await agent("installed skill read explicitly denied", { readSkill: true, skillReadDenied: true,
+    sessionKey: "agent:main:skill-read-denied-fixture" });
   const skillDisabled = structuredClone(config);
   skillDisabled.skills = { entries: { [skillName]: { enabled: false } } };
   await fs.writeFile(configPath, JSON.stringify(skillDisabled));
