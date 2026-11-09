@@ -83,6 +83,7 @@ internal static partial class SmokeProgram
             ("Spectre renders clawctl output under NativeAOT", SpectreOutputRenders),
             ("gateway narration survives NativeAOT", GatewayNarrationRenders),
             ("pending gateway JSON survives NativeAOT", PendingGatewayJsonIsStructured),
+            ("gateway restart handoffs survive NativeAOT", GatewayRestartHandoffsAreStructured),
             ("Windows logon identity survives NativeAOT", WindowsLogonIdentityWorks),
             ("Windows process identity survives NativeAOT", WindowsProcessIdentityWorks),
             ("invocation job interop survives NativeAOT", InvocationJobWorks),
@@ -151,6 +152,23 @@ internal static partial class SmokeProgram
 
         WriteLine($"{scenarios.Length} NativeAOT scenarios passed.");
         return 0;
+    }
+
+    private static Task GatewayRestartHandoffsAreStructured()
+    {
+        GatewayRestartHandoffDecision accepted = SessionGatewayRestartHandoff.ReadDecision(
+            """
+            {"ok":true,"protocol":"openclaw.gateway.restart-handoff","protocolVersion":1,
+             "status":"accepted","handoff":{"pid":123,"supervisorMode":"external","restartKind":"full-process"}}
+            """, 123);
+        Assert(accepted.Restart, "The trimmed handoff parser lost the authorized restart.");
+        GatewayRestartHandoffDecision absent = SessionGatewayRestartHandoff.ReadDecision(
+            """
+            {"ok":true,"protocol":"openclaw.gateway.restart-handoff","protocolVersion":1,
+             "status":"none","reason":"missing"}
+            """, 123);
+        Assert(!absent.Restart, "An ordinary exit became a restart under NativeAOT.");
+        return Task.CompletedTask;
     }
 
     private static Task HelperFailureFallbackWorks()
