@@ -286,6 +286,11 @@ async function inspect(name, value, { active = true, hook = true, mode = "enable
 
 try {
   const configBytes = JSON.stringify(config);
+  const skillReadDenied = structuredClone(config);
+  skillReadDenied.tools.deny = ["skills_read"];
+  await fs.writeFile(configPath, JSON.stringify(skillReadDenied));
+  await agent("installed skill read explicitly denied", { readSkill: true, skillReadDenied: true,
+    sessionKey: "agent:main:skill-read-denied-fixture" });
   await fs.writeFile(configPath, configBytes);
   await agent("on-demand self-contained skill read", { readSkill: true,
     sessionKey: "agent:main:skill-read-fixture" });
@@ -307,11 +312,6 @@ try {
   denied.plugins.entries = { "gateway-isolation": { hooks: { allowPromptInjection: false } } };
   await fs.writeFile(configPath, JSON.stringify(denied));
   await agent("prompt-injection opt-out", { guidance: false, sessionKey: "agent:main:opt-out-fixture" });
-  const skillReadDenied = structuredClone(config);
-  skillReadDenied.tools.deny = ["skills_read"];
-  await fs.writeFile(configPath, JSON.stringify(skillReadDenied));
-  await agent("installed skill read explicitly denied", { readSkill: true, skillReadDenied: true,
-    sessionKey: "agent:main:skill-read-denied-fixture" });
   const skillDisabled = structuredClone(config);
   skillDisabled.skills = { entries: { [skillName]: { enabled: false } } };
   await fs.writeFile(configPath, JSON.stringify(skillDisabled));
