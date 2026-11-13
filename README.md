@@ -110,6 +110,27 @@ OpenClaw exit code; the next eligible run retries. A successful start is
 acknowledged for the current Windows logon. See [environment
 variables](#environment-variables) to restore the prior start hint.
 
+### Interactive desktop nodes
+
+The MSIX `openclaw node run` command runs in the isolated agent session, even
+when started from a terminal on your desktop. A connected node advertising
+`computer.act` does not mean it can control your interactive desktop: its
+local windows and screenshots belong to the isolated session.
+
+Use [Windows Hub](https://github.com/openclaw/openclaw-windows-node) for the
+supported interactive-user Windows node route. Hub does **not currently
+implement `computer.act`**; that gap is tracked in
+[openclaw/openclaw-windows-node#1871](https://github.com/openclaw/openclaw-windows-node/issues/1871).
+Until that capability ships, Hub cannot provide end-to-end computer use on
+your desktop for the MSIX Gateway. Screen capture and system commands do not
+establish computer-control capability.
+
+A separately installed npm CLI node running as the interactive user is an
+**unsupported workaround**, not a supported MSIX setup. The bundled
+[computer-use guide](https://docs.openclaw.ai/nodes/computer-use)'s interactive
+desktop prerequisite cannot be satisfied through the MSIX alias or
+`clawctl pwsh`. See [desktop-node troubleshooting](docs/troubleshooting.md#a-connected-node-shows-a-blank-or-unfamiliar-desktop).
+
 ### Environment variables
 
 These host-side variables are not passed to the OpenClaw child. Automatic
