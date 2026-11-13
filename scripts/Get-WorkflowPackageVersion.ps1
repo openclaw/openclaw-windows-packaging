@@ -6,7 +6,9 @@ param(
     [Parameter(Mandatory)]
     [long]$RunAttempt,
 
-    [string]$ReleaseVersion
+    [string]$ReleaseVersion,
+
+    [switch]$Store
 )
 
 Set-StrictMode -Version Latest
@@ -42,8 +44,24 @@ if (-not [string]::IsNullOrWhiteSpace($ReleaseVersion)) {
         }
     }
 
+    if ($Store) {
+        # The Store identity has its own upgrade sequence. Reserve the range
+        # above every shipped source-derived version (at most 9999), and use
+        # GitHub's immutable workflow run number across stable and preview runs.
+        # A retry reuses its version; never wrap or reset this sequence.
+        $storeVersionOffset = 10000L
+        if ($components[0] -lt 1 -or $components[1] -lt 1 -or $components[1] -gt 12) {
+            throw 'Store ReleaseVersion must carry the Gateway release year and month.'
+        }
+        if ($RunNumber -lt 1 -or $RunNumber -gt ($maximumComponent - $storeVersionOffset)) {
+            throw 'Store workflow run number exceeds the supported allocation range (1..55534).'
+        }
+        return "$($components[0]).$($components[1]).$($storeVersionOffset + $RunNumber).0"
+    }
     return ($components -join '.')
 }
+
+if ($Store) { throw 'Store version allocation requires ReleaseVersion.' }
 
 if ($RunNumber -lt 1) {
     throw 'RunNumber must be greater than zero.'
