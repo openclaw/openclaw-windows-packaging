@@ -27,6 +27,31 @@ clawctl setup
 
 For another stated prerequisite, correct that prerequisite and rerun setup.
 
+## A connected node shows a blank or unfamiliar desktop
+
+**Check.** If you started the node with the MSIX `openclaw node run` alias,
+it runs in the isolated agent session, even from a terminal opened on your
+interactive desktop. Successful pairing, a connected status, or an advertised
+`computer.act` command does not prove that the node targets your desktop.
+Screenshots and window listings from that node describe the isolated desktop.
+
+**Next step.** Use [Windows Hub](https://github.com/openclaw/openclaw-windows-node)
+as the supported interactive-user Windows node route, and check the selected
+node's actual capabilities and authorization before using it. Hub does **not
+currently implement `computer.act`**; follow
+[openclaw/openclaw-windows-node#1871](https://github.com/openclaw/openclaw-windows-node/issues/1871)
+for that missing capability. Hub screen capture and system commands alone
+cannot satisfy a computer-control request. Until that capability ships,
+this route cannot provide end-to-end computer use on your desktop.
+
+The upstream computer-use guide's instruction to start a node in the
+interactive desktop session does not apply to the MSIX alias. Opening another
+terminal or using `clawctl pwsh` does not change the execution session.
+A separately installed npm CLI node running as the interactive user is an
+**unsupported workaround**, not the supported MSIX route. Do not disable
+isolation or reset the agent session to try to move its node onto your desktop.
+See [interactive desktop nodes](../README.md#interactive-desktop-nodes).
+
 ## The session record is missing but setup evidence remains
 
 **Check.** `openclaw`, `clawctl setup`, and `clawctl teardown` stop with this
