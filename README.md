@@ -1077,3 +1077,12 @@ This is an independent public implementation in the OpenClaw ecosystem, informed
 by the upstream OpenClaw and Windows Node projects rather than a source fork of
 either repository. See [CONTRIBUTORS.md](CONTRIBUTORS.md) for acknowledgements
 and links to the contributor histories.
+
+### Store servicing prototype
+
+An opt-in `openclaw-gateway-recovery.exe --store-update-host` example explores
+Windows-controlled shutdown and restart for a resident packaged host. It reuses
+`clawctl` for Gateway lifecycle operations and does not enable automatic updates
+or change normal sign-in behavior. It is not production-qualified. See the
+[isolated validation procedure](docs/local-development.md#store-servicing-example)
+and [ownership and limitations](docs/architecture.md#opt-in-store-servicing-example).
