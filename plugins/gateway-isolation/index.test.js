@@ -56,14 +56,50 @@ test("supplies brief system-only local-session guidance without reading the conv
   assert.deepEqual(Object.keys(result), ["appendSystemContext"]);
   const text = result.appendSystemContext;
   assert.ok(text.length <= 600, "Static guidance must remain brief.");
-  assert.deepEqual(text.split("\n\n"), [
-    "## Windows agent session",
-    "The Gateway and local tools run in an isolated Windows agent session, not the user's desktop: local windows are invisible to the user, and local file access does not imply user access.",
-    "Do not solicit or expose credentials/tokens, bypass MFA/consent, alter ACLs/isolation, open local GUI for human participation, or export private workspaces; consult windows-agent-handoff for supported GUI, sign-in, and verified nonsensitive file delivery.",
-  ]);
+  assert.ok(Buffer.byteLength(text, "utf8") <= 600, "Rendered guidance must remain brief in bytes too.");
+  assert.equal(text.split("\n\n").length, 4);
+  assert.equal(text.split("\n\n")[0], "## Windows agent session");
+  for (const boundary of [
+    /isolated Windows agent session/, /GUI.*invisible/,
+    /human profile folders.*off-limits/i,
+    /no profile probes, access requests or agent-folder substitution/,
+    /Private headless\/agent-local work stays local/,
+    /Never solicit\/expose credentials or secrets/, /bypass MFA\/consent\/isolation/,
+    /change ACLs/, /No local GUI for human input/,
+  ]) assert.match(text, boundary);
   assert.deepEqual(hooks[0].handler(), result);
   result.appendSystemContext = "caller mutation";
   assert.equal(hooks[0].handler().appendSystemContext, text);
+});
+
+test("covers all human profile folders and redirected or cloud aliases in emitted guidance", () => {
+  const { hooks } = registerPlugin("enabled");
+  const boundary = hooks[0].handler().appendSystemContext.split("\n\n")[1];
+  assert.match(boundary, /\ball human profile folders\b/i);
+  for (const scope of [/redirected/, /cloud/, /aliases/, /off-limits/]) {
+    assert.match(boundary, scope);
+  }
+});
+
+test("requires a full skill read before advice as well as action, including observational tasks", () => {
+  const { hooks } = registerPlugin("enabled");
+  const text = hooks[0].handler().appendSystemContext;
+  const gate = text.split("\n\n").find(paragraph => paragraph.includes("windows-agent-handoff"));
+  assert.ok(gate, "The environment must route relevant requests to the existing skill.");
+  for (const scope of [/Before/, /advice/, /action/, /human folders/, /delivery/, /GUI/, /sign-in/, /observational/, /read full/]) {
+    assert.match(gate, scope);
+  }
+  for (const unavailable of [/unreadable/, /blocked/, /invent no/, /route\/tool/]) {
+    assert.match(gate, unavailable);
+  }
+  // This is the emitted instruction contract, not proof that a model obeys it.
+  for (const context of [
+    { sessionKey: "agent:main:fixture" },
+    { sessionKey: "agent:main:subagent:fixture" },
+    { sessionKey: "agent:main:fixture", compacted: true },
+  ]) {
+    assert.equal(hooks[0].handler({}, context).appendSystemContext, text);
+  }
 });
 
 test("does not infer local isolation from platform alone or a remote Windows node", () => {

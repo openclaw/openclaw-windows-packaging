@@ -701,11 +701,12 @@ does not rewrite them. Direct-Node UI fixtures verify rendering and interactions
 not packaged-launcher isolation or installed upgrade behavior.
 
 The same plugin supplies agent instructions on Windows when the launcher report
-is exactly `enabled`. Its `before_prompt_build` hook supplies two sentences
-explaining that local windows are invisible to the user, local file access does
-not imply user access, and essential credential, MFA/consent, ACL/isolation,
-human-GUI, and private-workspace prohibitions apply before any skill is loaded.
-Procedural detail stays in the skill. Static guidance is appended through
+is exactly `enabled`. Its `before_prompt_build` hook supplies a short block
+explaining that local windows are invisible to the user and that every human
+profile folder and alias is off-limits to the agent. Its credential/secret,
+MFA/consent, isolation, ACL, and human-GUI prohibitions apply before any skill
+is loaded. Procedural detail, including which files may be copied to `Shared`,
+stays in the skill. Static guidance is appended through
 `appendSystemContext`, without duplicating it in the user prompt.
 This is guidance, not isolation enforcement or a file-export feature; it does
 not overwrite workspace instructions or configuration.
@@ -713,7 +714,21 @@ It is not a blanket prohibition on agent-only GUI work.
 
 The plugin also bundles the
 [`windows-agent-handoff` skill](plugins/gateway-isolation/skills/windows-agent-handoff/SKILL.md).
-The short context names it for user-facing GUI, sign-in, and file delivery.
+The short context requires its complete read before advice or actions on
+user-folder requests, GUI, sign-in, and file delivery, including observational
+questions. If it cannot be read, the agent reports the blocker without inventing
+a route or tool. The catalog entry grants no additional capability. The isolated
+agent cannot write any human profile directory or known-folder alias. Desktop,
+Documents, Downloads, Pictures/Photos, Music, and Videos are examples, not a
+closed list. Redirection, cloud sync, another drive, translated names, or the
+user's permission do not grant access, and the agent must not probe or resolve
+human folders or request broader access. Instead it copies the file to the
+agent's `Shared` folder and says where, without asking first; when the user asked
+for an in-chat attachment as the fallback and one is available, it attaches the
+file instead. When a connected node is available, it also offers to send the
+file through that node, asking for confirmation first; it never assumes one.
+Explicitly requested private agent-local output, including the agent account's
+own Pictures, Music, or Videos, and ordinary private headless work remain local.
 OpenClaw advertises eligible skills and loads their instructions on demand;
 the detailed procedures are not inserted into every prompt. One successful
 `SKILL.md` read supplies the complete GUI/authentication, client delivery, and
@@ -727,31 +742,37 @@ plugin removes its skill; `skills.entries.windows-agent-handoff.enabled=false`
 disables the skill independently. Hook opt-outs do not disable manifest skills.
 
 The plugin supplies static guidance, not a shared-path environment variable.
-For filesystem handoff, prefer a host-reported or user-selected destination.
-The host reports `session.sharedFolder` through `clawctl status --json` in the
-user's normal terminal; that command can start the recorded session.
-The skill names the isolated agent's existing `Shared` folder as a handoff
-option. When neither destination is supplied, resolve it with a local tool
-inside that agent session, for example:
+The agent's `Shared` folder is in the agent account's profile. Setup creates it
+by default and it is visible to both the interactive user and the agent, so a
+copy there needs no separate delivery step. The host reports it as
+`session.sharedFolder` through `clawctl status --json` in the user's normal
+terminal; that command can start the recorded session. Inside the agent session,
+the skill resolves it with an authorized local tool, for example:
 
 ```powershell
 (Resolve-Path -LiteralPath (Join-Path $env:USERPROFILE 'Shared') -ErrorAction Stop).Path
 ```
 
-Verify that the result is an existing directory. `USERPROFILE` must belong to
-the isolated agent, not the interactive user; do not substitute the OpenClaw
-workspace/state directory or hard-code an account path. Before copying, display
-the complete destination in a fenced text code block rather than a filename-only
-chip, and offer another destination. Do not copy to a destination the user declines.
-Copy only intended nonsensitive deliverables, preserving private originals and
-unrelated files. Agent-side access or a successful copy does not prove recipient
-access; verify it where feasible and state what remains unverified.
-If resolution, directory availability, access or copying fails, report the failure
-and ask for a supported destination. Do not fall back to Public Documents or
-`PUBLIC`/`TEMP`, create a replacement shared root, or change permissions.
-For requested in-chat delivery, verify and attach the current file or explain
-the limitation; a saved copy, path, or earlier attachment is not delivery.
-Recipient filesystem access and client delivery require separate verification.
+`USERPROFILE` must belong to the isolated agent, not the interactive user; do not
+substitute the OpenClaw workspace/state directory or hard-code an account path.
+Copy, do not move, only the requested files, preserving private originals and
+unrelated files, then report the exact path. A folder the user supplies, or asks
+for, that both accounts can open is also acceptable; the skill does not ask for
+other folders or sharing evidence. A whole workspace can be copied after the
+standard credential, secret, and privacy filtering; the credential cache is never
+exported, and Public Documents, `PUBLIC`/`TEMP`, and Everyone ACL grants are
+never used.
+
+A missing `Shared` folder means setup is broken. The skill reports it, says
+nothing was copied, and points the user to `clawctl status` and then
+`clawctl setup` in their normal terminal, as described in
+[troubleshooting](docs/troubleshooting.md#the-session-is-unavailable-or-will-not-start).
+It does not create, repair, or replace `Shared` from inside the agent.
+For requested in-chat delivery, the skill attaches the current file when an
+attachment tool is available, or says attachment is unavailable and offers
+`Shared`; a saved copy, path, or earlier attachment is not this revision's
+attachment. An already accepted current attachment is reported as attached,
+not submitted again.
 The prompt hook also respects `hooks.allowPromptInjection=false` and
 `hooks.allowConversationAccess=false` under the plugin's configuration entry.
 Coverage and the local-only runtime proof are described in

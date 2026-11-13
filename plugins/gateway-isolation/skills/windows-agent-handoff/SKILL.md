@@ -1,200 +1,162 @@
 ---
 name: windows-agent-handoff
-description: Handle user-facing GUI, sign-in, and file handoffs from an isolated Windows agent session; not ordinary headless work.
+description: Read before advice/actions on all human profile folders (e.g. Photos), delivery, GUI or sign-in under isolation, even observational; not private headless work.
 metadata: {"openclaw":{"os":["win32"],"requires":{"env":["CLAWCTL_GATEWAY_ISOLATION"]}}}
 ---
 
 # Windows Agent Handoff
 
-## Operating contract
+The agent runs as its own Windows account in an isolated session. The human and
+the agent share one folder: the agent's `USERPROFILE\Shared`, for example
+`C:\Users\<agent user>\Shared`. Setup creates it by default and its ACLs give both
+accounts access, so the human can always open it. Copying a file there is an
+ordinary local copy; there is no separate delivery step to confirm.
 
-| Concern | Rule |
-|---|---|
-| Use when | A task in the isolated Windows agent needs human viewing/input, sign-in participation, user-session GUI, or delivery of a generated file. |
-| Do not use when | Ordinary headless work stays inside the agent session, or an established remote-node workflow needs no local-to-user handoff. This skill does not provision sessions or administer the host. |
-| Required inputs | Execution location, launcher isolation report, intended user action or exact deliverable, available client/tool capabilities, and any selected destination. |
-| Mutation boundary | Inspect first. Preview the handoff; act only within the user's request and approved destination. Never weaken isolation, change ACLs, collect credentials, or export private workspaces. |
-| Done when | The requested user action or exact-file delivery has observable evidence; otherwise report the blocker and next supported step without claiming completion. |
+## 1. Establish the facts
 
-## Workflow
+- Confirm local Windows execution and exactly `CLAWCTL_GATEWAY_ISOLATION=enabled`
+  from supplied facts or an authorized check of that value only. If that evidence
+  is missing, ask where execution occurs; don't infer it from Windows alone.
+- A fact stated for the current request overrides a general or default statement.
+- Keep supplied results separate from checks you run now: say "According to the
+  supplied result" rather than "I checked" unless a current tool checked it.
+- Observational, hypothetical, or status-only requests get an explanation from the
+  supplied facts: no filesystem checks, writes, copies, or uploads. State the next
+  action you would take; don't turn it into a question. Reading this skill is not
+  checking a file.
+- The agent has no administrator access and cannot elevate, open an elevated
+  Explorer, or create, start, or repair its own session. When asked, say it can't.
 
-1. Establish where the action will run.
-   - Confirm that the local execution environment is Windows and its
-     `CLAWCTL_GATEWAY_ISOLATION` value is exactly `enabled`. Inspect only the
-     required value, not the whole environment.
-   - A tool target named `host` or `gateway` is not proof of the interactive
-     user's session. A connected chat, browser, or node is not proof of GUI
-     capabilities, authorization, or filesystem access.
-   - If the report is absent, invalid, or unavailable, do not infer isolation
-     from Windows alone. Ask for execution-location evidence before relying on
-     this workflow; do not provision or repair the session.
-   - **Check:** the action's execution location and applicable boundary are
-     established, or the uncertainty is explicit.
+## 2. Human folders
 
-2. Select the smallest supported route.
-   - This file contains the complete GUI, authentication, and file-handoff
-     procedures, including refusals and recovery. No branch-file read is needed.
-   - Use the applicable sections below; when GUI/authentication and file
-     delivery are both needed, follow both. Unsafe requested actions remain
-     prohibited during read-only preparation.
-   - Keep unrelated headless work in the agent session; do not repeat its isolation explanation every turn.
-   - **Check:** the route matches the user's requested outcome, not merely a
-     convenient local operation.
+"My" Desktop, Documents, Downloads, Pictures/Photos, Music, Videos, or any other
+profile folder or known-folder alias means the human's, not the agent's
+same-named folder. The agent cannot write any of them. Redirection, cloud sync,
+another drive, a translated name, or the user's permission does not change that.
+Never probe or resolve a human profile, request profile access, or change ACLs.
 
-3. Execute only the authorized part.
-   - Preserve private originals, caches, repositories, credentials, and
-     unrelated files. A supported client handoff does not grant broader
-     filesystem or remote-node access.
-   - If the user declines a destination or action, stop that action. Missing
-     capabilities, permission denial, partial completion, and unavailable
-     client delivery remain explicit failures; do not invent a fallback.
-   - **Check:** each side effect stays within the request, and incomplete work
-     is distinguishable from success.
+When a request names a human folder:
 
-4. Verify and report the observable outcome.
-   - Separate execution, recipient filesystem access, and client attachment/open/download
-     evidence; none implies the others. Report completion, evidence, and unverified access/delivery.
-   - When blocked, name the next supported user action.
-   - **Check:** local command success alone proves no visible window, sign-in, or delivery.
+1. Say you can't write there, then do the supported thing: copy the file to
+   Shared and say exactly where it is, for example "I don't have access to write
+   to your Desktop folder, so instead I copied it to
+   C:\Users\<agent user>\Shared\report.txt." Shared needs no selection or
+   approval, and the request itself is the go-ahead: don't ask whether to go
+   ahead with Shared, list other routes, or invite the user to say go.
+   Observational mode only defers the copy; state it as the next action, for
+   example "Next, I'd copy it to C:\Users\<agent user>\Shared\report.txt." End
+   there, with no closing question or offer about Shared.
+2. If the user asked for an in-chat attachment as the fallback and an attachment
+   is available or already accepted, use it and say so: "I couldn't save to your
+   Downloads, so I've attached it here." Use Shared only if the attachment had a
+   problem.
+3. Only when a connected node is available, add an offer after the Shared copy
+   to send the file to that node's own folder, asking for confirmation for the
+   node only: "I might also be able to send it to [node]'s Desktop folder. Want
+   me to?" A node is available when the user mentions a connected node, or the
+   supplied facts or the actual `nodes` tool's `status` show one. Never invent
+   a node or a node check; when no node is available, don't mention nodes.
+   Sending needs an actual node file-write tool, such as File Transfer's
+   `file_write`, and that node's path policy; don't claim it worked until it
+   has.
+4. A folder the user supplies, or asks you to create, that both accounts can
+   access is fine to use. Don't ask the user to name other folders or provide
+   sharing evidence.
 
-## GUI and human participation
+## 3. Copying to Shared
 
-Local dialogs and browser windows belong to the isolated agent session, not
-the user's interactive desktop. Do not launch or offer a local window for
-human viewing or input, even if asked to open a sign-in dialog. Explain the
-limitation only when it affects the task.
+For an authorized copy, or when describing one:
 
-Authorized agent-only GUI work is allowed when no human viewing or input is
-needed. Verify a suitable automation tool is actually available, establish its
-execution session, and check its result. Creating a process is not proof that
-automation worked. Close only task-created windows or processes when finished;
-do not terminate unrelated work.
-
-**Check:** know the viewer/operator and actual tool capabilities before GUI work.
-
-## Authentication
-
-1. If the service is unknown, explain that a local sign-in dialog cannot reach
-   the user's desktop, ask one concrete question such as **"Which service are
-   you signing into?"**, then wait for the answer. End the turn there; do not
-   propose an authentication flow or request secrets.
-2. For a known service, prefer its documented CLI, headless, device-code, or
-   text flow. If official sign-in instructions are unavailable, obtain them
-   or ask the user for the official instructions and wait before proposing a
-   flow. Do not substitute guessed URLs, device codes, or flows, or promise
-   that a local window will reach the user.
-3. Give concise steps for the user's own desktop or a supported connected
-   client. Relay a safe verification URL only when the documented flow
-   provides it; relay sensitive verification material only through a supported
-   private route to the requesting user.
-4. Do not ask for passwords, session cookies, access tokens, recovery codes,
-   or MFA secrets in chat. Never fabricate a device-code flow, bypass MFA or
-   consent, disable isolation, or change security policy.
-5. Wait for the required user action. User confirmation alone is not proof of
-   agent-side authentication: use the service's supported status or account
-   check without printing secrets. If it fails or expires, report the actual
-   failure and offer the documented retry.
-
-**Check:** the intended authenticated state has service evidence, or remaining
-participation/blockers are explicit. An opened window or code is not proof of sign-in.
-
-## Remote or user-session UI
-
-A connected node may have its own desktop, filesystem, and automation tools.
-Before using it, establish the selected node, execution location, available
-capability, and authorization for the exact action. Do not transfer an
-agent-local file path or assume that `host` means the user's desktop.
-
-Use a verified, authorized UI route when available; otherwise provide user-side
-steps or a supported headless route. Do not install remote-control tools,
-change ACLs, elevate Explorer, or escape isolation to make a GUI visible.
-
-**Check:** selected-environment evidence supports user-visible results; connectivity does not.
-
-## Deliverable and channel
-
-Identify the exact current file, intended recipient, and requested outcome:
-in-chat attachment, client download/export, or recipient-accessible filesystem
-copy. Verify that the file exists and contains the intended output. Do not
-substitute an old attachment, filename, path, saved copy, or local file link
-for delivery.
-
-Keep scratch files, dependencies, repositories, caches, and private originals
-private. Hand off only requested nonsensitive deliverables, never a whole
-workspace or credential database. Resolve possible secrets or private
-configuration before exporting.
-
-**Check:** the verified current artifact and intended delivery route are known.
-
-## Client attachment or export
-
-Use the current client's documented attachment/export capability and actual
-tool schema. Do not invent an attachment tool or claim delivery from the
-existence of a local file.
-
-If unavailable, explain that in-chat delivery is blocked and offer a supported
-alternative. Do not silently switch to a filesystem copy. Verify that the
-attachment/export result identifies the current artifact; verify recipient-side
-open/download and exact bytes when evidence is available. Otherwise distinguish
-accepted attachment submission from verified receipt.
-
-**Check:** evidence matches the current file and requested channel, or the limitation is explicit.
-
-## Filesystem copy
-
-1. Prefer a host-reported or user-selected destination. A host-reported path
-   alone does not prove recipient access. Do not run host lifecycle commands
-   inside the agent to discover it.
-2. If neither is supplied, resolve the agent account's existing `Shared`
-   folder with a local tool in the isolated Windows agent:
+1. Resolve the agent's existing Shared with an authorized local tool in the
+   isolated session:
 
    ```powershell
-   $shared = (Resolve-Path -LiteralPath (Join-Path $env:USERPROFILE 'Shared') -ErrorAction Stop).Path
-   if (-not (Test-Path -LiteralPath $shared -PathType Container)) {
-       throw 'The agent Shared path is not a directory.'
-   }
-   $shared
+   (Resolve-Path -LiteralPath (Join-Path $env:USERPROFILE 'Shared') -ErrorAction Stop).Path
    ```
 
-   Use this agent's `USERPROFILE`, not the human user's profile.
-   Never substitute OpenClaw workspace/state or hard-code an account path.
-3. Before copying, show the complete resolved destination in a fenced `text`
-   code block, not an inline path or filename-only link. Offer another
-   destination and respect any destination the user declines.
-4. Copy rather than move the intended files. Preserve unrelated destination
-   files and do not overwrite without explicit approval. For concurrent or
-   existing deliveries, use a new nonconflicting destination or ask which
-   version the user wants replaced.
-5. Re-read the copy and compare it with the current source using exact bytes
-   or hashes. A successful copy proves neither recipient access nor client
-   delivery; verify those separately where possible and state what remains
-   unverified.
+   Use the agent's current `USERPROFILE`, not a human profile, a remembered
+   account, the OpenClaw workspace, or a host path.
+2. Copy, don't move, only the requested files to a destination inside Shared,
+   with no parent traversal or links redirecting outside it. Don't overwrite an
+   existing file without approval; choose a nonconflicting name instead.
+3. Re-read the copy, compare its bytes or hash with the current source, and
+   report the exact path. Keep the original.
 
-**Check:** approved copied bytes match, the private original stays intact,
-and the report distinguishes copying from recipient access.
+Report it plainly: the copy is in Shared at its exact path, the human folder was
+not written, and the original is unchanged. The user can open Shared, so don't
+add caveats about delivery, receipt, download, or recipient access, and don't
+offer to verify them.
 
-## Verification and recovery
+**Missing Shared.** Shared is created by default, so if it is missing or can't be
+resolved, setup is broken. Say so, say nothing was copied and the human folder is
+unchanged, and point to the user-side fix: run `clawctl status`, then
+`clawctl setup`, from the user's normal terminal, outside the agent. Don't create,
+repair, or replace Shared from inside the agent, and don't fall back to another
+profile, the agent's own folders, Public Documents, `PUBLIC`/`TEMP`, or a new
+root. If a connected node is available, offer it, asking first.
 
-If profile/path resolution, directory availability, access, copying, or client
-delivery fails, report the failure and ask for a supported destination or
-capability. Name the actual missing or failed destination even when refusing
-an unsafe export; do not propose missing `Shared` as an available alternative.
-For a filesystem handoff, ask for a supported destination and clarify intended
-nonsensitive deliverables only if needed.
+## 4. In-chat attachments
 
-Do not create a replacement shared root, fall back to Public Documents or
-`PUBLIC`/`TEMP`, modify broad ACLs, use administrator Explorer, or weaken isolation.
-For partial delivery, identify each file's result. Retry only the authorized
-failed part, without overwriting unrelated files or claiming the whole handoff
-succeeded. Keep private originals intact.
+A new attachment needs the current client's documented capability, an actual
+attachment tool, and the exact current file. Without a tool, say in-chat
+attachment isn't available and offer to copy the file to Shared instead; don't
+copy silently, and don't claim "I can send it" from a skill or connection. An old
+attachment card, the same filename, or a local path is not this revision.
 
-**Check:** every requested artifact has a verified result or a named blocker.
+An attachment already accepted for the exact current revision is done: report it
+("I've attached it here") without uploading again or offering to resend. A later
+explicit request to resend or add a recipient needs current capability again.
 
-## Source freshness
+## 5. What can leave the agent
 
-The current tool schemas, connected-client capabilities, and the service's
-official sign-in instructions govern execution. Read them when a route is
-unknown or has changed; do not invent tool parameters or authentication flows.
-`CLAWCTL_GATEWAY_ISOLATION` is a launcher report, not an authorization grant.
-Use the agent's current profile and observed paths, never a remembered account
-name, host environment, or upstream default directory.
+The human should have full visibility into what the agent has. Copy the files the
+user asks for, including a whole workspace, with the standard filtering: never
+export the credential cache or credential databases, and leave out secrets,
+tokens, auth profiles, and private configuration, resolving anything doubtful
+first. Use Shared for it. Never use Public Documents, `PUBLIC`/`TEMP`, or an
+Everyone ACL grant.
+
+## 6. The agent's own folders
+
+When the user asks for output in the agent account's own folders, such as its
+Desktop, Documents, Pictures, Music, or Videos, that's allowed. Resolve only that
+agent folder, verify the content when executing, and report the actual path, for
+example "created at C:\Users\<agent user>\Desktop\notes.txt, which is the agent
+account's Desktop, not yours." A blocked human-folder request alone doesn't call
+for an agent-folder copy; use Shared. If the user also asked for a private copy,
+report where each copy is. Don't guess identity from an account name or path
+shape. Ordinary private headless work stays in its normal workflow, without
+forced export or isolation warnings.
+
+## 7. GUI, sign-in, and remote UI
+
+Windows and dialogs the agent opens belong to the isolated agent session, not the
+human's desktop: the human can't see or type into them. Never launch or offer one
+for human viewing or input.
+
+- **Agent-only GUI** is neither banned nor guaranteed. It may not work at all, and
+  some apps crash or behave oddly. When authorized, establish the actual
+  automation tool and session, verify the real result rather than process
+  creation, say plainly if it didn't work, and close only windows or processes
+  you started.
+- **Sign-in:** when the service is unknown, explain the invisible local dialog,
+  ask "Which service are you signing into?", and stop, before flow examples,
+  CLI/device-code/OAuth advice, or URLs. Once known, obtain official instructions
+  before choosing its documented CLI/headless/device-code/text flow and an
+  actually supported input route; if instructions are unavailable, obtain or
+  request them and wait. Never guess flows, URLs, or codes. Relay a safe
+  verification URL only if provided, and sensitive verification material only
+  through a supported private route to the requester. Never ask for passwords,
+  cookies, tokens, recovery codes, or MFA secrets in chat, and never bypass MFA,
+  consent, or security policy. Wait for the user, then confirm with service
+  status or account evidence without printing secrets. User confirmation, a
+  window, or a code is not authentication proof.
+- **Remote or node UI:** a node has its own desktop and filesystem. Before acting,
+  establish the selected node, its actual tools, and the user's confirmation.
+  Don't assume `host` is the human's desktop, and don't pass an agent-local path
+  as a node path.
+
+## 8. Report
+
+Report what actually happened, file by file for partial work. Command success
+alone proves no GUI operation or sign-in. Don't invent a tool, route, or check.
