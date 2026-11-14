@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
@@ -89,12 +90,27 @@ const server = http.createServer(async (request, response) => {
     requestCount++;
     const summary = !body.tools?.length;
     console.log(`${scenario.name}: ${summary ? "summary" : "agent"} request ${requestCount}`);
+    const systemText = body.messages
+      .filter(message => ["system", "developer"].includes(message.role))
+      .map(message => typeof message.content === "string" ? message.content : JSON.stringify(message.content))
+      .join("\n");
+    const skillsSection = systemText.split(/(?=^## )/m)
+      .filter(section => /^## Skills\r?\n/.test(section)).join("\n");
+    const availableSkills = skillsSection.match(/<available_skills>[\s\S]*?<\/available_skills>/)?.[0] ?? "";
+    // Request-bound admission evidence, including summaries; never log prompt contents.
+    // Summary presence is observed, not assumed to share the agent prompt contract.
+    console.log(JSON.stringify({
+      scenario: scenario.name, request: requestCount, kind: summary ? "summary" : "agent",
+      systemBytes: Buffer.byteLength(systemText, "utf8"),
+      systemSha256: createHash("sha256").update(systemText).digest("hex"),
+      skillCatalogBytes: Buffer.byteLength(availableSkills, "utf8"),
+      skillCatalogSha256: createHash("sha256").update(availableSkills).digest("hex"),
+      guidanceCopies: systemText.split(instructions).length - 1,
+      guidanceBytes: Buffer.byteLength(instructions, "utf8"),
+      guidanceSha256: createHash("sha256").update(instructions).digest("hex"),
+    }));
     if (!summary) {
-      const systemText = body.messages
-        .filter(message => ["system", "developer"].includes(message.role))
-        .map(message => typeof message.content === "string" ? message.content : JSON.stringify(message.content))
-        .join("\n");
-      const advertisedSkill = systemText.match(
+      const advertisedSkill = skillsSection.match(
         /<skill>\s*<name>windows-agent-handoff<\/name>[\s\S]*?<location>(.*?)<\/location>[\s\S]*?<\/skill>/,
       );
       assert.equal(Boolean(advertisedSkill), scenario.skillAvailable,
@@ -105,6 +121,18 @@ const server = http.createServer(async (request, response) => {
         .includes(JSON.stringify(skillReads[0].text).slice(1, -1)),
       "Detailed skill instructions must not be eagerly injected into user context.");
       if (advertisedSkill) {
+        // Prompt wiring only: the fake provider does not select skills autonomously.
+        const description = advertisedSkill[0].match(/<description>([\s\S]*?)<\/description>/)?.[1];
+        assert.match(description ?? "", /\ball human profile folders\b/i,
+          "Runtime discovery must cover all human profile folders, not a closed list.");
+        assert.match(description, /Photos/,
+          "Runtime discovery must include a representative folder beyond the original trio.");
+        assert.ok(description.length <= 160, "The rendered description must stay selective.");
+        for (const trigger of [/advice/, /actions/, /observational/, /delivery/, /GUI/, /sign-in/]) {
+          assert.match(description, trigger, "Discovery must include advice-only handoff requests.");
+        }
+        assert.equal([...skillsSection.matchAll(/<name>windows-agent-handoff<\/name>/g)].length, 1,
+          "The actual Skills section must advertise the packaged skill exactly once.");
         scenario.skillPath = advertisedSkill[1].replace(/^~(?=[\\/]|$)/, root);
         assert.equal(await fs.realpath(scenario.skillPath), await fs.realpath(skillReads[0].path),
           "Discovery must point to the packaged skill, not an ambient same-named copy.");
@@ -119,7 +147,10 @@ const server = http.createServer(async (request, response) => {
             "The entire instruction block must reach the model, not just its heading.");
         }
       }
-      assert.deepEqual(body.tools.map(tool => tool.function.name), ["read"]);
+      // The pinned runtime exposes installed-skill reads under the ordinary read grant.
+      const expectedTools = availableSkills.includes("<skill>") && !scenario.skillReadDenied
+        ? ["read", "skills_read"] : ["read"];
+      assert.deepEqual(body.tools.map(tool => tool.function.name), expectedTools);
       scenario.agentRequests++;
       if (scenario.overflow && !scenario.overflowSent) {
         scenario.overflowSent = true;
@@ -132,6 +163,10 @@ const server = http.createServer(async (request, response) => {
       }
     } else {
       scenario.summaries++;
+      const kind = JSON.stringify(body.messages).includes(
+        "This is the PREFIX of a turn that was too large to keep. The SUFFIX (recent work) is retained.",
+      ) ? "turn-prefix" : "history";
+      scenario.summaryKinds.push(kind);
     }
     const lastUser = body.messages.findLastIndex(message => message.role === "user");
     const toolResults = body.messages.slice(lastUser + 1).filter(message => message.role === "tool");
@@ -190,9 +225,12 @@ const config = {
       fixture: {
         baseUrl: `http://127.0.0.1:${server.address().port}/v1`,
         apiKey: "fixture-key", api: "openai-completions",
+        // The runtime shortens Skills catalog descriptions beyond contextWindow/5 characters, and
+        // bundled-skill locations embed the payload path. A realistic window keeps that budget
+        // independent of where the caller placed the payload; overflow is forced explicitly below.
         models: [{
           id: "fixture-chat", name: "Fixture", reasoning: false, input: ["text"],
-          contextWindow: 32768, maxTokens: 1024,
+          contextWindow: 128000, maxTokens: 1024,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         }],
       },
@@ -202,10 +240,20 @@ const config = {
   tools: { allow: ["read"], toolSearch: false, codeMode: false },
   logging: { file: path.join(root, "runtime.log") },
 };
+const systemRoot = process.env.SystemRoot;
+assert.ok(systemRoot, "SystemRoot is required to build the child environment.");
 const env = {};
-for (const key of ["SystemRoot", "WINDIR", "ComSpec", "PATH", "PATHEXT"]) {
+for (const key of ["SystemRoot", "WINDIR", "ComSpec", "PATHEXT"]) {
   if (process.env[key]) env[key] = process.env[key];
 }
+// Bundled skills become eligible when their required binaries resolve on PATH; host-installed
+// tools must not change the advertised catalog, so expose only the runtime and Windows itself.
+env.PATH = [
+  path.dirname(process.execPath),
+  path.join(systemRoot, "System32"),
+  systemRoot,
+  path.join(systemRoot, "System32", "WindowsPowerShell", "v1.0"),
+].join(path.delimiter);
 Object.assign(env, {
   HOME: root, USERPROFILE: root, APPDATA: root, LOCALAPPDATA: root,
   TEMP: root, TMP: root, OPENCLAW_HOME: root,
@@ -229,12 +277,12 @@ async function run(args) {
 
 async function agent(name, {
   overflow = false, summaryExpected = false, guidance = true,
-  skillAvailable = true, readSkill = false,
+  skillAvailable = true, readSkill = false, skillReadDenied = false,
   sessionKey = "agent:main:isolation-context-fixture",
 } = {}) {
   const reads = [...(readSkill ? skillReads : []), { path: sentinelPath, text: sentinel }];
-  scenario = { name, overflow, guidance, skillAvailable, readSkill, reads,
-    agentRequests: 0, summaries: 0, toolResults: 0 };
+  scenario = { name, overflow, guidance, skillAvailable, readSkill, skillReadDenied, reads,
+    agentRequests: 0, summaries: 0, summaryKinds: [], toolResults: 0 };
   const result = await run([
     "agent", "--local", "--agent", "main", "--session-key", sessionKey,
     "--message", `${readSkill ? "Consult the complete windows-agent-handoff SKILL.md before reading" : "Read"} the fixture deliverable. Scenario: ${name}.`,
@@ -248,7 +296,10 @@ async function agent(name, {
     // Retained-turn compaction can finish without a separate summary-model request.
     assert.equal(result.meta.agentMeta.compactionCount, 1, JSON.stringify(result));
     assert.equal(result.meta.contextManagement.lastTurnCompactions, 1);
-    if (summaryExpected) assert.equal(scenario.summaries, 1);
+    if (summaryExpected) {
+      // This cut splits the live turn: the pinned runtime summarizes history, then its prefix.
+      assert.deepEqual(scenario.summaryKinds, ["history", "turn-prefix"]);
+    }
     assert.ok(scenario.agentRequests >= 3, "The overflowed request must be retried after compaction.");
   }
   assert.equal(await fs.readFile(sentinelPath, "utf8"), sentinel);
@@ -276,8 +327,14 @@ async function inspect(name, value, { active = true, hook = true, mode = "enable
   console.log(`PASS ${name}`);
 }
 
+let primaryFailure;
 try {
   const configBytes = JSON.stringify(config);
+  const skillReadDenied = structuredClone(config);
+  skillReadDenied.tools.deny = ["skills_read"];
+  await fs.writeFile(configPath, JSON.stringify(skillReadDenied));
+  await agent("installed skill read explicitly denied", { readSkill: true, skillReadDenied: true,
+    sessionKey: "agent:main:skill-read-denied-fixture" });
   await fs.writeFile(configPath, configBytes);
   await agent("on-demand self-contained skill read", { readSkill: true,
     sessionKey: "agent:main:skill-read-fixture" });
@@ -332,8 +389,18 @@ try {
   }
   assert.equal(await fs.readFile(sentinelPath, "utf8"), sentinel);
   console.log("PASS user instructions and private original unchanged");
+} catch (error) {
+  primaryFailure = error;
+  throw error;
 } finally {
   server.close();
   server.closeAllConnections();
-  await fs.rm(root, { recursive: true, force: true });
+  try {
+    await fs.rm(root, { recursive: true, force: true });
+  } catch (cleanupError) {
+    // A runtime process can still hold the disposable profile after a failed scenario;
+    // that must not replace the assertion that explains the failure.
+    if (!primaryFailure) throw cleanupError;
+    console.error(`Secondary cleanup failure; disposable profile left at ${root}:`, cleanupError);
+  }
 }

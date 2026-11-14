@@ -1225,6 +1225,11 @@ try {
 
     # Version selection.
     Assert-True ((Get-LocalPackageNextVersion -InstalledVersion '2026.1.0.65535' -Now ([datetime]'2026-09-14')) -eq '2026.1.1.0') 'Revision rollover failed.'
+    # Local versions also stamp the launcher AssemblyVersion, which rejects 65535 components.
+    Assert-True ((Get-LocalPackageNextVersion -InstalledVersion '2026.1.0.65534' -Now ([datetime]'2026-09-14')) -eq '2026.1.1.0') 'Increment produced an assembly-invalid revision.'
+    Assert-True ((Get-LocalPackageNextVersion -InstalledVersion '2026.1.65535.3' -Now ([datetime]'2026-09-14')) -eq '2026.2.0.0') 'Increment kept an assembly-invalid build component.'
+    $timeVersion = [version](Get-LocalPackageNextVersion -Now ([datetime]'2026-09-14 18:12:15'))
+    Assert-True ($timeVersion.Revision -lt 65535 -and $timeVersion.Build -lt 65535) "Time-based version '$timeVersion' is not a valid assembly version."
     Assert-Fails { Get-LocalPackageNextVersion -InstalledVersion '65535.65535.65535.65535' } 'version space is exhausted'
     Assert-Fails { Get-LocalPackageNextVersion -InstalledVersion '1.2.3' } 'Invalid MSIX version'
     # A failed or skipped setup must not be recorded as a complete deployment.
