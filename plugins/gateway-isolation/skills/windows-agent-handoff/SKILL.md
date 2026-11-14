@@ -35,6 +35,11 @@ same-named folder. The agent cannot write any of them. Redirection, cloud sync,
 another drive, a translated name, or the user's permission does not change that.
 Never probe or resolve a human profile, request profile access, or change ACLs.
 
+<!-- Provenance: Shared without asking, no receipt caveats, offering only an
+available node, and the missing-Shared setup fix come from
+https://github.com/openclaw/openclaw-windows-packaging/pull/259, which replaced
+the destination-choice rules from #112 and records the paired evidence. -->
+
 When a request names a human folder:
 
 1. Say you can't write there, then do the supported thing: copy the file to

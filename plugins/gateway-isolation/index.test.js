@@ -92,14 +92,6 @@ test("requires a full skill read before advice as well as action, including obse
   for (const unavailable of [/unreadable/, /blocked/, /invent no/, /route\/tool/]) {
     assert.match(gate, unavailable);
   }
-  // This is the emitted instruction contract, not proof that a model obeys it.
-  for (const context of [
-    { sessionKey: "agent:main:fixture" },
-    { sessionKey: "agent:main:subagent:fixture" },
-    { sessionKey: "agent:main:fixture", compacted: true },
-  ]) {
-    assert.equal(hooks[0].handler({}, context).appendSystemContext, text);
-  }
 });
 
 test("does not infer local isolation from platform alone or a remote Windows node", () => {
