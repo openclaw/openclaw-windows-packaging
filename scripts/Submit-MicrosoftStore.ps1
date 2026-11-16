@@ -26,6 +26,7 @@ if ($isFlight -and -not [guid]::TryParse($FlightId, [ref]$parsedFlightId)) {
 if (-not $isFlight -and -not [string]::IsNullOrWhiteSpace($FlightId)) {
     throw 'Production submission must not specify a flight ID.'
 }
+if ($isFlight) { $FlightId = $parsedFlightId.ToString('D') }
 $packagesProperty = if ($isFlight) { 'FlightPackages' } else { 'ApplicationPackages' }
 $pendingProperty = if ($isFlight) { 'PendingFlightSubmission' } else { 'PendingApplicationSubmission' }
 $publishedProperty = if ($isFlight) { 'LastPublishedFlightSubmission' } else { 'LastPublishedApplicationSubmission' }
@@ -40,6 +41,12 @@ function Get-RequiredProperty {
     $property = $Object.PSObject.Properties[$Name]
     if ($null -eq $property) { throw "Store response is missing '$Name'." }
     return $property.Value
+}
+
+function Test-ConfiguredFlightId {
+    param([string]$Value)
+    $returnedFlightId = [guid]::Empty
+    return [guid]::TryParse($Value, [ref]$returnedFlightId) -and $returnedFlightId -eq $parsedFlightId
 }
 
 function ConvertTo-CanonicalValue {
@@ -273,7 +280,7 @@ function Invoke-StoreApi {
 function Assert-OwnedDraft {
     param([Parameter(Mandatory)][string]$SubmissionId)
     $target = Invoke-StoreApi -Method Get -Path $targetPath
-    if ($isFlight -and [string](Get-RequiredProperty $target 'FlightId') -cne $FlightId) {
+    if ($isFlight -and -not (Test-ConfiguredFlightId ([string](Get-RequiredProperty $target 'FlightId')))) {
         throw 'Store returned a different flight.'
     }
     $pending = Get-RequiredProperty $target $pendingProperty
@@ -298,7 +305,7 @@ try {
     $target = $application
     if ($isFlight) {
         $target = Invoke-StoreApi -Method Get -Path $targetPath
-        if ([string](Get-RequiredProperty $target 'FlightId') -cne $FlightId) {
+        if (-not (Test-ConfiguredFlightId ([string](Get-RequiredProperty $target 'FlightId')))) {
             throw 'Store returned a different flight.'
         }
         if (@(Get-RequiredProperty $target 'GroupIds').Count -eq 0) {
@@ -336,7 +343,7 @@ try {
     $uploadUri = [string](Get-RequiredProperty $draft 'FileUploadUrl')
     Assert-NonEmptyValue -Name 'Draft upload URL' -Value $uploadUri
 
-    if ($isFlight -and [string](Get-RequiredProperty $draft 'FlightId') -cne $FlightId) {
+    if ($isFlight -and -not (Test-ConfiguredFlightId ([string](Get-RequiredProperty $draft 'FlightId')))) {
         throw 'Store returned a submission for a different flight.'
     }
     # A first flight has no published baseline; preserve its freshly created settings.
@@ -387,7 +394,7 @@ try {
     if ([string](Get-RequiredProperty $verifiedDraft 'Id') -cne $draftId) {
         throw 'Store verification returned an unowned draft.'
     }
-    if ($isFlight -and [string](Get-RequiredProperty $verifiedDraft 'FlightId') -cne $FlightId) {
+    if ($isFlight -and -not (Test-ConfiguredFlightId ([string](Get-RequiredProperty $verifiedDraft 'FlightId')))) {
         throw 'Store verification returned a different flight.'
     }
     $draftMetadataHash = Get-SubmissionMetadataHash $verifiedDraft
