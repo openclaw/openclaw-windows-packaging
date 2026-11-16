@@ -18,14 +18,18 @@ internal interface IStateArchiveApplication
     void RebaseConfiguration(string profile, string previousProfile, string currentProfile);
 }
 
-internal sealed class StateArchiveApplication : IStateArchiveApplication
+internal sealed class StateArchiveApplication : IStateArchiveApplication, IDisposable
 {
     private readonly SessionStateTransferRequest _request;
+    private FileStream? _nativeLease;
+    private bool _admitted;
 
     public StateArchiveApplication(SessionStateTransferRequest request)
     {
         _request = request;
     }
+
+    public void Dispose() => _nativeLease?.Dispose();
 
     public StateArchiveApplicationResult Capture(string profile, string output, bool dryRun)
     {
@@ -318,6 +322,14 @@ internal sealed class StateArchiveApplication : IStateArchiveApplication
                     $"The agent has a {name} override. Remove it before using packaged state transfer.");
             }
         }
+        // Admitted once, before the first packaged Node.js run, and held for
+        // the rest of the operation. Actions that never run Node.js, such as
+        // the inspection status performs, are not refused by a stale stage.
+        if (!_admitted)
+        {
+            _nativeLease = SessionNativeStager.Admit(_request.ApplicationDirectory!, _request.NativeRootPath);
+            _admitted = true;
+        }
         List<string> nodeArguments = [];
         if (_request.NativePreloadPath is { Length: > 0 } preload)
         {
@@ -354,7 +366,6 @@ internal sealed class StateArchiveApplication : IStateArchiveApplication
             Arguments = nodeArguments,
             WorkingDirectory = profile,
             Environment = environment,
-            NativeRootPath = _request.NativeRootPath,
             NodeOptionsSuffix = _request.NodeOptionsSuffix
         });
         if (output.ExitCode != 0)

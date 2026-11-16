@@ -146,7 +146,11 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
             PathPrefix = Path.GetDirectoryName(request.NodePath)
                 ?? throw new SessionException(
                     "The agent's Node.js runtime has no parent directory."),
-            NativeRootPath = _getNativeRootPath(),
+            NativeStage = new SessionNativeStageReference
+            {
+                ApplicationDirectory = request.ApplicationDirectory,
+                RootPath = _getNativeRootPath()
+            },
             LogPath = logPath,
             StatusPath = statusPath,
             RestartHandoffArguments = [.. nodeArguments, "gateway", "restart-handoff", "consume"]
@@ -394,6 +398,8 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
         SessionLaunchResult result = SessionLaunchProtocol.ReadResult(text);
         if (!result.Launched || result.Error is not null)
         {
+            // The helper refused before starting a supervisor, so no gateway exists.
+            NativeStageStaleException.ThrowIfReported(result.ErrorCode, result.Error);
             throw new SessionException(
                 "The gateway could not be started in the isolated session: " +
                 (result.Error ?? "the session helper reported no detail."));

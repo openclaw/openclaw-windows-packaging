@@ -103,12 +103,6 @@ internal sealed class SessionProcessLauncher(
         PrependPath(startInfo, request.PathPrefix);
         AppendNodeOptions(startInfo, request.NodeOptionsSuffix);
 
-        // Held for the launched process's whole lifetime, including anything it
-        // starts that inherits the redirect, so setup cannot reclaim the root
-        // out from under it.
-        using FileStream? lease =
-            SessionNativeStager.OpenConsumerLease(request.NativeRootPath);
-
         try
         {
             if (capture)

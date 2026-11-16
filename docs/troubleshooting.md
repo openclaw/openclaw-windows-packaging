@@ -52,6 +52,33 @@ A separately installed npm CLI node running as the interactive user is an
 isolation or reset the agent session to try to move its node onto your desktop.
 See [interactive desktop nodes](../README.md#interactive-desktop-nodes).
 
+## A launch reports `native-stage-stale`
+
+**Check.** `openclaw`, `clawctl pwsh`, `clawctl gateway-service start`,
+Companion preparation, or a backup or restore stops before OpenClaw starts and
+says the isolated session's staged native dependencies do not match this
+installed package. With `--json`, `error.type` is `native_stage_stale`. The
+bracketed detail names the state: `missing`, `stale-source` (staged from
+other package content, typically after a package update), `incomplete` or
+`content-mismatch` (changed after staging), `unsupported-layout` (a link inside
+the stage), or `inaccessible`.
+
+**Likely cause.** The agent loads native addons from copies setup made in its
+own profile. After a package update, or if those copies were altered, the
+installed application would otherwise run with mismatched native code and fail
+far from the cause, for example as an unavailable fs-safe helper.
+
+**Fix.** Run:
+
+```powershell
+clawctl setup
+```
+
+Setup verifies the stage, restages it when it does not match, and keeps the
+recorded session, agent profile, configuration, and data. It does not run
+Doctor. A Gateway that is already running keeps its stage until it stops. Do
+not use `clawctl setup --fresh` for this; it removes the owned session.
+
 ## The session record is missing but setup evidence remains
 
 **Check.** `openclaw`, `clawctl setup`, and `clawctl teardown` stop with this

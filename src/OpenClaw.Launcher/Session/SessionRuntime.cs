@@ -267,11 +267,31 @@ internal sealed class SessionRuntime
     /// packages, or <see langword="null"/> when setup staged none.
     /// </summary>
     /// <remarks>
-    /// Absence is not an error: an application without native dependencies
-    /// stages nothing, and the redirect is simply not applied.
+    /// This only selects what the redirect points at. Whether that root may
+    /// be used is decided by the guest when it admits each launch, through
+    /// <see cref="GetNativeStage"/>.
     /// </remarks>
     public string? GetAgentNativeRoot() =>
         SetupState.Read(ApplicationId).Record?.AgentNativeRoot;
+
+    /// <summary>
+    /// The native stage a launch of the installed application must be
+    /// admitted against.
+    /// </summary>
+    /// <remarks>
+    /// Every launch that runs packaged OpenClaw carries this, including when
+    /// setup recorded no root: the guest then refuses the launch if the
+    /// installed application has since gained native dependencies.
+    /// </remarks>
+    public SessionNativeStageReference GetNativeStage(string applicationDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(applicationDirectory);
+        return new SessionNativeStageReference
+        {
+            ApplicationDirectory = applicationDirectory,
+            RootPath = GetAgentNativeRoot()
+        };
+    }
 
     /// <summary>Records a completed guest runtime installation.</summary>
     public void CompleteSetup(

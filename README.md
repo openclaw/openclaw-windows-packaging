@@ -461,9 +461,10 @@ location. Only the packages that carry a `.node`, `.dll`, or `.exe` artifact
 are mirrored; the rest of the application, which is nearly all of it, keeps
 executing from the immutable package.
 
-That set is discovered by scanning `app\node_modules`, never from a hard-coded
-list, so an upstream revision that introduces a new native dependency is staged
-automatically. Whole owning package directories are copied rather than
+That set is discovered from the package's own `payload\payload-files.json`
+inventory, never from a hard-coded list, so an upstream revision that
+introduces a new native dependency is staged automatically. A layout without
+that inventory, such as a test fixture, is scanned and hashed instead. Whole owning package directories are copied rather than
 individual binaries, because a package locates its sibling libraries and helper
 executables relative to its own directory. A packaged preload then redirects
 both CommonJS and ESM resolution to the staged copies. The launcher places that
@@ -475,6 +476,17 @@ is idempotent, keyed by package content, and reclaims the superseded copy after
 an upgrade once nothing is still running from it; a launch holds its root for
 its whole lifetime, and a root that is still held is left whole for a later
 setup.
+
+Every launch of packaged OpenClaw, including `openclaw`, `clawctl pwsh`, a new
+Gateway process, Companion preparation, and backup or restore, is admitted
+against the recorded stage first. Under the agent identity, the session helper
+takes the root's lifetime hold and then compares every staged file's path,
+length, and SHA-256 with the installed package inventory. A completion marker or
+directory name alone never admits a launch. A stage that is missing, built from
+other package content, incomplete, altered, or linked elsewhere stops the launch
+before Node.js starts with `native-stage-stale`, and `clawctl setup` repairs it
+in the existing session. Adopting a Gateway that is already running is not
+blocked. Setup reuses a stage only after the same verification.
 
 Run `clawctl setup` before using `clawctl pwsh` or gateway-service start.
 `openclaw` provisions a clean installation automatically, but there is no
@@ -1059,7 +1071,9 @@ the trust boundary for the application and archive. `clawctl setup` extracts
 the archive into the isolated agent account's local application data and
 records its executable and archive. `openclaw` runs the packaged
 `app\openclaw.mjs` with that recorded executable inside the recorded session.
-Neither command hashes or walks the expanded application inventory.
+Neither command hashes or walks the expanded application inventory; launch
+admission reads only the inventory entries of native-bearing packages and
+hashes the agent's staged copies of them.
 
 Native dependency staging does not move that boundary. The copies live in the
 agent's own profile, which already holds the extracted Node.js runtime and is

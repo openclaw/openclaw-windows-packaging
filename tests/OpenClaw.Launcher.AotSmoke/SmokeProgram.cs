@@ -93,6 +93,7 @@ internal static partial class SmokeProgram
             ("diagnostics redaction survives NativeAOT", DiagnosticsRedactionWorks),
             ("package diagnostics ZIP survives NativeAOT", PackageDiagnosticsAreStructuredAsync),
             ("plain helper failure fallback survives NativeAOT", HelperFailureFallbackWorks),
+            ("native stage admission survives NativeAOT", NativeStageAdmissionWorks),
             ("missing application reports diagnostics", MissingApplicationReportsAsync),
             ("openclaw never parses its arguments", AgentNeverParsesItsArgumentsAsync),
             ("first agent launch provisions and forwards arguments", FirstAgentLaunchProvisionsAsync),

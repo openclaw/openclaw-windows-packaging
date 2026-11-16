@@ -28,9 +28,10 @@ internal sealed record SessionExecutionRequest(
     public string? NodeOptionsSuffix { get; init; }
 
     /// <summary>
-    /// The staged native dependency root this launch resolves addons through.
+    /// The installed application and recorded native stage the guest admits
+    /// this launch against before Node.js starts.
     /// </summary>
-    public string? NativeRootPath { get; init; }
+    public SessionNativeStageReference? NativeStage { get; init; }
 }
 
 /// <summary>
@@ -72,10 +73,10 @@ internal sealed record SessionCommandRequest(
     public string? NodeOptionsSuffix { get; init; }
 
     /// <summary>
-    /// The staged native dependency root this command resolves addons through,
-    /// held open by the guest for the command's lifetime.
+    /// The native stage the guest admits this command against and holds for
+    /// the command's lifetime.
     /// </summary>
-    public string? NativeRootPath { get; init; }
+    public SessionNativeStageReference? NativeStage { get; init; }
 }
 
 /// <summary>
@@ -162,7 +163,7 @@ internal sealed partial class SessionExecutor
             PathPrefix = nodeDirectory,
             AdditionalEnvironment = MergeEnvironment(_buildEnvironment(), request.AdditionalEnvironment),
             NodeOptionsSuffix = request.NodeOptionsSuffix,
-            NativeRootPath = request.NativeRootPath
+            NativeStage = request.NativeStage
         };
     }
 
@@ -334,7 +335,7 @@ internal sealed partial class SessionExecutor
                 _buildEnvironment(), request.AdditionalEnvironment),
             PathPrefix = request.PathPrefix,
             NodeOptionsSuffix = request.NodeOptionsSuffix,
-            NativeRootPath = request.NativeRootPath,
+            NativeStage = request.NativeStage,
         };
 
     /// <summary>
@@ -575,6 +576,7 @@ internal sealed partial class SessionExecutor
         }
         if (result.Error is { Length: > 0 } error)
         {
+            NativeStageStaleException.ThrowIfReported(result.ErrorCode, error);
             throw new SessionException($"The isolated session could not configure the Gateway: {error}");
         }
         if (exitCode != 0)
@@ -921,6 +923,7 @@ internal sealed partial class SessionExecutor
 
         if (!result.Launched)
         {
+            NativeStageStaleException.ThrowIfReported(result.ErrorCode, result.Error);
             throw new SessionException(
                 $"{subject} could not be started inside the isolated session: " +
                 (result.Error ?? "no reason was reported."));
@@ -989,6 +992,7 @@ internal sealed partial class SessionExecutor
 
         if (!result.Launched)
         {
+            NativeStageStaleException.ThrowIfReported(result.ErrorCode, result.Error);
             throw new SessionException(
                 $"{subject} could not be started inside the isolated session: " +
                 (result.Error ?? "no reason was reported."));

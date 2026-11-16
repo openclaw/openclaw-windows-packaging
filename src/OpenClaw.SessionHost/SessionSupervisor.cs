@@ -45,6 +45,12 @@ internal static class SessionSupervisor
             WriteStatus(writeFile, statusPath, request, "starting", "The supervisor accepted the launch.");
             enterState ??= SessionStateAccess.ForAgent().EnterReader;
             using IDisposable state = enterState();
+
+            // Admitted again under this process's own lease, which it holds
+            // for the supervised gateway's whole lifetime, across restarts.
+            using FileStream? nativeLease = request.NativeStage is { } stage
+                ? SessionNativeStager.Admit(stage.ApplicationDirectory!, stage.RootPath)
+                : null;
             Directory.CreateDirectory(
                 Path.GetDirectoryName(logPath)
                 ?? throw new SessionLaunchException(
@@ -101,11 +107,6 @@ internal static class SessionSupervisor
         }
         SessionProcessLauncher.PrependPath(startInfo, request.PathPrefix);
         SessionProcessLauncher.AppendNodeOptions(startInfo, request.NodeOptionsSuffix);
-
-        // Held for the supervised process's whole lifetime, so setup cannot
-        // reclaim the native root a running gateway resolves addons through.
-        using FileStream? lease =
-            SessionNativeStager.OpenConsumerLease(request.NativeRootPath);
 
         // The shared launcher creates suspended, assigns the job, then resumes.
         // Assigning after Process.Start leaves a window for orphan descendants.

@@ -79,6 +79,9 @@ public sealed record SessionStateTransferResult
     public bool GatewayStopped { get; init; }
     public SessionConfigReadinessResult? Readiness { get; init; }
     public string? Error { get; init; }
+
+    /// <summary>Classifies <see cref="Error"/>; see <see cref="SessionLaunchResult.ErrorCode"/>.</summary>
+    public string? ErrorCode { get; init; }
 }
 
 public static class SessionStateTransferProtocol

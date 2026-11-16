@@ -88,8 +88,8 @@ foreach ((string source, byte[] expected) in hashes)
     }
 }
 
-using FileStream lease = SessionNativeStager.OpenConsumerLease(staged)
-    ?? throw new InvalidOperationException("The staged root has no completion marker.");
+using FileStream lease = SessionNativeStager.Admit(application, staged)
+    ?? throw new InvalidOperationException("The staged root was not admitted.");
 if (SessionNativeStager.Stage(application, args[1]) != staged)
 {
     throw new InvalidOperationException("Unchanged content did not reuse the staged root.");

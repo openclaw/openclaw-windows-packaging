@@ -104,6 +104,24 @@ public sealed class SessionCompanionConfigTests : IDisposable
     }
 
     [Fact]
+    public void AStaleNativeStageIsRefusedBeforeReadingOrPatchingConfiguration()
+    {
+        string application = NativeStagePackageFixture.WriteApplication(
+            Path.Combine(_root, "package"),
+            new Dictionary<string, string> { ["node_modules/koffi/koffi.node"] = "native" });
+
+        int exitCode = RunWithoutPatch(
+            Request() with { ApplicationDirectory = application },
+            () => throw new InvalidOperationException("Configuration must not be read."));
+
+        Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode, exitCode);
+        SessionCompanionConfigResult result = SessionCompanionConfigProtocol.ReadResult(
+            File.ReadAllText(ResultPath), "companion-1");
+        Assert.Equal(SessionLaunchProtocol.NativeStageStaleErrorCode, result.ErrorCode);
+        Assert.False(File.Exists(ConfigPath));
+    }
+
+    [Fact]
     public void MissingAgentConfigUsesUpstreamPatchInsideAgentProfile()
     {
         int exitCode = Run(Request(), ApplyPatch);

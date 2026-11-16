@@ -17,7 +17,8 @@ internal sealed record StateArchiveCommandResult(
     int ExitCode,
     SessionStateTransferResult? Transfer = null,
     IReadOnlyList<StateArchiveEntry>? Archives = null,
-    string? Error = null) : IClawCtlResult;
+    string? Error = null,
+    string? ErrorType = null) : IClawCtlResult;
 
 internal record ClawCtlProgress(string Message);
 
@@ -126,7 +127,8 @@ internal sealed record CompanionPrepareResult(
     int ExitCode,
     int? Port = null,
     string? Token = null,
-    string? Error = null) : IClawCtlResult
+    string? Error = null,
+    string? ErrorType = null) : IClawCtlResult
 {
     public string Command => "companion prepare";
 }

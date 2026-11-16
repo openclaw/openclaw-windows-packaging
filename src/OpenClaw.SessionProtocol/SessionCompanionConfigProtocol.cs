@@ -54,9 +54,11 @@ public sealed record SessionCompanionConfigResult
 
     [JsonPropertyName("error")]
     public string? Error { get; init; }
-}
 
-[JsonSourceGenerationOptions(DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
+    /// <summary>Classifies <see cref="Error"/>; see <see cref="SessionLaunchResult.ErrorCode"/>.</summary>
+    [JsonPropertyName("errorCode")]
+    public string? ErrorCode { get; init; }
+}
 [JsonSerializable(typeof(SessionCompanionConfigRequest))]
 [JsonSerializable(typeof(SessionCompanionConfigResult))]
 internal sealed partial class SessionCompanionConfigJsonContext : JsonSerializerContext;

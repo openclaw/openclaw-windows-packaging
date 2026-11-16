@@ -170,7 +170,10 @@ internal static class Program
                         () => ClawCtlJson.WriteFailure(
                             output,
                             command,
-                            exception.Message),
+                            exception.Message,
+                            exception is Session.NativeStageStaleException
+                                ? ClawCtlJson.NativeStageStaleErrorType
+                                : ClawCtlJson.CliErrorType),
                         "standard output");
                 }
                 else
@@ -197,7 +200,8 @@ internal static class Program
                         using (restore)
                         {
                             if (exception is Session.InteractiveLogonRequiredException or
-                                Session.UnownedSetupEvidenceException)
+                                Session.UnownedSetupEvidenceException or
+                                Session.NativeStageStaleException)
                             {
                                 ClawCtlConsole.WriteActionableFailure(
                                     error,
@@ -363,7 +367,7 @@ internal static class Program
                     interactive,
                     environmentReader),
                 NodeArgumentsPrefix = BuildNativeRedirectNodeArguments(runtime),
-                NativeRootPath = runtime.GetAgentNativeRoot()
+                NativeStage = runtime.GetNativeStage(applicationDirectory)
             },
             CancellationToken.None).ConfigureAwait(false);
         return await Gateway.AgentPostflight.Create(
@@ -908,7 +912,7 @@ internal static class Program
                                 {
                                     PathPrefix = Path.GetDirectoryName(nodePath),
                                     AdditionalEnvironment = dashboardEnvironment,
-                                    NativeRootPath = runtime.GetAgentNativeRoot()
+                                    NativeStage = runtime.GetNativeStage(applicationDirectory)
                                 },
                                 "Resolving the Control UI handoff in the isolated session.",
                                 "OpenClaw dashboard",
@@ -1218,7 +1222,12 @@ internal static class Program
                     catch (Session.SessionException exception) when (outputOptions.Json)
                     {
                         log($"Companion Gateway preparation failed: {DiagnosticFailure.Describe(exception)}");
-                        return WriteResult(new CompanionPrepareResult(1, Error: exception.Message));
+                        return WriteResult(new CompanionPrepareResult(
+                            1,
+                            Error: exception.Message,
+                            ErrorType: exception is Session.NativeStageStaleException
+                                ? ClawCtlJson.NativeStageStaleErrorType
+                                : null));
                     }
                 }
             },
@@ -1383,7 +1392,7 @@ internal static class Program
                         applicationDirectory,
                         nativeRootPath,
                         nativePreloadUrl)),
-                NativeRootPath = nativeRootPath
+                NativeStage = runtime.GetNativeStage(applicationDirectory)
             },
             $"Opening {shell.DisplayName} in the isolated session.",
             shell.DisplayName,

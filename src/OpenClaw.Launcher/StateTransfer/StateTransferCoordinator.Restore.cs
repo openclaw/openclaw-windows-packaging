@@ -193,7 +193,7 @@ internal sealed partial class StateTransferCoordinator
                     Pending = activationStarted || cleanupError is not null,
                     Phase = activationStarted ? "interrupted" : "not-activated",
                     GatewayStopped = gatewayStopped
-                }, Error: message);
+                }, Error: message, ErrorType: ErrorTypeOf(exception));
         }
         finally
         {
@@ -297,7 +297,8 @@ internal sealed partial class StateTransferCoordinator
     {
         _log($"{command} failed: {DiagnosticFailure.Describe(exception)}");
         return new StateArchiveCommandResult(command, 1,
-            Error: exception is OperationCanceledException ? "State transfer was cancelled." : exception.Message);
+            Error: exception is OperationCanceledException ? "State transfer was cancelled." : exception.Message,
+            ErrorType: ErrorTypeOf(exception));
     }
 
     private static void RequireStopped(GatewayStopResult result)

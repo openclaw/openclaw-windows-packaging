@@ -100,6 +100,8 @@ internal static class SessionCompanionConfig
             SessionCompanionConfigRequest request =
                 SessionCompanionConfigProtocol.ReadRequest(readFile(requestPath));
             requestId = request.RequestId;
+            using FileStream? nativeLease =
+                SessionNativeStager.Admit(request.ApplicationDirectory!, request.NativeRootPath);
             enterState ??= SessionStateAccess.ForAgent().EnterReader;
             using IDisposable state = enterState();
             string configPath = Path.Combine(profileRoot ?? AgentProfile.GetPath(), ".openclaw", "openclaw.json");
@@ -115,7 +117,12 @@ internal static class SessionCompanionConfig
             InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             writeFile(resultPath, SessionCompanionConfigProtocol.SerializeResult(
-                new SessionCompanionConfigResult { RequestId = requestId, Error = exception.Message }));
+                new SessionCompanionConfigResult
+                {
+                    RequestId = requestId,
+                    Error = exception.Message,
+                    ErrorCode = (exception as SessionLaunchException)?.Code
+                }));
             return SessionLaunchProtocol.HelperFailureExitCode;
         }
     }
@@ -324,8 +331,7 @@ internal static class SessionCompanionConfig
             Executable = request.NodePath,
             Arguments = nodeArguments,
             WorkingDirectory = AppContext.BaseDirectory,
-            Environment = request.Environment,
-            NativeRootPath = request.NativeRootPath
+            Environment = request.Environment
         }, TimeSpan.FromMinutes(2));
         return (output.ExitCode, output.StandardOutput);
     }

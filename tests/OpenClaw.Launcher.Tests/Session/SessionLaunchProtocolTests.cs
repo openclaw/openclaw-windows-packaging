@@ -70,7 +70,11 @@ public sealed class SessionLaunchProtocolTests
         {
             PathPrefix = @"C:\agent\node",
             NodeOptionsSuffix = "--import file:///C:/agent/native-redirect.mjs",
-            NativeRootPath = @"C:\agent\agent-native\content",
+            NativeStage = new SessionNativeStageReference
+            {
+                ApplicationDirectory = @"C:\Program Files\WindowsApps\pkg\app",
+                RootPath = @"C:\agent\agent-native\content"
+            },
         };
 
         SessionLaunchRequest restored = SessionLaunchProtocol.ReadRequest(
@@ -78,7 +82,8 @@ public sealed class SessionLaunchProtocolTests
 
         Assert.Equal(@"C:\agent\node", restored.PathPrefix);
         Assert.Equal("--import file:///C:/agent/native-redirect.mjs", restored.NodeOptionsSuffix);
-        Assert.Equal(@"C:\agent\agent-native\content", restored.NativeRootPath);
+        Assert.Equal(@"C:\agent\agent-native\content", restored.NativeStage!.RootPath);
+        Assert.Equal(@"C:\Program Files\WindowsApps\pkg\app", restored.NativeStage.ApplicationDirectory);
     }
 
     [Fact]

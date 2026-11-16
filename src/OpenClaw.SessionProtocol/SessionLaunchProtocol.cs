@@ -79,18 +79,18 @@ public sealed record SessionLaunchRequest
     public string? NodeOptionsSuffix { get; init; }
 
     /// <summary>
-    /// The staged native dependency root this launch resolves addons through.
+    /// The application this launch runs and the staged native dependency root
+    /// recorded for it. Present for every launch that runs packaged OpenClaw.
     /// </summary>
     /// <remarks>
-    /// Held open for the lifetime of the launched process so setup can tell a
-    /// root that still has a consumer from one that does not. Without it, a
-    /// process that merely inherited the root - an idle agent shell, say - is
-    /// indistinguishable from no consumer at all, and reclaiming the root
-    /// leaves that process resolving native addons back to the packaged copies
-    /// it cannot load.
+    /// The helper admits the launch only when the recorded stage matches the
+    /// installed application's native dependency inventory, and holds the root
+    /// for the launched process's lifetime so setup can tell a root that still
+    /// has a consumer from one that does not. An idle agent shell that merely
+    /// inherited the root is a consumer too.
     /// </remarks>
-    [JsonPropertyName("nativeRootPath")]
-    public string? NativeRootPath { get; init; }
+    [JsonPropertyName("nativeStage")]
+    public SessionNativeStageReference? NativeStage { get; init; }
 
     /// <summary>
     /// Detached only. Where the application's output is written, because a
@@ -118,6 +118,24 @@ public sealed record SessionLaunchRequest
     /// </summary>
     [JsonPropertyName("restartHandoffArguments")]
     public IReadOnlyList<string>? RestartHandoffArguments { get; init; }
+}
+
+/// <summary>
+/// Names the native dependency stage a launch must be admitted against.
+/// </summary>
+/// <remarks>
+/// The host names the installed application and the root setup recorded. Only
+/// the agent can read that root, so the helper decides whether it is current.
+/// A null root means setup staged nothing, which is admissible only while the
+/// installed application carries no native dependencies.
+/// </remarks>
+public sealed record SessionNativeStageReference
+{
+    [JsonPropertyName("applicationDirectory")]
+    public string? ApplicationDirectory { get; init; }
+
+    [JsonPropertyName("rootPath")]
+    public string? RootPath { get; init; }
 }
 
 /// <summary>
@@ -184,6 +202,13 @@ public sealed record SessionLaunchResult
 
     [JsonPropertyName("error")]
     public string? Error { get; init; }
+
+    /// <summary>
+    /// Classifies <see cref="Error"/> when the host must act on the kind of
+    /// failure, such as <see cref="SessionLaunchProtocol.NativeStageStaleErrorCode"/>.
+    /// </summary>
+    [JsonPropertyName("errorCode")]
+    public string? ErrorCode { get; init; }
 }
 
 /// <summary>
@@ -205,6 +230,15 @@ public sealed class SessionLaunchException : Exception
         : base(message, innerException)
     {
     }
+
+    public SessionLaunchException(string message, string code)
+        : base(message)
+    {
+        Code = code;
+    }
+
+    /// <summary>The result error code this failure reports, if any.</summary>
+    public string? Code { get; }
 }
 
 [JsonSourceGenerationOptions(
@@ -229,6 +263,12 @@ public static class SessionLaunchProtocol
     /// control result file is authoritative.
     /// </summary>
     public const int HelperFailureExitCode = 64;
+
+    /// <summary>
+    /// The recorded native dependency stage does not match the installed
+    /// application, so nothing was started. Explicit setup repairs it.
+    /// </summary>
+    public const string NativeStageStaleErrorCode = "native-stage-stale";
 
     public static string ResultPathFor(string requestPath) =>
         requestPath + ".result.json";
@@ -294,6 +334,14 @@ public static class SessionLaunchProtocol
                 "The launch request has no working directory.");
         }
 
+        if (request.NativeStage is { } stage &&
+            (!IsFullyQualifiedWithoutTraversal(stage.ApplicationDirectory) ||
+             (stage.RootPath is not null && !IsFullyQualifiedWithoutTraversal(stage.RootPath))))
+        {
+            throw new SessionLaunchException(
+                "The launch request names a native stage without fully qualified paths.");
+        }
+
         if (request.Mode == SessionLaunchMode.Detached)
         {
             // A detached process has no console to inherit and the pipe it was
@@ -355,4 +403,13 @@ public static class SessionLaunchProtocol
 
         return result;
     }
+
+    /// <summary>
+    /// Whether a path names a location outright, rather than relative to an
+    /// unstated directory or by climbing out of the one it names.
+    /// </summary>
+    public static bool IsFullyQualifiedWithoutTraversal(string? path) =>
+        !string.IsNullOrWhiteSpace(path) &&
+        Path.IsPathFullyQualified(path) &&
+        !path.Split(['\\', '/']).Contains("..", StringComparer.Ordinal);
 }
