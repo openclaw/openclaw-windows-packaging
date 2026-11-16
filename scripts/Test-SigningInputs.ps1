@@ -16,6 +16,8 @@ param(
     [ValidatePattern('\A[1-9][0-9]*\z')]
     [string]$WorkflowRunId,
 
+    [long]$WorkflowRunNumber,
+
     [Parameter(Mandatory)]
     [ValidateSet('official', 'store')]
     [string]$SigningMode,
@@ -42,9 +44,6 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-if ($ReleaseChannel -ne 'stable' -and $IdentityChannel -eq 'Store') {
-    throw 'Prereleases cannot authorize Store submission artifacts.'
-}
 
 function New-PackageEntryIndex {
     param(
@@ -227,6 +226,10 @@ $releaseIdentity = & (Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1') `
     -GatewayTag $releaseIdentitySource.releaseTag `
     -MSIXRevision ([int]$policy.msixRevision)
 $approvedPackageVersion = $releaseIdentity.PackageVersion
+if ($IdentityChannel -eq 'Store') {
+    $approvedPackageVersion = & (Join-Path $PSScriptRoot 'Get-WorkflowPackageVersion.ps1') `
+        -RunNumber $WorkflowRunNumber -RunAttempt 1 -ReleaseVersion $releaseIdentity.PackageVersion -Store
+}
 $approvedPayloadVersion = $source.packageVersion
 $approvedCommit = $source.resolvedCommit
 

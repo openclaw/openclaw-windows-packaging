@@ -98,7 +98,7 @@ an older stable package is a downgrade and is not a data-preserving rollback
 procedure. Store installations use a different identity and do not join this
 GitHub channel.
 
-Stable numeric versions remain unchanged. Previews use
+Sideload stable numeric versions remain unchanged. Sideload previews use
 `year.month.(releaseSequence*100-1).previewRevision`, where `previewRevision`
 is `N*10+msixRevision`.
 `N` must be `1..2999`, with no leading zero; `msixRevision` remains `0..9`.
@@ -106,13 +106,16 @@ For example, `v2026.9.8-beta.2-msix.0` is `2026.9.799.20`, below stable
 `2026.9.800.0` and above all rebuilds of the preceding stable release.
 Packaging rebuilds precede the next beta number.
 
-The nonzero fourth component is for sideload distribution only. Prerelease
-runs do not produce or retain Store-identity artifacts, and `signing_mode=store`
-rejects preview channels. Microsoft reserves the fourth component for Store
+The nonzero fourth component is for sideload distribution only. Preview runs
+also produce Store-identity packages with the separate
+[Store allocation](microsoft-store.md#store-package-versions). Published GitHub
+prereleases can feed the Development flight. `signing_mode=store` still rejects
+preview channels: use `official` and `publish_release=true` for that path.
+Microsoft reserves the fourth component for Store
 use ([package version requirements](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/package-version-numbering)).
 For an unsigned or temporary test-signed preview, use `unsigned` or `test`;
 unsigned runs retain development-version sideload artifacts; test runs use
-release-candidate versions and run sideload upgrade proof without publication.
+release-candidate versions and run all Store and sideload upgrade proof without publication.
 
 ## Before stable dispatch
 
@@ -179,11 +182,10 @@ Documentation-only pull requests intentionally skip both callers.
 
 The shared workflow builds the validated upstream package, then builds the
 expanded payload and unsigned MSIX separately for both x64 and ARM64. It
-creates Store-identity and sideload-identity packages for stable, and only
-sideload-identity packages for prereleases, for each architecture and
+creates Store-identity and sideload-identity packages for every release channel and architecture and
 composes a multi-architecture bundle for each channel with
 `scripts\Build-MSIXBundle.ps1`. Both channels use the same validated payload
-and derived package version.
+and independently derived package versions.
 
 After every `test-msix-upgrades` scenario succeeds, and before publication or
 Azure credentials, `authorize-signing` runs
@@ -240,8 +242,9 @@ the fixtures to make either check pass.
 
 ## Publication and completion
 
-For stable releases, after authorization succeeds, `retain-store-submission` keeps the unsigned
-Store-identity bundle as the `openclaw-gateway-msix-store-submission` Actions
+After authorization succeeds (and GitHub publication succeeds for previews),
+`retain-store-submission` keeps the unsigned Store-identity bundle as the
+`openclaw-gateway-msix-store-submission-<attempt>` Actions
 artifact for 90 days. Microsoft signs it during Store ingestion; it is never a
 GitHub Release download. `publish-release` runs after sideload signing and creates the permanent GitHub release
 tag derived by `scripts\Get-MSIXReleaseIdentity.ps1`, generates release notes
@@ -250,7 +253,8 @@ bundle plus signed x64 and ARM64 standalone MSIX assets.
 
 After publication, verify the release has the derived permanent tag, generated
 notes, three signed sideload assets, and valid signatures. For stable, verify
-the retained unsigned Store submission bundle. For every release, verify all successful
+the retained unsigned Store submission bundle. For previews, verify that bundle
+and its current-attempt witness after GitHub publication. For every release, verify all successful
 identity-transition and in-place-upgrade evidence from that same release run.
 The proof and packages share the run's captured upstream source and derived
 release identity. Verify the bundle and both
@@ -310,4 +314,8 @@ separate authorized operations, not part of local implementation validation.
 
 ## Automated Store submission
 
-See [Microsoft Store submission](microsoft-store.md) for protected OIDC setup, manual submission from an existing release run, automatic activation, and recovery. Automatic submission remains off until the repository variable `MSSTORE_ENABLED` is `true`; the existing release and artifact handoffs are unchanged.
+See [Microsoft Store submission](microsoft-store.md) for protected OIDC setup,
+manual submission, the Development tester group and flight, automatic activation,
+and recovery. Production uses `MSSTORE_ENABLED`; Development uses the independent
+`MSSTORE_DEVELOPMENT_ENABLED` flag. Neither flag substitutes for first-submission
+certification and tester install/upgrade proof.

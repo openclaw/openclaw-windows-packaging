@@ -124,3 +124,25 @@ if ($secondBoundaryVersion -le $firstBoundaryVersion) {
 }
 
 Write-Host 'Workflow package-version tests passed.'
+
+$previous = [version]'2026.9.9999.65534'
+foreach ($run in @(1, 2, 55534)) {
+    foreach ($release in @('2026.9.700.0', '2026.9.700.12', '2026.9.700.32012')) {
+        $value = & $scriptPath -RunNumber $run -RunAttempt 1 -ReleaseVersion $release -Store
+        if ($value -cne "2026.9.$(10000 + $run).0" -or [version]$value -le $previous) {
+            throw 'Store versions must advance beyond shipped versions and keep revision zero.'
+        }
+        $retry = & $scriptPath -RunNumber $run -RunAttempt 2 -ReleaseVersion $release -Store
+        if ($retry -cne $value) { throw 'A Store retry changed its immutable run version.' }
+    }
+    $previous = [version]$value
+}
+foreach ($run in @(0, 55535)) {
+    Assert-Fails -MessagePattern 'allocation range' -Action {
+        & $scriptPath -RunNumber $run -RunAttempt 1 -ReleaseVersion '2026.9.700.0' -Store
+    }
+}
+Assert-Fails -MessagePattern 'requires ReleaseVersion' -Action {
+    & $scriptPath -RunNumber 1 -RunAttempt 1 -Store
+}
+Write-Host 'Store workflow version allocation and retry tests passed.'

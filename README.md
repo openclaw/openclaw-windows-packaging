@@ -552,8 +552,10 @@ For a GitHub prerelease, manually select `release_channel=beta`.
 An empty `gateway_version` resolves that public npm dist-tag; an exact
 matching preview version selects both payload and release identity. Stable
 compatibility pins do not apply. Previews use the existing sideload identity,
-are marked **Pre-release**, never become **Latest**, and produce no Store
-submission. See [prerelease dispatch and upgrade rules](docs/release-process.md#publish-a-beta-github-prerelease).
+are marked **Pre-release**, and never become **Latest**. Published previews also
+retain a Store-identity bundle for the opt-in
+[Development flight](docs/microsoft-store.md#development-flight), not public
+production. See [prerelease dispatch and upgrade rules](docs/release-process.md#publish-a-beta-github-prerelease).
 
 If compatibility requires an older known-good stable release, a reviewed
 `stableVersion` field in `release-policy.json` can pin its exact version, for
@@ -894,7 +896,7 @@ from the recorded release-identity source and `msixRevision` in
 `release-policy.json`. Normally that source is also the packaged payload. For stable releases,
 `openclaw_ref` and `gateway_version` overrides keep the unmodified stable source
 as the release identity and record the selected payload separately. The GitHub tag is
-`<gateway-tag>-msix.<revision>`. The stable MSIX identity is
+`<gateway-tag>-msix.<revision>`. The stable sideload MSIX version is
 `year.month.VVPN.0`: `VV` is the two-digit monthly Gateway release sequence,
 `P` is the Gateway correction digit, and `N` is the MSIX rebuild digit. The
 digits are packed numerically into the third component, so leading zeroes are
@@ -915,7 +917,9 @@ contract. Set `msixRevision` from `0` through `9`, starting at `0` for each
 Gateway tag and incrementing it only when that exact Gateway tag is repackaged.
 Decimal place value guarantees Gateway release > Gateway correction > MSIX
 rebuild while keeping every component at four digits or fewer and reserving the
-fourth component as `0` for Microsoft Store submission.
+fourth component as `0`. Store packages have a separate
+[run-number allocation](docs/microsoft-store.md#store-package-versions) shared
+by stable and Development-flight releases.
 
 For a new Gateway release, keep `msixRevision` at `0`; if a previous packaging
 rebuild increased it, reset it in a reviewed pull request first. Increment it
@@ -937,8 +941,8 @@ contains a signed sideload
 `OpenClawGateway-<version>.msixbundle`, plus
 `OpenClawGateway-<version>-x64.msix` and
 `OpenClawGateway-<version>-arm64.msix` packages for architecture-specific
-deployment. For stable releases, the unsigned Store-identity bundle is retained separately as the
-`openclaw-gateway-msix-store-submission` Actions artifact for 90 days; Partner
+deployment. For stable releases and published previews, the unsigned Store-identity bundle is retained separately as the
+`openclaw-gateway-msix-store-submission-<attempt>` Actions artifact for 90 days; Partner
 Center signs it during ingestion.
 
 Direct GitHub distribution and Store submission intentionally use distinct

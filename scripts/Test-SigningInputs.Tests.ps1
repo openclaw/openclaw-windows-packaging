@@ -43,7 +43,8 @@ $releaseIdentity = & (
 ) `
     -GatewayTag 'v2026.9.7' `
     -MSIXRevision ([int]$policy.msixRevision)
-$approvedPackageVersion = $releaseIdentity.PackageVersion
+$approvedPackageVersion = & (Join-Path $PSScriptRoot 'Get-WorkflowPackageVersion.ps1') `
+    -RunNumber 1234 -RunAttempt 1 -ReleaseVersion $releaseIdentity.PackageVersion -Store
 $approvedPayloadVersion = '2026.9.7'
 $packagingCommit = '1111111111111111111111111111111111111111'
 $suiteRoot = Join-Path $env:TEMP (
@@ -57,7 +58,7 @@ $validationScripts = Join-Path $validationRoot 'scripts'
 New-Item -Path $validationScripts -ItemType Directory -Force | Out-Null
 foreach ($name in @(
     'Test-SigningInputs.ps1', 'Get-WorkflowSource.ps1',
-    'Get-MSIXReleaseIdentity.ps1', 'OpenClawSource.ps1'
+    'Get-MSIXReleaseIdentity.ps1', 'OpenClawSource.ps1', 'Get-WorkflowPackageVersion.ps1'
 )) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) `
         -Destination (Join-Path $validationScripts $name)
@@ -116,6 +117,10 @@ function New-TestArtifact {
         [bool]$IncludeEncodedScopedDependency = $false
     )
 
+    if ($IdentityChannel -eq 'Sideload') {
+        $approvedPackageVersion = (& (Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1') `
+            -GatewayTag $source.releaseTag -MSIXRevision ([int]$policy.msixRevision)).PackageVersion
+    }
     $directory = Join-Path $Root $Architecture
     $staging = Join-Path $Root ".$Architecture-package"
     $payloadDirectory = Join-Path $staging 'payload'
@@ -391,6 +396,7 @@ function Invoke-PolicyValidation {
         -BundlePath (Join-Path $Root 'bundle\OpenClawGateway.msixbundle') `
         -SourcePath $sourcePath `
         -WorkflowRunId '123456' `
+        -WorkflowRunNumber 1234 `
         -SigningMode official `
         -RequestedRef $RequestedRef `
         -GatewayVersion $GatewayVersion `
@@ -416,6 +422,11 @@ function New-TestBundle {
         [string]$IdentityChannel = 'Store'
     )
 
+    if ($IdentityChannel -eq 'Sideload') {
+        $approvedPackageVersion = (& (Join-Path $PSScriptRoot 'Get-MSIXReleaseIdentity.ps1') `
+            -GatewayTag $source.releaseTag -MSIXRevision ([int]$policy.msixRevision)).PackageVersion
+        if (-not $PSBoundParameters.ContainsKey('BundleVersion')) { $BundleVersion = $approvedPackageVersion }
+    }
     $selectedIdentity = if ($IdentityChannel -eq 'Sideload') {
         $policy.sideloadPackageIdentity
     }
@@ -1176,8 +1187,18 @@ try {
         Assert-Fails -MessagePattern 'packageVersion|channel' -Action {
             Invoke-PolicyValidation -Root $previewRoot -IdentityChannel Sideload
         }
-        Assert-Fails -MessagePattern 'cannot authorize Store' -Action {
+        Assert-Fails -MessagePattern 'metadata|identity|package' -Action {
             Invoke-PolicyValidation -Root $previewRoot -ReleaseChannel $previewChannel -PreserveBundle
+        }
+        $approvedPackageVersion = & (Join-Path $PSScriptRoot 'Get-WorkflowPackageVersion.ps1') `
+            -RunNumber 1234 -RunAttempt 1 -ReleaseVersion $previewIdentity.PackageVersion -Store
+        $flightRoot = Join-Path $suiteRoot "$previewChannel-store"
+        foreach ($architecture in @('x64', 'arm64')) {
+            New-TestArtifact -Root $flightRoot -Architecture $architecture -PayloadPackageVersion $previewVersion
+        }
+        Invoke-PolicyValidation -Root $flightRoot -ReleaseChannel $previewChannel
+        Assert-Fails -MessagePattern 'metadata|identity|package' -Action {
+            Invoke-PolicyValidation -Root $flightRoot -IdentityChannel Sideload -ReleaseChannel $previewChannel -PreserveBundle
         }
         $source.releaseChannel = 'stable'
         Save-TestSource

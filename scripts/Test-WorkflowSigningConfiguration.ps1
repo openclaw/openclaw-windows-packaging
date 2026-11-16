@@ -292,7 +292,7 @@ function Assert-WorkflowClassification {
             throw "$EventName/$SigningMode did not emit the upgrade matrix."
         }
         $matrix = $outputs['upgrade_matrix'] | ConvertFrom-Json
-        if (@($matrix.include).Count -ne $(if ($ReleaseChannel -eq 'stable') { 13 } else { 6 })) {
+        if (@($matrix.include).Count -ne 13) {
             throw "$EventName/$SigningMode did not select the channel upgrade scenarios."
         }
     }
