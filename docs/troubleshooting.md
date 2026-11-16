@@ -74,9 +74,10 @@ far from the cause, for example as an unavailable fs-safe helper.
 clawctl setup
 ```
 
-Setup verifies the stage, restages it when it does not match, and keeps the
-recorded session, agent profile, configuration, and data. It does not run
-Doctor. A Gateway that is already running keeps its stage until it stops. Do
+Setup verifies the stage, publishes a fresh copy when it does not match, and
+keeps the recorded session, agent profile, configuration, and data. It does not
+run Doctor. A Gateway or agent shell that is already running keeps its stage
+until it exits; a later `clawctl setup` reclaims that copy. Do
 not use `clawctl setup --fresh` for this; it removes the owned session.
 
 ## The session record is missing but setup evidence remains

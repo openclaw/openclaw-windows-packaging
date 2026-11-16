@@ -453,7 +453,7 @@ because nothing runs on the host.
 
 Setup also mirrors the application's native dependency packages into the
 agent's own LocalState, under
-`%LOCALAPPDATA%\OpenClawGatewayMSIX\agent-native\<content-id>`. The
+`%LOCALAPPDATA%\OpenClawGatewayMSIX\agent-native\<generation>`. The
 isolated-session identity may read packaged files but may not map them as
 executable images, so loading a `.node` addon directly from the package fails
 with `ERR_DLOPEN_FAILED` even though the same bytes load from a writable
@@ -471,11 +471,16 @@ both CommonJS and ESM resolution to the staged copies. The launcher places that
 preload on the agent Node.js argument vector so OpenClaw retains it when an
 agent invokes `openclaw` again. Once loaded, the preload appends itself to the
 agent account's own `NODE_OPTIONS` for ordinary Node.js workers, so an option
-the agent set survives and the invoking host's value never reaches it. Staging
-is idempotent, keyed by package content, and reclaims the superseded copy after
-an upgrade once nothing is still running from it; a launch holds its root for
-its whole lifetime, and a root that is still held is left whole for a later
-setup.
+the agent set survives and the invoking host's value never reaches it. Setup
+reuses the recorded stage, or one named by its content identifier by an earlier
+release, only after verifying it, so an unchanged stage is not copied again.
+Otherwise it copies and verifies a new generation in a separate directory and
+records it only after publication, so a failed copy leaves the previous stage
+untouched and a stage still in use is never overwritten. A launch holds its root
+for its whole lifetime. Setup reclaims a superseded stage only through an
+exclusive gate that conflicts with every launch's hold, retiring it so it can
+no longer be admitted; a stage still held, or one it cannot retire, is left
+whole for a later setup.
 
 Every launch of packaged OpenClaw, including `openclaw`, `clawctl pwsh`, a new
 Gateway process, Companion preparation, and backup or restore, is admitted
@@ -1036,7 +1041,7 @@ signature verification fails closed when it does not.
 | OpenClaw application files | Read-only MSIX package `app` directory |
 | Bundled Node.js archive | Read-only MSIX package `runtime` directory |
 | Node.js runtime used by OpenClaw | `%LOCALAPPDATA%\OpenClawGatewayMSIX\agent-node\node-v<version>-win-<architecture>` (isolated agent account) |
-| Staged native dependency packages | `%LOCALAPPDATA%\OpenClawGatewayMSIX\agent-native\<content-id>` (agent account) |
+| Staged native dependency packages | `%LOCALAPPDATA%\OpenClawGatewayMSIX\agent-native\<generation>` (agent account) |
 | OpenClaw configuration and user state | `%USERPROFILE%\.openclaw` (isolated session's agent account) |
 | Retained manual/recovery archives | `%USERPROFILE%\.openclaw-backups` (invoking user) |
 | Pre-restore protection | `%USERPROFILE%\.openclaw-backups\before-restore` (invoking user) |

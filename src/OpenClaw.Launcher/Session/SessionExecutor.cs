@@ -643,6 +643,7 @@ internal sealed partial class SessionExecutor
         string helperPath,
         string archivePath,
         string applicationDirectory,
+        string? currentNativeRootPath,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(record);
@@ -663,7 +664,8 @@ internal sealed partial class SessionExecutor
                 {
                     RequestId = requestId,
                     ArchivePath = archivePath,
-                    ApplicationDirectory = applicationDirectory
+                    ApplicationDirectory = applicationDirectory,
+                    CurrentNativeRootPath = currentNativeRootPath
                 }),
                 cancellationToken).ConfigureAwait(false);
 
@@ -711,6 +713,13 @@ internal sealed partial class SessionExecutor
                 throw new SessionException(
                     "The isolated session reported a runtime install without a " +
                     "Node.js executable path and version.");
+            }
+
+            if (result.NativeRootsRetained > 0)
+            {
+                _log(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"Retained {result.NativeRootsRetained} superseded native stage(s) that a running process still holds; a later setup reclaims them."));
             }
 
             return result;

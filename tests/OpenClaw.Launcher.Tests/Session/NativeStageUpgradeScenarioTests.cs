@@ -227,6 +227,110 @@ public sealed partial class NativeStageUpgradeScenarioTests : IDisposable
             repaired, @"node_modules\@openclaw\fs-safe\dist\owner-dacl-batch-worker.js")));
     }
 
+    /// <summary>
+    /// Repair must not pull the stage out from under a shell that is still
+    /// running from it; the next setup after the shell exits reclaims it.
+    /// </summary>
+    [Fact]
+    public async Task AShellStillRunningKeepsItsStageThroughRepairUntilItExits()
+    {
+        HostOptions a = CreatePackage("pkg-a", PackageA());
+        Assert.Equal(0, await RunAsync(a, "setup"));
+        string rootA = ReadSetup().AgentNativeRoot!;
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        _launcher.OnRun = _ =>
+        {
+            entered.Set();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(30)));
+            return 0;
+        };
+        Task<int> shell = Task.Run(() => RunAsync(a, "pwsh", "--command", "exit"));
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(30)));
+        _launcher.OnRun = null;
+
+        HostOptions b = CreatePackage("pkg-b", PackageB());
+        Assert.Equal(0, await RunAsync(b, "setup"));
+        string rootB = ReadSetup().AgentNativeRoot!;
+
+        Assert.NotEqual(rootA, rootB);
+        Assert.Equal(
+            "native a",
+            File.ReadAllText(Path.Combine(rootA, @"node_modules\@openclaw\fs-safe-win32-x64-msvc\fs-safe.win32-x64-msvc.node")));
+        release.Set();
+        Assert.Equal(0, await shell.ConfigureAwait(true));
+
+        Assert.Equal(0, await RunAsync(b, "setup"));
+        Assert.Equal(rootB, ReadSetup().AgentNativeRoot);
+        Assert.False(Directory.Exists(rootA), "The released stage must be reclaimed by the next setup.");
+    }
+
+    /// <summary>
+    /// A superseded stage whose marker cannot be retired is left for a later
+    /// setup; it must not fail the setup that already published its
+    /// replacement.
+    /// </summary>
+    [Fact]
+    public async Task ASupersededStageThatCannotBeRetiredDoesNotFailSetup()
+    {
+        HostOptions a = CreatePackage("pkg-a", PackageA());
+        Assert.Equal(0, await RunAsync(a, "setup"));
+        string rootA = ReadSetup().AgentNativeRoot!;
+        string markerA = Path.Combine(rootA, ".staged-content-id");
+        File.SetAttributes(markerA, FileAttributes.ReadOnly);
+        try
+        {
+            HostOptions b = CreatePackage("pkg-b", PackageB());
+            Assert.Equal(0, await RunAsync(b, "setup"));
+
+            SetupRecord setup = ReadSetup();
+            Assert.Equal(SetupPhase.Ready, setup.Phase);
+            Assert.NotEqual(rootA, setup.AgentNativeRoot);
+            Assert.True(File.Exists(markerA), "The unretired stage must be left whole.");
+            Assert.Equal(0, await RunAsync(b, "pwsh", "--command", "exit"));
+            Assert.Equal(setup.AgentNativeRoot, Assert.Single(_launcher.Runs).NativeStage!.RootPath);
+        }
+        finally
+        {
+            File.SetAttributes(markerA, FileAttributes.Normal);
+        }
+    }
+
+    /// <summary>
+    /// A restage that fails leaves the previous stage in place and
+    /// remembered, launches stay refused, and a retried setup completes.
+    /// </summary>
+    [Fact]
+    public async Task AFailedRestageKeepsThePreviousStageAndSetupCanBeRetried()
+    {
+        HostOptions a = CreatePackage("pkg-a", PackageA());
+        Assert.Equal(0, await RunAsync(a, "setup"));
+        string rootA = ReadSetup().AgentNativeRoot!;
+        HostOptions b = CreatePackage("pkg-b", PackageB());
+        string locked = Path.Combine(
+            b.PackagedApplicationDirectory!,
+            @"node_modules\@openclaw\fs-safe\dist\windows-security-helper.exe");
+
+        using (new FileStream(locked, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            Assert.Equal(1, await RunAsync(b, "setup"));
+        }
+
+        SetupRecord failed = _runtime.SetupState.Read(_runtime.ApplicationId).Record!;
+        Assert.Equal(SetupPhase.Preparing, failed.Phase);
+        Assert.Equal(rootA, failed.AgentNativeRoot);
+        Assert.Equal([rootA], Directory.GetDirectories(Path.GetDirectoryName(rootA)!));
+        SessionException refused = await Assert.ThrowsAsync<SessionException>(
+            () => RunAsync(b, "pwsh", "--command", "exit"));
+        Assert.Contains("clawctl setup", refused.Message, StringComparison.Ordinal);
+        Assert.Empty(_launcher.Runs);
+
+        Assert.Equal(0, await RunAsync(b, "setup"));
+        Assert.Equal(0, await RunAsync(b, "pwsh", "--command", "exit"));
+        Assert.NotEqual(rootA, Assert.Single(_launcher.Runs).NativeStage!.RootPath);
+        Assert.False(Directory.Exists(rootA));
+    }
+
     private static Dictionary<string, string> PackageA() => new()
     {
         [$"{JavaScriptPackage}/package.json"] = "{\"version\":\"0.25.0\"}",

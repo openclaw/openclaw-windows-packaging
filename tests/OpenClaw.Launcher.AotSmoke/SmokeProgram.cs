@@ -279,7 +279,7 @@ internal static partial class SmokeProgram
             int Install() => SessionRuntimeInstaller.Run(
                 requestPath, File.ReadAllText, File.WriteAllText,
                 getLocalApplicationData: () => directory,
-                stageNativeModules: (_, _) => null);
+                stageNativeModules: (_, _, _) => new NativeStagePublication(null, false, 0));
             Assert(Install() == 0, "Initial fixture runtime installation failed.");
             string executablePath = Path.Combine(
                 directory, "OpenClawGatewayMSIX", "agent-node", archiveRoot, "node.exe");

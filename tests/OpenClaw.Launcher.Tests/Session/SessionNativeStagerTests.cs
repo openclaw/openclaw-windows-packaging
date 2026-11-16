@@ -125,7 +125,7 @@ public sealed class SessionNativeStagerTests : IDisposable
         DateTime sentinel = new(2001, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         File.SetLastWriteTimeUtc(staged, sentinel);
 
-        string second = SessionNativeStager.Stage(application, local)!;
+        string second = SessionNativeStager.Stage(application, local, first)!;
 
         Assert.Equal(first, second);
         Assert.Equal(sentinel, File.GetLastWriteTimeUtc(staged));
@@ -141,7 +141,7 @@ public sealed class SessionNativeStagerTests : IDisposable
 
         string first = SessionNativeStager.Stage(application, local)!;
         WriteFile(modules, @"koffi\koffi.node", "a different native payload");
-        string second = SessionNativeStager.Stage(application, local)!;
+        string second = SessionNativeStager.Stage(application, local, first)!;
 
         Assert.NotEqual(first, second);
         Assert.False(
@@ -172,7 +172,7 @@ public sealed class SessionNativeStagerTests : IDisposable
         File.SetLastWriteTimeUtc(native, written);
         Assert.Equal(written, File.GetLastWriteTimeUtc(native));
 
-        string second = SessionNativeStager.Stage(application, local)!;
+        string second = SessionNativeStager.Stage(application, local, first)!;
 
         Assert.NotEqual(first, second);
         Assert.Equal(
@@ -202,7 +202,7 @@ public sealed class SessionNativeStagerTests : IDisposable
         using (File.Open(stagedNative, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
             WriteFile(modules, @"koffi\koffi.node", "a different native payload");
-            string second = SessionNativeStager.Stage(application, local)!;
+            string second = SessionNativeStager.Stage(application, local, first)!;
 
             Assert.NotEqual(first, second);
             Assert.True(
@@ -234,7 +234,7 @@ public sealed class SessionNativeStagerTests : IDisposable
             Assert.NotNull(lease);
 
             WriteFile(modules, @"koffi\koffi.node", "a different native payload");
-            string second = SessionNativeStager.Stage(application, local)!;
+            string second = SessionNativeStager.Stage(application, local, first)!;
 
             Assert.NotEqual(first, second);
             Assert.Equal(
@@ -261,12 +261,12 @@ public sealed class SessionNativeStagerTests : IDisposable
         using (SessionNativeStager.OpenConsumerLease(first))
         {
             WriteFile(modules, @"koffi\koffi.node", "a different native payload");
-            second = SessionNativeStager.Stage(application, local)!;
+            second = SessionNativeStager.Stage(application, local, first)!;
             Assert.True(Directory.Exists(first));
         }
 
         // Content is unchanged now, so this is the reuse path.
-        Assert.Equal(second, SessionNativeStager.Stage(application, local));
+        Assert.Equal(second, SessionNativeStager.Stage(application, local, second));
         Assert.False(
             Directory.Exists(first),
             "Releasing the consumer must let the next setup reclaim the root.");
@@ -376,7 +376,10 @@ public sealed class SessionNativeStagerTests : IDisposable
         Assert.True(File.Exists(Path.Combine(root, ".staged-content-id")));
         AssertStale(() => SessionNativeStager.Admit(application, root), state);
 
-        string repaired = SessionNativeStager.Stage(application, local)!;
+        string repaired = SessionNativeStager.Stage(application, local, root)!;
+
+        Assert.NotEqual(root, repaired);
+        Assert.False(Directory.Exists(root), "An unheld damaged stage must be reclaimed.");
 
         using FileStream? lease = SessionNativeStager.Admit(application, repaired);
         Assert.NotNull(lease);
@@ -410,6 +413,145 @@ public sealed class SessionNativeStagerTests : IDisposable
         {
             Directory.Delete(link);
         }
+    }
+
+    /// <summary>
+    /// A damaged stage can still be the one a running gateway resolves
+    /// through. Repair must publish elsewhere and leave it whole until its
+    /// consumer is gone.
+    /// </summary>
+    [Fact]
+    public void ADamagedStageStillHeldIsRepairedIntoANewGenerationAndLeftWhole()
+    {
+        string application = Path.Combine(_root, "app");
+        string modules = Path.Combine(application, "node_modules");
+        WriteFile(modules, @"fs-safe\dist\helper.exe", "helper");
+        WriteFile(modules, @"fs-safe\native.node", "native");
+        string local = Path.Combine(_root, "local");
+        string held = SessionNativeStager.Stage(application, local)!;
+        string repaired;
+        using (SessionNativeStager.OpenConsumerLease(held))
+        {
+            File.Delete(Path.Combine(held, @"node_modules\fs-safe\dist\helper.exe"));
+
+            repaired = SessionNativeStager.Stage(application, local, held)!;
+
+            Assert.NotEqual(held, repaired);
+            Assert.Equal("native", File.ReadAllText(Path.Combine(held, @"node_modules\fs-safe\native.node")));
+            using FileStream? lease = SessionNativeStager.Admit(application, repaired);
+            Assert.NotNull(lease);
+        }
+
+        Assert.Equal(repaired, SessionNativeStager.Stage(application, local, repaired));
+        Assert.False(Directory.Exists(held), "The released damaged stage must be reclaimed.");
+    }
+
+    /// <summary>
+    /// A copy that fails partway must neither publish a partial stage nor
+    /// disturb the one setup recorded before.
+    /// </summary>
+    [Fact]
+    public void AFailedRestageLeavesThePreviousStageAndPublishesNothing()
+    {
+        string application = Path.Combine(_root, "app");
+        string modules = Path.Combine(application, "node_modules");
+        WriteFile(modules, @"koffi\a.node", "native a");
+        WriteFile(modules, @"koffi\b.node", "native a");
+        string local = Path.Combine(_root, "local");
+        string previous = SessionNativeStager.Stage(application, local)!;
+        string parent = Path.GetDirectoryName(previous)!;
+        WriteFile(modules, @"koffi\a.node", "native b");
+        WriteFile(modules, @"koffi\b.node", "native b");
+
+        using (new FileStream(Path.Combine(modules, @"koffi\b.node"), FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            Assert.ThrowsAny<IOException>(() => SessionNativeStager.Stage(application, local, previous));
+        }
+
+        Assert.Equal([previous], Directory.GetDirectories(parent));
+        Assert.Equal("native a", File.ReadAllText(Path.Combine(previous, @"node_modules\koffi\b.node")));
+        Assert.True(File.Exists(Path.Combine(previous, ".staged-content-id")));
+    }
+
+    /// <summary>
+    /// Earlier releases recorded a root named by its content identifier. A
+    /// valid one is verified and kept, not copied again.
+    /// </summary>
+    [Fact]
+    public void AValidStageFromAnEarlierReleaseIsVerifiedAndKept()
+    {
+        string application = Path.Combine(_root, "app");
+        WriteFile(Path.Combine(application, "node_modules"), @"koffi\koffi.node", "native");
+        string local = Path.Combine(_root, "local");
+        string generation = SessionNativeStager.Stage(application, local)!;
+        string legacy = Path.Combine(
+            Path.GetDirectoryName(generation)!,
+            NativeStageInventory.Load(application)!.ContentId);
+        Directory.Move(generation, legacy);
+        string staged = Path.Combine(legacy, @"node_modules\koffi\koffi.node");
+        DateTime sentinel = new(2001, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(staged, sentinel);
+
+        using (FileStream? lease = SessionNativeStager.Admit(application, legacy))
+        {
+            Assert.NotNull(lease);
+        }
+
+        Assert.Equal(legacy, SessionNativeStager.Stage(application, local, currentRootPath: null));
+        Assert.Equal(sentinel, File.GetLastWriteTimeUtc(staged));
+    }
+
+    /// <summary>
+    /// The reclaim gate and consumer leases exclude each other in both
+    /// orders, so a launch cannot be admitted to a root as it is retired.
+    /// </summary>
+    [Fact]
+    public void TheReclaimGateAndConsumerLeasesExcludeEachOther()
+    {
+        string application = Path.Combine(_root, "app");
+        WriteFile(Path.Combine(application, "node_modules"), @"koffi\koffi.node", "native");
+        string root = SessionNativeStager.Stage(application, Path.Combine(_root, "local"))!;
+
+        using (SessionNativeStager.Admit(application, root))
+        {
+            Assert.Null(SessionNativeStager.TryOpenReclaimGate(root));
+            Assert.False(SessionNativeStager.TryReclaim(root));
+            Assert.True(File.Exists(Path.Combine(root, ".staged-content-id")));
+        }
+
+        using (FileStream? gate = SessionNativeStager.TryOpenReclaimGate(root))
+        {
+            Assert.NotNull(gate);
+            Assert.Null(SessionNativeStager.OpenConsumerLease(root));
+            AssertStale(() => SessionNativeStager.Admit(application, root), "missing");
+        }
+
+        Assert.True(SessionNativeStager.TryReclaim(root));
+        Assert.False(Directory.Exists(root));
+    }
+
+    /// <summary>
+    /// A file mapped without a lease still blocks a partial delete: the root
+    /// is retired so nothing new is admitted, but kept whole until released.
+    /// </summary>
+    [Fact]
+    public void ARetiredRootWithAnOpenFileIsKeptWholeUntilReleased()
+    {
+        string application = Path.Combine(_root, "app");
+        string modules = Path.Combine(application, "node_modules");
+        WriteFile(modules, @"koffi\koffi.node", "native");
+        WriteFile(modules, @"koffi\index.js", "loader");
+        string root = SessionNativeStager.Stage(application, Path.Combine(_root, "local"))!;
+
+        using (File.Open(Path.Combine(root, @"node_modules\koffi\koffi.node"), FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            Assert.False(SessionNativeStager.TryReclaim(root));
+            Assert.Equal("loader", File.ReadAllText(Path.Combine(root, @"node_modules\koffi\index.js")));
+            AssertStale(() => SessionNativeStager.Admit(application, root), "missing");
+        }
+
+        Assert.True(SessionNativeStager.TryReclaim(root));
+        Assert.False(Directory.Exists(root));
     }
 
     [Fact]
