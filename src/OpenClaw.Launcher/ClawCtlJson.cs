@@ -23,7 +23,25 @@ internal sealed record ClawCtlJsonDocument(
     ClawCtlJsonIntegration? Integration = null,
     ClawCtlJsonCompanion? Companion = null,
     SessionStateTransferResult? StateTransfer = null,
-    IReadOnlyList<StateTransfer.StateArchiveEntry>? Archives = null);
+    IReadOnlyList<StateTransfer.StateArchiveEntry>? Archives = null,
+    ClawCtlJsonNativeStage? NativeStage = null);
+
+// Present only for `status --native`. `inspected` is false, with a reason,
+// whenever no fresh guest report was taken; nothing here is a cached result.
+internal sealed record ClawCtlJsonNativeStage(
+    bool Inspected,
+    string State,
+    string? Reason = null,
+    string? Provenance = null,
+    string? ExpectedContentId = null,
+    string? StagedContentId = null,
+    int? ExpectedFiles = null,
+    int? VerifiedFiles = null,
+    int? MissingFiles = null,
+    int? UnexpectedFiles = null,
+    int? ChangedFiles = null,
+    IReadOnlyList<SessionNativeStagePackage>? Packages = null,
+    string? Repair = null);
 
 internal sealed record ClawCtlJsonIntegration(string Kind, int Version)
 {
@@ -261,11 +279,35 @@ internal static class ClawCtlJson
                     : null),
             Recovery: new ClawCtlJsonRecovery(DescribeRecovery(result.Recovery.State)),
             StateTransfer: result.StateTransfer,
+            NativeStage: FromNativeStage(result.NativeStage),
             Error: result.ExitCode == 0
                 ? null
                 : new ClawCtlJsonError(
                     "cli_error",
                     "One or more status checks require attention."));
+
+    private static ClawCtlJsonNativeStage? FromNativeStage(NativeStageStatus? native) =>
+        native switch
+        {
+            null => null,
+            { Report: { Error: null } report } => new ClawCtlJsonNativeStage(
+                true,
+                report.State!,
+                Provenance: report.Provenance,
+                ExpectedContentId: report.ExpectedContentId,
+                StagedContentId: report.StagedContentId,
+                ExpectedFiles: report.ExpectedFiles,
+                VerifiedFiles: report.VerifiedFiles,
+                MissingFiles: report.MissingFiles,
+                UnexpectedFiles: report.UnexpectedFiles,
+                ChangedFiles: report.ChangedFiles,
+                Packages: report.Packages,
+                Repair: native.RequiresSetup ? "clawctl setup" : null),
+            { Report.Error: { } error } => new ClawCtlJsonNativeStage(
+                false, "unavailable", NormalizeMessage(error)),
+            _ => new ClawCtlJsonNativeStage(
+                false, "not-inspected", NormalizeOptionalMessage(native.NotInspected))
+        };
 
     private static ClawCtlJsonDocument FromCollectLogs(CollectLogsCommandResult result) =>
         new(

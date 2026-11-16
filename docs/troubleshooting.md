@@ -69,6 +69,13 @@ own profile. After a package update, or if those copies were altered, the
 installed application would otherwise run with mismatched native code and fail
 far from the cause, for example as an unavailable fs-safe helper.
 
+To see which packages differ, run `clawctl status --native` (add `--json` for
+the machine-readable report). It compares the installed package's native
+dependencies with the agent's staged copies without changing either, and shows
+for each package its source and staged versions and whether it resolves from the
+stage or from the immutable package. A package that resolves from the immutable
+package, including any worker it starts, cannot load native code there.
+
 **Fix.** Run:
 
 ```powershell

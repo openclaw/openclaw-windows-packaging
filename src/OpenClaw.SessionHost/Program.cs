@@ -47,7 +47,7 @@ internal static class Program
             errorOutput.WriteLine(
                 "openclaw-session-host: usage: openclaw-session-host " +
                 "--request|--supervise|--inspect|--stop|--collect|--install-runtime|" +
-                "--install-tools|--check-config|--companion-config|--state-transfer <path>");
+                "--install-tools|--check-config|--companion-config|--state-transfer|--inspect-native <path>");
             return SessionLaunchProtocol.HelperFailureExitCode;
         }
 
@@ -79,6 +79,8 @@ internal static class Program
             case "--state-transfer":
                 return SessionStateTransfer.Run(
                     requestPath, readFile, File.WriteAllText);
+            case "--inspect-native":
+                return SessionNativeStageInspector.Run(requestPath, readFile, File.WriteAllText);
         }
 
         if (args[0] == "--collect")
@@ -187,7 +189,8 @@ internal static class Program
 
         if (args[0] is not ("--request" or "--supervise" or "--inspect" or "--stop" or
             "--collect" or "--install-runtime" or "--install-tools" or "--check-config" or
-            "--companion-config" or "--state-transfer") && !WindowsInvocationJob.IsMode(args[0]))
+            "--companion-config" or "--state-transfer" or "--inspect-native") &&
+            !WindowsInvocationJob.IsMode(args[0]))
         {
             return false;
         }

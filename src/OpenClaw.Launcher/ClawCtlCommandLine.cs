@@ -10,7 +10,7 @@ internal sealed record ClawCtlHandlers
     public Func<RestoreOptions, CancellationToken, Task<int>>? Restore { get; init; }
     public Func<RecoverOptions, CancellationToken, Task<int>>? Recover { get; init; }
     public required Func<SetupOptions, CancellationToken, Task<int>> Setup { get; init; }
-    public required Func<CancellationToken, Task<int>> Status { get; init; }
+    public required Func<StatusOptions, CancellationToken, Task<int>> Status { get; init; }
     public required Func<string?, CancellationToken, Task<int>> CollectLogs { get; init; }
     public required Func<bool, CancellationToken, Task<int>> Teardown { get; init; }
     public Func<CancellationToken, Task<int>> Open { get; init; } = _ => Task.FromResult(1);
@@ -27,6 +27,9 @@ internal sealed record ClawCtlHandlers
 }
 
 internal sealed record SetupOptions(bool Fresh, bool Force);
+
+/// <param name="Native">Also inspect the agent's staged native dependencies.</param>
+internal sealed record StatusOptions(bool Native);
 internal sealed record GatewayStartOptions(bool Recovery, string? AttemptId);
 internal sealed record BackupOptions(string? Path, bool List, bool DryRun);
 internal sealed record RestoreOptions(string? Path, bool DryRun, bool Yes, bool Rollback);
@@ -132,12 +135,19 @@ internal static partial class ClawCtlCommandLine
             StatusCommandName,
             "Show whether the session, gateway, and sign-in recovery are ready.");
         Option<bool> statusJson = CreateJsonOption();
+        Option<bool> statusNative = new("--native")
+        {
+            Description =
+                "Also verify the agent's staged native dependencies against the installed package. " +
+                "Starts the recorded isolated session if it is stopped; changes no setup or staged files."
+        };
+        status.Options.Add(statusNative);
         status.Options.Add(statusJson);
         status.SetAction((parsed, cancellationToken) =>
         {
             outputOptions.Json = IsJsonRequested(parsed, rootJson, statusJson);
             outputOptions.NoColor = parsed.GetValue(noColor);
-            return handlers.Status(cancellationToken);
+            return handlers.Status(new StatusOptions(parsed.GetValue(statusNative)), cancellationToken);
         });
         Option<string?> outputPath = new("--output")
         {
