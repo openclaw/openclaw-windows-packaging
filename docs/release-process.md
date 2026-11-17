@@ -207,7 +207,8 @@ all selected identity channels pass does `sign-msix` request Azure credentials.
 `sign-msix` runs for `store` and `official`. Executables that run outside the
 installed package lose its catalog trust: the session host is copied into the
 agent's shared workspace before it runs, where Smart App Control and App
-Control evaluate the copy by its own signature. So `sign-msix` first unpacks
+Control evaluate the copy without the catalog: by its own signature, or by
+per-file cloud reputation when it has none. So `sign-msix` first unpacks
 the authorized packages with `scripts\Invoke-MSIXExecutableSigning.ps1` and
 signs exactly `openclaw.exe`, `openclaw-gateway-recovery.exe`, and the
 `session-host\<architecture>` files through Azure Artifact Signing with an

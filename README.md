@@ -915,8 +915,10 @@ Official signing uses the protected `release-signing` environment, Azure OIDC,
 and the existing OpenClaw Artifact Signing account and certificate profile.
 `store` and `official` runs both use it to embed timestamped Authenticode
 signatures in the executables this repository builds before any package is
-retained or signed. The session host runs from a copy outside the package, where
-Smart App Control and App Control trust only that embedded signature; see the
+retained or signed. The session host runs from a copy outside the package, which
+loses the package catalog's trust. Its embedded signature lets Smart App Control
+and App Control admit the copy by signer, subject to the active policy, instead
+of by per-file cloud reputation; see the
 [release process](docs/release-process.md#watch-the-release-workflow).
 Test-signing private keys are generated only on the temporary GitHub runner
 and are deleted before artifacts are uploaded. No signing secret or private

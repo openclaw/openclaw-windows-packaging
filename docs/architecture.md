@@ -191,9 +191,10 @@ package identity's WindowsApps directory. The shared workspace is visible to
 both identities. This is a required execution bridge, not a caching or startup
 optimization; staging verifies the packaged source and reports a staging
 failure rather than silently substituting another executable. The copy leaves
-the package's signed catalog behind, so Smart App Control and App Control admit
-it only by its own embedded Authenticode signature. Release packages carry
-that signature; see the [release process](release-process.md#watch-the-release-workflow).
+the package's signed catalog behind. Its embedded Authenticode signature lets
+Smart App Control and App Control admit it by signer, subject to the active
+policy; an unsigned copy depends on per-file cloud reputation. Release packages
+carry that signature; see the [release process](release-process.md#watch-the-release-workflow).
 Gateway start (including logon recovery) refreshes this versioned helper under the installation
 lifecycle lock before inspecting a retained Gateway process. It reuses the
 configured session without rewriting setup, identity, or profile data. Status
