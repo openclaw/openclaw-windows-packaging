@@ -1092,8 +1092,10 @@ internal static class Program
                                         log,
                                         cancellationToken).ConfigureAwait(false);
 
-                            int? port = result.Record?.ObservedPorts is { Count: 1 }
-                                ? result.Record.ObservedPorts[0]
+                            // Only an observed listener is reported: a launch-pinned port among
+                            // several, as for start results, or the single listener.
+                            int? port = result.Record?.ObservedPorts is { Count: > 0 }
+                                ? Gateway.GatewayAddress.ResolvePort(result.Record)
                                 : null;
                             return new GatewayCommandResult(
                                 "status",

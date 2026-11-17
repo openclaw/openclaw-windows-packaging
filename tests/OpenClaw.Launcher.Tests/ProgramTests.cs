@@ -2191,12 +2191,17 @@ public sealed class ProgramTests : IDisposable
             StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public async Task GatewayStatusAttestsEveryOwnedListenerWhenThePortIsAmbiguous()
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData(51789, 51789)]
+    [InlineData(51700, null)]
+    public async Task GatewayStatusAttestsEveryOwnedListenerAndReportsOnlyAnObservedPinnedPort(
+        int? pinnedPort, int? expectedPort)
     {
-        // MCP apps add a sandbox host listener beside the gateway port (#260). Status
-        // cannot name the endpoint, so it reports no port but still attests both
-        // listeners for Companion, which selects the port it prepared.
+        // A second listener in the gateway process, such as the MCP App sandbox host or
+        // the Codex plugin's loopback inference proxy on an OS-assigned port (#260),
+        // leaves the endpoint ambiguous. Status still attests both listeners, and
+        // reports the launch-pinned port only when it is one of them.
         SessionRuntime runtime = await SetUpSessionAsync();
         SessionRecord session = runtime.RequireSetup();
         var backend = (FakeMxcSessionClient)runtime.Backend;
@@ -2207,12 +2212,13 @@ public sealed class ProgramTests : IDisposable
             ProcessId = 42,
             ProcessStartTimeUtc = started,
             HelperPath = runtime.HelperPath,
+            Port = pinnedPort,
             ObservedPorts = [51789],
         });
         SessionOwnedListener[] owned =
         [
             new() { Port = 51789, ProcessId = 43, ProcessStartTimeUtc = started, SequenceNumber = 77 },
-            new() { Port = 51790, ProcessId = 43, ProcessStartTimeUtc = started, SequenceNumber = 77 },
+            new() { Port = 52535, ProcessId = 43, ProcessStartTimeUtc = started, SequenceNumber = 77 },
         ];
         backend.ExecuteBehavior = _ =>
         {
@@ -2230,7 +2236,7 @@ public sealed class ProgramTests : IDisposable
                         ProcessFound = true,
                         StartTimeMatches = true,
                         PortListening = true,
-                        ListeningPorts = [51789, 51790],
+                        ListeningPorts = [51789, 52535],
                         ListenerOwned = true,
                         OwnedListeners = owned,
                     }));
@@ -2251,12 +2257,14 @@ public sealed class ProgramTests : IDisposable
         using JsonDocument document = JsonDocument.Parse(output.ToString());
         JsonElement gateway = document.RootElement.GetProperty("gateway");
         Assert.Equal("running", gateway.GetProperty("state").GetString());
-        Assert.False(gateway.TryGetProperty("port", out _));
+        Assert.Equal(
+            expectedPort,
+            gateway.TryGetProperty("port", out JsonElement port) ? port.GetInt32() : null);
         JsonElement ownership = gateway.GetProperty("ownership");
         Assert.Equal(session.SandboxId, ownership.GetProperty("sandboxId").GetString());
         Assert.Equal(session.AgentUserSid, ownership.GetProperty("agentUserSid").GetString());
         Assert.Equal(
-            [51789, 51790],
+            [51789, 52535],
             ownership.GetProperty("listeners").EnumerateArray()
                 .Select(listener => listener.GetProperty("port").GetInt32()));
     }

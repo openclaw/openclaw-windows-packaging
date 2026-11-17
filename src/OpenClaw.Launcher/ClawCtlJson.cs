@@ -343,7 +343,7 @@ internal static class ClawCtlJson
         record?.ObservedPorts is { Count: 1 } ports ? ports[0] : null;
 
     // The gateway can own several listeners, such as OpenClaw's MCP App sandbox host
-    // beside the gateway port. Without a single resolved port the attested listeners
+    // beside the gateway port or a plugin's loopback proxy. Without a single resolved port the attested listeners
     // are still reported, and a caller that configured the endpoint selects it among
     // them. A reported port must be one of the attested listeners.
     private static ClawCtlJsonOwnership? FromOwnership(
