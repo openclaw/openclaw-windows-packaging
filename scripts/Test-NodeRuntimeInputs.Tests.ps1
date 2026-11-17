@@ -81,6 +81,8 @@ try {
     @'
 const fs = require("node:fs");
 fs.writeFileSync("installed-architecture.txt", process.arch);
+fs.writeFileSync("installed-directory.txt", __dirname);
+fs.writeFileSync("installed-cache.txt", process.env.npm_config_cache);
 fs.unlinkSync(".openclaw-lifecycle-pending");
 '@ | Set-Content -LiteralPath "$source\install.cjs"
     Copy-Item `
@@ -321,6 +323,12 @@ fs.unlinkSync(".openclaw-lifecycle-pending");
     if (-not (Test-Path -LiteralPath "$reusedPayload\app\openclaw.mjs")) {
         throw 'The reused staged install did not produce an application payload.'
     }
+    if ([IO.File]::ReadAllText("$reusedPayload\app\installed-directory.txt") -cne
+        (Join-Path $testRoot "openclaw-stage-$nodeArchitecture\node_modules\openclaw") -or
+        [IO.File]::ReadAllText("$reusedPayload\app\installed-cache.txt") -cne
+        (Join-Path $testRoot "openclaw-npm-cache-$nodeArchitecture")) {
+        throw 'Caller-provided RUNNER_TEMP must retain its staging and cache paths for reuse.'
+    }
     if (
         -not (
             Test-Path `
@@ -330,6 +338,58 @@ fs.unlinkSync(".openclaw-lifecycle-pending");
     ) {
         throw 'The reused staged install did not regenerate PowerShell completion.'
     }
+
+    $previousTemp = $env:TEMP
+    $previousTmp = $env:TMP
+    $previousRuntimeFailure = $env:OPENCLAW_FIXTURE_FAIL_RUNTIME
+    $localTemp = Join-Path $testRoot 'local temp'
+    New-Item -ItemType Directory -Path $localTemp | Out-Null
+    try {
+        $env:TEMP = $localTemp
+        $env:TMP = $localTemp
+        $env:RUNNER_TEMP = $null
+        $env:OPENCLAW_FIXTURE_FAIL_RUNTIME = $null
+        $localPayload = Join-Path $testRoot 'local-payload'
+        & "$PSScriptRoot\Build-Payload.ps1" `
+            -PackageDirectory $package -Architecture $nodeArchitecture `
+            -OutputDirectory $localPayload
+        $installedDirectory = [IO.File]::ReadAllText("$localPayload\app\installed-directory.txt")
+        $localRoot = Split-Path (Split-Path (Split-Path $installedDirectory -Parent) -Parent) -Parent
+        $localCache = [IO.File]::ReadAllText("$localPayload\app\installed-cache.txt")
+        if ((Split-Path $localRoot -Parent) -cne $localTemp -or
+            (Split-Path $localRoot -Leaf) -notlike 'openclaw-payload-*' -or
+            $localCache -cne (Join-Path $localRoot "openclaw-npm-cache-$nodeArchitecture") -or
+            (Test-Path -LiteralPath $localRoot) -or
+            -not [string]::IsNullOrEmpty($env:RUNNER_TEMP) -or
+            -not (Test-Path -LiteralPath "$localPayload\payload-metadata.json")) {
+            throw 'Local payload preparation must isolate and clean its own stage/cache without changing RUNNER_TEMP or removing its output.'
+        }
+        Assert-Fails -MessagePattern 'ReuseStagedInstall requires RUNNER_TEMP' -Action {
+            & "$PSScriptRoot\Build-Payload.ps1" `
+                -PackageDirectory $package -Architecture $nodeArchitecture `
+                -OutputDirectory (Join-Path $testRoot 'unowned-reuse') `
+                -ReuseStagedInstall
+        }
+        $env:OPENCLAW_FIXTURE_FAIL_RUNTIME = '1'
+        Assert-Fails -MessagePattern 'cannot load the Gateway isolation plugin' -Action {
+            & "$PSScriptRoot\Build-Payload.ps1" `
+                -PackageDirectory $package -Architecture $nodeArchitecture `
+                -OutputDirectory (Join-Path $testRoot 'failed-local-payload')
+        }
+        $global:LASTEXITCODE = 0
+        if (@(Get-ChildItem -LiteralPath $localTemp -Directory -Filter 'openclaw-payload-*').Count -ne 0 -or
+            -not (Test-Path -LiteralPath (Join-Path $currentStage '.openclaw-install.json')) -or
+            [IO.File]::ReadAllText((Join-Path $ambientPrefix 'preserve.txt')) -cne 'preserve') {
+            throw 'Failed local preparation must clean only its private root and preserve caller-owned reusable state.'
+        }
+    }
+    finally {
+        $env:TEMP = $previousTemp
+        $env:TMP = $previousTmp
+        $env:RUNNER_TEMP = $testRoot
+        $env:OPENCLAW_FIXTURE_FAIL_RUNTIME = $previousRuntimeFailure
+    }
+
     $stagedPackage = Join-Path $currentStage 'node_modules\openclaw'
     foreach ($guard in @('.openclaw-lifecycle-pending', 'dist\openclaw-install-guard')) {
         $guardPath = Join-Path $stagedPackage $guard

@@ -939,6 +939,10 @@ function Get-LocalPackageOperations {
                     $metadataArgs += "-p:ClawCtlPackageCommit=$($metadata.PackageCommit)"
                 }
                 $metadataArgs += "-p:ClawCtlPackageVersion=$($metadata.PackageVersion)"
+                # The session helper stages under the launcher's assembly version; match
+                # Build-MSIX so a redeploy never overwrites a helper that is still running.
+                $metadataArgs += "-p:AssemblyVersion=$($metadata.PackageVersion)"
+                $metadataArgs += "-p:FileVersion=$($metadata.PackageVersion)"
                 $metadataArgs += "-p:ClawCtlPayloadVersion=$($metadata.PayloadVersion)"
                 $metadataArgs += "-p:ClawCtlPayloadCommit=$($metadata.PayloadCommit)"
             }
@@ -1484,19 +1488,24 @@ function Get-LocalPackageNextVersion {
     if ($previous -gt $highest) { $highest = $previous }
 
     $days = [int]($Now.Date - [datetime]'2020-01-01').TotalDays
-    if ($days -lt 0 -or $days -gt [uint16]::MaxValue) {
+    # The version also becomes the launcher's AssemblyVersion, whose components must
+    # stay below 65535. Existing records may still carry 65535; the result exceeds them.
+    $limit = [uint16]::MaxValue - 1
+    if ($days -lt 0 -or $days -gt $limit) {
         throw 'The current date cannot be encoded as a local package version.'
     }
-    $candidate = [version]"0.1.$days.$([int]$Now.TimeOfDay.TotalSeconds % 65536)"
+    $candidate = [version]"0.1.$days.$([int]$Now.TimeOfDay.TotalSeconds % ($limit + 1))"
     if ($candidate -gt $highest) { return $candidate.ToString(4) }
 
     $parts = @($highest.Major, $highest.Minor, $highest.Build, $highest.Revision)
-    for ($index = 3; $index -ge 0; $index--) {
-        if ($parts[$index] -lt [uint16]::MaxValue) {
+    $index = [array]::IndexOf($parts, [int][uint16]::MaxValue)
+    if ($index -lt 0) { $index = 4 }
+    for ($index--; $index -ge 0; $index--) {
+        if ($parts[$index] -lt $limit) {
             $parts[$index]++
+            for ($rest = $index + 1; $rest -lt 4; $rest++) { $parts[$rest] = 0 }
             return $parts -join '.'
         }
-        $parts[$index] = 0
     }
     throw 'The local package version space is exhausted.'
 }

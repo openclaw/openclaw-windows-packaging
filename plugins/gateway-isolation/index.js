@@ -3,8 +3,9 @@ const STATUS_PATH = "/plugins/gateway-isolation/status";
 const THEME_MESSAGE_TYPE = "openclaw:widget-theme";
 const ISOLATION_AGENT_CONTEXT = [
   "## Windows agent session",
-  "The Gateway and local tools run in an isolated Windows agent session, not the user's desktop: local windows are invisible to the user, and local file access does not imply user access.",
-  "Do not solicit or expose credentials/tokens, bypass MFA/consent, alter ACLs/isolation, open local GUI for human participation, or export private workspaces; consult windows-agent-handoff for supported GUI, sign-in, and verified nonsensitive file delivery.",
+  "Gateway/tools: isolated Windows agent session; GUI is invisible to users. All human profile folders, even redirected/cloud aliases, are off-limits: no profile probes, access requests or agent-folder substitution.",
+  "Before advice or action on human folders, delivery, GUI or sign-in (even observational), read full windows-agent-handoff. If unreadable, report blocked; invent no route/tool. Private headless/agent-local work stays local.",
+  "Never solicit/expose credentials or secrets, bypass MFA/consent/isolation, or change ACLs. No local GUI for human input.",
 ].join("\n\n");
 const COMMAND_GROUPS = [
   {
