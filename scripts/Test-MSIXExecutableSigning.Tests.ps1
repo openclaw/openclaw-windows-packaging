@@ -149,8 +149,19 @@ function Get-EntryHashes {
     $hashes
 }
 
+function Get-BundleManifest {
+    param([string]$Path)
+
+    $archive = [IO.Compression.ZipFile]::OpenRead($Path)
+    try {
+        $reader = [IO.StreamReader]::new($archive.GetEntry('AppxMetadata/AppxBundleManifest.xml').Open())
+        try { $reader.ReadToEnd() } finally { $reader.Dispose() }
+    }
+    finally { $archive.Dispose() }
+}
+
 function New-FixtureArtifacts {
-    param([string]$Root, [byte]$MarkerBase = 1, [switch]$Bundle)
+    param([string]$Root, [byte]$MarkerBase = 1, [switch]$Bundle, [string]$PackageVersion = $version, [string]$BundleVersion = $PackageVersion)
 
     foreach ($architecture in $architectures) {
         $layout = Join-Path $Root "layouts\$architecture"
@@ -162,7 +173,7 @@ function New-FixtureArtifacts {
         @"
 <?xml version="1.0" encoding="utf-8"?>
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities" IgnorableNamespaces="uap rescap">
-  <Identity Name="OpenClaw.Fixture" Publisher="$publisher" Version="$version" ProcessorArchitecture="$architecture" />
+  <Identity Name="OpenClaw.Fixture" Publisher="$publisher" Version="$PackageVersion" ProcessorArchitecture="$architecture" />
   <Properties>
     <DisplayName>OpenClaw Fixture</DisplayName>
     <PublisherDisplayName>OpenClaw</PublisherDisplayName>
@@ -219,7 +230,7 @@ function New-FixtureArtifacts {
             archive = "OpenClawGateway-$architecture.msix"
             sha256 = Get-Sha256 $msix
             signed = $false
-            packageVersion = $version
+            packageVersion = $PackageVersion
             sessionHostFiles = @([ordered]@{
                     path = 'openclaw-session-host.exe'
                     length = (Get-Item $sessionHost).Length
@@ -238,7 +249,7 @@ function New-FixtureArtifacts {
         & $bundleScript `
             -X64Package (Join-Path $Root 'artifacts\x64\OpenClawGateway-x64.msix') `
             -Arm64Package (Join-Path $Root 'artifacts\arm64\OpenClawGateway-arm64.msix') `
-            -PackageVersion $version `
+            -PackageVersion $BundleVersion `
             -OutputPath (Join-Path $Root 'artifacts\bundle\OpenClawGateway.msixbundle') `
             -MakeAppxPath $makeAppx | Out-Null
     }
@@ -410,6 +421,28 @@ try {
         -Pattern 'does not contain the authorized x64 package' `
         -Because 'Preparation accepted a bundle with substituted packages.'
     Write-Host 'Preparation rejects bundles that embed unauthorized packages.'
+
+    # The rebuilt bundle keeps the authorized bundle's identity even when its
+    # version differs from the packages', including the 0.0.0.0 packages for
+    # which MakeAppx generates the bundle version.
+    foreach ($versionCase in @(
+            @{ Name = 'bundle-version'; PackageVersion = $version; BundleVersion = '9.8.7.0' },
+            @{ Name = 'bundle-zero-version'; PackageVersion = '0.0.0.0'; BundleVersion = '0.0.0.0' }
+        )) {
+        $case = Get-CaseDirectories $versionCase.Name
+        $artifacts = New-FixtureArtifacts -Root $case.Root -Bundle `
+            -PackageVersion $versionCase.PackageVersion -BundleVersion $versionCase.BundleVersion
+        & $signingScript -Phase All -ArtifactsDirectory $artifacts -WorkDirectory $case.Work `
+            -SigningDirectory $case.Signing -OutputDirectory $case.Output `
+            -PfxPath $certificate.Path -PfxPassword $certificate.Password -MakeAppxPath $makeAppx |
+            Out-Null
+        $sourceVersion = ([xml](Get-BundleManifest (Join-Path $artifacts 'bundle\OpenClawGateway.msixbundle'))).Bundle.Identity.Version
+        $rebuiltVersion = ([xml](Get-BundleManifest (Join-Path $case.Output 'bundle\OpenClawGateway.msixbundle'))).Bundle.Identity.Version
+        if ($rebuiltVersion -cne $sourceVersion) {
+            throw "The $($versionCase.Name) rebuild changed the bundle version from $sourceVersion to $rebuiltVersion."
+        }
+    }
+    Write-Host 'Rebuilt bundles keep the authorized bundle version, including generated zero-version bundles.'
 
     # Test mode rehearses the release order with its temporary certificate:
     # executables first, then the packages and the bundle.

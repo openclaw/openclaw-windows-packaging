@@ -154,6 +154,7 @@ function Read-BundleIdentity {
     )
     [pscustomobject]@{
         Identity = '{0}|{1}|{2}' -f $identity.Name, $identity.Publisher, $identity.Version
+        Version = [string]$identity.Version
         Packages = $packages -join ';'
     }
 }
@@ -507,11 +508,15 @@ function Invoke-Complete {
         if ($completed['x64'].Version -cne $completed['arm64'].Version) {
             throw 'The x64 and arm64 package versions do not match.'
         }
+        # Reuse the authorized bundle's own version: MakeAppx assigns a
+        # generated one when the packages are 0.0.0.0, so the package version
+        # cannot reproduce that bundle identity.
+        $sourceIdentity = Read-BundleIdentity $manifest.bundle.source
         $bundlePath = Join-Path $output "bundle\$(Split-Path $manifest.bundle.source -Leaf)"
         & (Join-Path $PSScriptRoot 'Build-MSIXBundle.ps1') `
             -X64Package $completed['x64'].Path `
             -Arm64Package $completed['arm64'].Path `
-            -PackageVersion $completed['x64'].Version `
+            -PackageVersion $sourceIdentity.Version `
             -OutputPath $bundlePath `
             -MakeAppxPath $script:makeAppx
 
@@ -525,7 +530,6 @@ function Invoke-Complete {
                 throw "The rebuilt MSIX bundle does not contain the signed $architecture package."
             }
         }
-        $sourceIdentity = Read-BundleIdentity $manifest.bundle.source
         $rebuiltIdentity = Read-BundleIdentity $bundlePath
         if (
             $sourceIdentity.Identity -cne $rebuiltIdentity.Identity -or
