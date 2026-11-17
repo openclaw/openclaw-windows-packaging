@@ -37,15 +37,20 @@ internal static class SessionTerminator
             return SessionLaunchProtocol.HelperFailureExitCode;
         }
 
-        Write(writeFile, resultPath, Stop(request, readFile));
+        Write(writeFile, resultPath, Stop(request, readFile, grace: GatewayStopGrace.ConsoleInterrupt));
         return 0;
     }
 
+    /// <remarks>
+    /// A null <paramref name="grace"/> terminates at once; only the <c>--stop</c> helper, a dedicated
+    /// short-lived process, can safely send the gateway its console stop request.
+    /// </remarks>
     internal static SessionInspectResult Stop(
         SessionInspectRequest request,
         Func<string, string> readFile,
         Action<Process>? probeAccess = null,
-        Func<IReadOnlyDictionary<int, DateTimeOffset>>? captureCreationTimes = null)
+        Func<IReadOnlyDictionary<int, DateTimeOffset>>? captureCreationTimes = null,
+        GatewayStopGrace? grace = null)
     {
         try
         {
@@ -84,6 +89,10 @@ internal static class SessionTerminator
             // state lease the supervisor holds ends with it. Holding the job lets this stop wait out the whole tree.
             using WindowsKillOnCloseJob? tree = WindowsKillOnCloseJob.TryOpen(
                 WindowsKillOnCloseJob.GatewayJobName(process.Id, process.StartTime.ToUniversalTime().Ticks));
+            if (tree is not null)
+            {
+                grace?.Request(tree);
+            }
             process.Kill();
             if (!process.WaitForExit(30_000))
             {
@@ -135,6 +144,44 @@ internal static class SessionTerminator
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException)
         {
+        }
+    }
+}
+
+/// <summary>
+/// A bounded chance for a gateway to stop itself before its process tree is terminated.
+/// </summary>
+/// <remarks>
+/// Terminating the gateway outright skips its shutdown, so it never releases its agent database
+/// lease, and the next start must recover that lease as a crash. That recovery can push startup
+/// past the listener wait. Termination remains the fallback: a gateway that ignores the request,
+/// or is still draining work when the period ends, is terminated exactly as before.
+/// </remarks>
+internal sealed record GatewayStopGrace(Func<IReadOnlyList<int>, bool> Interrupt, TimeSpan Period)
+{
+    /// <summary>The <c>--stop</c> helper's request: Ctrl+C on the gateway's own console.</summary>
+    /// <remarks>
+    /// An idle gateway closes its databases within a second of the request. Fifteen seconds leaves
+    /// room for slower devices and short in-flight work while keeping the whole stop well inside
+    /// callers' command deadlines; a gateway still draining long work is terminated instead.
+    /// </remarks>
+    public static GatewayStopGrace ConsoleInterrupt { get; } =
+        new(GatewayConsoleControl.TryInterrupt, TimeSpan.FromSeconds(15));
+
+    /// <summary>Sends the request and waits for the tree to exit; never terminates anything.</summary>
+    public void Request(WindowsKillOnCloseJob tree)
+    {
+        try
+        {
+            // Members stay pinned while the request is sent, so it reaches only this gateway's tree.
+            if (tree.WithLiveMembers(members => members.Count > 0 && Interrupt(members)))
+            {
+                _ = tree.WaitForMembersToExit(Period);
+            }
+        }
+        catch (Win32Exception)
+        {
+            // An unobservable tree gets no grace; the caller's termination still applies.
         }
     }
 }

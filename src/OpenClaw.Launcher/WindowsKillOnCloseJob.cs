@@ -335,36 +335,9 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
     {
         Stopwatch elapsed = Stopwatch.StartNew();
         CloseAdmission();
-        List<SafeProcessHandle> pinned = [];
+        List<SafeProcessHandle> pinned = PinMembers();
         try
         {
-            foreach (nuint processId in ReadMemberIds())
-            {
-                SafeProcessHandle member = OpenProcess(ProcessSynchronize | ProcessQueryLimitedInformation, false, (uint)processId);
-                if (member.IsInvalid)
-                {
-                    int error = Marshal.GetLastWin32Error();
-                    member.Dispose();
-                    // Only an invalid ID identifies a member that already exited.
-                    if (error == ErrorInvalidParameter)
-                    {
-                        continue;
-                    }
-                    throw new Win32Exception(error, "Unable to pin an OpenClaw process job member.");
-                }
-                if (!IsProcessInJob(member, _handle, out bool inJob))
-                {
-                    int error = Marshal.GetLastWin32Error();
-                    member.Dispose();
-                    throw new Win32Exception(error, "Unable to verify an OpenClaw process job member.");
-                }
-                if (!inJob)
-                {
-                    member.Dispose();
-                    continue;
-                }
-                pinned.Add(member);
-            }
             if (!TerminateJobObject(_handle, 1))
             {
                 throw new Win32Exception(
@@ -398,6 +371,126 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
             {
                 member.Dispose();
             }
+        }
+    }
+
+    /// <summary>
+    /// Runs an action with the IDs of the job's live members while each one is pinned by handle.
+    /// </summary>
+    /// <remarks>
+    /// Windows does not reuse a process ID while a handle to it is open, so an ID the action receives
+    /// cannot name an unrelated process that started after a member exited. Exited members are omitted.
+    /// </remarks>
+    public T WithLiveMembers<T>(Func<IReadOnlyList<int>, T> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        List<SafeProcessHandle> pinned = PinMembers();
+        try
+        {
+            List<int> live = [];
+            foreach (SafeProcessHandle member in pinned)
+            {
+                if (WaitForSingleObject(member, 0) != WaitTimeout)
+                {
+                    continue;
+                }
+                uint processId = GetProcessId(member);
+                if (processId == 0)
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Unable to identify an OpenClaw process job member.");
+                }
+                live.Add(checked((int)processId));
+            }
+            return action(live);
+        }
+        finally
+        {
+            foreach (SafeProcessHandle member in pinned)
+            {
+                member.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Waits, without terminating anything, for every process currently in the job to exit.
+    /// </summary>
+    /// <returns>Whether each member present at the call exited before the timeout.</returns>
+    /// <remarks>
+    /// Admission stays open: an application stopping itself may still start short-lived helpers.
+    /// Members are pinned by handle, so a reused process ID cannot satisfy the wait.
+    /// </remarks>
+    public bool WaitForMembersToExit(TimeSpan timeout)
+    {
+        Stopwatch elapsed = Stopwatch.StartNew();
+        List<SafeProcessHandle> pinned = PinMembers();
+        try
+        {
+            foreach (SafeProcessHandle member in pinned)
+            {
+                int remaining = (int)Math.Max(0, (timeout - elapsed.Elapsed).TotalMilliseconds);
+                uint wait = WaitForSingleObject(member, (uint)remaining);
+                if (wait == WaitTimeout)
+                {
+                    return false;
+                }
+                if (wait != WaitObject0)
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Unable to wait for an OpenClaw process job member.");
+                }
+            }
+            return true;
+        }
+        finally
+        {
+            foreach (SafeProcessHandle member in pinned)
+            {
+                member.Dispose();
+            }
+        }
+    }
+
+    private List<SafeProcessHandle> PinMembers()
+    {
+        List<SafeProcessHandle> pinned = [];
+        try
+        {
+            foreach (nuint processId in ReadMemberIds())
+            {
+                SafeProcessHandle member = OpenProcess(ProcessSynchronize | ProcessQueryLimitedInformation, false, (uint)processId);
+                if (member.IsInvalid)
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    member.Dispose();
+                    // Only an invalid ID identifies a member that already exited.
+                    if (error == ErrorInvalidParameter)
+                    {
+                        continue;
+                    }
+                    throw new Win32Exception(error, "Unable to pin an OpenClaw process job member.");
+                }
+                if (!IsProcessInJob(member, _handle, out bool inJob))
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    member.Dispose();
+                    throw new Win32Exception(error, "Unable to verify an OpenClaw process job member.");
+                }
+                if (!inJob)
+                {
+                    member.Dispose();
+                    continue;
+                }
+                pinned.Add(member);
+            }
+            return pinned;
+        }
+        catch
+        {
+            foreach (SafeProcessHandle member in pinned)
+            {
+                member.Dispose();
+            }
+            throw;
         }
     }
 
@@ -684,6 +777,9 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern uint WaitForSingleObject(SafeProcessHandle handle, uint milliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint GetProcessId(SafeProcessHandle process);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
