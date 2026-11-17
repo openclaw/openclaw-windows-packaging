@@ -2191,6 +2191,84 @@ public sealed class ProgramTests : IDisposable
             StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData(51789, 51789)]
+    [InlineData(51700, null)]
+    public async Task GatewayStatusAttestsEveryOwnedListenerAndReportsOnlyAnObservedPinnedPort(
+        int? pinnedPort, int? expectedPort)
+    {
+        // A second listener in the gateway process, such as the MCP App sandbox host or
+        // the Codex plugin's loopback inference proxy on an OS-assigned port (#260),
+        // leaves the endpoint ambiguous. Status still attests both listeners, and
+        // reports the launch-pinned port only when it is one of them.
+        SessionRuntime runtime = await SetUpSessionAsync();
+        SessionRecord session = runtime.RequireSetup();
+        var backend = (FakeMxcSessionClient)runtime.Backend;
+        DateTimeOffset started = DateTimeOffset.UtcNow;
+        runtime.GatewayState.Write(new GatewayRecord
+        {
+            SandboxId = session.SandboxId,
+            ProcessId = 42,
+            ProcessStartTimeUtc = started,
+            HelperPath = runtime.HelperPath,
+            Port = pinnedPort,
+            ObservedPorts = [51789],
+        });
+        SessionOwnedListener[] owned =
+        [
+            new() { Port = 51789, ProcessId = 43, ProcessStartTimeUtc = started, SequenceNumber = 77 },
+            new() { Port = 52535, ProcessId = 43, ProcessStartTimeUtc = started, SequenceNumber = 77 },
+        ];
+        backend.ExecuteBehavior = _ =>
+        {
+            if (!WriteStateInspectionResult(backend))
+            {
+                string requestPath = Directory.GetFiles(
+                    backend.Metadata!.EphemeralWorkspacePath, "inspect-*.json").Single();
+                SessionInspectRequest request = SessionInspectProtocol.ReadRequest(
+                    File.ReadAllText(requestPath));
+                File.WriteAllText(
+                    SessionLaunchProtocol.ResultPathFor(requestPath),
+                    SessionInspectProtocol.SerializeResult(new SessionInspectResult
+                    {
+                        RequestId = request.RequestId,
+                        ProcessFound = true,
+                        StartTimeMatches = true,
+                        PortListening = true,
+                        ListeningPorts = [51789, 52535],
+                        ListenerOwned = true,
+                        OwnedListeners = owned,
+                    }));
+            }
+            return Task.FromResult(new MxcExecutionResult(0, string.Empty, string.Empty));
+        };
+        using var output = new StringWriter();
+
+        int exitCode = await Program.RunControlAsync(
+            CreateSetupOptions(Path.Combine(_testDirectory, "app")),
+            ["gateway-service", "status", "--json"],
+            _ => { },
+            output,
+            TextWriter.Null,
+            installationLifecycle: new StubbedRecoveryLifecycle(runtime));
+
+        Assert.Equal(0, exitCode);
+        using JsonDocument document = JsonDocument.Parse(output.ToString());
+        JsonElement gateway = document.RootElement.GetProperty("gateway");
+        Assert.Equal("running", gateway.GetProperty("state").GetString());
+        Assert.Equal(
+            expectedPort,
+            gateway.TryGetProperty("port", out JsonElement port) ? port.GetInt32() : null);
+        JsonElement ownership = gateway.GetProperty("ownership");
+        Assert.Equal(session.SandboxId, ownership.GetProperty("sandboxId").GetString());
+        Assert.Equal(session.AgentUserSid, ownership.GetProperty("agentUserSid").GetString());
+        Assert.Equal(
+            [51789, 52535],
+            ownership.GetProperty("listeners").EnumerateArray()
+                .Select(listener => listener.GetProperty("port").GetInt32()));
+    }
+
     [Fact]
     public void StatusJsonFailureRetainsStateDetails()
     {

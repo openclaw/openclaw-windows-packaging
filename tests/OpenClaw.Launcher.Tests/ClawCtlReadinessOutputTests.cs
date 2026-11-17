@@ -193,6 +193,28 @@ public sealed class ClawCtlReadinessOutputTests
     }
 
     [Fact]
+    public void ReportedPortOutsideTheAttestedListenersIsNotOwnershipProof()
+    {
+        using var output = new StringWriter();
+        ClawCtlJson.WriteResult(output, new GatewayCommandResult(
+            "status", GatewayState.Running, "Gateway is running.", null, 0,
+            Port: 19001, SandboxId: "iso:test", AgentUserSid: "S-1-5-21-fixture",
+            OwnedListeners:
+            [
+                new SessionOwnedListener
+                {
+                    Port = 19002,
+                    ProcessId = 1234,
+                    ProcessStartTimeUtc = new DateTimeOffset(2026, 9, 29, 12, 0, 0, TimeSpan.Zero),
+                    SequenceNumber = 77
+                }
+            ]));
+
+        using JsonDocument document = JsonDocument.Parse(output.ToString());
+        Assert.False(document.RootElement.GetProperty("gateway").TryGetProperty("ownership", out _));
+    }
+
+    [Fact]
     public void GatewayWithoutSequenceOwnershipProofOmitsOwnershipFromJson()
     {
         using var output = new StringWriter();

@@ -218,10 +218,15 @@ integration as `integration.kind: "isolated-session"` and
 `integration.version: 1`. After `clawctl companion prepare --port <port> --json`,
 use `clawctl gateway-service start --json` and
 `clawctl gateway-service status --json`. A running status includes
-`gateway.ownership` only when a single port and its isolated-session listener
-identities were observed. Each listener identity includes an OS process
-sequence number so Companion can detect PID reuse without opening an agent
-process handle. Companion checks those identities against fresh Windows
+`gateway.ownership` when its isolated-session listener identities were
+observed. It lists every attested listener, including auxiliary ones such as
+OpenClaw's MCP App sandbox host or a plugin's loopback proxy. With several
+listeners, `gateway.port` reports the port pinned for the launch in the
+Gateway configuration when that port is one of them. Otherwise the port is
+ambiguous, `gateway.port` is omitted, and Companion selects the port it
+prepared from those listeners; a reported port is always one of them. Each listener
+identity includes an OS process sequence number so Companion can detect PID
+reuse without opening an agent process handle. Companion checks those identities against fresh Windows
 listener and process-sequence snapshots before sending credentials; a port or
 session ID alone is not ownership proof. No `openclaw.json` is created under Companion's
 Windows account for this path. Older Gateway packages without the supported
