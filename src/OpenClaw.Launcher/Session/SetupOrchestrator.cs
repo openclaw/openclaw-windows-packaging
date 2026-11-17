@@ -345,10 +345,17 @@ internal static class SetupOrchestrator
             ? null
             : runtime.AcquireLifecycleLock();
         runtime.Coordinator.RequireRecordedOwnershipOrCleanState(runtime.SetupState);
+
+        // Carried through Preparing so a setup that fails before completing
+        // can still reuse the stage on retry. Launches refuse a Preparing
+        // record, so nothing runs against it in between.
+        string? recordedNativeRoot =
+            runtime.SetupState.Read(runtime.ApplicationId).Record?.AgentNativeRoot;
         runtime.SetupState.Write(new SetupRecord
         {
             ApplicationId = runtime.ApplicationId,
-            Phase = SetupPhase.Preparing
+            Phase = SetupPhase.Preparing,
+            AgentNativeRoot = recordedNativeRoot
         });
         SessionStartResult session = await runtime.Coordinator
             .EnsureStartedWithResultAsync(cancellationToken).ConfigureAwait(false);
@@ -379,6 +386,7 @@ internal static class SetupOrchestrator
             helperPath,
             options.RequirePackagedNodeArchivePath(),
             applicationDirectory,
+            recordedNativeRoot,
             cancellationToken).ConfigureAwait(false);
         progress.Report(new ClawCtlProgress("Enabling gateway startup at sign-in."));
         GatewayPersistenceInstallResult recovery = await lifecycle

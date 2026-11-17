@@ -909,7 +909,8 @@ public sealed class ProgramTests : IDisposable
             launched.Arguments[2]);
         Assert.Equal("doctor", launched.Arguments[3]);
         Assert.Null(launched.NodeOptionsSuffix);
-        Assert.Equal(nativeRoot, launched.NativeRootPath);
+        Assert.Equal(nativeRoot, launched.NativeStage!.RootPath);
+        Assert.Equal(applicationDirectory, launched.NativeStage.ApplicationDirectory);
 
         // The assigned environment must not carry NODE_OPTIONS at all: it
         // would replace the agent's, and the host's value is not the agent's.
@@ -1005,7 +1006,8 @@ public sealed class ProgramTests : IDisposable
         Assert.Equal(string.Empty, output.ToString());
         Assert.Equal(string.Empty, error.ToString());
         Assert.NotNull(launched);
-        Assert.Equal(nativeRoot, launched.NativeRootPath);
+        Assert.Equal(nativeRoot, launched.NativeStage!.RootPath);
+        Assert.Equal(applicationDirectory, launched.NativeStage.ApplicationDirectory);
         Assert.Null(launched.NodeOptionsSuffix);
         string[] pathPrefix = launched.PathPrefix!.Split(Path.PathSeparator);
         Assert.Equal(
@@ -3367,7 +3369,7 @@ public sealed class ProgramTests : IDisposable
             ],
             dashboardRequest.Arguments);
         Assert.Null(dashboardRequest.NodeOptionsSuffix);
-        Assert.Equal(nativeRoot, dashboardRequest.NativeRootPath);
+        Assert.Equal(nativeRoot, dashboardRequest.NativeStage!.RootPath);
         foreach ((string name, string value) in OpenClawRuntimeEnvironment.BuildNativeRedirect(
             Path.Combine(_testDirectory, "app"),
             nativeRoot))

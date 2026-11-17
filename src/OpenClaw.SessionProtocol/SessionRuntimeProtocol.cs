@@ -48,6 +48,18 @@ public sealed record SessionRuntimeInstallRequest
     public string? ApplicationDirectory { get; init; }
 
     /// <summary>
+    /// The native root setup recorded before this run, if any.
+    /// </summary>
+    /// <remarks>
+    /// Reused only when the guest verifies it against the installed
+    /// application, so an unchanged stage is not copied again. Named by the
+    /// host because the stage directory alone does not identify which
+    /// generation setup last selected.
+    /// </remarks>
+    [JsonPropertyName("currentNativeRootPath")]
+    public string? CurrentNativeRootPath { get; init; }
+
+    /// <summary>
     /// Whether to prepend the installed directory to the agent's persistent
     /// user <c>PATH</c>.
     /// </summary>
@@ -93,6 +105,13 @@ public sealed record SessionRuntimeInstallResult
     /// </summary>
     [JsonPropertyName("nativeRootPath")]
     public string? NativeRootPath { get; init; }
+
+    /// <summary>
+    /// Superseded native roots left in place because a running process still
+    /// holds them; a later setup reclaims them once released.
+    /// </summary>
+    [JsonPropertyName("nativeRootsRetained")]
+    public int NativeRootsRetained { get; init; }
 
     /// <summary>Set when the install could not be completed.</summary>
     [JsonPropertyName("error")]
@@ -191,6 +210,13 @@ public static class SessionRuntimeProtocol
         {
             throw new SessionLaunchException(
                 "The runtime install request has no fully qualified application directory.");
+        }
+
+        if (request.CurrentNativeRootPath is not null &&
+            !SessionLaunchProtocol.IsFullyQualifiedWithoutTraversal(request.CurrentNativeRootPath))
+        {
+            throw new SessionLaunchException(
+                "The runtime install request names a recorded native root without a fully qualified path.");
         }
 
         return request;

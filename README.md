@@ -458,7 +458,7 @@ because nothing runs on the host.
 
 Setup also mirrors the application's native dependency packages into the
 agent's own LocalState, under
-`%LOCALAPPDATA%\OpenClawGatewayMSIX\agent-native\<content-id>`. The
+`%LOCALAPPDATA%\OpenClawGatewayMSIX\agent-native\<generation>`. The
 isolated-session identity may read packaged files but may not map them as
 executable images, so loading a `.node` addon directly from the package fails
 with `ERR_DLOPEN_FAILED` even though the same bytes load from a writable
@@ -466,20 +466,37 @@ location. Only the packages that carry a `.node`, `.dll`, or `.exe` artifact
 are mirrored; the rest of the application, which is nearly all of it, keeps
 executing from the immutable package.
 
-That set is discovered by scanning `app\node_modules`, never from a hard-coded
-list, so an upstream revision that introduces a new native dependency is staged
-automatically. Whole owning package directories are copied rather than
+That set is discovered from the package's own `payload\payload-files.json`
+inventory, never from a hard-coded list, so an upstream revision that
+introduces a new native dependency is staged automatically. A layout without
+that inventory, such as a test fixture, is scanned and hashed instead. Whole owning package directories are copied rather than
 individual binaries, because a package locates its sibling libraries and helper
 executables relative to its own directory. A packaged preload then redirects
 both CommonJS and ESM resolution to the staged copies. The launcher places that
 preload on the agent Node.js argument vector so OpenClaw retains it when an
 agent invokes `openclaw` again. Once loaded, the preload appends itself to the
 agent account's own `NODE_OPTIONS` for ordinary Node.js workers, so an option
-the agent set survives and the invoking host's value never reaches it. Staging
-is idempotent, keyed by package content, and reclaims the superseded copy after
-an upgrade once nothing is still running from it; a launch holds its root for
-its whole lifetime, and a root that is still held is left whole for a later
-setup.
+the agent set survives and the invoking host's value never reaches it. Setup
+reuses the recorded stage, or one named by its content identifier by an earlier
+release, only after verifying it, so an unchanged stage is not copied again.
+Otherwise it copies and verifies a new generation in a separate directory and
+records it only after publication, so a failed copy leaves the previous stage
+untouched and a stage still in use is never overwritten. A launch holds its root
+for its whole lifetime. Setup reclaims a superseded stage only through an
+exclusive gate that conflicts with every launch's hold, retiring it so it can
+no longer be admitted; a stage still held, or one it cannot retire, is left
+whole for a later setup.
+
+Every launch of packaged OpenClaw, including `openclaw`, `clawctl pwsh`, a new
+Gateway process, Companion preparation, and backup or restore, is admitted
+against the recorded stage first. Under the agent identity, the session helper
+takes the root's lifetime hold and then compares every staged file's path,
+length, and SHA-256 with the installed package inventory. A completion marker or
+directory name alone never admits a launch. A stage that is missing, built from
+other package content, incomplete, altered, or linked elsewhere stops the launch
+before Node.js starts with `native-stage-stale`, and `clawctl setup` repairs it
+in the existing session. Adopting a Gateway that is already running is not
+blocked. Setup reuses a stage only after the same verification.
 
 Run `clawctl setup` before using `clawctl pwsh` or gateway-service start.
 `openclaw` provisions a clean installation automatically, but there is no
@@ -1050,7 +1067,7 @@ signature verification fails closed when it does not.
 | OpenClaw application files | Read-only MSIX package `app` directory |
 | Bundled Node.js archive | Read-only MSIX package `runtime` directory |
 | Node.js runtime used by OpenClaw | `%LOCALAPPDATA%\OpenClawGatewayMSIX\agent-node\node-v<version>-win-<architecture>` (isolated agent account) |
-| Staged native dependency packages | `%LOCALAPPDATA%\OpenClawGatewayMSIX\agent-native\<content-id>` (agent account) |
+| Staged native dependency packages | `%LOCALAPPDATA%\OpenClawGatewayMSIX\agent-native\<generation>` (agent account) |
 | OpenClaw configuration and user state | `%USERPROFILE%\.openclaw` (isolated session's agent account) |
 | Retained manual/recovery archives | `%USERPROFILE%\.openclaw-backups` (invoking user) |
 | Pre-restore protection | `%USERPROFILE%\.openclaw-backups\before-restore` (invoking user) |
@@ -1085,7 +1102,9 @@ the trust boundary for the application and archive. `clawctl setup` extracts
 the archive into the isolated agent account's local application data and
 records its executable and archive. `openclaw` runs the packaged
 `app\openclaw.mjs` with that recorded executable inside the recorded session.
-Neither command hashes or walks the expanded application inventory.
+Neither command hashes or walks the expanded application inventory; launch
+admission reads only the inventory entries of native-bearing packages and
+hashes the agent's staged copies of them.
 
 Native dependency staging does not move that boundary. The copies live in the
 agent's own profile, which already holds the extracted Node.js runtime and is

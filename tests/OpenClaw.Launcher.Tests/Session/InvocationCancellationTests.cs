@@ -175,11 +175,18 @@ public static class CancellationPrototypeProbe
         using var exitParent = new EventWaitHandle(false, EventResetMode.ManualReset, events + ".exit-parent");
         using var blocked = new EventWaitHandle(false, EventResetMode.ManualReset);
         using var recovery = new EventWaitHandle(false, EventResetMode.ManualReset);
-        string nativeRoot = Path.Combine(root, "native");
-        Directory.CreateDirectory(nativeRoot);
-        File.WriteAllText(Path.Combine(nativeRoot, ".staged-content-id"), "fixture");
+        string application = Path.Combine(root, "app");
+        string addon = Path.Combine(application, "node_modules", "fixture-native", "addon.node");
+        Directory.CreateDirectory(Path.GetDirectoryName(addon)!);
+        File.WriteAllText(addon, "native");
+        // A real verified stage, so the worker is admitted and the waiter's hold is what is under test.
+        string nativeRoot = OpenClaw.SessionHost.SessionNativeStager.Stage(application, Path.Combine(root, "local"))!;
         string request = Path.Combine(root, "request.json");
-        WriteFixtureRequest(request, root, events, nativeRoot);
+        WriteFixtureRequest(request, root, events, new OpenClaw.SessionProtocol.SessionNativeStageReference
+        {
+            ApplicationDirectory = application,
+            RootPath = nativeRoot
+        });
         using WindowsIdentity identity = WindowsIdentity.GetCurrent();
         WindowsInvocationJob job = WindowsInvocationJob.Create(identity.User!.Value);
         bool disposed = false;
@@ -354,7 +361,11 @@ public static class CancellationPrototypeProbe
         }
     }
 
-    private static void WriteFixtureRequest(string request, string root, string events, string? nativeRoot = null) =>
+    private static void WriteFixtureRequest(
+        string request,
+        string root,
+        string events,
+        OpenClaw.SessionProtocol.SessionNativeStageReference? nativeStage = null) =>
         File.WriteAllText(request, OpenClaw.SessionProtocol.SessionLaunchProtocol.SerializeRequest(
             new OpenClaw.SessionProtocol.SessionLaunchRequest
             {
@@ -364,7 +375,7 @@ public static class CancellationPrototypeProbe
                 Arguments = [Path.Combine(AppContext.BaseDirectory, "OpenClaw.Launcher.AotSmoke.dll"),
                     "--invocation-tree-fixture", root, "parent", events],
                 WorkingDirectory = root,
-                NativeRootPath = nativeRoot,
+                NativeStage = nativeStage,
                 Environment = new Dictionary<string, string> { ["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1" }
             }));
 

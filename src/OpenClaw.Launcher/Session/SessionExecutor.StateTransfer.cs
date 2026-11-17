@@ -52,6 +52,7 @@ internal sealed partial class SessionExecutor
                 SessionStateTransferProtocol.ReadResult(text, requestId);
             if (result.Error is { Length: > 0 } error)
             {
+                NativeStageStaleException.ThrowIfReported(result.ErrorCode, error);
                 throw new SessionException(error);
             }
             if (execution.ExitCode != 0)

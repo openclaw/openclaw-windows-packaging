@@ -48,7 +48,11 @@ internal sealed partial class StateTransferCoordinator
                     record.WorkspacePath!)
                 {
                     AdditionalEnvironment = inputs.Environment,
-                    NativeRootPath = inputs.NativeRootPath,
+                    NativeStage = new SessionNativeStageReference
+                    {
+                        ApplicationDirectory = inputs.ApplicationDirectory,
+                        RootPath = inputs.NativeRootPath
+                    },
                     NodeArgumentsPrefix = inputs.NativePreloadPath is null ? null :
                         OpenClawRuntimeEnvironment.BuildNativeRedirectNodeArguments(inputs.NativePreloadPath)
                 },
@@ -72,7 +76,8 @@ internal sealed partial class StateTransferCoordinator
                 backup is null ? null : backup with { GatewayStopped = stopped, Phase = "repair-failed" },
                 Error: (exception is OperationCanceledException ? "Repair was cancelled." : exception.Message) +
                     (stopped ? " The gateway remains stopped." : "") +
-                    (backup?.Archive is not null ? " The retained backup is available with `clawctl backup --list`." : " Doctor did not run."));
+                    (backup?.Archive is not null ? " The retained backup is available with `clawctl backup --list`." : " Doctor did not run."),
+                ErrorType: ErrorTypeOf(exception));
         }
     }
 }

@@ -51,9 +51,15 @@ internal sealed partial class StateTransferCoordinator
         catch (Exception exception) when (IsOperationalFailure(exception))
         {
             _log($"Backup failed: {DiagnosticFailure.Describe(exception)}");
-            return new StateArchiveCommandResult("backup", 1, Error: exception.Message);
+            return new StateArchiveCommandResult(
+                "backup", 1, Error: exception.Message, ErrorType: ErrorTypeOf(exception));
         }
     }
+
+    // A refused native stage keeps its type to the process boundary, where
+    // callers such as Companion read it to offer setup.
+    private static string? ErrorTypeOf(Exception exception) =>
+        exception is NativeStageStaleException ? ClawCtlJson.NativeStageStaleErrorType : null;
 
     private async Task<StateArchiveCommandResult> CaptureBackupUnderLockAsync(
         SessionRuntime runtime,

@@ -37,7 +37,8 @@ internal static class SessionInvocationCoordinator
             {
                 throw new SessionLaunchException("Invocation coordinators support attached requests only.");
             }
-            lease = SessionNativeStager.OpenConsumerLease(request.NativeRootPath);
+            // The worker admits the stage; this waiter only extends its hold through orphan drain.
+            lease = SessionNativeStager.OpenConsumerLease(request.NativeStage?.RootPath);
             return Coordinate(mode, requestPath, out orphanDrainUnconfirmed, readMembers, startWorker);
         }
         catch (Exception exception) when (exception is Win32Exception or InvalidOperationException or

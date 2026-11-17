@@ -388,6 +388,21 @@ internal sealed class GatewayController
         {
             started = await _client.StartAsync(session, request, cancellationToken).ConfigureAwait(false);
         }
+        catch (NativeStageStaleException)
+        {
+            // The guest refused before starting anything, so this attempt has
+            // no process to retain. Put back what was recorded before it.
+            if (existing.Record is { LaunchPending: false } previous)
+            {
+                _store.Write(previous);
+            }
+            else
+            {
+                _store.Clear();
+            }
+
+            throw;
+        }
         catch (Exception exception) when (
             exception is SessionException or SessionLaunchException or Mxc.MxcException or IOException or UnauthorizedAccessException)
         {

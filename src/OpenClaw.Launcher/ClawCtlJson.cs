@@ -92,6 +92,15 @@ internal static class ClawCtlJson
 {
     internal const int SchemaVersion = 1;
 
+    internal const string CliErrorType = "cli_error";
+
+    /// <summary>
+    /// The isolated session refused to start OpenClaw because its staged
+    /// native dependencies do not match the installed package; explicit
+    /// <c>clawctl setup</c> repairs it.
+    /// </summary>
+    internal const string NativeStageStaleErrorType = "native_stage_stale";
+
     internal static ClawCtlJsonIntegration Integration { get; } = new("isolated-session", 1);
 
     internal static void WriteResult(TextWriter output, IClawCtlResult result)
@@ -121,7 +130,9 @@ internal static class ClawCtlJson
                 state.Command,
                 Error: state.Error is null
                     ? null
-                    : new ClawCtlJsonError("cli_error", NormalizeMessage(state.Error)),
+                    : new ClawCtlJsonError(
+                        state.ErrorType ?? CliErrorType,
+                        NormalizeMessage(state.Error)),
                 StateTransfer: state.Transfer,
                 Archives: state.Archives),
             CompanionPrepareResult companion => new ClawCtlJsonDocument(
@@ -130,7 +141,9 @@ internal static class ClawCtlJson
                 companion.Command,
                 Error: companion.Error is null
                     ? null
-                    : new ClawCtlJsonError("cli_error", NormalizeMessage(companion.Error)),
+                    : new ClawCtlJsonError(
+                        companion.ErrorType ?? CliErrorType,
+                        NormalizeMessage(companion.Error)),
                 Companion: companion.Port is int port && companion.Token is string token
                     ? new ClawCtlJsonCompanion(port, token)
                     : null),
@@ -165,7 +178,11 @@ internal static class ClawCtlJson
                 ClawCtlBuildMetadata.PayloadCommit)));
     }
 
-    internal static void WriteFailure(TextWriter output, string command, string message)
+    internal static void WriteFailure(
+        TextWriter output,
+        string command,
+        string message,
+        string errorType = CliErrorType)
     {
         ArgumentNullException.ThrowIfNull(output);
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
@@ -175,7 +192,7 @@ internal static class ClawCtlJson
             false,
             SchemaVersion,
             command,
-            Error: new ClawCtlJsonError("cli_error", NormalizeMessage(message)),
+            Error: new ClawCtlJsonError(errorType, NormalizeMessage(message)),
             // Capability is a package fact, not proof that setup or status succeeded.
             // Companion must still be able to reach explicit setup after a probe fails.
             Integration: Integration));
