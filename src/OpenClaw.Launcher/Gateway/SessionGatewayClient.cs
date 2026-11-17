@@ -116,16 +116,17 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
         string logPath = operation.FilePath("gateway", generation, ".log");
 
         string entryPoint = Path.Combine(request.ApplicationDirectory, "openclaw.mjs");
+        var nodeArguments = new List<string>();
+        if (_buildNodeArgumentsPrefix() is { } nodeArgumentsPrefix)
+        {
+            nodeArguments.AddRange(nodeArgumentsPrefix);
+        }
+        nodeArguments.Add(entryPoint);
 
         // --port is added only when the user pinned one. Passing a port always
         // would outrank `gateway.port` in OpenClaw's own configuration and
         // silently move the gateway away from where its clients look.
-        var arguments = new List<string>();
-        if (_buildNodeArgumentsPrefix() is { } nodeArgumentsPrefix)
-        {
-            arguments.AddRange(nodeArgumentsPrefix);
-        }
-        arguments.Add(entryPoint);
+        var arguments = new List<string>(nodeArguments);
         arguments.Add("gateway");
         arguments.Add("run");
         if (request.Port is int port)
@@ -147,7 +148,8 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
                     "The agent's Node.js runtime has no parent directory."),
             NativeRootPath = _getNativeRootPath(),
             LogPath = logPath,
-            StatusPath = statusPath
+            StatusPath = statusPath,
+            RestartHandoffArguments = [.. nodeArguments, "gateway", "restart-handoff", "consume"]
         };
 
         try

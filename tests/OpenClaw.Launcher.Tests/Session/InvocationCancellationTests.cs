@@ -93,7 +93,8 @@ public sealed class InvocationCancellationTests
             {
                 FileName = Path.Combine(AppContext.BaseDirectory, "openclaw-session-host.exe"),
                 ArgumentList = { mode, request },
-                UseShellExecute = false
+                UseShellExecute = false,
+                Environment = { ["OPENCLAW_SESSION_STATE_DIRECTORY"] = Path.Combine(root, "state-access") }
             })!;
             await coordinator.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(true);
             Assert.Equal(130, coordinator.ExitCode);
@@ -142,7 +143,8 @@ public sealed class InvocationCancellationTests
                     WindowsInvocationJob.ModePrefix + job.Mode[WindowsInvocationJob.CoordinatorModePrefix.Length..],
                     request },
                 UseShellExecute = false,
-                RedirectStandardError = true
+                RedirectStandardError = true,
+                Environment = { ["OPENCLAW_SESSION_STATE_DIRECTORY"] = Path.Combine(root, "state-access") }
             })!;
             string error = await helper.StandardError.ReadToEndAsync().ConfigureAwait(true);
             await helper.WaitForExitAsync().ConfigureAwait(true);
@@ -189,6 +191,7 @@ public static class CancellationPrototypeProbe
             startWorker: start =>
             {
                 start.FileName = Path.Combine(AppContext.BaseDirectory, "openclaw-session-host.exe");
+                start.Environment["OPENCLAW_SESSION_STATE_DIRECTORY"] = Path.Combine(root, "state-access");
                 return Process.Start(start);
             },
             waitForRecovery: () =>
@@ -257,7 +260,8 @@ public static class CancellationPrototypeProbe
         {
             FileName = Path.Combine(AppContext.BaseDirectory, "openclaw-session-host.exe"),
             ArgumentList = { siblingJob.Mode, siblingRequest },
-            UseShellExecute = false
+            UseShellExecute = false,
+            Environment = { ["OPENCLAW_SESSION_STATE_DIRECTORY"] = Path.Combine(siblingRoot, "state-access") }
         })!;
         siblingJob.MarkDispatched();
         using var siblingHandles = new ProcessHandles(_ => { }, "sibling");
@@ -417,7 +421,7 @@ public static class CancellationPrototypeProbe
         {
             var client = new MxcSdkSessionClient(
                 new MxcRuntimeLocation(root, null),
-                new LocalLifecycle(completedBeforeReturn ? null : () =>
+                new LocalLifecycle(root, completedBeforeReturn ? null : () =>
                 {
                     entered.SetResult();
                     release.Task.GetAwaiter().GetResult();
@@ -646,7 +650,7 @@ public static class CancellationPrototypeProbe
         {
             var client = new MxcSdkSessionClient(
                 new MxcRuntimeLocation(root, null),
-                new LocalLifecycle(), new QuietConsole(), new QuietStdio());
+                new LocalLifecycle(root), new QuietConsole(), new QuietStdio());
             await RunScenarioAsync(
                 client, "iso:local-fixture", identity.User!.Value, root,
                 Path.Combine(AppContext.BaseDirectory, "openclaw-session-host.exe"),
@@ -870,6 +874,7 @@ public static class CancellationPrototypeProbe
         {
             ["TEMP"] = temporary,
             ["TMP"] = temporary,
+            ["OPENCLAW_SESSION_STATE_DIRECTORY"] = Path.Combine(directory, "state-access"),
             ["PSModuleAnalysisCachePath"] = Path.Combine(temporary, "module-cache"),
             ["POWERSHELL_TELEMETRY_OPTOUT"] = "1",
             ["POWERSHELL_UPDATECHECK"] = "Off",
@@ -1081,6 +1086,7 @@ public static class CancellationPrototypeProbe
     }
 
     private sealed class LocalLifecycle(
+        string directory,
         Action? beforeSpawn = null, Action<string>? beforeSpawnReturns = null) : IMxcSdkLifecycle
     {
         public Sdk.ProvisionResult Provision(Sdk.IsolationSessionProvisionRequest request) => throw new NotSupportedException();
@@ -1090,7 +1096,7 @@ public static class CancellationPrototypeProbe
         public Sdk.IMxcProcess Spawn(Sdk.ContainerId id, Sdk.ExecutionRequest request)
         {
             beforeSpawn?.Invoke();
-            var process = new LocalProcess(request.Command);
+            var process = new LocalProcess(request.Command, directory);
             try
             {
                 beforeSpawnReturns?.Invoke(request.Command);
@@ -1110,7 +1116,7 @@ public static class CancellationPrototypeProbe
     {
         private readonly Process _process;
         private readonly SafeFileHandle? _retainedJob;
-        public LocalProcess(string command)
+        public LocalProcess(string command, string directory)
         {
             string prefix = command.Contains(WindowsInvocationJob.CoordinatorModePrefix, StringComparison.Ordinal)
                 ? WindowsInvocationJob.CoordinatorModePrefix : WindowsInvocationJob.ModePrefix;
@@ -1129,7 +1135,12 @@ public static class CancellationPrototypeProbe
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
-                CreateNoWindow = true
+                CreateNoWindow = true,
+                Environment =
+                {
+                    ["OPENCLAW_SESSION_STATE_DIRECTORY"] =
+                        Path.Combine(directory, "state-access", Guid.NewGuid().ToString("N"))
+                }
             })!;
         }
         public uint Id => (uint)_process.Id;

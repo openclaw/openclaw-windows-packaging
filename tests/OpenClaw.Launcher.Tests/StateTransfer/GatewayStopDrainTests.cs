@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Win32.SafeHandles;
 using OpenClaw.SessionHost;
 using OpenClaw.SessionProtocol;
 
@@ -31,7 +32,7 @@ public sealed class GatewayStopDrainTests : IDisposable
             const child = `
               import { connect } from "node:net";
               const socket = connect("\\\\\\\\.\\\\pipe\\\\{{pipeName}}");
-              socket.once("connect", () => socket.write(JSON.stringify({ pid: process.pid }) + "\\n"));
+              socket.once("connect", () => socket.write(JSON.stringify({ pid: process.pid, parentPid: process.ppid }) + "\\n"));
               setInterval(() => {}, 1000);
             `;
             // The descendant shares none of the supervisor's streams.
@@ -69,6 +70,9 @@ public sealed class GatewayStopDrainTests : IDisposable
         using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
         using JsonDocument metadata = JsonDocument.Parse((await reader.ReadLineAsync(budget.Token))!);
         using Process descendant = Process.GetProcessById(metadata.RootElement.GetProperty("pid").GetInt32());
+        using Process primary = Process.GetProcessById(metadata.RootElement.GetProperty("parentPid").GetInt32());
+        _ = primary.SafeHandle;
+        _ = descendant.SafeHandle;
         try
         {
             Assert.False(descendant.HasExited);
@@ -87,11 +91,21 @@ public sealed class GatewayStopDrainTests : IDisposable
             Assert.Null(result.Error);
             Assert.True(supervisor.HasExited);
             Assert.True(descendant.HasExited);
+            AssertExited(primary);
+            AssertExited(descendant);
         }
         finally
         {
             StateTransferProcessFixture.Stop(descendant);
+            StateTransferProcessFixture.Stop(primary);
             StateTransferProcessFixture.Stop(supervisor);
         }
+    }
+
+    private static void AssertExited(Process process)
+    {
+        using var wait = new EventWaitHandle(false, EventResetMode.AutoReset);
+        wait.SafeWaitHandle = new SafeWaitHandle(process.SafeHandle.DangerousGetHandle(), ownsHandle: false);
+        Assert.True(wait.WaitOne(0), $"Process {process.Id} was not signaled when stop returned.");
     }
 }

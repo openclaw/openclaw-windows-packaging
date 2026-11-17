@@ -118,9 +118,11 @@ internal sealed partial class GatewayRuntime
         string? requestedPath,
         string? environment,
         IProgress<ClawCtlProgress> progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        HostPackageDiagnostics? packageDiagnostics = null)
     {
         ArgumentNullException.ThrowIfNull(progress);
+        cancellationToken.ThrowIfCancellationRequested();
 
         string bundlePath = ResolveBundlePath(
             requestedPath,
@@ -129,6 +131,13 @@ internal sealed partial class GatewayRuntime
             _clock);
 
         List<string> notes = [];
+        if (packageDiagnostics is not null)
+        {
+            progress.Report(new ClawCtlProgress("Collecting current-user package and command-alias diagnostics."));
+        }
+        string? packageEvidence = packageDiagnostics is null
+            ? null
+            : await packageDiagnostics.CollectAsync(notes, cancellationToken).ConfigureAwait(false);
         List<HostSource> hostFiles = CollectHostFiles();
         string? staged = null;
         SessionWorkspaceOperation? stagingOperation = null;
@@ -141,11 +150,12 @@ internal sealed partial class GatewayRuntime
                     .ConfigureAwait(false);
             (gatewayOperation, List<string> gatewayFiles) = FindGatewayLaunchFiles(notes);
 
-            if (hostFiles.Count == 0 && staged is null && gatewayFiles.Count == 0)
+            if (hostFiles.Count == 0 && staged is null && gatewayFiles.Count == 0 && packageEvidence is null)
             {
                 return new DiagnosticsBundleResult(null, sessionReached, Shareable(notes));
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             WriteBundle(
                 bundlePath,
                 hostFiles,
@@ -154,6 +164,7 @@ internal sealed partial class GatewayRuntime
                 staged,
                 stagingOperation,
                 environment,
+                packageEvidence,
                 notes,
                 progress);
             return new DiagnosticsBundleResult(bundlePath, sessionReached, Shareable(notes));
@@ -402,6 +413,7 @@ internal sealed partial class GatewayRuntime
         string? staged,
         SessionWorkspaceOperation? stagingOperation,
         string? environment,
+        string? packageEvidence,
         List<string> notes,
         IProgress<ClawCtlProgress> progress)
     {
@@ -409,6 +421,14 @@ internal sealed partial class GatewayRuntime
 
         using FileStream stream = CreateBundleStream(bundlePath);
         using ZipArchive archive = new(stream, ZipArchiveMode.Create);
+
+        if (packageEvidence is not null)
+        {
+            progress.Report(new ClawCtlProgress("Adding current-user package and command-alias diagnostics."));
+            ZipArchiveEntry entry = archive.CreateEntry("host/package-diagnostics.json");
+            using StreamWriter packageWriter = new(entry.Open());
+            packageWriter.Write(packageEvidence);
+        }
 
         foreach (HostSource source in hostFiles)
         {

@@ -68,7 +68,12 @@ internal static partial class SmokeProgram
             FileName = Path.Combine(AppContext.BaseDirectory, "openclaw-session-host.exe"),
             ArgumentList = { mode, request },
             UseShellExecute = false,
-            WorkingDirectory = Path.GetDirectoryName(request)!
+            WorkingDirectory = Path.GetDirectoryName(request)!,
+            Environment =
+            {
+                ["OPENCLAW_SESSION_STATE_DIRECTORY"] =
+                    Path.Combine(Path.GetDirectoryName(request)!, "state-access")
+            }
         })!;
         job.MarkDispatched();
         File.WriteAllText(Path.Combine(Path.GetDirectoryName(request)!, "invocation-mode.txt"),

@@ -457,6 +457,23 @@ permits replacement. No second launch registry or status-side repair is involved
 The receipt's `running` state still means application process, not listener
 readiness.
 
+For a Gateway-requested full-process restart, the same session supervisor keeps
+its identity, launch attempt, output log, state-access lease, and native-root
+lease across child generations. After the old child and its job descendants
+exit, it runs the bundled `gateway restart-handoff consume` command with
+`--expected-pid <pid> --json` under the agent identity, using the same Node.js runtime,
+preload, environment, and working directory. Upstream owns atomic consumption,
+expiry, and PID matching; packaging validates the versioned response and
+relaunches only an accepted `external` / `full-process` handoff. Missing or
+rejected handoffs, update-process handoffs, and ordinary crashes do not restart.
+An unavailable or unsupported consumer fails explicitly without a replacement.
+The named outer job remains open through handoff and successor launch, so
+explicit stop and teardown still terminate the whole owned tree. Each child
+generation has an inner job that must drain before the next begins.
+Only the outer job kills automatically on last-handle close: a stop retains
+that job before killing the supervisor, then pins and drains its members.
+Closing an inner handle must not kill them before that snapshot.
+
 Start distinguishes creating an attempt from adopting an existing starting or
 running attempt. Adoption preserves the existing ID. Conditional stop compares
 the requested attempt under the same lifecycle lock used for start and restart,
@@ -673,6 +690,22 @@ credential stores, and writes the collecting host's environment into its
 manifest. It also reads every recent gateway launch's output log and supervisor
 status from that workspace. It keeps a bounded tail of each and refuses reparse
 points, because the guest can write there.
+[`HostPackageDiagnostics`](../src/OpenClaw.Launcher/Gateway/HostPackageDiagnostics.cs)
+adds `host/package-diagnostics.json` independently of session reachability:
+collecting-process provenance and the manifest-qualified control alias,
+current-user Gateway/legacy/Companion registration metadata, and ordered
+clean-shell `clawctl` command resolution. It uses absolute inbox Windows
+PowerShell with no profiles, explicit inbox module imports, bounded streams,
+a 15-second deadline, and 32-entry inventory limits. It never invokes a
+discovered command or another `status` probe, which could start the session.
+Its declaration of the integration envelope shares `ClawCtlJson`'s producer;
+it is not evidence that a different package returned a compatible response.
+Exit/parse/launch failures and unavailable sources remain explicit, with no raw
+subprocess output in the ZIP. Structured paths preserve drive/depth, standard
+directory labels, and public package/alias identities while replacing private
+components consistently. Companion's historical selection, response mismatch,
+and active distribution remain unknown to this collector.
+
 [`DiagnosticsRedactor`](../src/OpenClaw.Launcher/Gateway/DiagnosticsRedactor.cs)
 redacts credential-shaped JSON members, URL parameters, environment-style
 assignments, and authorization header credentials in the remaining text, the

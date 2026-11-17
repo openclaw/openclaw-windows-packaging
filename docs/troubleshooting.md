@@ -27,6 +27,31 @@ clawctl setup
 
 For another stated prerequisite, correct that prerequisite and rerun setup.
 
+## A connected node shows a blank or unfamiliar desktop
+
+**Check.** If you started the node with the MSIX `openclaw node run` alias,
+it runs in the isolated agent session, even from a terminal opened on your
+interactive desktop. Successful pairing, a connected status, or an advertised
+`computer.act` command does not prove that the node targets your desktop.
+Screenshots and window listings from that node describe the isolated desktop.
+
+**Next step.** Use [Windows Hub](https://github.com/openclaw/openclaw-windows-node)
+as the supported interactive-user Windows node route, and check the selected
+node's actual capabilities and authorization before using it. Hub does **not
+currently implement `computer.act`**; follow
+[openclaw/openclaw-windows-node#1871](https://github.com/openclaw/openclaw-windows-node/issues/1871)
+for that missing capability. Hub screen capture and system commands alone
+cannot satisfy a computer-control request. Until that capability ships,
+this route cannot provide end-to-end computer use on your desktop.
+
+The upstream computer-use guide's instruction to start a node in the
+interactive desktop session does not apply to the MSIX alias. Opening another
+terminal or using `clawctl pwsh` does not change the execution session.
+A separately installed npm CLI node running as the interactive user is an
+**unsupported workaround**, not the supported MSIX route. Do not disable
+isolation or reset the agent session to try to move its node onto your desktop.
+See [interactive desktop nodes](../README.md#interactive-desktop-nodes).
+
 ## The session record is missing but setup evidence remains
 
 **Check.** `openclaw`, `clawctl setup`, and `clawctl teardown` stop with this
@@ -217,6 +242,22 @@ with `clawctl restore <archive> --yes` without rereading the old profile.
 Review approvals and messaging state, resolve reported upstream plugin
 installation requirements, and relink nonportable credentials before restarting
 with `clawctl gateway-service start`.
+
+## A Gateway-requested restart leaves the gateway stopped
+
+**Check.** Run `clawctl gateway-service status`, then `clawctl collect-logs`.
+Preserve the launch log and supervisor status. A clean exit code alone is not
+a restart request: the supervisor consumes the bundled application's
+PID-matched full-process restart handoff before launching a successor.
+
+**Recovery.** An ordinary failure, a shutdown deadline reached before a handoff
+was written, or an expired/rejected handoff leaves the Gateway stopped.
+Correct any startup refusal reported in its log, then run
+`clawctl gateway-service start`. If the supervisor reports a failed or
+unsupported restart-handoff command, retain the diagnostics and update the
+Gateway package; it does not guess at private application state or retry every
+failed exit. `clawctl gateway-service stop` and teardown never request a
+replacement.
 
 ## The gateway is not started, not listening, or is unhealthy
 
@@ -458,6 +499,47 @@ with the ZIP path on its own line. Without `--output`, it creates the ZIP in
 package state. It is best effort: if the agent session cannot be reached, the
 ZIP still contains host diagnostics and records that agent-side collection
 failed, with the underlying cause.
+
+`host/package-diagnostics.json` captures fresh host-side package and alias
+evidence even when no session or helper is usable. It records:
+
+- The collecting process's package family, full identity, origin, development
+  registration, install location, and manifest-resolved package-qualified
+  `clawctl` alias, including whether that alias exists.
+- Current-user registrations for the Gateway Store/development names and
+  patches, the legacy `Microsoft.OpenClaw` name, and the Companion
+  `OpenClawFoundation.OpenClaw` / `OpenClaw.Tray` names: name, version, full
+  identity, family, install location, signature kind, and development mode.
+- Ordered application/script results from `Get-Command clawctl -All` in a
+  fresh inbox Windows PowerShell process with `-NoProfile`. A preceding
+  `.cmd`, `.bat`, or `.ps1` can explain command shadowing. Nothing discovered
+  is executed; aliases/functions from the caller's existing shell or profiles
+  remain unknown.
+
+The inventory is limited to 32 packages and 32 commands, with a 15-second
+deadline and 256 Ki characters retained per process stream. The document
+records acquisition time, source, exit code, output lengths/truncation,
+standard-error presence, and parse/launch failure classification when
+available. Partial collection also appears in `manifest.txt` and the command's
+notes. Raw process output, error messages, configuration, tokens, environment
+dumps, and account/group inventories are not added by this probe.
+
+These new structured paths retain the drive, directory depth, public package
+identities and declared control alias, and standard Windows directory labels.
+Other components, including profile names, UNC machine/share names and SID
+components, become consistent `<private-N>` placeholders within this entry.
+This additional path policy does not apply to the existing log/config entries.
+
+The declared status command and integration schema/kind/version come from the
+command tree and the same producer as `clawctl` JSON output. This declaration
+is not a fresh `status` response: status can start the
+recorded session, so collection does not invoke it again. Current Companion
+registration metadata cannot establish which Companion distribution was
+running, which Gateway it selected, what response it received, or whether
+credentials were sent during an earlier failure. Those observations belong
+in Companion's own diagnostics. Collect both products' diagnostics before
+repairing the affected installation; an older ZIP cannot supply missing
+incident-time evidence.
 
 The ZIP's `manifest.txt` names the collecting build's environment: the Windows
 build and update revision, how the package was installed (a Developer Mode

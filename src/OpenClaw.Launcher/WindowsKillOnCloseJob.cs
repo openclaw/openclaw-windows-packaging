@@ -39,11 +39,16 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
     private static readonly SearchValues<char> QuoteCharacters = SearchValues.Create(" \t\r\n\v\"");
 
     private readonly bool _owned;
+    private readonly WindowsKillOnCloseJob? _parent;
 
-    private WindowsKillOnCloseJob(SafeJobHandle handle, bool owned = true)
+    private WindowsKillOnCloseJob(
+        SafeJobHandle handle,
+        bool owned = true,
+        WindowsKillOnCloseJob? parent = null)
     {
         _handle = handle;
         _owned = owned;
+        _parent = parent;
     }
 
     /// <summary>The name a supervised gateway's job is published under, bound to that supervisor's identity.</summary>
@@ -69,7 +74,16 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
         return new WindowsKillOnCloseJob(handle, owned: false);
     }
 
-    public static WindowsKillOnCloseJob Create(string? name = null)
+    public static WindowsKillOnCloseJob Create(string? name = null) =>
+        CreateCore(name, parent: null);
+
+    public static WindowsKillOnCloseJob CreateContained(WindowsKillOnCloseJob parent)
+    {
+        ArgumentNullException.ThrowIfNull(parent);
+        return CreateCore(name: null, parent);
+    }
+
+    private static WindowsKillOnCloseJob CreateCore(string? name, WindowsKillOnCloseJob? parent)
     {
         SafeJobHandle handle = CreateJobObjectW(IntPtr.Zero, name);
         int createError = Marshal.GetLastWin32Error();
@@ -91,7 +105,7 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
             {
                 BasicLimitInformation = new JobObjectBasicLimitInformation
                 {
-                    LimitFlags = JobObjectLimitKillOnJobClose
+                    LimitFlags = parent is null ? JobObjectLimitKillOnJobClose : 0
                 }
             };
             int size = Marshal.SizeOf<JobObjectExtendedLimitInformation>();
@@ -115,7 +129,7 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
                 Marshal.FreeHGlobal(buffer);
             }
 
-            return new WindowsKillOnCloseJob(handle);
+            return new WindowsKillOnCloseJob(handle, parent: parent);
         }
         catch
         {
@@ -202,6 +216,17 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
 
             try
             {
+                if (_parent is not null &&
+                    !AssignProcessToJobObject(
+                        _parent._handle,
+                        processInformation.Process))
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    TerminateProcess(processInformation.Process, 1);
+                    throw new Win32Exception(
+                        error,
+                        "Unable to assign OpenClaw to its supervisor job.");
+                }
                 if (assignToJob &&
                     !AssignProcessToJobObject(
                         _handle,
@@ -382,7 +407,12 @@ internal sealed class WindowsKillOnCloseJob : IDisposable
         {
             BasicLimitInformation = new JobObjectBasicLimitInformation
             {
-                LimitFlags = JobObjectLimitKillOnJobClose | JobObjectLimitActiveProcess,
+                // Only the outer owner kills on last-handle close. A stop
+                // retains that job before killing the supervisor, then pins
+                // its members. An inner kill-on-close could kill and remove
+                // them before that snapshot.
+                LimitFlags = JobObjectLimitActiveProcess |
+                    (_parent is null ? JobObjectLimitKillOnJobClose : 0),
                 ActiveProcessLimit = 1
             }
         };

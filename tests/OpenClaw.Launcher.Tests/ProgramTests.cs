@@ -2,6 +2,7 @@ using System.IO.Compression;
 using OpenClaw.Launcher.Mxc;
 using OpenClaw.Launcher.Gateway;
 using OpenClaw.Launcher.Session;
+using OpenClaw.Launcher.Tests.Gateway;
 using OpenClaw.Launcher.Tests.Session;
 using OpenClaw.SessionProtocol;
 using System.Text.Json;
@@ -3837,14 +3838,17 @@ public sealed class ProgramTests : IDisposable
             _ => { },
             output,
             error,
-            new StubbedRecoveryLifecycle(runtime)).ConfigureAwait(true);
+            new StubbedRecoveryLifecycle(runtime),
+            packageDiagnostics: CreateCollectionDiagnostics()).ConfigureAwait(true);
 
         Assert.Equal(0, exitCode);
         Assert.Equal(
             [
                 "Collecting redacted diagnostics.",
+                "Collecting current-user package and command-alias diagnostics.",
                 "Starting the isolated session.",
                 "Collecting OpenClaw logs and configuration from the isolated session.",
+                "Adding current-user package and command-alias diagnostics.",
                 "Collecting the host diagnostic log.",
                 "Collecting the setup record.",
                 "Collecting the session record.",
@@ -4011,7 +4015,8 @@ public sealed class ProgramTests : IDisposable
             _ => { },
             output,
             error,
-            new StubbedRecoveryLifecycle(runtime)).ConfigureAwait(true);
+            new StubbedRecoveryLifecycle(runtime),
+            packageDiagnostics: CreateCollectionDiagnostics()).ConfigureAwait(true);
 
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, error.ToString());
@@ -4021,6 +4026,11 @@ public sealed class ProgramTests : IDisposable
             "host-and-session",
             document.RootElement.GetProperty("bundle").GetProperty("included").GetString());
         using ZipArchive archive = ZipFile.OpenRead(bundlePath);
+        using (var packageReader = new StreamReader(archive.GetEntry("host/package-diagnostics.json")!.Open()))
+        {
+            using JsonDocument packages = JsonDocument.Parse(await packageReader.ReadToEndAsync().ConfigureAwait(true));
+            Assert.Equal(2, packages.RootElement.GetProperty("inventory").GetProperty("packages").GetArrayLength());
+        }
         using var logReader = new StreamReader(archive.GetEntry("agent/logs/openclaw-2026-09-23.log")!.Open());
         string kept = await logReader.ReadToEndAsync().ConfigureAwait(true);
         Assert.True(kept.Length <= GatewayRuntime.MaximumGatewayFileBytes);
@@ -4034,6 +4044,9 @@ public sealed class ProgramTests : IDisposable
             await manifestReader.ReadToEndAsync().ConfigureAwait(true),
             StringComparison.Ordinal);
     }
+
+    private static HostPackageDiagnostics CreateCollectionDiagnostics() =>
+        new(_ => Task.FromResult(HostPackageDiagnosticsTests.Output()), HostPackageDiagnosticsTests.Collector);
 
     private HostOptions CollectionOptions() =>
         new(

@@ -530,7 +530,8 @@ internal static class Program
         Action? beforeBrowserValidation = null,
         string? environment = null,
         Func<CancellationToken, Task<string?>>? readInputLine = null,
-        string? archiveDirectory = null)
+        string? archiveDirectory = null,
+        Gateway.HostPackageDiagnostics? packageDiagnostics = null)
     {
         Session.IInstallationLifecycle lifecycle =
             installationLifecycle ?? Session.InstallationLifecycle.Production;
@@ -798,7 +799,9 @@ internal static class Program
                             requestedPath,
                             environment,
                             progress,
-                            cancellationToken)).ConfigureAwait(false);
+                            cancellationToken,
+                            packageDiagnostics ??
+                                Gateway.HostPackageDiagnostics.CreateDefault(runtime.Paths))).ConfigureAwait(false);
                     return WriteResult(new CollectLogsCommandResult(result));
                 },
                 Teardown = async (force, cancellationToken) =>

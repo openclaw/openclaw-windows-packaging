@@ -8,7 +8,7 @@ namespace OpenClaw.Launcher.Tests.Session;
 /// Drives the real supervisor against a real child process, because its whole
 /// job is to own output and lifetime that a fake would simply assert away.
 /// </summary>
-public sealed class SessionSupervisorTests : IDisposable
+public sealed partial class SessionSupervisorTests : IDisposable
 {
     private readonly string _root = TestDirectory.Create();
 

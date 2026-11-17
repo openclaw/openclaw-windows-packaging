@@ -111,6 +111,13 @@ public sealed record SessionLaunchRequest
     /// </remarks>
     [JsonPropertyName("statusPath")]
     public string? StatusPath { get; init; }
+
+    /// <summary>
+    /// Detached Gateway only. The bundled CLI command that consumes its
+    /// restart handoff; the supervisor appends the exited child's expected PID.
+    /// </summary>
+    [JsonPropertyName("restartHandoffArguments")]
+    public IReadOnlyList<string>? RestartHandoffArguments { get; init; }
 }
 
 /// <summary>

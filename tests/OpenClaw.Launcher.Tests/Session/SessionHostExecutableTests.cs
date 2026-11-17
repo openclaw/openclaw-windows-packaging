@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using OpenClaw.SessionHost;
 using OpenClaw.SessionProtocol;
 
 namespace OpenClaw.Launcher.Tests.Session;
@@ -143,7 +144,8 @@ public sealed class SessionHostExecutableTests : IDisposable
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            StandardOutputEncoding = System.Text.Encoding.UTF8
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            Environment = { ["OPENCLAW_SESSION_STATE_DIRECTORY"] = StateDirectory }
         }) ?? throw new InvalidOperationException("Starting the private-console fixture failed.");
         Task<string> output = process.StandardOutput.ReadToEndAsync();
         Task<string> error = process.StandardError.ReadToEndAsync();
@@ -155,6 +157,36 @@ public sealed class SessionHostExecutableTests : IDisposable
         Assert.Empty(stderr);
         Assert.Equal("\u00e9\u4e2d", stdout.Trim());
         Assert.True(ReadResult(requestPath).Launched);
+    }
+
+    [Fact]
+    public void IndependentFixtureStateGateRemainsUsableWhileAnotherFixtureHoldsMaintenance()
+    {
+        using var independent = new SessionHostExecutableTests();
+        string blockedRequest = WriteRequest(_testDirectory);
+        string independentRequest = WriteRequest(independent._testDirectory);
+        using IDisposable maintenance = new SessionStateAccess(StateDirectory).EnterMaintenance();
+
+        Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode,
+            RunHelper(blockedRequest, _testDirectory));
+        Assert.False(ReadResult(blockedRequest).Launched);
+        Assert.Contains("Another agent process", ReadResult(blockedRequest).Error, StringComparison.Ordinal);
+        Assert.Equal(0, independent.RunHelper(independentRequest, independent._testDirectory));
+        Assert.True(ReadResult(independentRequest).Launched);
+        Assert.True(File.Exists(Path.Combine(independent.StateDirectory, "access.lock")));
+
+        static string WriteRequest(string directory)
+        {
+            string path = Path.Combine(directory, "isolated-request.json");
+            File.WriteAllText(path, SessionLaunchProtocol.SerializeRequest(new SessionLaunchRequest
+            {
+                RequestId = "isolated-state",
+                Executable = Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+                Arguments = ["/d", "/c", "exit", "0"],
+                WorkingDirectory = directory
+            }));
+            return path;
+        }
     }
 
     [Fact]

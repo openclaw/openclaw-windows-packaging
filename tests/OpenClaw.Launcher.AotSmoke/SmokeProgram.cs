@@ -42,6 +42,11 @@ internal static partial class SmokeProgram
             "scenarios.")]
     private static async Task<int> Main(string[] args)
     {
+        if (args is ["--package-diagnostics-evidence", string evidenceRoot])
+        {
+            await WritePackageDiagnosticEvidenceAsync(evidenceRoot).ConfigureAwait(false);
+            return 0;
+        }
         if (args is ["--invocation-owner-fixture", string request, string ready, string release, string kind])
         {
             return RunInvocationOwnerFixture(request, ready, release, kind);
@@ -78,6 +83,7 @@ internal static partial class SmokeProgram
             ("Spectre renders clawctl output under NativeAOT", SpectreOutputRenders),
             ("gateway narration survives NativeAOT", GatewayNarrationRenders),
             ("pending gateway JSON survives NativeAOT", PendingGatewayJsonIsStructured),
+            ("gateway restart handoffs survive NativeAOT", GatewayRestartHandoffsAreStructured),
             ("Windows logon identity survives NativeAOT", WindowsLogonIdentityWorks),
             ("Windows process identity survives NativeAOT", WindowsProcessIdentityWorks),
             ("invocation job interop survives NativeAOT", InvocationJobWorks),
@@ -85,6 +91,7 @@ internal static partial class SmokeProgram
             ("MXC SDK loads and validates requests under NativeAOT", MxcSdkWorksInFreshProcessAsync),
             ("package provenance reads survive NativeAOT", PackageProvenanceReadsBind),
             ("diagnostics redaction survives NativeAOT", DiagnosticsRedactionWorks),
+            ("package diagnostics ZIP survives NativeAOT", PackageDiagnosticsAreStructuredAsync),
             ("plain helper failure fallback survives NativeAOT", HelperFailureFallbackWorks),
             ("missing application reports diagnostics", MissingApplicationReportsAsync),
             ("openclaw never parses its arguments", AgentNeverParsesItsArgumentsAsync),
@@ -145,6 +152,23 @@ internal static partial class SmokeProgram
 
         WriteLine($"{scenarios.Length} NativeAOT scenarios passed.");
         return 0;
+    }
+
+    private static Task GatewayRestartHandoffsAreStructured()
+    {
+        GatewayRestartHandoffDecision accepted = SessionGatewayRestartHandoff.ReadDecision(
+            """
+            {"ok":true,"protocol":"openclaw.gateway.restart-handoff","protocolVersion":1,
+             "status":"accepted","handoff":{"pid":123,"supervisorMode":"external","restartKind":"full-process"}}
+            """, 123);
+        Assert(accepted.Restart, "The trimmed handoff parser lost the authorized restart.");
+        GatewayRestartHandoffDecision absent = SessionGatewayRestartHandoff.ReadDecision(
+            """
+            {"ok":true,"protocol":"openclaw.gateway.restart-handoff","protocolVersion":1,
+             "status":"none","reason":"missing"}
+            """, 123);
+        Assert(!absent.Restart, "An ordinary exit became a restart under NativeAOT.");
+        return Task.CompletedTask;
     }
 
     private static Task HelperFailureFallbackWorks()

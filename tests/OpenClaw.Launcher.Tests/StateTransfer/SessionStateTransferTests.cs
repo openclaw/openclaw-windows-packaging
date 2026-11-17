@@ -21,7 +21,9 @@ public sealed class SessionStateTransferTests : IDisposable
         Directory.CreateDirectory(profile);
         var application = new ArchiveApplication();
         var backend = new FakeMxcSessionClient();
-        string exchange = longPath ? Path.Combine(_root, new string('p', 150)) : Path.Combine(_root, "shared");
+        string exchange = longPath
+            ? Path.Combine(_root, new string('p', 150), new string('q', 150))
+            : Path.Combine(_root, "shared");
         Directory.CreateDirectory(exchange);
         using WindowsIdentity identity = WindowsIdentity.GetCurrent();
         var record = new SessionRecord

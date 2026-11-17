@@ -4,7 +4,7 @@ using OpenClaw.SessionProtocol;
 namespace OpenClaw.SessionHost;
 
 /// <summary>
-/// The <c>--supervise</c> mode: owns one detached application and its log.
+/// The <c>--supervise</c> mode: owns a detached application and its restart handoffs.
 /// </summary>
 /// <remarks>
 /// This process is deliberately long-lived and is the identity the host
@@ -115,26 +115,54 @@ internal static class SessionSupervisor
         using WindowsKillOnCloseJob job = WindowsKillOnCloseJob.Create(WindowsKillOnCloseJob.GatewayJobName(
             self.Id, self.StartTime.ToUniversalTime().Ticks));
         using var input = new FileStream("NUL", FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        using Process process = job.StartProcess(startInfo, input.SafeFileHandle, log.SafeFileHandle, log.SafeFileHandle);
+        // Re-exposing a FileStream's handle resets the native file position to
+        // its cached position, overwriting earlier child output on a restart.
+        var logHandle = log.SafeFileHandle;
+        while (true)
+        {
+            int processId;
+            int exitCode;
+            // The named outer job stays open through handoff and replacement.
+            // Each inner job drains the old generation before any successor.
+            using (WindowsKillOnCloseJob generation = WindowsKillOnCloseJob.CreateContained(job))
+            {
+                using Process process = generation.StartProcess(
+                    startInfo, input.SafeFileHandle, logHandle, logHandle);
+                processId = process.Id;
+                WriteStatus(
+                    writeFile,
+                    statusPath,
+                    request,
+                    SessionSupervisorStatus.RunningState,
+                    $"supervising process {processId}");
+                process.WaitForExit();
+                exitCode = process.ExitCode;
+                generation.Dispose();
+                if (!generation.ExitConfirmed)
+                {
+                    throw new SessionLaunchException(
+                        "The gateway process tree did not exit; no replacement was started.");
+                }
+            }
 
-        // Written only once the application is actually running, so a status of
-        // 'running' is evidence rather than intent.
-        WriteStatus(
-            writeFile,
-            statusPath,
-            request,
-            SessionSupervisorStatus.RunningState,
-            $"supervising process {process.Id}");
+            string detail = $"the application exited with code {exitCode}";
+            if (request.RestartHandoffArguments is not null)
+            {
+                WriteStatus(writeFile, statusPath, request, "starting",
+                    $"{detail}; checking its restart handoff");
+                GatewayRestartHandoffDecision decision =
+                    SessionGatewayRestartHandoff.Consume(request, processId, job);
+                if (decision.Restart)
+                {
+                    WriteStatus(writeFile, statusPath, request, "starting", decision.Detail);
+                    continue;
+                }
+                detail += "; " + decision.Detail;
+            }
 
-        process.WaitForExit();
-
-        WriteStatus(
-            writeFile,
-            statusPath,
-            request,
-            SessionSupervisorStatus.ExitedState,
-            $"the application exited with code {process.ExitCode}");
-        return process.ExitCode;
+            WriteStatus(writeFile, statusPath, request, SessionSupervisorStatus.ExitedState, detail);
+            return exitCode;
+        }
     }
 
     private static void WriteStatus(
