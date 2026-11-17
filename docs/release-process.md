@@ -51,9 +51,11 @@ branches and tags cannot be combined with `gateway_version`.
 The workflow also accepts `signing_mode`, whose choices are `unsigned`, `test`,
 `store`, and `official`. Select `test` for a credential-free release-candidate
 preflight, including the installed-upgrade matrix, from any branch. Select `store`
-to authorize and retain an unsigned Partner Center
-submission bundle without signing. Select `official` to retain that Store
+to authorize and retain a Partner Center submission bundle whose package
+signature is left to Microsoft. Select `official` to retain that Store
 bundle and sign the separate sideload-identity packages for GitHub Releases.
+Both modes Authenticode-sign the executables this repository builds through the
+protected `release-signing` environment before retaining or publishing anything.
 Following stable does not automatically publish: both modes still require a
 manual dispatch from `main`.
 
@@ -164,7 +166,9 @@ payload is rebuilt and revalidated.
 For a preflight without release authorization or Azure credentials, dispatch
 `signing_mode=test` with the desired source inputs. It uses the derived release
 version and the same installed-upgrade matrix, then retains temporary test-signed
-packages. A later `store` or `official` dispatch repeats that proof against its
+packages and bundle. The temporary certificate signs the package executables
+first, then the packages, rehearsing the release signing order. A later
+`store` or `official` dispatch repeats that proof against its
 own immutable source snapshot. `unsigned` dispatches and push builds keep
 development versions and skip installed-upgrade validation.
 
@@ -197,10 +201,28 @@ commit, payload version, and derived release identity. The check validates
 policy-controlled publishers and every selected package and bundle
 against those inputs. A later channel change or upstream tag deletion does not
 rewrite or revoke a captured source snapshot; stop the workflow rather than
-retrying it if that captured release must no longer be published. For `official`,
-only after all selected identity channels
-pass does `sign-msix` use Azure login. It signs only the sideload x64, ARM64,
-and bundle artifacts; the Store bundle remains unsigned for Partner Center.
+retrying it if that captured release must no longer be published. Only after
+all selected identity channels pass does `sign-msix` request Azure credentials.
+
+`sign-msix` runs for `store` and `official`. Executables that run outside the
+installed package lose its catalog trust: the session host is copied into the
+agent's shared workspace before it runs, where Smart App Control and App
+Control evaluate the copy by its own signature. So `sign-msix` first unpacks
+the authorized packages with `scripts\Invoke-MSIXExecutableSigning.ps1` and
+signs exactly `openclaw.exe`, `openclaw-gateway-recovery.exe`, and the
+`session-host\<architecture>` files through Azure Artifact Signing with an
+RFC 3161 timestamp. It then repacks each package and rebuilds each bundle.
+Completion refuses any executable that changed beyond its Authenticode
+signature, and any package or bundle whose other entries differ from the
+authorized input. `scripts\Test-MSIXExecutableSignatures.ps1` then fails the
+job unless those executables carry a timestamped embedded signature from the
+authorized publisher, and unless the bundled `node.exe` carries a valid
+embedded signature. Unsigned native files in the upstream payload are reported
+as warnings for their owners; this repository does not re-sign upstream or
+third-party code. For `official`, the job then signs the sideload x64, ARM64,
+and bundle artifacts and repeats that check on the published files. The Store
+bundle keeps no package signature for Partner Center, which replaces only
+package signatures and leaves the embedded executable signatures intact.
 
 Observe these workflow outcomes:
 
@@ -210,7 +232,10 @@ Observe these workflow outcomes:
   succeed before `authorize-signing`. Missing or skipped required upgrade
   proof fails the final `Gateway MSIX CI` gate.
 - `authorize-signing` succeeds before Azure login and signing begins.
-- `sign-msix` verifies signatures and refreshes package metadata.
+- `sign-msix` signs and verifies the package executables, then for `official`
+  verifies the package signatures and refreshes package metadata. A skipped or
+  failed `sign-msix` or Store retention job after authorization fails the final
+  gate.
 
 The upgrade matrix runs for versioning/source-selection pull requests and
 manual `test`, `store`, and `official` dispatches. It uses
@@ -242,18 +267,19 @@ the fixtures to make either check pass.
 
 ## Publication and completion
 
-After authorization succeeds (and GitHub publication succeeds for previews),
-`retain-store-submission` keeps the unsigned Store-identity bundle as the
+After authorization and executable signing succeed (and GitHub publication
+succeeds for previews), `retain-store-submission` keeps the executable-signed
+Store-identity bundle, still without a package signature, as the
 `openclaw-gateway-msix-store-submission-<attempt>` Actions
-artifact for 90 days. Microsoft signs it during Store ingestion; it is never a
-GitHub Release download. `publish-release` runs after sideload signing and creates the permanent GitHub release
+artifact for 90 days. Microsoft signs the package during Store ingestion; it is never a
+GitHub Release download. `publish-release` runs only in `official` mode after sideload signing and creates the permanent GitHub release
 tag derived by `scripts\Get-MSIXReleaseIdentity.ps1`, generates release notes
 from merged pull request titles, and publishes the signed multi-architecture
 bundle plus signed x64 and ARM64 standalone MSIX assets.
 
 After publication, verify the release has the derived permanent tag, generated
 notes, three signed sideload assets, and valid signatures. For stable, verify
-the retained unsigned Store submission bundle. For previews, verify that bundle
+the retained Store submission bundle. For previews, verify that bundle
 and its current-attempt witness after GitHub publication. For every release, verify all successful
 identity-transition and in-place-upgrade evidence from that same release run.
 The proof and packages share the run's captured upstream source and derived

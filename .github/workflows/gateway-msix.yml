@@ -255,6 +255,11 @@ jobs:
         run: >
           .\scripts\Test-Sign-TestMSIX.Tests.ps1
 
+      - name: Test MSIX executable signing
+        shell: pwsh
+        run: >
+          .\scripts\Test-MSIXExecutableSigning.Tests.ps1
+
       - name: Test MSIX upgrade safety
         shell: pwsh
         run: >
@@ -655,6 +660,12 @@ jobs:
           name: openclaw-gateway-msix-${{ inputs.release_channel == 'stable' && 'store' || 'sideload' }}-unsigned-arm64
           path: artifacts\arm64
 
+      - name: Download unsigned bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-${{ inputs.release_channel == 'stable' && 'store' || 'sideload' }}-unsigned-bundle
+          path: artifacts\bundle
+
       - name: Apply temporary test signature
         shell: pwsh
         env:
@@ -663,7 +674,8 @@ jobs:
           .\scripts\Sign-TestMSIX.ps1 `
             -ArtifactsDirectory artifacts `
             -OutputDirectory test-signed `
-            -IdentityChannel $env:IDENTITY_CHANNEL
+            -IdentityChannel $env:IDENTITY_CHANNEL `
+            -SignExecutables
 
       - name: Upload test-signed x64 MSIX
         uses: actions/upload-artifact@v7
@@ -678,6 +690,14 @@ jobs:
         with:
           name: openclaw-gateway-msix-test-signed-arm64
           path: test-signed\arm64\
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload test-signed MSIX bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: openclaw-gateway-msix-test-signed-bundle
+          path: test-signed\bundle\
           if-no-files-found: error
           retention-days: 7
 
@@ -989,8 +1009,8 @@ jobs:
 
   sign-msix:
     cache-mode: none
-    name: Officially sign Gateway MSIX packages
-    if: ${{ !cancelled() && inputs.signing_mode == 'official' && needs.build.result == 'success' && needs.authorize-signing.result == 'success' }}
+    name: Sign Gateway executables and MSIX packages
+    if: ${{ !cancelled() && (inputs.signing_mode == 'official' || inputs.signing_mode == 'store') && needs.build.result == 'success' && needs.authorize-signing.result == 'success' }}
     needs:
       - build
       - authorize-signing
@@ -1001,23 +1021,66 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - name: Download unsigned x64 package
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Download authorized Store x64 package
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-store-unsigned-x64
+          path: authorized\store\x64
+
+      - name: Download authorized Store ARM64 package
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-store-unsigned-arm64
+          path: authorized\store\arm64
+
+      - name: Download authorized Store bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-store-unsigned-bundle
+          path: authorized\store\bundle
+
+      - name: Download authorized sideload x64 package
+        if: ${{ inputs.signing_mode == 'official' }}
         uses: actions/download-artifact@v8
         with:
           name: openclaw-gateway-msix-sideload-unsigned-x64
-          path: artifacts\x64
+          path: authorized\sideload\x64
 
-      - name: Download unsigned ARM64 package
+      - name: Download authorized sideload ARM64 package
+        if: ${{ inputs.signing_mode == 'official' }}
         uses: actions/download-artifact@v8
         with:
           name: openclaw-gateway-msix-sideload-unsigned-arm64
-          path: artifacts\arm64
+          path: authorized\sideload\arm64
 
-      - name: Download unsigned multi-architecture bundle
+      - name: Download authorized sideload bundle
+        if: ${{ inputs.signing_mode == 'official' }}
         uses: actions/download-artifact@v8
         with:
           name: openclaw-gateway-msix-sideload-unsigned-bundle
-          path: artifacts\bundle
+          path: authorized\sideload\bundle
+
+      # Executables copied out of the installed package lose its catalog
+      # trust, so they carry their own signature. Unpack before requesting
+      # credentials; only the selected executables enter the signing folders.
+      - name: Stage package executables for signing
+        shell: pwsh
+        env:
+          SIGNING_MODE: ${{ inputs.signing_mode }}
+        run: |
+          $channels = if ($env:SIGNING_MODE -ceq 'official') { @('store', 'sideload') } else { @('store') }
+          foreach ($channel in $channels) {
+            .\scripts\Invoke-MSIXExecutableSigning.ps1 `
+              -Phase Prepare `
+              -ArtifactsDirectory "authorized\$channel" `
+              -WorkDirectory (Join-Path $env:RUNNER_TEMP "executable-layouts\$channel") `
+              -SigningDirectory "executable-signing\$channel"
+          }
 
       - name: Azure login
         uses: azure/login@v3
@@ -1026,13 +1089,57 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Sign standalone MSIX packages
+      - name: Sign Store package executables
         uses: azure/artifact-signing-action@v2
         with:
           endpoint: https://eus.codesigning.azure.net/
           signing-account-name: openclaw
           certificate-profile-name: openclaw
-          files-folder: artifacts
+          files-catalog: ${{ github.workspace }}\executable-signing\store\files.txt
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Sign sideload package executables
+        if: ${{ inputs.signing_mode == 'official' }}
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: openclaw
+          certificate-profile-name: openclaw
+          files-catalog: ${{ github.workspace }}\executable-signing\sideload\files.txt
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Repack and verify executable signatures
+        shell: pwsh
+        env:
+          SIGNING_MODE: ${{ inputs.signing_mode }}
+          EXPECTED_PUBLISHER: ${{ needs.authorize-signing.outputs.publisher }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:EXPECTED_PUBLISHER)) {
+            throw 'The authorized publisher subject was not provided to the signing job.'
+          }
+          $channels = if ($env:SIGNING_MODE -ceq 'official') { @('store', 'sideload') } else { @('store') }
+          foreach ($channel in $channels) {
+            .\scripts\Invoke-MSIXExecutableSigning.ps1 `
+              -Phase Complete `
+              -ArtifactsDirectory "authorized\$channel" `
+              -WorkDirectory (Join-Path $env:RUNNER_TEMP "executable-layouts\$channel") `
+              -SigningDirectory "executable-signing\$channel" `
+              -OutputDirectory "artifacts\$channel" `
+              -ExpectedPublisher $env:EXPECTED_PUBLISHER
+          }
+
+      - name: Sign standalone MSIX packages
+        if: ${{ inputs.signing_mode == 'official' }}
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: openclaw
+          certificate-profile-name: openclaw
+          files-folder: ${{ github.workspace }}\artifacts\sideload
           files-folder-filter: msix
           files-folder-recurse: true
           files-folder-depth: 2
@@ -1041,17 +1148,19 @@ jobs:
           timestamp-digest: SHA256
 
       - name: Sign multi-architecture MSIX bundle
+        if: ${{ inputs.signing_mode == 'official' }}
         uses: azure/artifact-signing-action@v2
         with:
           endpoint: https://eus.codesigning.azure.net/
           signing-account-name: openclaw
           certificate-profile-name: openclaw
-          files: ${{ github.workspace }}\artifacts\bundle\OpenClawGateway.msixbundle
+          files: ${{ github.workspace }}\artifacts\sideload\bundle\OpenClawGateway.msixbundle
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
 
       - name: Verify signatures and refresh metadata
+        if: ${{ inputs.signing_mode == 'official' }}
         shell: pwsh
         env:
           EXPECTED_PUBLISHER: ${{ needs.authorize-signing.outputs.publisher }}
@@ -1061,7 +1170,7 @@ jobs:
             throw 'The authorized publisher subject was not provided to the signing job.'
           }
           foreach ($architecture in @('x64', 'arm64')) {
-            $directory = Join-Path 'artifacts' $architecture
+            $directory = Join-Path 'artifacts\sideload' $architecture
             $msix = Get-ChildItem -LiteralPath $directory -Filter '*.msix' -File
             if (@($msix).Count -ne 1) {
               throw "Expected one signed MSIX in $directory."
@@ -1085,12 +1194,12 @@ jobs:
               Get-FileHash -LiteralPath $msix.FullName -Algorithm SHA256
             ).Hash.ToLowerInvariant()
             $metadata.signed = $true
-            $metadata | ConvertTo-Json |
+            $metadata | ConvertTo-Json -Depth 6 |
               Set-Content -LiteralPath $metadataPath -Encoding utf8
           }
 
           $bundle = Get-Item `
-            -LiteralPath artifacts\bundle\OpenClawGateway.msixbundle
+            -LiteralPath artifacts\sideload\bundle\OpenClawGateway.msixbundle
           $bundleSignature = Get-AuthenticodeSignature `
             -LiteralPath $bundle.FullName
           if ($bundleSignature.Status -ne 'Valid') {
@@ -1107,34 +1216,54 @@ jobs:
             )
           }
 
+          # Recheck the published packages, not only their executable-signed inputs.
+          .\scripts\Test-MSIXExecutableSignatures.ps1 `
+            -Path @(
+              'artifacts\sideload\x64\OpenClawGateway-x64.msix',
+              'artifacts\sideload\arm64\OpenClawGateway-arm64.msix',
+              $bundle.FullName
+            ) `
+            -ExpectedPublisher $expectedSubject
+
       - name: Upload signed x64 MSIX
+        if: ${{ inputs.signing_mode == 'official' }}
         uses: actions/upload-artifact@v7
         with:
           name: openclaw-gateway-msix-x64
-          path: artifacts\x64\
+          path: artifacts\sideload\x64\
           if-no-files-found: error
           retention-days: 7
 
       - name: Upload signed ARM64 MSIX
+        if: ${{ inputs.signing_mode == 'official' }}
         uses: actions/upload-artifact@v7
         with:
           name: openclaw-gateway-msix-arm64
-          path: artifacts\arm64\
+          path: artifacts\sideload\arm64\
           if-no-files-found: error
           retention-days: 7
 
       - name: Upload signed multi-architecture MSIX bundle
+        if: ${{ inputs.signing_mode == 'official' }}
         uses: actions/upload-artifact@v7
         with:
           name: openclaw-gateway-msix-bundle
-          path: artifacts\bundle\OpenClawGateway.msixbundle
+          path: artifacts\sideload\bundle\OpenClawGateway.msixbundle
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload executable-signed Store bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: openclaw-gateway-msix-store-executable-signed-bundle
+          path: artifacts\store\bundle\OpenClawGateway.msixbundle
           if-no-files-found: error
           retention-days: 7
 
   publish-release:
     cache-mode: none
     name: Publish signed Gateway MSIX release
-    if: ${{ !cancelled() && inputs.publish_release && needs.build.result == 'success' && needs.authorize-signing.result == 'success' && needs.sign-msix.result == 'success' }}
+    if: ${{ !cancelled() && inputs.signing_mode == 'official' && inputs.publish_release && needs.build.result == 'success' && needs.authorize-signing.result == 'success' && needs.sign-msix.result == 'success' }}
     needs:
       - build
       - authorize-signing
@@ -1203,19 +1332,20 @@ jobs:
   retain-store-submission:
     cache-mode: none
     name: Retain authorized Microsoft Store submission bundle
-    if: ${{ !cancelled() && needs.build.result == 'success' && needs.authorize-signing.result == 'success' && ((inputs.release_channel == '' || inputs.release_channel == 'stable') || needs.publish-release.result == 'success') }}
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.authorize-signing.result == 'success' && needs.sign-msix.result == 'success' && ((inputs.release_channel == '' || inputs.release_channel == 'stable') || needs.publish-release.result == 'success') }}
     needs:
       - build
       - authorize-signing
+      - sign-msix
       - publish-release
     runs-on: windows-latest
     permissions:
       actions: read
     steps:
-      - name: Download authorized unsigned Store bundle
+      - name: Download executable-signed Store bundle
         uses: actions/download-artifact@v8
         with:
-          name: openclaw-gateway-msix-store-unsigned-bundle
+          name: openclaw-gateway-msix-store-executable-signed-bundle
           path: store
 
       - name: Stage versioned Store submission bundle
@@ -1298,17 +1428,27 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           SIGNING_MODE: ${{ inputs.signing_mode || 'unsigned' }}
+          RELEASE_CHANNEL: ${{ inputs.release_channel || 'stable' }}
           VERSIONING: ${{ needs.changes.outputs.versioning }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           TEST_HOST_RESULT: ${{ needs.test-host.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           UPGRADE_RESULT: ${{ needs.test-msix-upgrades.result }}
+          AUTHORIZATION_RESULT: ${{ needs.authorize-signing.result }}
+          SIGNING_RESULT: ${{ needs.sign-msix.result }}
+          PUBLISH_RESULT: ${{ needs.publish-release.result }}
+          STORE_RETENTION_RESULT: ${{ needs.retain-store-submission.result }}
         run: |
           ./scripts/Assert-WorkflowJobResults.ps1 `
             -EventName $env:EVENT_NAME `
             -SigningMode $env:SIGNING_MODE `
+            -ReleaseChannel $env:RELEASE_CHANNEL `
             -Versioning $env:VERSIONING `
             -ChangesResult $env:CHANGES_RESULT `
             -TestHostResult $env:TEST_HOST_RESULT `
             -BuildResult $env:BUILD_RESULT `
-            -UpgradeResult $env:UPGRADE_RESULT
+            -UpgradeResult $env:UPGRADE_RESULT `
+            -AuthorizationResult $env:AUTHORIZATION_RESULT `
+            -SigningResult $env:SIGNING_RESULT `
+            -PublishResult $env:PUBLISH_RESULT `
+            -StoreRetentionResult $env:STORE_RETENTION_RESULT

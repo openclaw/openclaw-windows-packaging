@@ -13,6 +13,11 @@ param(
     [ValidateSet('store', 'sideload')]
     [string]$IdentityChannel = 'store',
 
+    # Also embed the temporary signature in the executables this repository
+    # builds before signing the packages, rehearsing the release order without
+    # release credentials. A bundle directory requires both architectures.
+    [switch]$SignExecutables,
+
     # Test seam that replaces certificate-store operations so tests never
     # touch Cert:\. Production callers omit it.
     [hashtable]$Operations = @{}
@@ -120,15 +125,33 @@ $temporaryPfx = Join-Path $temporaryDirectory (
     "openclaw-gateway-test-$([guid]::NewGuid().ToString('N')).pfx"
 )
 $passwordText = [guid]::NewGuid().ToString('N')
-$password = ConvertTo-SecureString $passwordText -AsPlainText -Force
+$executableSigningRoot = Join-Path $temporaryDirectory (
+    "openclaw-gateway-test-executables-$([guid]::NewGuid().ToString('N'))"
+)
 $certificate = & $certificateServices.NewCertificate $publisher
 
 try {
-    Export-PfxCertificate `
-        -Cert $certificate `
-        -FilePath $temporaryPfx `
-        -Password $password |
-        Out-Null
+    [IO.File]::WriteAllBytes(
+        $temporaryPfx,
+        $certificate.Export(
+            [Security.Cryptography.X509Certificates.X509ContentType]::Pfx,
+            $passwordText
+        )
+    )
+
+    if ($SignExecutables) {
+        $executableSignedArtifacts = Join-Path $executableSigningRoot 'signed'
+        & (Join-Path $PSScriptRoot 'Invoke-MSIXExecutableSigning.ps1') `
+            -Phase All `
+            -ArtifactsDirectory $resolvedArtifactsDirectory `
+            -WorkDirectory (Join-Path $executableSigningRoot 'work') `
+            -SigningDirectory (Join-Path $executableSigningRoot 'signing') `
+            -OutputDirectory $executableSignedArtifacts `
+            -PfxPath $temporaryPfx `
+            -PfxPassword $passwordText
+        $resolvedArtifactsDirectory = $executableSignedArtifacts
+        $bundleDirectory = Join-Path $resolvedArtifactsDirectory 'bundle'
+    }
 
     foreach ($architecture in $architectures) {
         $sourceDirectory = Join-Path $resolvedArtifactsDirectory $architecture
@@ -271,7 +294,19 @@ try {
 }
 finally {
     Remove-Item -LiteralPath $temporaryPfx -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $executableSigningRoot -Recurse -Force -ErrorAction SilentlyContinue
     & $certificateServices.RemoveCertificate $certificate
+}
+
+if ($SignExecutables) {
+    $signedPackages = @(
+        Get-ChildItem -LiteralPath $OutputDirectory -File -Recurse |
+            Where-Object { $_.Extension -in @('.msix', '.msixbundle') } |
+            ForEach-Object FullName
+    )
+    & (Join-Path $PSScriptRoot 'Test-MSIXExecutableSignatures.ps1') `
+        -Path $signedPackages `
+        -ExpectedThumbprint $certificate.Thumbprint
 }
 
 Write-Host "Created test-signed MSIX artifacts under: $OutputDirectory"
