@@ -1,0 +1,8 @@
+# An administrator must require code-owner approval and grant the team explicit write access.
+/.github/ @openclaw/release-managers-openclaw
+/scripts/ @openclaw/release-managers-openclaw
+/release-policy.json @openclaw/release-managers-openclaw
+/Directory.Build.* @openclaw/release-managers-openclaw
+/Directory.Packages.props @openclaw/release-managers-openclaw
+/global.json @openclaw/release-managers-openclaw
+/src/OpenClaw.Launcher/Package.appxmanifest @openclaw/release-managers-openclaw

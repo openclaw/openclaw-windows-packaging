@@ -517,6 +517,8 @@ Run PowerShell policy suites by owning surface rather than indiscriminately:
 `Test-WorkflowSigningConfiguration.ps1` for source capture, retry context,
 cache routing, and selected-build outcomes,
 `Test-MSIXUpgradeMatrix.Tests.ps1` for parallel upgrade scenario selection,
+`Test-Request-MicrosoftStorePublish.Tests.ps1` for the request-only central Store
+handoff (synthetic command fixtures, never a live dispatch),
 `Test-Deploy-LocalPackage.Tests.ps1` for the loose-registration flow, and
 `Test-Sign-TestMSIX.Tests.ps1` for test signing. The Node input suite requires
 Node.js and npm; its local fixture exercises the approved OpenClaw install hook,
