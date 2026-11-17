@@ -240,7 +240,10 @@ Observe these workflow outcomes:
 The upgrade matrix runs for versioning/source-selection pull requests and
 manual `test`, `store`, and `official` dispatches. It uses
 `scripts\Test-MSIXUpgrade.ps1` with the immutable, hash-pinned release fixtures in
-`scripts\msix-upgrade-baselines.json`. It requires an isolated clean Windows
+`scripts\msix-upgrade-baselines.json`. Candidates take the release signing path
+with a temporary certificate: executables first, then the repacked packages and
+rebuilt bundles, so the installed proof covers the transformed shape
+`sign-msix` publishes. It requires an isolated clean Windows
 account per scenario and refuses to run when an OpenClaw Gateway package is
 already registered. It exercises two explicit modes for every baseline and
 both standalone and bundle delivery in parallel:

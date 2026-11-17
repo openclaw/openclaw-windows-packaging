@@ -727,6 +727,22 @@ jobs:
           name: ${{ matrix.artifact }}
           path: artifacts\${{ matrix.channel }}\${{ matrix.delivery_dir }}
 
+      # Release signing rebuilds bundles from executable-signed packages, so
+      # bundle candidates take the same path through both architectures.
+      - name: Download unsigned x64 package for bundle rebuild
+        if: ${{ matrix.delivery_dir == 'bundle' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-${{ matrix.channel }}-unsigned-x64
+          path: artifacts\${{ matrix.channel }}\x64
+
+      - name: Download unsigned ARM64 package for bundle rebuild
+        if: ${{ matrix.delivery_dir == 'bundle' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-gateway-msix-${{ matrix.channel }}-unsigned-arm64
+          path: artifacts\${{ matrix.channel }}\arm64
+
       - name: Apply temporary test signature
         shell: pwsh
         env:
@@ -735,7 +751,8 @@ jobs:
           .\scripts\Sign-TestMSIX.ps1 `
             -ArtifactsDirectory (Join-Path artifacts $env:CANDIDATE_CHANNEL) `
             -OutputDirectory (Join-Path test-signed $env:CANDIDATE_CHANNEL) `
-            -IdentityChannel $env:CANDIDATE_CHANNEL
+            -IdentityChannel $env:CANDIDATE_CHANNEL `
+            -SignExecutables
 
       - name: Download hash-pinned proof release
         if: ${{ matrix.transition_mode != 'store-in-place' }}
