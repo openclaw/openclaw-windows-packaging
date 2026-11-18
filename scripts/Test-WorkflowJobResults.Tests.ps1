@@ -93,4 +93,48 @@ Assert-Rejected @{
     UpgradeResult = 'skipped'
 } 'Change classification must succeed'
 
+# An authorized release must not silently skip executable signing or Store
+# retention: the gate catches a job condition that stops matching.
+function Join-Arguments {
+    param([hashtable[]]$Parts)
+    $joined = @{}
+    foreach ($part in $Parts) {
+        foreach ($entry in $part.GetEnumerator()) { $joined[$entry.Key] = $entry.Value }
+    }
+    $joined
+}
+$release = @{
+    EventName = 'workflow_dispatch'
+    Versioning = 'true'
+    UpgradeResult = 'success'
+    AuthorizationResult = 'success'
+    SigningResult = 'success'
+    StoreRetentionResult = 'success'
+}
+foreach ($mode in @('store', 'official')) {
+    Invoke-Validator (Join-Arguments $release, @{ SigningMode = $mode })
+    foreach ($result in @('skipped', 'failure', 'cancelled')) {
+        Assert-Rejected `
+            (Join-Arguments $base, $release, @{ SigningMode = $mode; SigningResult = $result }) `
+            'require successful executable and package signing'
+        Assert-Rejected `
+            (Join-Arguments $base, $release, @{ SigningMode = $mode; StoreRetentionResult = $result }) `
+            'require a retained Store submission bundle'
+    }
+}
+# Beta retention follows GitHub publication, and nothing is required before
+# authorization succeeds.
+Invoke-Validator (Join-Arguments $release, @{
+        SigningMode = 'official'
+        ReleaseChannel = 'beta'
+        PublishResult = 'skipped'
+        StoreRetentionResult = 'skipped'
+    })
+Invoke-Validator (Join-Arguments $release, @{
+        SigningMode = 'official'
+        AuthorizationResult = 'failure'
+        SigningResult = 'skipped'
+        StoreRetentionResult = 'skipped'
+    })
+
 Write-Output 'Workflow job-result contracts passed.'

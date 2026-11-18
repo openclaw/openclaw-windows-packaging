@@ -93,7 +93,8 @@ publisher.
 The coordinated core release handoff requests `channel=production` after stable
 builds and `channel=development` after beta builds, with `automatic=true`.
 Beta builds use `official` mode and publish their signed GitHub prerelease before
-retaining the separate unsigned Store bundle and attempt-bound witness.
+retaining the separate Store bundle, which has signed executables but no
+package signature, and its attempt-bound witness.
 The central publisher checks that published prerelease and keeps Development
 delivery in its configured flight, never in the public production submission.
 Both destinations require release-manager approval. A Store flight is an opt-in
@@ -119,8 +120,10 @@ an API-created draft while the publisher runs. If the source artifact expired,
 produce and validate a new candidate using the
 [release process](release-process.md).
 
-The unsigned multi-architecture Store bundle and its build/upgrade evidence remain
-owned by this repository. Signed sideload release assets are not Store inputs.
+The multi-architecture Store bundle and its build/upgrade evidence remain
+owned by this repository. Its executables carry this repository's embedded
+Authenticode signatures; Partner Center adds only the package signature.
+Signed sideload release assets are not Store inputs.
 The packaging repository no longer contains a Store API engine, Store submission
 policy, or Store source authorizer; centrally reviewed code owns those decisions.
 

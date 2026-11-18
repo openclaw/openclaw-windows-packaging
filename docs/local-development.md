@@ -289,6 +289,34 @@ certificate beside each signed package and records its thumbprint in
 `msix-metadata.json`; it does not add the certificate to a trust store. This is
 test signing, not an official release-signing path.
 
+Add `-SignExecutables` to rehearse the release order: the same temporary
+certificate first signs `openclaw.exe`, `openclaw-gateway-recovery.exe`, and the
+session host inside each package, then the packages and bundle. A `bundle`
+directory needs both architecture directories beside it, because the bundle is
+rebuilt from the repacked packages. To sign only the executables with a
+certificate you already trust, such as a local development certificate in
+`Cert:\CurrentUser\My`, and then check the result:
+
+```powershell
+.\scripts\Invoke-MSIXExecutableSigning.ps1 `
+  -Phase All `
+  -ArtifactsDirectory $unsignedArtifacts `
+  -WorkDirectory "$env:TEMP\openclaw-executable-work" `
+  -SigningDirectory "$env:TEMP\openclaw-executable-signing" `
+  -OutputDirectory '.\artifacts\local-msix-executables-signed' `
+  -CertificateThumbprint <thumbprint>
+
+.\scripts\Test-MSIXExecutableSignatures.ps1 `
+  -Path '.\artifacts\local-msix-executables-signed\x64\OpenClawGateway-x64.msix' `
+  -ExpectedThumbprint <thumbprint>
+```
+
+The output packages are still package-unsigned. The work and signing
+directories must not exist yet. The check fails for an executable without an
+embedded signature from that certificate; unsigned upstream payload natives
+are reported as warnings. Release runs use `-ExpectedPublisher`, which also
+requires a trusted chain and a timestamp.
+
 Before installing the signed output, switch away from a base loose
 registration through the repository-owned transition. Patched registrations use
 another package name and do not block the install:

@@ -15,6 +15,7 @@ Read the repository-root `AGENTS.md` before this file. This scope owns build, pa
 - Loose registration and MSIX installation are mutually exclusive. Preserve the explicit `-ReplaceExistingInstall` acknowledgement and never imply packaged app data survives the transition.
 - Preserve immutable upgrade baselines and clean up only registrations and files created by the current harness run. Run the harness only in its documented isolated account.
 - Official signing bypasses reusable build caches and remains gated by `release-policy.json`, `main`, immutable upstream identity, and signing-input validation before credentials are requested.
+- Every executable this repository builds ships with a timestamped embedded Authenticode signature in `store` and `official` packages, because a copy outside the package loses the package catalog (#256). `Invoke-MSIXExecutableSigning.ps1` signs before the package signature and may change nothing else; `Test-MSIXExecutableSignatures.ps1` is the gate.
 - A new or changed script behavior needs the corresponding `Test-*.Tests.ps1` scenario at the owning boundary. Use fixture directories and injected operations; do not register packages, install certificates, invoke signing services, or alter scheduled tasks.
 
 ## Proof

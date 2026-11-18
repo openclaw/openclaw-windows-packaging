@@ -898,8 +898,8 @@ validation. Manual runs support four modes:
   self-signed certificate plus the public `.cer` needed for local installation;
 - `store` follows stable, an `openclaw_ref` override, or an older payload pinned
   with `gateway_version`,
-  may run only from `main`, and retains an unsigned Partner Center submission bundle for 90 days;
-  Microsoft signs it during Store ingestion;
+  may run only from `main`, and retains a Partner Center submission bundle for 90 days.
+  Its executables are signed; Microsoft adds the package signature during Store ingestion;
 - `official` uses the same source rules, may run only from `main`, and publishes
   signed packages as permanent GitHub Release assets when `publish_release`
   is enabled.
@@ -913,6 +913,13 @@ preflight. `unsigned` dispatches keep development versions and skip that matrix.
 
 Official signing uses the protected `release-signing` environment, Azure OIDC,
 and the existing OpenClaw Artifact Signing account and certificate profile.
+`store` and `official` runs both use it to embed timestamped Authenticode
+signatures in the executables this repository builds before any package is
+retained or signed. The session host runs from a copy outside the package, which
+loses the package catalog's trust. Its embedded signature lets Smart App Control
+and App Control admit the copy by signer, subject to the active policy, instead
+of by per-file cloud reputation; see the
+[release process](docs/release-process.md#watch-the-release-workflow).
 Test-signing private keys are generated only on the temporary GitHub runner
 and are deleted before artifacts are uploaded. No signing secret or private
 key is stored in the repository.
@@ -959,7 +966,7 @@ resolved once and its commit is captured in the run snapshot. Leave
 `gateway_version` empty unless selecting an exact stable version older than
 policy/latest for a one-off payload rollback.
 Use `signing_mode=store`
-to retain only the unsigned Partner Center bundle, or `signing_mode=official`
+to retain only the Partner Center bundle, or `signing_mode=official`
 to additionally sign and publish the sideload identity. The workflow derives
 the package version and release tag. Official mode creates the tag and
 publishes a GitHub Release with generated release notes. Each GitHub Release
@@ -967,9 +974,9 @@ contains a signed sideload
 `OpenClawGateway-<version>.msixbundle`, plus
 `OpenClawGateway-<version>-x64.msix` and
 `OpenClawGateway-<version>-arm64.msix` packages for architecture-specific
-deployment. For stable releases and published previews, the unsigned Store-identity bundle is retained separately as the
+deployment. For stable releases and published previews, the Store-identity bundle, with signed executables but no package signature, is retained separately as the
 `openclaw-gateway-msix-store-submission-<attempt>` Actions artifact for 90 days; Partner
-Center signs it during ingestion.
+Center signs the package during ingestion.
 
 Direct GitHub distribution and Store submission intentionally use distinct
 identities because the current Azure certificate matches the legacy sideload
