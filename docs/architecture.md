@@ -628,7 +628,13 @@ fails the operation; the state leases still unwind with that error, which is
 deliberate fail-closed behavior rather than an unkillable process blocking every
 later maintenance operation. The supervised gateway's job is published under a
 name bound to its supervisor, so a stop that kills the supervisor still waits out
-the whole gateway tree before it reports success. Inspection and diagnostics remain
+the whole gateway tree before it reports success. Before that kill, the `--stop`
+helper sends Ctrl+C to the gateway's own windowless console, which Node.js
+delivers as SIGINT and OpenClaw handles as a graceful stop that releases its
+agent database lease. The helper waits up to 15 seconds for the members of the
+tree to exit, then terminates whatever remains exactly as before. A gateway that
+is terminated instead leaves its lease for the next start to recover as a crash,
+which can keep that start `starting` well past the listener wait. Inspection and diagnostics remain
 available when activation is pending. Successful activation or explicit
 rollback clears intent; an unreadable journal fails closed. Finalized state
 remains finalized if deleting disposable transaction data or a private recovery

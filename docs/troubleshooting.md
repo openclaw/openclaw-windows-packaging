@@ -301,6 +301,10 @@ and multiple unclassified listeners intentionally do not identify an endpoint.
 
 For `starting`, continue bounded status polling or collect the launch log to
 investigate. Elapsed time alone does not establish a failed or usable Gateway.
+A start that follows a terminated Gateway, such as after a crash or a stop that
+outlasted its shutdown grace period, first recovers the agent database and can
+remain `starting` for several minutes; restarting it in the meantime only
+repeats that recovery.
 Use `clawctl gateway-service stop` if you choose to abandon the launch; do not
 start a second one beside it. Status is read-only and does not save a listener
 first observed after the start wait, so loss of that late listener can return
