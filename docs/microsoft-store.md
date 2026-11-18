@@ -8,12 +8,13 @@ adapter; it cannot upload or commit a Store submission.
 
 ## Activate the centralized publisher
 
-Land and configure the centralized publisher before merging the request-only
-cutover. Its workflow is
+The centralized publisher's workflow is
 [`windows-store-publish.yml`](https://github.com/openclaw/releases/blob/main/.github/workflows/windows-store-publish.yml),
 and its [publishing guide](https://github.com/openclaw/releases/blob/main/docs/windows-store-publishing.md)
 owns approval, identity policy, source authorization, Store receipts, and recovery.
-Those links require the coordinated central change to land first.
+Verify its [administrator cutover](https://github.com/openclaw/releases/blob/main/docs/windows-store-publishing.md#administrator-cutover)
+before using the request adapter. Merged code does not establish that live
+settings or publication have been qualified.
 
 An administrator must complete and verify these separate changes:
 
@@ -22,15 +23,17 @@ An administrator must complete and verify these separate changes:
    `@openclaw/release-managers-openclaw` approval, and disable administrator
    deployment bypass. Keep the central source-validation job credential-free;
    only the approved publisher job may request Store OIDC tokens.
-2. Grant that team explicit repository write access and enforce code-owner review
-   on `main` in both repositories, including new commits after approval and the
-   workflow, publisher dependencies, identity policies, and CODEOWNERS itself.
-   This repository's CODEOWNERS file declares the owners; it does not enable or
-   enforce a GitHub branch rule.
+2. Verify that team has access to review deployments in `openclaw/releases`.
+   Leave existing branch rules, CODEOWNERS, and required-CI settings unchanged.
+   This cutover does not require PR-only `main` or release-manager code review;
+   repository writers remain trusted to change publisher code. Environment
+   approval gates the credential-bearing job, not changes to its implementation.
 3. Install the existing release GitHub App (ID `2729701`) for `openclaw/releases`
    with Actions write access. Make its existing `GH_APP_PRIVATE_KEY` available
    to this repository's manual request workflow. The minted token is scoped to
    the `releases` repository and Actions write; it does not grant Store access.
+   That token restriction does not constrain the private key itself: audit the
+   App's installation grants and key availability separately.
 4. Move the dedicated Gateway Partner Center application's federation to the
    central Gateway environment. Verify the exact subject against the central
    repository's current OIDC subject configuration. Remove the old packaging
@@ -45,10 +48,10 @@ An administrator must complete and verify these separate changes:
    changing its cloud trust, and reconcile any in-flight submission first.
 
 No new PAT or persistent Store client secret is required. GitHub App availability,
-team permissions, environment review rules, branch rules, and exclusive Entra
+team permissions, environment review rules, and exclusive Entra
 federation are administrative prerequisites, not guarantees made by this YAML.
-The centralized implementation and these settings are a merge/cutover dependency;
-this document does not claim they have already been activated.
+Verify these settings independently of the implementation. Migrating central
+release-evidence workflows to PRs is not a Store-publishing prerequisite.
 
 ## Request publication manually
 
