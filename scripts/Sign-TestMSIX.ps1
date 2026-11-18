@@ -65,7 +65,7 @@ $resolvedArtifactsDirectory = (
 $resolvedPolicyPath = (Resolve-Path -LiteralPath $PolicyPath).Path
 $policy = Get-Content -LiteralPath $resolvedPolicyPath -Raw |
     ConvertFrom-Json
-$publisher = if ($IdentityChannel -ceq 'sideload') {
+$publisher = if ($IdentityChannel -eq 'sideload') {
     [string]$policy.sideloadPackageIdentity.publisher
 }
 else {
