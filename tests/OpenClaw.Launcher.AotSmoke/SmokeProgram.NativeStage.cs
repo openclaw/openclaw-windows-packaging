@@ -39,6 +39,16 @@ internal static partial class SmokeProgram
                 launcher.Requests[0].NativeStage?.RootPath == root &&
                 launcher.Requests[0].NativeStage?.ApplicationDirectory == application,
                 "A verified native stage did not reach the launch under NativeAOT.");
+
+            // The check a restart runs before stopping a working Gateway.
+            SessionLaunchResult checkRefused = RunAdmission(
+                directory, launcher, application, rootPath: null, SessionLaunchMode.Admission);
+            SessionLaunchResult checkAdmitted = RunAdmission(
+                directory, launcher, application, root, SessionLaunchMode.Admission);
+            Assert(checkRefused.ErrorCode == SessionLaunchProtocol.NativeStageStaleErrorCode &&
+                checkAdmitted is { Launched: false, Error: null, ErrorCode: null } &&
+                checkAdmitted.RequestId == "aot-native-stage" && launcher.Requests.Count == 1,
+                "The admission-only check did not decide without launching under NativeAOT.");
         }
         finally
         {
@@ -52,12 +62,14 @@ internal static partial class SmokeProgram
         string directory,
         AdmissionRecordingLauncher launcher,
         string application,
-        string? rootPath)
+        string? rootPath,
+        SessionLaunchMode mode = SessionLaunchMode.Attached)
     {
         string requestPath = Path.Combine(directory, $"launch-{Guid.NewGuid():N}.json");
         File.WriteAllText(requestPath, SessionLaunchProtocol.SerializeRequest(new SessionLaunchRequest
         {
             RequestId = "aot-native-stage",
+            Mode = mode,
             Executable = @"C:\agent\node.exe",
             Arguments = ["openclaw.mjs"],
             WorkingDirectory = directory,

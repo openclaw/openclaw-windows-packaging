@@ -55,9 +55,10 @@ See [interactive desktop nodes](../README.md#interactive-desktop-nodes).
 ## A launch reports `native-stage-stale`
 
 **Check.** `openclaw`, `clawctl pwsh`, `clawctl gateway-service start`,
-Companion preparation, or a backup or restore stops before OpenClaw starts and
-says the isolated session's staged native dependencies do not match this
-installed package. With `--json`, `error.type` is `native_stage_stale`. The
+`restart`, or `repair`, Companion preparation, or a backup or restore stops
+before OpenClaw starts and says the isolated session's staged native
+dependencies do not match this installed package. Restart and repair check
+before stopping, so a Gateway that was running keeps running. With `--json`, `error.type` is `native_stage_stale`. The
 bracketed detail names the state: `missing`, `stale-source` (staged from
 other package content, typically after a package update), `incomplete` or
 `content-mismatch` (changed after staging), `unsupported-layout` (a link inside

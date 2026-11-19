@@ -1,4 +1,5 @@
 using OpenClaw.Launcher.Gateway;
+using OpenClaw.Launcher.Session;
 using OpenClaw.SessionProtocol;
 
 namespace OpenClaw.Launcher.Tests.Gateway;
@@ -71,10 +72,31 @@ public sealed class GatewayStartWaitTests
         Assert.True(result.Stop.Stopped);
         Assert.Equal(GatewayState.Running, result.Start!.State);
         Assert.Equal(
-            ["inspect:1234", "stop:1234", "start", "inspect:1234"],
+            ["inspect:1234", "check-native-stage", "stop:1234", "start", "inspect:1234"],
             harness.Client.Calls);
         Assert.True(result.Start!.Record.AutostartDisabled);
         Assert.Equal(1, harness.LifecycleLock.TotalAcquisitions);
+    }
+
+    /// <summary>
+    /// A check that cannot complete proves nothing about the replacement, so
+    /// the running gateway is kept rather than stopped on a guess.
+    /// </summary>
+    [Fact]
+    public async Task RestartKeepsTheRunningGatewayWhenItsNativeStageCannotBeChecked()
+    {
+        using var harness = new GatewayStartHarness();
+        harness.RecordRunningGateway();
+        harness.Client.Inspection = Listening();
+        harness.Client.CheckFailure = new SessionException("the session did not answer");
+
+        GatewayRestartResult result = await harness.RestartAsync();
+
+        Assert.False(result.Stop.Succeeded);
+        Assert.False(result.Stop.Stopped);
+        Assert.Equal("the session did not answer", result.Stop.Detail);
+        Assert.Null(result.Start);
+        Assert.Equal(["inspect:1234", "check-native-stage"], harness.Client.Calls);
     }
 
     [Fact]

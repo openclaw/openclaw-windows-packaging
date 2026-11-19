@@ -27,7 +27,9 @@ internal sealed partial class StateTransferCoordinator
             {
                 throw new SessionException("State activation is pending. Run `clawctl restore --rollback --yes` before repair.");
             }
-            RequireStopped(await _stopGateway(runtime, cancellationToken).ConfigureAwait(false));
+            // Backup and Doctor run packaged Node.js, so a stage that would
+            // refuse them must not cost the user a running gateway.
+            RequireStopped(await _stopGateway(runtime, true, cancellationToken).ConfigureAwait(false));
             stopped = true;
             StateArchiveCommandResult captured = await CaptureBackupUnderLockAsync(
                 runtime, record, destination: null, dryRun: false, cancellationToken).ConfigureAwait(false);

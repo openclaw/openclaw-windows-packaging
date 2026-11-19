@@ -11,7 +11,7 @@ internal sealed partial class StateTransferCoordinator
     private readonly StateArchiveStore _store;
     private readonly Action<string> _log;
     private readonly Func<string, CancellationToken, Task<bool>>? _confirm;
-    private readonly Func<SessionRuntime, CancellationToken, Task<GatewayStopResult>> _stopGateway;
+    private readonly Func<SessionRuntime, bool, CancellationToken, Task<GatewayStopResult>> _stopGateway;
 
     public StateTransferCoordinator(
         HostOptions options,
@@ -19,7 +19,7 @@ internal sealed partial class StateTransferCoordinator
         StateArchiveStore store,
         Action<string> log,
         Func<string, CancellationToken, Task<bool>>? confirm = null,
-        Func<SessionRuntime, CancellationToken, Task<GatewayStopResult>>? stopGateway = null)
+        Func<SessionRuntime, bool, CancellationToken, Task<GatewayStopResult>>? stopGateway = null)
     {
         _options = options;
         _createRuntime = createRuntime;
@@ -100,9 +100,10 @@ internal sealed partial class StateTransferCoordinator
         }
     }
 
-    private Task<GatewayStopResult> StopGatewayAsync(SessionRuntime runtime, CancellationToken cancellationToken) =>
+    private Task<GatewayStopResult> StopGatewayAsync(
+        SessionRuntime runtime, bool checkNativeStageFirst, CancellationToken cancellationToken) =>
         GatewayRuntime.Create(_options, runtime.Paths, runtime, _log).Controller
-            .StopUnderLockAsync(runtime.HelperPath, cancellationToken);
+            .StopUnderLockAsync(runtime.HelperPath, cancellationToken, checkNativeStageFirst: checkNativeStageFirst);
 
     private SessionStateTransferRequest CreateRequest(
         SessionRuntime runtime,

@@ -140,6 +140,29 @@ public sealed class SessionLaunchProtocolTests
             () => SessionLaunchProtocol.ReadRequest("{ not json"));
     }
 
+    // An admission check starts nothing, so it carries only its stage. Without
+    // one the helper would have nothing to refuse and would report admission.
+    [Fact]
+    public void AnAdmissionCheckNeedsOnlyItsNativeStage()
+    {
+        var check = new SessionLaunchRequest
+        {
+            RequestId = "r-1",
+            Mode = SessionLaunchMode.Admission,
+            NativeStage = new SessionNativeStageReference { ApplicationDirectory = @"C:\pkg\app" }
+        };
+
+        SessionLaunchRequest restored = SessionLaunchProtocol.ReadRequest(
+            SessionLaunchProtocol.SerializeRequest(check));
+
+        Assert.Equal(SessionLaunchMode.Admission, restored.Mode);
+        Assert.Equal(@"C:\pkg\app", restored.NativeStage!.ApplicationDirectory);
+        SessionLaunchException exception = Assert.Throws<SessionLaunchException>(
+            () => SessionLaunchProtocol.ReadRequest(
+                SessionLaunchProtocol.SerializeRequest(check with { NativeStage = null })));
+        Assert.Contains("native stage", exception.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void AnEmptyArgumentVectorIsAllowed()
     {

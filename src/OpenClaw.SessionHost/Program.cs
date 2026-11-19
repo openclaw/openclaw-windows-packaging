@@ -103,7 +103,8 @@ internal static class Program
                 throw new SessionLaunchException("Invocation jobs support attached requests only.");
             }
             if (request.Mode is not SessionLaunchMode.Attached and
-                not SessionLaunchMode.Detached)
+                not SessionLaunchMode.Detached and
+                not SessionLaunchMode.Admission)
             {
                 throw new SessionLaunchException(
                     $"Launch mode '{request.Mode}' is not supported by this helper.");
@@ -114,6 +115,12 @@ internal static class Program
             using FileStream? nativeLease = request.NativeStage is { } stage
                 ? SessionNativeStager.Admit(stage.ApplicationDirectory!, stage.RootPath)
                 : null;
+
+            if (request.Mode == SessionLaunchMode.Admission)
+            {
+                writeResult(resultPath, new SessionLaunchResult { RequestId = requestId });
+                return 0;
+            }
 
             if (request.Mode == SessionLaunchMode.Detached)
             {

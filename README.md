@@ -169,8 +169,8 @@ it enabled.
 | `clawctl gateway-service start` | Start the OpenClaw gateway in the isolated session and wait for it to listen. Requires setup. |
 | `clawctl gateway-service status` | Inspect the gateway without starting it. It may start/probe only the already-recorded isolated session to inspect activation state and, when the gateway is not running and activation is not pending, file-only config readiness; it never provisions a replacement or starts the gateway. |
 | `clawctl gateway-service stop` | Stop the gateway while retaining the session and its data. |
-| `clawctl gateway-service restart` | Stop the gateway and start it again as one lifecycle operation. If the stop cannot be verified, it retains the gateway record and does not start a replacement. If no gateway is running, it starts one. |
-| `clawctl gateway-service repair --yes` | Explicitly stop the owned gateway, retain a verified full-state backup, and run packaged `openclaw doctor --fix --non-interactive --no-workspace-suggestions` inside the recorded agent. Leaves the gateway stopped. Refuses uncertain stop, pending state activation, or unavailable backup; never provisions a replacement. |
+| `clawctl gateway-service restart` | Stop the gateway and start it again as one lifecycle operation. If the replacement's native stage would be refused, or the stop cannot be verified, it leaves the running gateway and its record in place and does not start a replacement. If no gateway is running, it starts one. |
+| `clawctl gateway-service repair --yes` | Explicitly stop the owned gateway, retain a verified full-state backup, and run packaged `openclaw doctor --fix --non-interactive --no-workspace-suggestions` inside the recorded agent. Leaves the gateway stopped. Refuses uncertain stop, a native stage that would refuse the backup or Doctor (before stopping the gateway), pending state activation, or unavailable backup; never provisions a replacement. |
 | `clawctl companion prepare --port <port> --json` | Prepare the agent account's Gateway for the Windows Companion app after `clawctl setup`. Read its effective upstream configuration, including JSON5 and `$include` values. Return a complete local token configuration unchanged, initialize an absent Gateway, or fill missing port/token values in a compatible local Gateway. A partially configured Gateway without local mode, password authentication, and agent-side profile/Gateway overrides require explicit recovery. Concurrent configuration changes fail rather than being overwritten. The JSON response includes `companion.port` and `companion.token`, so keep it private. |
 | `clawctl companion prepare --check --json` | Read the existing effective agent Gateway port and token without restoring backups, rewriting configuration, or recording config-health observations. Missing, incomplete, or incompatible configuration fails without a patch. Keep the credential-bearing response private. |
 | `clawctl --version` | Print the packaged launcher version. |
@@ -496,7 +496,9 @@ directory name alone never admits a launch. A stage that is missing, built from
 other package content, incomplete, altered, or linked elsewhere stops the launch
 before Node.js starts with `native-stage-stale`, and `clawctl setup` repairs it
 in the existing session. Adopting a Gateway that is already running is not
-blocked. Setup reuses a stage only after the same verification.
+blocked, and `gateway-service restart` and `repair` check the stage before
+stopping a running Gateway, so a refusal leaves it running. Setup reuses a stage
+only after the same verification.
 
 Run `clawctl setup` before using `clawctl pwsh` or gateway-service start.
 `openclaw` provisions a clean installation automatically, but there is no

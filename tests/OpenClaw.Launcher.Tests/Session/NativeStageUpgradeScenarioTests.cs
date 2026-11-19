@@ -30,6 +30,7 @@ public sealed partial class NativeStageUpgradeScenarioTests : IDisposable
     private readonly string _root = TestDirectory.Create();
     private readonly FakeMxcSessionClient _backend;
     private readonly RecordingLauncher _launcher = new();
+    private readonly List<string> _guestOptions = [];
     private readonly SessionRuntime _runtime;
     private readonly string _agentLocal;
     private (string First, string Second)? _alternatingRoots;
@@ -204,6 +205,88 @@ public sealed partial class NativeStageUpgradeScenarioTests : IDisposable
         JsonElement error = document.RootElement.GetProperty("error");
         Assert.Equal("native_stage_stale", error.GetProperty("type").GetString());
         Assert.Contains("clawctl setup", error.GetProperty("message").GetString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Restart stops a running gateway only once its replacement would be
+    /// admitted, so an update that needs setup leaves the user's gateway
+    /// serving instead of stopped until setup.
+    /// </summary>
+    [Fact]
+    public async Task RestartAfterAnUpdateKeepsTheRunningGatewayUntilSetupRestagesIt()
+    {
+        HostOptions a = CreatePackage("pkg-a", PackageA());
+        Assert.Equal(0, await RunAsync(a, "setup"));
+        Assert.Equal(0, await RunAsync(a, "gateway-service", "start"));
+        string gatewayBefore = File.ReadAllText(_runtime.Paths.GatewayStatePath);
+        HostOptions b = CreatePackage("pkg-b", PackageB());
+        using var output = new StringWriter();
+
+        int exitCode = await OpenClaw.Launcher.Program.RunAsync(
+            ["gateway-service", "restart", "--json"],
+            new HostStartup
+            {
+                Entrypoint = HostEntrypoint.Control,
+                CreateDiagnostics = () => HostDiagnosticLog.Create(
+                    Path.Combine(_root, "logs", "openclaw.log")),
+                BaseDirectory = Path.GetDirectoryName(b.PackagedApplicationDirectory)!,
+                Output = output,
+                Error = TextWriter.Null,
+                InstallationLifecycle = new ScenarioLifecycle(_runtime)
+            });
+
+        Assert.Equal(1, exitCode);
+        using (JsonDocument document = JsonDocument.Parse(output.ToString()))
+        {
+            JsonElement error = document.RootElement.GetProperty("error");
+            Assert.Equal("native_stage_stale", error.GetProperty("type").GetString());
+            Assert.Contains("clawctl setup", error.GetProperty("message").GetString(), StringComparison.Ordinal);
+            Assert.Contains("was not stopped", error.GetProperty("message").GetString(), StringComparison.Ordinal);
+        }
+        Assert.DoesNotContain("--stop", _guestOptions);
+        Assert.Single(_launcher.Starts);
+        Assert.Equal(gatewayBefore, File.ReadAllText(_runtime.Paths.GatewayStatePath));
+
+        Assert.Equal(0, await RunAsync(b, "setup"));
+        Assert.Equal(0, await RunAsync(b, "gateway-service", "restart"));
+        Assert.Contains("--stop", _guestOptions);
+        Assert.Equal(ReadSetup().AgentNativeRoot, _launcher.Starts[^1].NativeStage!.RootPath);
+    }
+
+    /// <summary>
+    /// Repair's backup and Doctor run packaged Node.js, so a stage that would
+    /// refuse them is reported before the running gateway is stopped.
+    /// </summary>
+    [Fact]
+    public async Task RepairAfterAnUpdateIsRefusedWithoutStoppingTheGateway()
+    {
+        HostOptions a = CreatePackage("pkg-a", PackageA());
+        Assert.Equal(0, await RunAsync(a, "setup"));
+        Assert.Equal(0, await RunAsync(a, "gateway-service", "start"));
+        string gatewayBefore = File.ReadAllText(_runtime.Paths.GatewayStatePath);
+        HostOptions b = CreatePackage("pkg-b", PackageB());
+        using var output = new StringWriter();
+
+        int exitCode = await OpenClaw.Launcher.Program.RunControlAsync(
+            b,
+            ["gateway-service", "repair", "--yes", "--json"],
+            _ => { },
+            output,
+            TextWriter.Null,
+            new ScenarioLifecycle(_runtime),
+            readEnvironmentVariable: _ => null,
+            controlOutputOptions: new ClawCtlOutputOptions { Json = true },
+            archiveDirectory: Path.Combine(_root, "archives"));
+
+        Assert.Equal(1, exitCode);
+        using JsonDocument document = JsonDocument.Parse(output.ToString());
+        JsonElement error = document.RootElement.GetProperty("error");
+        Assert.Equal("native_stage_stale", error.GetProperty("type").GetString());
+        Assert.DoesNotContain("remains stopped", error.GetProperty("message").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("--stop", _guestOptions);
+        Assert.Equal(gatewayBefore, File.ReadAllText(_runtime.Paths.GatewayStatePath));
+        Assert.False(Directory.Exists(Path.Combine(_root, "archives")) &&
+            Directory.EnumerateFileSystemEntries(Path.Combine(_root, "archives")).Any());
     }
 
     /// <summary>
@@ -467,6 +550,11 @@ public sealed partial class NativeStageUpgradeScenarioTests : IDisposable
     private Task<MxcExecutionResult> ExecuteInGuest(MxcExecutionRequest request)
     {
         (string option, string requestPath) = ParseGuestCommand(request.CommandLine);
+        lock (_guestOptions)
+        {
+            _guestOptions.Add(option);
+        }
+
         int exitCode = option switch
         {
             "--install-runtime" => SessionRuntimeInstaller.Run(
@@ -478,6 +566,7 @@ public sealed partial class NativeStageUpgradeScenarioTests : IDisposable
                 getRuntimeVersion: _ => "24.20.0"),
             "--install-tools" => SessionToolInstaller.Run(requestPath, File.ReadAllText, File.WriteAllText),
             "--inspect" => RespondAsRunningGateway(requestPath),
+            "--stop" => RespondAsStoppedGateway(requestPath),
             "--request" => RunGuestLaunch(request.CommandLine),
             _ when option.StartsWith("--coordinate-state-transfer=", StringComparison.Ordinal) =>
                 SessionStateTransfer.Run(
@@ -528,6 +617,15 @@ public sealed partial class NativeStageUpgradeScenarioTests : IDisposable
                 ListenerOwned = true,
                 ListeningPorts = [18789]
             }));
+        return 0;
+    }
+
+    private static int RespondAsStoppedGateway(string requestPath)
+    {
+        SessionInspectRequest request = SessionInspectProtocol.ReadRequest(File.ReadAllText(requestPath));
+        File.WriteAllText(
+            SessionLaunchProtocol.ResultPathFor(requestPath),
+            SessionInspectProtocol.SerializeResult(new SessionInspectResult { RequestId = request.RequestId }));
         return 0;
     }
 

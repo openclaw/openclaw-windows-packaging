@@ -156,6 +156,14 @@ public enum SessionLaunchMode
     /// the execution that started it.
     /// </summary>
     Detached,
+
+    /// <summary>
+    /// The helper only admits the named native stage and releases it at once,
+    /// starting nothing. A result with no error means a launch would be
+    /// admitted. Used before an operation stops a running Gateway, so a refusal
+    /// leaves it running.
+    /// </summary>
+    Admission,
 }
 
 /// <summary>
@@ -316,20 +324,27 @@ public static class SessionLaunchProtocol
             throw new SessionLaunchException("The launch request has no request id.");
         }
 
-        if (string.IsNullOrWhiteSpace(request.Executable))
+        if (request.Mode == SessionLaunchMode.Admission)
+        {
+            // Nothing is started, so the stage is the whole request.
+            if (request.NativeStage is null)
+            {
+                throw new SessionLaunchException(
+                    "An admission request names no native stage.");
+            }
+        }
+        else if (string.IsNullOrWhiteSpace(request.Executable))
         {
             throw new SessionLaunchException("The launch request has no executable.");
         }
-
-        if (request.Arguments is null)
+        else if (request.Arguments is null)
         {
             throw new SessionLaunchException("The launch request has no argument vector.");
         }
-
-        // An absent working directory would silently become the system
-        // directory, which is never what the caller asked for.
-        if (string.IsNullOrWhiteSpace(request.WorkingDirectory))
+        else if (string.IsNullOrWhiteSpace(request.WorkingDirectory))
         {
+            // An absent working directory would silently become the system
+            // directory, which is never what the caller asked for.
             throw new SessionLaunchException(
                 "The launch request has no working directory.");
         }
