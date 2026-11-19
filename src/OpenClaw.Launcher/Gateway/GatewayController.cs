@@ -388,6 +388,21 @@ internal sealed class GatewayController
         {
             started = await _client.StartAsync(session, request, cancellationToken).ConfigureAwait(false);
         }
+        catch (NativeStageStaleException)
+        {
+            // The guest refused before starting anything, so this attempt has
+            // no process to retain. Put back what was recorded before it.
+            if (existing.Record is { LaunchPending: false } previous)
+            {
+                _store.Write(previous);
+            }
+            else
+            {
+                _store.Clear();
+            }
+
+            throw;
+        }
         catch (Exception exception) when (
             exception is SessionException or SessionLaunchException or Mxc.MxcException or IOException or UnauthorizedAccessException)
         {
@@ -468,6 +483,10 @@ internal sealed class GatewayController
     /// Stops the gateway and starts it again without releasing the lifecycle
     /// lock between the two operations.
     /// </summary>
+    /// <remarks>
+    /// A replacement the native stage would refuse is refused before the
+    /// running gateway is stopped.
+    /// </remarks>
     public async Task<GatewayRestartResult> RestartAsync(
         string helperPath,
         CancellationToken cancellationToken,
@@ -478,7 +497,8 @@ internal sealed class GatewayController
         bool autostartDisabled = _store.Read().Record?.AutostartDisabled ?? false;
         GatewayStopResult stopped = await StopUnderLockAsync(
             helperPath,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            checkNativeStageFirst: true).ConfigureAwait(false);
         if (!stopped.Succeeded)
         {
             return new GatewayRestartResult(stopped, Start: null);
@@ -602,12 +622,22 @@ internal sealed class GatewayController
         };
     }
 
+    /// <summary>
+    /// Stops the recorded gateway under a lifecycle lock the caller holds.
+    /// </summary>
+    /// <remarks>
+    /// Set <c>checkNativeStageFirst</c> when the caller runs packaged Node.js
+    /// after this stop. A running gateway is then stopped only once the native
+    /// stage admits that work, so a refusal leaves it serving rather than
+    /// stopped until setup.
+    /// </remarks>
     internal async Task<GatewayStopResult> StopUnderLockAsync(
         string helperPath,
         CancellationToken cancellationToken,
         bool clearRecord = true,
         bool allowUnconfirmedLaunch = false,
-        bool allowUnavailableInspection = false)
+        bool allowUnavailableInspection = false,
+        bool checkNativeStageFirst = false)
     {
         GatewayStateResult state = _store.Read();
         if (state.Record is { LaunchPending: true, AttemptId: null } ||
@@ -685,6 +715,29 @@ internal sealed class GatewayController
                 Stopped: false,
                 "The recorded gateway was no longer running, so its record was " +
                 "removed.");
+        }
+
+        if (checkNativeStageFirst)
+        {
+            try
+            {
+                GatewayStartRequest replacement = await _startRequestFactory(cancellationToken).ConfigureAwait(false);
+                await _client.CheckNativeStageAsync(session.Record, replacement, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (NativeStageStaleException exception)
+            {
+                throw new NativeStageStaleException(
+                    $"{exception.Message} The running gateway was not stopped.", exception);
+            }
+            catch (Exception exception) when (
+                exception is SessionException or SessionLaunchException or Mxc.MxcException or IOException or UnauthorizedAccessException)
+            {
+                _log($"Gateway native stage check failed: {DiagnosticFailure.Describe(exception)}");
+                return new GatewayStopResult(false,
+                    "The running gateway was not stopped because the check before stopping it did not complete.",
+                    exception.Message, Succeeded: false);
+            }
         }
 
         SessionInspectResult stopped;

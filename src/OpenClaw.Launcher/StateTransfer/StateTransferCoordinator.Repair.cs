@@ -27,7 +27,9 @@ internal sealed partial class StateTransferCoordinator
             {
                 throw new SessionException("State activation is pending. Run `clawctl restore --rollback --yes` before repair.");
             }
-            RequireStopped(await _stopGateway(runtime, cancellationToken).ConfigureAwait(false));
+            // Backup and Doctor run packaged Node.js, so a stage that would
+            // refuse them must not cost the user a running gateway.
+            RequireStopped(await _stopGateway(runtime, true, cancellationToken).ConfigureAwait(false));
             stopped = true;
             StateArchiveCommandResult captured = await CaptureBackupUnderLockAsync(
                 runtime, record, destination: null, dryRun: false, cancellationToken).ConfigureAwait(false);
@@ -48,7 +50,11 @@ internal sealed partial class StateTransferCoordinator
                     record.WorkspacePath!)
                 {
                     AdditionalEnvironment = inputs.Environment,
-                    NativeRootPath = inputs.NativeRootPath,
+                    NativeStage = new SessionNativeStageReference
+                    {
+                        ApplicationDirectory = inputs.ApplicationDirectory,
+                        RootPath = inputs.NativeRootPath
+                    },
                     NodeArgumentsPrefix = inputs.NativePreloadPath is null ? null :
                         OpenClawRuntimeEnvironment.BuildNativeRedirectNodeArguments(inputs.NativePreloadPath)
                 },
@@ -72,7 +78,8 @@ internal sealed partial class StateTransferCoordinator
                 backup is null ? null : backup with { GatewayStopped = stopped, Phase = "repair-failed" },
                 Error: (exception is OperationCanceledException ? "Repair was cancelled." : exception.Message) +
                     (stopped ? " The gateway remains stopped." : "") +
-                    (backup?.Archive is not null ? " The retained backup is available with `clawctl backup --list`." : " Doctor did not run."));
+                    (backup?.Archive is not null ? " The retained backup is available with `clawctl backup --list`." : " Doctor did not run."),
+                ErrorType: ErrorTypeOf(exception));
         }
     }
 }

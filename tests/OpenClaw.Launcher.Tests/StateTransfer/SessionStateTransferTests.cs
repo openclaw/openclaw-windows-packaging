@@ -129,6 +129,53 @@ public sealed class SessionStateTransferTests : IDisposable
                 Request(SessionStateTransferAction.Inspect) with { RequestId = @"..\escape" })));
     }
 
+    /// <summary>
+    /// Backup and restore run packaged Node.js, so they are admitted like any
+    /// launch; a stale stage must not reach them with mixed native code.
+    /// </summary>
+    [Fact]
+    public void APackagedStateOperationIsRefusedWhenTheNativeStageIsStale()
+    {
+        string application = NativeStagePackageFixture.WriteApplication(
+            Path.Combine(_root, "package"),
+            new Dictionary<string, string> { ["node_modules/koffi/koffi.node"] = "native" });
+        using var operation = new StateArchiveApplication(
+            Request(SessionStateTransferAction.Capture) with { ApplicationDirectory = application });
+
+        SessionLaunchException exception = Assert.Throws<SessionLaunchException>(
+            () => operation.Capture(Path.Combine(_root, "agent"), Path.Combine(_root, "out.tar.gz"), dryRun: false));
+
+        Assert.Equal(SessionLaunchProtocol.NativeStageStaleErrorCode, exception.Code);
+    }
+
+    /// <summary>
+    /// Plain status inspects transfer state through the same helper mode. It
+    /// runs no packaged code, so a stale stage must not turn status into a
+    /// failure that only setup can clear.
+    /// </summary>
+    [Fact]
+    public void InspectingTransferStateIsNotRefusedByAStaleNativeStage()
+    {
+        string application = NativeStagePackageFixture.WriteApplication(
+            Path.Combine(_root, "package"),
+            new Dictionary<string, string> { ["node_modules/koffi/koffi.node"] = "native" });
+        string requestPath = Path.Combine(_root, "state-transfer-inspect.json");
+        File.WriteAllText(requestPath, SessionStateTransferProtocol.SerializeRequest(
+            Request(SessionStateTransferAction.Inspect) with { ApplicationDirectory = application }));
+        string profile = Path.Combine(_root, "agent");
+        Directory.CreateDirectory(profile);
+
+        int exitCode = SessionStateTransfer.Run(
+            requestPath, File.ReadAllText, File.WriteAllText,
+            request => new SessionStateTransfer(
+                profile, Path.Combine(_root, "transfer"), new StateArchiveApplication(request)));
+
+        Assert.Equal(0, exitCode);
+        Assert.Null(SessionStateTransferProtocol.ReadResult(
+            File.ReadAllText(SessionLaunchProtocol.ResultPathFor(requestPath)),
+            SessionStateTransferProtocol.ReadRequest(File.ReadAllText(requestPath)).RequestId!).Error);
+    }
+
     private SessionStateTransferRequest Request(SessionStateTransferAction action) => new()
     {
         RequestId = Guid.NewGuid().ToString("N"),

@@ -56,6 +56,17 @@ internal sealed class FakeSessionGatewayClient : ISessionGatewayClient
             : Task.FromException<GatewayStartOutcome>(StartFailure);
     }
 
+    public Task CheckNativeStageAsync(
+        SessionRecord session,
+        GatewayStartRequest request,
+        CancellationToken cancellationToken)
+    {
+        Calls.Add("check-native-stage");
+        return CheckFailure is null ? Task.CompletedTask : Task.FromException(CheckFailure);
+    }
+
+    public Exception? CheckFailure { get; set; }
+
     public Task<SessionInspectResult> InspectAsync(
         SessionRecord session,
         GatewayRecord gateway,

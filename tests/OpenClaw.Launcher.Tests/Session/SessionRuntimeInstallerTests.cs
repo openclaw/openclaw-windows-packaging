@@ -351,7 +351,7 @@ public sealed class SessionRuntimeInstallerTests : IDisposable
             },
             () => _root,
             getRuntimeVersion: ReadFixtureVersion,
-            stageNativeModules: (_, _) => null,
+            stageNativeModules: (_, _, _) => new NativeStagePublication(null, false, 0),
             errorOutput: errors);
 
         Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode, exitCode);

@@ -159,7 +159,8 @@ public sealed class SessionGatewayClientTests : IDisposable
 
         (SessionLaunchRequest delivered, _, _) = await StartGatewayAsync(nativeRootPath);
 
-        Assert.Equal(nativeRootPath, delivered.NativeRootPath);
+        Assert.Equal(nativeRootPath, delivered.NativeStage!.RootPath);
+        Assert.Equal(Path.Combine(_root, "app"), delivered.NativeStage.ApplicationDirectory);
         Assert.Equal("--import", delivered.Arguments![0]);
         Assert.Contains(
             OpenClawRuntimeEnvironment.NativeRedirectFileName,
@@ -179,7 +180,8 @@ public sealed class SessionGatewayClientTests : IDisposable
     {
         (SessionLaunchRequest delivered, _, _) = await StartGatewayAsync(nativeRootPath: null);
 
-        Assert.Null(delivered.NativeRootPath);
+        // Still admitted: the guest refuses it if the application now needs natives.
+        Assert.Null(delivered.NativeStage!.RootPath);
         Assert.Null(delivered.NodeOptionsSuffix);
         Assert.EndsWith("openclaw.mjs", delivered.Arguments![0], StringComparison.Ordinal);
         Assert.Equal([delivered.Arguments[0], "gateway", "restart-handoff", "consume"],

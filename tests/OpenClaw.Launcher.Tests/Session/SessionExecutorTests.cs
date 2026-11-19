@@ -323,6 +323,7 @@ public sealed class SessionExecutorTests : IDisposable
             @"C:\Package\session-host\x64\openclaw-session-host.exe",
             @"C:\Package\runtime\node-v24.20.0-win-x64.zip",
             @"C:\Package\app",
+            currentNativeRootPath: null,
             CancellationToken.None);
 
         Assert.Equal(
@@ -353,6 +354,7 @@ public sealed class SessionExecutorTests : IDisposable
             @"C:\Package\session-host\x64\openclaw-session-host.exe",
             @"C:\Package\runtime\node-v24.20.0-win-x64.zip",
             @"C:\Package\app",
+            currentNativeRootPath: null,
             CancellationToken.None);
 
         Assert.Equal(
@@ -386,6 +388,7 @@ public sealed class SessionExecutorTests : IDisposable
                 @"C:\Package\session-host\x64\openclaw-session-host.exe",
                 @"C:\Package\runtime\node-v24.20.0-win-x64.zip",
                 @"C:\Package\app",
+                currentNativeRootPath: null,
                 CancellationToken.None));
 
         Assert.Contains(
@@ -1003,7 +1006,11 @@ public sealed class SessionExecutorTests : IDisposable
             CaptureRequest("dashboard", "--json") with
             {
                 NodeOptionsSuffix = "--require C:\\agent\\native-redirect.cjs",
-                NativeRootPath = @"C:\agent\native",
+                NativeStage = new SessionNativeStageReference
+                {
+                    ApplicationDirectory = @"C:\pkg\app",
+                    RootPath = @"C:\agent\native"
+                },
             },
             "Resolving the dashboard.",
             "OpenClaw",
@@ -1013,7 +1020,8 @@ public sealed class SessionExecutorTests : IDisposable
         Assert.Equal("captured stderr", result.StandardError);
         Assert.NotNull(delivered);
         Assert.Equal("--require C:\\agent\\native-redirect.cjs", delivered.NodeOptionsSuffix);
-        Assert.Equal(@"C:\agent\native", delivered.NativeRootPath);
+        Assert.Equal(@"C:\agent\native", delivered.NativeStage!.RootPath);
+        Assert.Equal(@"C:\pkg\app", delivered.NativeStage.ApplicationDirectory);
         Assert.Empty(_backend.AttachedCommandLines);
         Assert.Single(_backend.ExecutedCommandLines);
         Assert.All(

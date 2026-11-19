@@ -33,7 +33,8 @@ internal sealed partial class StateTransferCoordinator
                 record, runtime.IsCurrentSessionRecord, privateData: true, log: _log);
             if (options.Rollback)
             {
-                GatewayStopResult stopped = await _stopGateway(runtime, cancellationToken).ConfigureAwait(false);
+                // Rollback runs no packaged Node.js, so no stage can refuse it.
+                GatewayStopResult stopped = await _stopGateway(runtime, false, cancellationToken).ConfigureAwait(false);
                 RequireStopped(stopped);
                 SessionStateTransferResult rolledBack = await TransferAsync(
                     runtime, record, operation,
@@ -96,7 +97,8 @@ internal sealed partial class StateTransferCoordinator
             {
                 throw new SessionException("The guest did not record the expected prepared activation.");
             }
-            GatewayStopResult stopped = await _stopGateway(runtime, cancellationToken).ConfigureAwait(false);
+            // Preparing already ran admitted packaged Node.js under this lock.
+            GatewayStopResult stopped = await _stopGateway(runtime, false, cancellationToken).ConfigureAwait(false);
             RequireStopped(stopped);
             gatewayStopped = true;
             SessionStateTransferRequest captureRequest = CreateRequest(runtime, SessionStateTransferAction.Capture) with
@@ -193,7 +195,7 @@ internal sealed partial class StateTransferCoordinator
                     Pending = activationStarted || cleanupError is not null,
                     Phase = activationStarted ? "interrupted" : "not-activated",
                     GatewayStopped = gatewayStopped
-                }, Error: message);
+                }, Error: message, ErrorType: ErrorTypeOf(exception));
         }
         finally
         {
@@ -297,7 +299,8 @@ internal sealed partial class StateTransferCoordinator
     {
         _log($"{command} failed: {DiagnosticFailure.Describe(exception)}");
         return new StateArchiveCommandResult(command, 1,
-            Error: exception is OperationCanceledException ? "State transfer was cancelled." : exception.Message);
+            Error: exception is OperationCanceledException ? "State transfer was cancelled." : exception.Message,
+            ErrorType: ErrorTypeOf(exception));
     }
 
     private static void RequireStopped(GatewayStopResult result)

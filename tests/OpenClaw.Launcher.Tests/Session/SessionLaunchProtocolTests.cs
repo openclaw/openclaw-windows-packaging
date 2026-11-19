@@ -70,7 +70,11 @@ public sealed class SessionLaunchProtocolTests
         {
             PathPrefix = @"C:\agent\node",
             NodeOptionsSuffix = "--import file:///C:/agent/native-redirect.mjs",
-            NativeRootPath = @"C:\agent\agent-native\content",
+            NativeStage = new SessionNativeStageReference
+            {
+                ApplicationDirectory = @"C:\Program Files\WindowsApps\pkg\app",
+                RootPath = @"C:\agent\agent-native\content"
+            },
         };
 
         SessionLaunchRequest restored = SessionLaunchProtocol.ReadRequest(
@@ -78,7 +82,8 @@ public sealed class SessionLaunchProtocolTests
 
         Assert.Equal(@"C:\agent\node", restored.PathPrefix);
         Assert.Equal("--import file:///C:/agent/native-redirect.mjs", restored.NodeOptionsSuffix);
-        Assert.Equal(@"C:\agent\agent-native\content", restored.NativeRootPath);
+        Assert.Equal(@"C:\agent\agent-native\content", restored.NativeStage!.RootPath);
+        Assert.Equal(@"C:\Program Files\WindowsApps\pkg\app", restored.NativeStage.ApplicationDirectory);
     }
 
     [Fact]
@@ -133,6 +138,29 @@ public sealed class SessionLaunchProtocolTests
     {
         Assert.Throws<SessionLaunchException>(
             () => SessionLaunchProtocol.ReadRequest("{ not json"));
+    }
+
+    // An admission check starts nothing, so it carries only its stage. Without
+    // one the helper would have nothing to refuse and would report admission.
+    [Fact]
+    public void AnAdmissionCheckNeedsOnlyItsNativeStage()
+    {
+        var check = new SessionLaunchRequest
+        {
+            RequestId = "r-1",
+            Mode = SessionLaunchMode.Admission,
+            NativeStage = new SessionNativeStageReference { ApplicationDirectory = @"C:\pkg\app" }
+        };
+
+        SessionLaunchRequest restored = SessionLaunchProtocol.ReadRequest(
+            SessionLaunchProtocol.SerializeRequest(check));
+
+        Assert.Equal(SessionLaunchMode.Admission, restored.Mode);
+        Assert.Equal(@"C:\pkg\app", restored.NativeStage!.ApplicationDirectory);
+        SessionLaunchException exception = Assert.Throws<SessionLaunchException>(
+            () => SessionLaunchProtocol.ReadRequest(
+                SessionLaunchProtocol.SerializeRequest(check with { NativeStage = null })));
+        Assert.Contains("native stage", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

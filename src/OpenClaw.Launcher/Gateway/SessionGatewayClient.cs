@@ -44,6 +44,16 @@ internal interface ISessionGatewayClient
         GatewayStartRequest request,
         CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Confirms that the native stage <paramref name="request"/> would be
+    /// started against admits it, without starting anything.
+    /// </summary>
+    /// <exception cref="NativeStageStaleException">The stage is refused.</exception>
+    Task CheckNativeStageAsync(
+        SessionRecord session,
+        GatewayStartRequest request,
+        CancellationToken cancellationToken);
+
     Task<SessionInspectResult> InspectAsync(
         SessionRecord session,
         GatewayRecord gateway,
@@ -146,7 +156,7 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
             PathPrefix = Path.GetDirectoryName(request.NodePath)
                 ?? throw new SessionException(
                     "The agent's Node.js runtime has no parent directory."),
-            NativeRootPath = _getNativeRootPath(),
+            NativeStage = CreateNativeStage(request),
             LogPath = logPath,
             StatusPath = statusPath,
             RestartHandoffArguments = [.. nodeArguments, "gateway", "restart-handoff", "consume"]
@@ -200,6 +210,79 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
             operation.Delete(resultPath);
         }
     }
+
+    public async Task CheckNativeStageAsync(
+        SessionRecord session,
+        GatewayStartRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(request);
+
+        string helperPath = SessionHelperStager.RequireStaged(
+            request.HelperPath,
+            RequireWorkspace(session));
+        string requestId = Guid.NewGuid().ToString("N");
+        using var operation = new SessionWorkspaceOperation(session, _isCurrentRecord);
+        string requestPath = operation.FilePath("admission", requestId);
+        string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
+        try
+        {
+            await operation.WriteTextNewAsync(
+                requestPath,
+                SessionLaunchProtocol.SerializeRequest(new SessionLaunchRequest
+                {
+                    RequestId = requestId,
+                    Mode = SessionLaunchMode.Admission,
+                    NativeStage = CreateNativeStage(request)
+                }),
+                cancellationToken).ConfigureAwait(false);
+
+            MxcExecutionResult execution = await _backend.ExecuteAsync(
+                session.ToSandboxIdOrThrow(),
+                new MxcExecutionRequest(
+                    SessionExecutor.BuildGuestCommandLine(helperPath, requestPath)),
+                cancellationToken).ConfigureAwait(false);
+
+            string text;
+            try
+            {
+                text = await operation.ReadTextAsync(resultPath, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (
+                exception is FileNotFoundException or DirectoryNotFoundException or IOException)
+            {
+                throw new SessionException(
+                    "The isolated session did not report whether its native stage admits this package " +
+                    $"(executor exit code {execution.ExitCode}). {Describe(execution)}",
+                    exception);
+            }
+
+            SessionLaunchResult result = SessionLaunchProtocol.ReadResult(text);
+            NativeStageStaleException.ThrowIfReported(result.ErrorCode, result.Error);
+            if (result.RequestId != requestId || result.Launched || result.Error is not null ||
+                execution.ExitCode != 0)
+            {
+                throw new SessionException(
+                    "The isolated session could not confirm that its native stage admits this package: " +
+                    (result.Error ?? $"the check did not complete (executor exit code {execution.ExitCode})."));
+            }
+        }
+        finally
+        {
+            operation.Delete(requestPath);
+            operation.Delete(resultPath);
+        }
+    }
+
+    // Start and its admission check name one stage, so a check that passes
+    // describes the launch that follows it.
+    private SessionNativeStageReference CreateNativeStage(GatewayStartRequest request) => new()
+    {
+        ApplicationDirectory = request.ApplicationDirectory,
+        RootPath = _getNativeRootPath()
+    };
 
     /// <summary>
     /// Ends the recorded gateway inside the session.
@@ -394,6 +477,8 @@ internal sealed class SessionGatewayClient : ISessionGatewayClient
         SessionLaunchResult result = SessionLaunchProtocol.ReadResult(text);
         if (!result.Launched || result.Error is not null)
         {
+            // The helper refused before starting a supervisor, so no gateway exists.
+            NativeStageStaleException.ThrowIfReported(result.ErrorCode, result.Error);
             throw new SessionException(
                 "The gateway could not be started in the isolated session: " +
                 (result.Error ?? "the session helper reported no detail."));
