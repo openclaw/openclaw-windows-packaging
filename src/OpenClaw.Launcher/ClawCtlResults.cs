@@ -46,6 +46,16 @@ internal sealed record SetupCommandResult(
     public string Command => Fresh ? "setup --fresh" : "setup";
 }
 
+/// <summary>
+/// What <c>status --native</c> established: a guest report, or why none was taken.
+/// </summary>
+internal sealed record NativeStageStatus(SessionNativeStageReport? Report, string? NotInspected)
+{
+    /// <summary>Whether the report shows a stage a launch would be refused for.</summary>
+    public bool RequiresSetup =>
+        Report is { Error: null, State: not ("current" or "not-required") };
+}
+
 internal sealed record StatusCommandResult(
     SessionStatus Session,
     GatewayStatusReport Gateway,
@@ -53,7 +63,8 @@ internal sealed record StatusCommandResult(
     string? NodeVersion,
     AgentConfigReadinessStatus? Readiness = null,
     SessionStateTransferResult? StateTransfer = null,
-    string? UnownedSetupEvidence = null) : IClawCtlResult
+    string? UnownedSetupEvidence = null,
+    NativeStageStatus? NativeStage = null) : IClawCtlResult
 {
     public string Command => "status";
 
@@ -66,7 +77,8 @@ internal sealed record StatusCommandResult(
         Recovery.State is GatewayPersistenceState.ActionRequired or
             GatewayPersistenceState.Unknown ||
         Readiness?.ProbeFailed == true ||
-        StateTransfer?.Pending == true || StateTransfer?.Error is not null
+        StateTransfer?.Pending == true || StateTransfer?.Error is not null ||
+        NativeStage?.RequiresSetup == true || NativeStage?.Report?.Error is not null
             ? 1
             : 0;
 }

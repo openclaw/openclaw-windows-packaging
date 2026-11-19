@@ -1,5 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using OpenClaw.Launcher.Gateway;
+using OpenClaw.Launcher.Session;
 using OpenClaw.SessionHost;
 using OpenClaw.SessionProtocol;
 
@@ -49,6 +52,40 @@ internal static partial class SmokeProgram
                 checkAdmitted is { Launched: false, Error: null, ErrorCode: null } &&
                 checkAdmitted.RequestId == "aot-native-stage" && launcher.Requests.Count == 1,
                 "The admission-only check did not decide without launching under NativeAOT.");
+
+            string inspectPath = Path.Combine(directory, "native-stage.json");
+            File.WriteAllText(inspectPath, SessionNativeStageProtocol.SerializeRequest(new SessionNativeStageInspectRequest
+            {
+                RequestId = "aot-native-inspect",
+                ApplicationDirectory = application,
+                RootPath = root
+            }));
+            Assert(OpenClaw.SessionHost.Program.Run(
+                    ["--inspect-native", inspectPath],
+                    launcher,
+                    TextWriter.Null,
+                    File.ReadAllText,
+                    OpenClaw.SessionHost.Program.WriteResult) == 0,
+                "Native stage inspection failed under NativeAOT.");
+            SessionNativeStageReport report = SessionNativeStageProtocol.ReadReport(
+                File.ReadAllText(SessionLaunchProtocol.ResultPathFor(inspectPath)), "aot-native-inspect");
+            using var statusOutput = new StringWriter();
+            ClawCtlJson.WriteResult(statusOutput, new StatusCommandResult(
+                new SessionStatus(SessionAvailability.Running, null, null, null),
+                new GatewayStatusReport(GatewayState.NotStarted, null, "No gateway has been started."),
+                new GatewayPersistenceStatus(
+                    GatewayPersistenceState.Ready,
+                    GatewayPersistenceLane.TaskScheduler,
+                    "Recovery is configured."),
+                null,
+                NativeStage: new NativeStageStatus(report, null)));
+            using JsonDocument status = JsonDocument.Parse(statusOutput.ToString());
+            JsonElement native = status.RootElement.GetProperty("nativeStage");
+            Assert(native.GetProperty("state").GetString() == "current" &&
+                native.GetProperty("inspected").GetBoolean() &&
+                native.GetProperty("packages")[0].GetProperty("name").GetString() == "koffi" &&
+                native.GetProperty("packages")[0].GetProperty("resolvesFrom").GetString() == "staged",
+                "The native stage report did not survive NativeAOT.");
         }
         finally
         {

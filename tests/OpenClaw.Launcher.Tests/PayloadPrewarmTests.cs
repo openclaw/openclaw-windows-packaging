@@ -519,7 +519,7 @@ public sealed class PayloadPrewarmTests : IDisposable
         RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
         {
             Setup = (_, _) => Task.FromResult(1),
-            Status = _ => Task.FromResult(1),
+            Status = (_, _) => Task.FromResult(1),
             CollectLogs = (_, _) => Task.FromResult(1),
             Teardown = (_, _) => Task.FromResult(1),
             PowerShell = (_, _) => Task.FromResult(1),

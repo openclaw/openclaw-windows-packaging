@@ -475,6 +475,56 @@ public sealed class ClawCtlConsoleTests
     }
 
     [Fact]
+    public void StatusNativeNamesTheMismatchedPackageAndTheRepair()
+    {
+        static string Render(NativeStageStatus native)
+        {
+            using var output = new StringWriter();
+            ClawCtlConsole.WriteResult(
+                output,
+                new StatusCommandResult(
+                    new SessionStatus(SessionAvailability.Running, null, null, null),
+                    new GatewayStatusReport(GatewayState.NotStarted, null, "No gateway has been started."),
+                    new GatewayPersistenceStatus(
+                        GatewayPersistenceState.Ready,
+                        GatewayPersistenceLane.TaskScheduler,
+                        "Gateway recovery is configured."),
+                    null,
+                    NativeStage: native));
+            return output.ToString();
+        }
+
+        string stale = Render(new NativeStageStatus(
+            new OpenClaw.SessionProtocol.SessionNativeStageReport
+            {
+                State = "stale-source",
+                ExpectedFiles = 6,
+                VerifiedFiles = 0,
+                Packages =
+                [
+                    new OpenClaw.SessionProtocol.SessionNativeStagePackage
+                    {
+                        Name = "@openclaw/fs-safe",
+                        SourceVersion = "0.26.5",
+                        ResolvesFrom = "immutable"
+                    }
+                ]
+            },
+            null));
+        string skipped = Render(new NativeStageStatus(null, "OpenClaw has not been set up. Run `clawctl setup` first."));
+
+        Assert.Contains("Native stage:", stale, StringComparison.Ordinal);
+        Assert.Contains("stale-source (0 of 6 files verified)", stale, StringComparison.Ordinal);
+        Assert.Contains(
+            "@openclaw/fs-safe: source 0.26.5, staged none, resolves from immutable",
+            stale,
+            StringComparison.Ordinal);
+        Assert.Contains("clawctl setup", stale, StringComparison.Ordinal);
+        Assert.Contains("not inspected", skipped, StringComparison.Ordinal);
+        Assert.Contains("has not been set up", skipped, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ColorChangesOnlyTerminalFormatting()
     {
         var result = new SetupCommandResult(

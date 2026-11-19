@@ -30,7 +30,7 @@ public sealed class ClawCtlCommandLineTests
         RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
         {
             Setup = (_, _) => Task.FromResult(0),
-            Status = _ => Task.FromResult(0),
+            Status = (_, _) => Task.FromResult(0),
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
             PowerShell = (_, _) => Task.FromResult(0),
@@ -125,7 +125,7 @@ public sealed class ClawCtlCommandLineTests
         RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
         {
             Setup = (_, _) => Task.FromResult(0),
-            Status = _ => Task.FromResult(0),
+            Status = (_, _) => Task.FromResult(0),
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
             PowerShell = (_, _) => Task.FromResult(0),
@@ -165,7 +165,7 @@ public sealed class ClawCtlCommandLineTests
                 requestedSetup = options;
                 return Task.FromResult(0);
             },
-            Status = _ => Task.FromResult(1),
+            Status = (_, _) => Task.FromResult(1),
             CollectLogs = (_, _) => Task.FromResult(1),
             Teardown = (_, _) => Task.FromResult(1),
             PowerShell = (_, _) => Task.FromResult(1),
@@ -189,7 +189,7 @@ public sealed class ClawCtlCommandLineTests
         RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
         {
             Setup = (_, _) => Task.FromResult(0),
-            Status = _ => Task.FromResult(0),
+            Status = (_, _) => Task.FromResult(0),
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
             PowerShell = (_, _) => Task.FromResult(0),
@@ -217,7 +217,7 @@ public sealed class ClawCtlCommandLineTests
         RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
         {
             Setup = (_, _) => Task.FromResult(0),
-            Status = _ => Task.FromResult(0),
+            Status = (_, _) => Task.FromResult(0),
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
             Open = _ =>
@@ -248,7 +248,7 @@ public sealed class ClawCtlCommandLineTests
         RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
         {
             Setup = (_, _) => Task.FromResult(0),
-            Status = _ => Task.FromResult(0),
+            Status = (_, _) => Task.FromResult(0),
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
             PowerShell = (_, _) => Task.FromResult(0),
@@ -278,7 +278,7 @@ public sealed class ClawCtlCommandLineTests
         RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
         {
             Setup = (_, _) => Task.FromResult(0),
-            Status = _ => Task.FromResult(0),
+            Status = (_, _) => Task.FromResult(0),
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
             PowerShell = (_, _) => Task.FromResult(0),
@@ -307,7 +307,7 @@ public sealed class ClawCtlCommandLineTests
         RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
         {
             Setup = (_, _) => Task.FromResult(0),
-            Status = _ => Task.FromResult(0),
+            Status = (_, _) => Task.FromResult(0),
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
             PowerShell = (_, _) => Task.FromResult(0),
@@ -333,7 +333,7 @@ public sealed class ClawCtlCommandLineTests
         RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
         {
             Setup = (_, _) => Task.FromResult(0),
-            Status = _ => Task.FromResult(0),
+            Status = (_, _) => Task.FromResult(0),
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
             PowerShell = (_, _) => Task.FromResult(0),
@@ -365,7 +365,7 @@ public sealed class ClawCtlCommandLineTests
         RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
         {
             Setup = (_, _) => Task.FromResult(0),
-            Status = _ => Task.FromResult(0),
+            Status = (_, _) => Task.FromResult(0),
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
             PowerShell = (_, _) => Task.FromResult(0),
@@ -408,7 +408,7 @@ public sealed class ClawCtlCommandLineTests
         RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
         {
             Setup = (_, _) => Task.FromResult(0),
-            Status = _ => Task.FromResult(0),
+            Status = (_, _) => Task.FromResult(0),
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
             Open = _ => Task.FromResult(0),
@@ -445,7 +445,7 @@ public sealed class ClawCtlCommandLineTests
         RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
         {
             Setup = (_, _) => Task.FromResult(0),
-            Status = _ => Task.FromResult(0),
+            Status = (_, _) => Task.FromResult(0),
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
             PowerShell = (options, _) =>
@@ -477,7 +477,7 @@ public sealed class ClawCtlCommandLineTests
         RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
         {
             Setup = (_, _) => Task.FromResult(0),
-            Status = _ => Task.FromResult(0),
+            Status = (_, _) => Task.FromResult(0),
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
             PowerShell = (options, _) =>
@@ -541,7 +541,7 @@ public sealed class ClawCtlCommandLineTests
         RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
         {
             Setup = (_, _) => Task.FromResult(0),
-            Status = _ => Task.FromResult(0),
+            Status = (_, _) => Task.FromResult(0),
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
             PowerShell = (_, _) => Task.FromResult(0),
@@ -586,7 +586,7 @@ public sealed class ClawCtlCommandLineTests
                 received = options;
                 return Task.FromResult(0);
             },
-            Status = _ => Task.FromResult(0),
+            Status = (_, _) => Task.FromResult(0),
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
             PowerShell = (_, _) => Task.FromResult(0),
@@ -613,7 +613,7 @@ public sealed class ClawCtlCommandLineTests
                 received = options;
                 return Task.FromResult(0);
             },
-            Status = _ => Task.FromResult(0),
+            Status = (_, _) => Task.FromResult(0),
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
             PowerShell = (_, _) => Task.FromResult(0),
@@ -636,7 +636,7 @@ public sealed class ClawCtlCommandLineTests
         RootCommand root = ClawCtlCommandLine.Create(new ClawCtlHandlers
         {
             Setup = (_, _) => Task.FromResult(0),
-            Status = _ => Task.FromResult(0),
+            Status = (_, _) => Task.FromResult(0),
             CollectLogs = (_, _) => Task.FromResult(0),
             Teardown = (_, _) => Task.FromResult(0),
             Completion = (value, _) =>

@@ -691,6 +691,8 @@ internal static class ClawCtlConsole
             view.Row("Runtime", new Text($"Node.js {result.NodeVersion}"));
         }
 
+        WriteNativeStage(view, result.NativeStage);
+
         view.Row("Gateway", DescribeGateway(view, result.Gateway));
         if (Gateway.GatewayAddress.ResolvePort(result.Gateway.Record) is int statusPort &&
             result.Gateway.State == Gateway.GatewayState.Running)
@@ -733,6 +735,44 @@ internal static class ClawCtlConsole
             view.IssueGuidance();
             view.Blank();
             view.Command("Recover with", "clawctl setup --fresh");
+        }
+    }
+
+    private static void WriteNativeStage(ResultView view, NativeStageStatus? native)
+    {
+        if (native is null)
+        {
+            return;
+        }
+
+        if (native.Report is not { Error: null } report)
+        {
+            view.Row("Native stage", Status(view, StatusKind.Warning, "not inspected"));
+            view.Detail(native.Report?.Error ?? native.NotInspected ?? "no inspection was taken");
+            return;
+        }
+
+        view.Row(
+            "Native stage",
+            Status(
+                view,
+                native.RequiresSetup ? StatusKind.Failure : StatusKind.Success,
+                report.State!,
+                report.State == "not-required"
+                    ? " (this package has no native dependencies)"
+                    : string.Create(
+                        CultureInfo.InvariantCulture,
+                        $" ({report.VerifiedFiles} of {report.ExpectedFiles} files verified)")));
+        foreach (SessionNativeStagePackage package in report.Packages.Where(package => !package.FilesMatch).Take(8))
+        {
+            view.Detail(
+                $"{package.Name ?? "a package"}: source {package.SourceVersion ?? "unversioned"}, " +
+                $"staged {package.StagedVersion ?? "none"}, resolves from {package.ResolvesFrom}");
+        }
+
+        if (native.RequiresSetup)
+        {
+            view.Command("Repair with", "clawctl setup");
         }
     }
 
