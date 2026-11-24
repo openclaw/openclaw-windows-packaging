@@ -91,6 +91,50 @@ public sealed partial class SessionSupervisorTests : IDisposable
         Assert.Equal(SessionSupervisorStatus.ExitedState, exited.State);
     }
 
+    /// <summary>
+    /// The gateway resolves natives through the root for as long as it runs,
+    /// including across restart handoffs, so the supervisor holds it the
+    /// whole time. The child itself proves it: it cannot move the root.
+    /// </summary>
+    [Fact]
+    public void TheSupervisedGatewayHoldsItsAdmittedRootUntilItExits()
+    {
+        string application = Path.Combine(_root, "app");
+        string addon = Path.Combine(application, "node_modules", "koffi", "koffi.node");
+        Directory.CreateDirectory(Path.GetDirectoryName(addon)!);
+        File.WriteAllText(addon, "native");
+        string root = SessionNativeStager.Stage(application, Path.Combine(_root, "local"))!;
+
+        int exitCode = RunSupervisor(Request("/c", "move", root, root + "-moved") with
+        {
+            NativeStage = new SessionNativeStageReference { ApplicationDirectory = application, RootPath = root }
+        });
+
+        Assert.NotEqual(0, exitCode);
+        Assert.True(Directory.Exists(root));
+        Directory.Move(root, root + "-moved");
+    }
+
+    [Fact]
+    public void AStaleNativeStageIsRecordedAndNothingIsStarted()
+    {
+        string application = Path.Combine(_root, "app");
+        string addon = Path.Combine(application, "node_modules", "koffi", "koffi.node");
+        Directory.CreateDirectory(Path.GetDirectoryName(addon)!);
+        File.WriteAllText(addon, "native");
+
+        int exitCode = RunSupervisor(Request("/c", "echo started") with
+        {
+            NativeStage = new SessionNativeStageReference { ApplicationDirectory = application }
+        });
+
+        Assert.Equal(SessionLaunchProtocol.HelperFailureExitCode, exitCode);
+        SessionSupervisorStatus status = SessionInspectProtocol.ReadStatus(File.ReadAllText(StatusPath));
+        Assert.Equal(SessionSupervisorStatus.ExitedState, status.State);
+        Assert.Contains("Run `clawctl setup`", status.Detail, StringComparison.Ordinal);
+        Assert.False(File.Exists(LogPath));
+    }
+
     [Fact]
     public void TheApplicationsOutputIsCapturedInTheLog()
     {

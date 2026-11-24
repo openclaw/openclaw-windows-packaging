@@ -116,7 +116,7 @@ public sealed class StateTransferScenarioTests : IDisposable
             return Task.FromResult(new MxcExecutionResult(exit, "secret stdout", "secret stderr"));
         };
         return new StateTransferCoordinator(_options, () => _runtime, Store, _log.Add,
-            stopGateway: (_, _) =>
+            stopGateway: (_, _, _) =>
             {
                 if (_rejectGatewayStop)
                 {

@@ -108,6 +108,46 @@ internal sealed class SessionStateException : SessionException
 }
 
 /// <summary>
+/// The session refused a launch because the agent's staged native dependencies
+/// do not match the installed package. Nothing was started, and explicit
+/// <c>clawctl setup</c> repairs it.
+/// </summary>
+/// <remarks>
+/// The guest writes the message, including that remediation, because only the
+/// agent can read the stage it describes.
+/// </remarks>
+internal sealed class NativeStageStaleException : SessionException
+{
+    public NativeStageStaleException()
+    {
+    }
+
+    public NativeStageStaleException(string message)
+        : base(message)
+    {
+    }
+
+    public NativeStageStaleException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+
+    /// <summary>Raises this exception when a guest result carries its code.</summary>
+    public static void ThrowIfReported(string? errorCode, string? message)
+    {
+        if (string.Equals(errorCode, OpenClaw.SessionProtocol.SessionLaunchProtocol.NativeStageStaleErrorCode,
+            StringComparison.Ordinal))
+        {
+            throw new NativeStageStaleException(
+                message is { Length: > 0 }
+                    ? message
+                    : "The isolated session's staged native dependencies do not match this " +
+                      "installed package. Run `clawctl setup` to refresh them.");
+        }
+    }
+}
+
+/// <summary>
 /// Another process held the lifecycle lock for longer than the caller allowed.
 /// </summary>
 [SuppressMessage(

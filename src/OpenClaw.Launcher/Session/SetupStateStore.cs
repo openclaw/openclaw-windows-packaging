@@ -98,11 +98,13 @@ internal sealed class SetupStateStore
     public const int CurrentSchemaVersion = 2;
 
     private readonly string _filePath;
+    private readonly Func<string, string> _readAllText;
 
-    public SetupStateStore(string filePath)
+    public SetupStateStore(string filePath, Func<string, string>? readAllText = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
         _filePath = Path.GetFullPath(filePath);
+        _readAllText = readAllText ?? File.ReadAllText;
     }
 
     public string FilePath => _filePath;
@@ -114,7 +116,7 @@ internal sealed class SetupStateStore
         string text;
         try
         {
-            text = File.ReadAllText(_filePath);
+            text = _readAllText(_filePath);
         }
         catch (Exception exception) when (
             exception is FileNotFoundException or DirectoryNotFoundException)

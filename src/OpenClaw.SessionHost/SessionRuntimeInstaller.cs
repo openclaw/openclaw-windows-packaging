@@ -35,7 +35,7 @@ internal static class SessionRuntimeInstaller
         Func<string>? getLocalApplicationData = null,
         Func<string, bool>? tryPrependUserPath = null,
         Func<string, string?>? getRuntimeVersion = null,
-        Func<string, string, string?>? stageNativeModules = null,
+        Func<string, string, string?, NativeStagePublication>? stageNativeModules = null,
         TextWriter? errorOutput = null)
     {
         string resultPath = SessionLaunchProtocol.ResultPathFor(requestPath);
@@ -109,9 +109,10 @@ internal static class SessionRuntimeInstaller
 
             // Native dependencies are mirrored by the same account that will
             // load them, for the same reason the runtime itself is.
-            string? nativeRootPath = (stageNativeModules ?? SessionNativeStager.Stage)(
+            NativeStagePublication native = (stageNativeModules ?? SessionNativeStager.Publish)(
                 request.ApplicationDirectory!,
-                (getLocalApplicationData ?? GetLocalApplicationData)());
+                (getLocalApplicationData ?? GetLocalApplicationData)(),
+                request.CurrentNativeRootPath);
 
             writeFile(
                 resultPath,
@@ -122,7 +123,8 @@ internal static class SessionRuntimeInstaller
                     Version = expectedVersion,
                     ArchiveName = Path.GetFileName(request.ArchivePath!),
                     UserPathUpdated = pathUpdated,
-                    NativeRootPath = nativeRootPath
+                    NativeRootPath = native.RootPath,
+                    NativeRootsRetained = native.RetainedRootCount
                 }));
             return 0;
         }

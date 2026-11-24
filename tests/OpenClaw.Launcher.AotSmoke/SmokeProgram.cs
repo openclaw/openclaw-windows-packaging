@@ -93,6 +93,7 @@ internal static partial class SmokeProgram
             ("diagnostics redaction survives NativeAOT", DiagnosticsRedactionWorks),
             ("package diagnostics ZIP survives NativeAOT", PackageDiagnosticsAreStructuredAsync),
             ("plain helper failure fallback survives NativeAOT", HelperFailureFallbackWorks),
+            ("native stage admission survives NativeAOT", NativeStageAdmissionWorks),
             ("missing application reports diagnostics", MissingApplicationReportsAsync),
             ("openclaw never parses its arguments", AgentNeverParsesItsArgumentsAsync),
             ("first agent launch provisions and forwards arguments", FirstAgentLaunchProvisionsAsync),
@@ -278,7 +279,7 @@ internal static partial class SmokeProgram
             int Install() => SessionRuntimeInstaller.Run(
                 requestPath, File.ReadAllText, File.WriteAllText,
                 getLocalApplicationData: () => directory,
-                stageNativeModules: (_, _) => null);
+                stageNativeModules: (_, _, _) => new NativeStagePublication(null, false, 0));
             Assert(Install() == 0, "Initial fixture runtime installation failed.");
             string executablePath = Path.Combine(
                 directory, "OpenClawGatewayMSIX", "agent-node", archiveRoot, "node.exe");

@@ -421,8 +421,11 @@ observed.
 
 `gateway-service restart` performs the existing stop and start operations
 under one lifecycle lock. A missing or already-exited gateway makes the stop a
-no-op and the start continues. If the gateway cannot be confirmed stopped, the
-operation retains its ownership record and does not launch a replacement.
+no-op and the start continues. Before stopping a running gateway, restart asks
+the session helper to admit the replacement's native stage without starting
+anything; a refusal leaves the gateway running and its record unchanged. If the
+gateway cannot be confirmed stopped, the operation retains its ownership record
+and does not launch a replacement.
 
 Start and restart wait up to 90 seconds for an owned listener. A verified live
 supervisor with no listener can then return successful acceptance with
@@ -596,7 +599,8 @@ package migration.
 
 Explicit `clawctl gateway-service repair --yes` uses that same lifecycle lock,
 backup pipeline, and recorded identity. It refuses pending activation, stops
-through the gateway owner, and publishes a verified archive before invoking
+through the gateway owner after the same native-stage check restart makes, and
+publishes a verified archive before invoking
 the packaged Doctor. Doctor owns the schema/data mutations, with external
 service repair policy retained. It never automatically starts the gateway or
 runs in the update/logon path. Failure retains the archive and the stopped

@@ -103,10 +103,23 @@ internal static class Program
                 throw new SessionLaunchException("Invocation jobs support attached requests only.");
             }
             if (request.Mode is not SessionLaunchMode.Attached and
-                not SessionLaunchMode.Detached)
+                not SessionLaunchMode.Detached and
+                not SessionLaunchMode.Admission)
             {
                 throw new SessionLaunchException(
                     $"Launch mode '{request.Mode}' is not supported by this helper.");
+            }
+
+            // Held until the attached process tree ends, or until a detached
+            // supervisor has started and taken its own admission.
+            using FileStream? nativeLease = request.NativeStage is { } stage
+                ? SessionNativeStager.Admit(stage.ApplicationDirectory!, stage.RootPath)
+                : null;
+
+            if (request.Mode == SessionLaunchMode.Admission)
+            {
+                writeResult(resultPath, new SessionLaunchResult { RequestId = requestId });
+                return 0;
             }
 
             if (request.Mode == SessionLaunchMode.Detached)
@@ -146,7 +159,13 @@ internal static class Program
             UnauthorizedAccessException)
         {
             errorOutput.WriteLine($"openclaw-session-host: {exception.Message}");
-            TryWriteFailure(writeResult, resultPath, requestId, exception.Message, errorOutput);
+            TryWriteFailure(
+                writeResult,
+                resultPath,
+                requestId,
+                exception.Message,
+                errorOutput,
+                (exception as SessionLaunchException)?.Code);
             return SessionLaunchProtocol.HelperFailureExitCode;
         }
     }
@@ -183,7 +202,8 @@ internal static class Program
         string resultPath,
         string? requestId,
         string error,
-        TextWriter errorOutput)
+        TextWriter errorOutput,
+        string? errorCode = null)
     {
         try
         {
@@ -193,7 +213,8 @@ internal static class Program
                 {
                     RequestId = requestId,
                     Launched = false,
-                    Error = error
+                    Error = error,
+                    ErrorCode = errorCode
                 });
         }
         catch (Exception exception) when (

@@ -170,7 +170,10 @@ internal static class Program
                         () => ClawCtlJson.WriteFailure(
                             output,
                             command,
-                            exception.Message),
+                            exception.Message,
+                            exception is Session.NativeStageStaleException
+                                ? ClawCtlJson.NativeStageStaleErrorType
+                                : ClawCtlJson.CliErrorType),
                         "standard output");
                 }
                 else
@@ -197,7 +200,8 @@ internal static class Program
                         using (restore)
                         {
                             if (exception is Session.InteractiveLogonRequiredException or
-                                Session.UnownedSetupEvidenceException)
+                                Session.UnownedSetupEvidenceException or
+                                Session.NativeStageStaleException)
                             {
                                 ClawCtlConsole.WriteActionableFailure(
                                     error,
@@ -348,6 +352,8 @@ internal static class Program
                 .ConfigureAwait(false);
         string agentNodePath = runtime.RequireAgentNodePath(
             options.RequirePackagedNodeArchivePath());
+        OpenClaw.SessionProtocol.SessionNativeStageReference nativeStage =
+            runtime.GetNativeStage(applicationDirectory);
         int exitCode = await runtime.Executor.ExecuteAsync(
             record,
             new Session.SessionExecutionRequest(
@@ -358,12 +364,11 @@ internal static class Program
                 record.WorkspacePath!)
             {
                 AdditionalEnvironment = BuildRuntimeEnvironment(
-                    runtime,
-                    applicationDirectory,
+                    nativeStage,
                     interactive,
                     environmentReader),
-                NodeArgumentsPrefix = BuildNativeRedirectNodeArguments(runtime),
-                NativeRootPath = runtime.GetAgentNativeRoot()
+                NodeArgumentsPrefix = BuildNativeRedirectNodeArguments(nativeStage),
+                NativeStage = nativeStage
             },
             CancellationToken.None).ConfigureAwait(false);
         return await Gateway.AgentPostflight.Create(
@@ -468,21 +473,29 @@ internal static class Program
     /// account owns.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Built in one place so foreground and gateway launch paths resolve native
     /// addons the same way. The agent shell carries equivalent values through
     /// its command shim because agent tooling may replace process environment
     /// values before invoking <c>openclaw</c>. The redirect's preload is not
     /// here: it belongs on the agent Node.js argument vector.
+    /// </para>
+    /// <para>
+    /// The redirect and the admitted stage come from one snapshot of the
+    /// recorded root. A launch does not hold the lifecycle lock, so setup can
+    /// publish a new generation and reclaim the previous one between two
+    /// reads; the guest would then admit one root while the redirect named
+    /// another.
+    /// </para>
     /// </remarks>
     private static IReadOnlyDictionary<string, string> BuildRuntimeEnvironment(
-        Session.SessionRuntime runtime,
-        string applicationDirectory,
+        OpenClaw.SessionProtocol.SessionNativeStageReference nativeStage,
         bool isInteractive,
         Func<string, string?> readEnvironmentVariable)
     {
         IReadOnlyDictionary<string, string> environment =
             OpenClawRuntimeEnvironment.Build(isInteractive, readEnvironmentVariable);
-        if (runtime.GetAgentNativeRoot() is not { Length: > 0 } nativeRoot)
+        if (nativeStage.RootPath is not { Length: > 0 } nativeRoot)
         {
             return environment;
         }
@@ -490,7 +503,7 @@ internal static class Program
         return Session.SessionExecutor.MergeEnvironment(
             environment,
             OpenClawRuntimeEnvironment.BuildNativeRedirect(
-                applicationDirectory,
+                nativeStage.ApplicationDirectory!,
                 nativeRoot));
     }
 
@@ -499,8 +512,8 @@ internal static class Program
     /// when setup staged nothing to redirect to.
     /// </summary>
     private static IReadOnlyList<string>? BuildNativeRedirectNodeArguments(
-        Session.SessionRuntime runtime) =>
-        runtime.GetAgentNativeRoot() is { Length: > 0 }
+        OpenClaw.SessionProtocol.SessionNativeStageReference nativeStage) =>
+        nativeStage.RootPath is { Length: > 0 }
             ? OpenClawRuntimeEnvironment.BuildNativeRedirectNodeArguments(
                 ResolveNativeRedirectPreloadPath())
             : null;
@@ -873,10 +886,11 @@ internal static class Program
                             options.RequirePackagedApplicationDirectory();
                         string nodePath = runtime.RequireAgentNodePath(
                             options.RequirePackagedNodeArchivePath());
+                        OpenClaw.SessionProtocol.SessionNativeStageReference nativeStage =
+                            runtime.GetNativeStage(applicationDirectory);
                         IReadOnlyDictionary<string, string> dashboardEnvironment =
                             BuildRuntimeEnvironment(
-                                runtime,
-                                applicationDirectory,
+                                nativeStage,
                                 isInteractive: false,
                                 readEnvironmentVariable ??
                                     Environment.GetEnvironmentVariable);
@@ -899,7 +913,7 @@ internal static class Program
                                     runtime.RequireStagedHelper(record),
                                     nodePath,
                                     [
-                                        .. BuildNativeRedirectNodeArguments(runtime) ?? [],
+                                        .. BuildNativeRedirectNodeArguments(nativeStage) ?? [],
                                         Path.Combine(applicationDirectory, "openclaw.mjs"),
                                         "dashboard",
                                         "--json"
@@ -908,7 +922,7 @@ internal static class Program
                                 {
                                     PathPrefix = Path.GetDirectoryName(nodePath),
                                     AdditionalEnvironment = dashboardEnvironment,
-                                    NativeRootPath = runtime.GetAgentNativeRoot()
+                                    NativeStage = nativeStage
                                 },
                                 "Resolving the Control UI handoff in the isolated session.",
                                 "OpenClaw dashboard",
@@ -1220,7 +1234,12 @@ internal static class Program
                     catch (Session.SessionException exception) when (outputOptions.Json)
                     {
                         log($"Companion Gateway preparation failed: {DiagnosticFailure.Describe(exception)}");
-                        return WriteResult(new CompanionPrepareResult(1, Error: exception.Message));
+                        return WriteResult(new CompanionPrepareResult(
+                            1,
+                            Error: exception.Message,
+                            ErrorType: exception is Session.NativeStageStaleException
+                                ? ClawCtlJson.NativeStageStaleErrorType
+                                : null));
                     }
                 }
             },
@@ -1356,7 +1375,11 @@ internal static class Program
                 operation, runtime.Paths.CompletionCachePath);
         }
         Session.AgentShell shell = Session.AgentShellResolver.Resolve(File.Exists);
-        string? nativeRootPath = runtime.GetAgentNativeRoot();
+        // One snapshot for the shim's redirect and the admitted stage; see
+        // BuildRuntimeEnvironment.
+        OpenClaw.SessionProtocol.SessionNativeStageReference nativeStage =
+            runtime.GetNativeStage(applicationDirectory);
+        string? nativeRootPath = nativeStage.RootPath;
         string? nativePreloadUrl = nativeRootPath is { Length: > 0 }
             ? new Uri(ResolveNativeRedirectPreloadPath()).AbsoluteUri
             : null;
@@ -1385,7 +1408,7 @@ internal static class Program
                         applicationDirectory,
                         nativeRootPath,
                         nativePreloadUrl)),
-                NativeRootPath = nativeRootPath
+                NativeStage = nativeStage
             },
             $"Opening {shell.DisplayName} in the isolated session.",
             shell.DisplayName,

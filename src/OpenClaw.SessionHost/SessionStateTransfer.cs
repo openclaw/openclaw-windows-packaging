@@ -63,11 +63,13 @@ internal sealed class SessionStateTransfer
             {
                 JoinInvocation(invocationMode);
             }
+            using StateArchiveApplication? application =
+                createTransfer is null ? new StateArchiveApplication(request) : null;
             SessionStateTransfer transfer = createTransfer?.Invoke(request) ??
                 new SessionStateTransfer(
                     AgentProfile.GetPath(),
                     SessionStateAccess.ForAgent().DirectoryPath,
-                    new StateArchiveApplication(request));
+                    application!);
             SessionStateTransferResult result = transfer.Execute(request);
             writeFile(
                 SessionLaunchProtocol.ResultPathFor(requestPath),
@@ -83,7 +85,8 @@ internal sealed class SessionStateTransfer
                 SessionStateTransferProtocol.SerializeResult(new SessionStateTransferResult
                 {
                     RequestId = requestId,
-                    Error = exception.Message
+                    Error = exception.Message,
+                    ErrorCode = (exception as SessionLaunchException)?.Code
                 }));
             return SessionLaunchProtocol.HelperFailureExitCode;
         }
