@@ -40,6 +40,11 @@ on:
         required: true
         default: true
         type: boolean
+      request_store_publication:
+        description: Request central Store approval after this release completes successfully
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: gateway-msix-${{ github.event.pull_request.number || github.run_id }}
@@ -272,6 +277,7 @@ jobs:
         shell: pwsh
         run: |
           ./scripts/Test-Request-MicrosoftStorePublish.Tests.ps1
+          ./scripts/Test-CompletedStoreRequest.Tests.ps1
 
       - name: Test signing workflow configuration
         shell: pwsh
@@ -437,6 +443,8 @@ jobs:
           RELEASE_CHANNEL: ${{ inputs.release_channel || 'stable' }}
           SIGNING_MODE: ${{ inputs.signing_mode || 'unsigned' }}
           SNAPSHOT_MODE: ${{ steps.snapshot.outputs.mode }}
+          REQUEST_STORE_PUBLICATION: ${{ inputs.request_store_publication && 'true' || 'false' }}
+          PUBLISH_RELEASE: ${{ inputs.publish_release && 'true' || 'false' }}
         run: |
           if ($env:SNAPSHOT_MODE -cnotin @('resolve', 'reuse')) {
             throw "Unknown source snapshot mode '$env:SNAPSHOT_MODE'."
@@ -452,7 +460,9 @@ jobs:
             -WorkflowRunId $env:GITHUB_RUN_ID `
             -PackagingCommit $env:GITHUB_SHA `
             -WorkflowRef $env:GITHUB_WORKFLOW_REF -GitHubRef $env:GITHUB_REF -EventName $env:GITHUB_EVENT_NAME `
-            -ReuseSnapshot:($env:SNAPSHOT_MODE -ceq 'reuse')
+            -ReuseSnapshot:($env:SNAPSHOT_MODE -ceq 'reuse') `
+            -RequestStorePublication:($env:REQUEST_STORE_PUBLICATION -ceq 'true') `
+            -PublishRelease:($env:PUBLISH_RELEASE -ceq 'true')
           "route=$($source.buildRoute)" >> $env:GITHUB_OUTPUT
           "sha=$($source.resolvedCommit)" >> $env:GITHUB_OUTPUT
           "tag=v$($source.packageVersion)" >> $env:GITHUB_OUTPUT
@@ -855,7 +865,6 @@ jobs:
       release_version: ${{ steps.release.outputs.release_version }}
       publisher: ${{ steps.release.outputs.publisher }}
       prerelease: ${{ steps.release.outputs.prerelease }}
-      make_latest: ${{ steps.release.outputs.make_latest }}
     permissions:
       actions: read
       contents: read
@@ -957,7 +966,6 @@ jobs:
           "release_tag=$($identity.ReleaseTag)" >> $env:GITHUB_OUTPUT
           "release_version=$($identity.ReleaseVersion)" >> $env:GITHUB_OUTPUT
           "prerelease=$($identity.Prerelease.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
-          "make_latest=$($identity.MakeLatest.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           "publisher=$($policy.sideloadPackageIdentity.publisher)" >> $env:GITHUB_OUTPUT
 
       - name: Enforce reviewed release policy
@@ -1134,6 +1142,12 @@ jobs:
   publish-release:
     cache-mode: none
     name: Publish signed Gateway MSIX release
+    # Hold the same slot while reading Latest and publishing. Queue distinct
+    # releases instead of dropping pending jobs or letting older builds win.
+    concurrency:
+      group: gateway-msix-github-publication
+      queue: max
+      cancel-in-progress: false
     if: ${{ !cancelled() && inputs.publish_release && needs.build.result == 'success' && needs.authorize-signing.result == 'success' && needs.sign-msix.result == 'success' }}
     needs:
       - build
@@ -1143,6 +1157,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Check out release policy
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
       - name: Download signed x64 package
         uses: actions/download-artifact@v8
         with:
@@ -1175,6 +1194,22 @@ jobs:
           cp signed/bundle/OpenClawGateway.msixbundle \
             "release-assets/OpenClawGateway-${RELEASE_VERSION}.msixbundle"
 
+      - name: Keep GitHub Latest moving forward
+        id: latest
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.authorize-signing.outputs.release_tag }}
+          IS_PRERELEASE: ${{ needs.authorize-signing.outputs.prerelease }}
+        run: |
+          $makeLatest = $false
+          if ($env:IS_PRERELEASE -ceq 'false') {
+            $latestTag = gh api "repos/$env:GITHUB_REPOSITORY/releases/latest" --jq .tag_name
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot determine current Latest; no release published.' }
+            $makeLatest = ./scripts/Select-MSIXLatestRelease.ps1 -CandidateTag $env:RELEASE_TAG -LatestTag $latestTag
+          }
+          "make_latest=$($makeLatest.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+
       - name: Create permanent GitHub release
         uses: softprops/action-gh-release@v3
         with:
@@ -1183,7 +1218,7 @@ jobs:
           name: OpenClaw Gateway MSIX ${{ needs.authorize-signing.outputs.release_tag }}
           generate_release_notes: true
           prerelease: ${{ needs.authorize-signing.outputs.prerelease == 'true' }}
-          make_latest: ${{ needs.authorize-signing.outputs.make_latest }}
+          make_latest: ${{ steps.latest.outputs.make_latest }}
           overwrite_files: false
           fail_on_unmatched_files: true
           files: |
@@ -1224,6 +1259,7 @@ jobs:
           RELEASE_VERSION: ${{ needs.authorize-signing.outputs.release_version }}
           RELEASE_TAG: ${{ needs.authorize-signing.outputs.release_tag }}
           RELEASE_CHANNEL: ${{ inputs.release_channel || 'stable' }}
+          REQUEST_STORE_PUBLICATION: ${{ inputs.request_store_publication && inputs.signing_mode == 'official' && inputs.publish_release && 'true' || 'false' }}
         run: |
           Rename-Item `
             -LiteralPath store\OpenClawGateway.msixbundle `
@@ -1235,6 +1271,7 @@ jobs:
             packagingCommit = $env:GITHUB_SHA
             releaseTag = $env:RELEASE_TAG
             releaseChannel = $env:RELEASE_CHANNEL
+            automaticStorePublication = $env:REQUEST_STORE_PUBLICATION -ceq 'true'
             bundleName = $bundle.Name
             bundleSha256 = (Get-FileHash $bundle.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           }

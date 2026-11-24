@@ -14,18 +14,24 @@ on:
         default: production
         required: true
 
+  workflow_run:
+    workflows: [Build OpenClaw Gateway MSIX]
+    types: [completed]
+
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: microsoft-store-request
+  group: microsoft-store-request-${{ github.event.workflow_run.id || inputs.run_id }}
   cancel-in-progress: false
 
 jobs:
   request:
     if: >-
       github.repository == 'openclaw/openclaw-windows-packaging' &&
-      github.ref == 'refs/heads/main'
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     steps:
       - name: Check out request adapter
@@ -33,7 +39,25 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Select completed release request
+        id: source
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.run_id }}
+          STORE_CHANNEL: ${{ inputs.channel }}
+        run: |
+          $request = ./scripts/Get-StorePublicationRequest.ps1 -EventPath $env:GITHUB_EVENT_PATH `
+            -RunId $env:SOURCE_RUN_ID -Channel $env:STORE_CHANNEL
+          if ($null -eq $request) {
+            'Completed build did not opt in to automatic Store publication.' >> $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
+          "run_id=$($request.runId)" >> $env:GITHUB_OUTPUT
+          "channel=$($request.channel)" >> $env:GITHUB_OUTPUT
+
       - name: Mint request-only release token
+        if: steps.source.outputs.run_id != ''
         id: release-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
         with:
@@ -44,12 +68,14 @@ jobs:
           permission-actions: write
 
       - name: Request release-manager-approved Store publication
+        if: steps.source.outputs.run_id != ''
         shell: pwsh
         env:
           GH_TOKEN: ${{ steps.release-token.outputs.token }}
-          SOURCE_RUN_ID: ${{ inputs.run_id }}
-          STORE_CHANNEL: ${{ inputs.channel }}
+          SOURCE_RUN_ID: ${{ steps.source.outputs.run_id }}
+          STORE_CHANNEL: ${{ steps.source.outputs.channel }}
         run: |
-          $request = ./scripts/Request-MicrosoftStorePublish.ps1 -RunId $env:SOURCE_RUN_ID -Channel $env:STORE_CHANNEL
+          $request = ./scripts/Request-MicrosoftStorePublish.ps1 -RunId $env:SOURCE_RUN_ID -Channel $env:STORE_CHANNEL `
+            -Automatic:($env:GITHUB_EVENT_NAME -ceq 'workflow_run')
           "Store $($request.channel) publication requested for Gateway source run $($request.sourceRunId)." >> $env:GITHUB_STEP_SUMMARY
           'Follow [Windows Store publication](https://github.com/openclaw/releases/actions/workflows/windows-store-publish.yml) for release-manager approval and the Store receipt. This request is not Store acceptance.' >> $env:GITHUB_STEP_SUMMARY

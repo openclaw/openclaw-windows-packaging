@@ -312,12 +312,26 @@ authorized disposition is backed by actual platform denial evidence.
 Cache deletion, dispatch, alert disposition, signing, and publication are
 separate authorized operations, not part of local implementation validation.
 
+## GitHub Latest ordering
+
+Signed GitHub publication queues in one repository-wide concurrency group. While
+holding that slot, the job compares the candidate with the current Latest release
+using the same MSIX version mapping Windows upgrades use. A delayed older build
+still gets its permanent release, but cannot replace a newer stable download as
+Latest; correction releases and packaging revisions retain their upgrade order.
+Previews never become Latest. Failure to read or recognize the existing stable
+Latest release fails closed. Finish older in-flight publication workflows before
+enabling the coordinated automatic caller, since those revisions lack this guard.
+
 ## Store publication requests
 
 See [Microsoft Store publication](microsoft-store.md) for the central approval
 cutover, manual requests, the Development tester group/flight, activation, and
 recovery. The coordinated upstream handoff requests production for stable and
-Development for beta. The central publisher owns activation and release-manager
-approval; this repository keeps only a manual request adapter, not a Store API
-engine or automatic trigger. Development activation still requires manual
+Development for beta. Set `request_store_publication=true` with `official` and
+`publish_release=true` to opt in; manual builds default to no Store request.
+The completion-triggered adapter requests approval only after the entire release
+run succeeds, without holding the upstream request open. The central publisher
+owns activation and release-manager approval; this repository keeps the automatic
+and manual request adapter, not a Store API engine. Development activation still requires manual
 submission, certification, and tester install/upgrade proof.

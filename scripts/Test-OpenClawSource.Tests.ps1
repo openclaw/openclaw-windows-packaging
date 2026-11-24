@@ -374,6 +374,44 @@ try {
         } 'older than the current stable release identity'
         Assert-Equal (Test-Path -LiteralPath $workflow.OutputPath) $false
     }
+    Invoke-Test 'automatic publication captures and replays the exact matching stable source' {
+        $source = & $workflowPath @workflow -SigningMode official -Ref $commit -RequestStorePublication -PublishRelease:$true
+        Assert-Equal $source.resolvedCommit $source.releaseIdentitySource.resolvedCommit
+        $http.Calls.Clear()
+        $replayed = & $workflowPath @workflow -SigningMode official -Ref $commit -RequestStorePublication -PublishRelease:$true -ReuseSnapshot
+        Assert-Equal $replayed.resolvedCommit $commit
+        Assert-Equal $http.Calls.Count 0
+    }
+    foreach ($mode in @('unsigned', 'test', 'store')) {
+        Invoke-Test "automatic Store request rejects $mode signing before source resolution" {
+            Assert-Throws {
+                & $workflowPath @workflow -SigningMode $mode -RequestStorePublication -PublishRelease:$true
+            } 'require official signing'
+            Assert-Equal $http.Calls.Count 0
+        }
+    }
+    Invoke-Test 'automatic Store request rejects disabled GitHub publication before source resolution' {
+        Assert-Throws {
+            & $workflowPath @workflow -SigningMode official -RequestStorePublication
+        } 'require official signing'
+        Assert-Equal $http.Calls.Count 0
+    }
+    Invoke-Test 'automatic publication rejects an advanced stable selector before capturing source' {
+        Add-Release '2026.9.7' ('a' * 40) ('b' * 40)
+        $http.Responses['Registry:latest'].version = '2026.9.7'
+        Assert-Throws {
+            & $workflowPath @workflow -SigningMode official -Ref $commit -RequestStorePublication -PublishRelease:$true
+        } 'payload and release identity to match'
+        Assert-Equal (Test-Path -LiteralPath $workflow.OutputPath) $false
+    }
+    Invoke-Test 'automatic publication cannot reuse a manual compatibility snapshot' {
+        Add-Release '2026.9.7' ('a' * 40) ('b' * 40)
+        $http.Responses['Registry:latest'].version = '2026.9.7'
+        $null = & $workflowPath @workflow -SigningMode official -Ref $commit
+        Assert-Throws {
+            & $workflowPath @workflow -SigningMode official -Ref $commit -RequestStorePublication -PublishRelease:$true -ReuseSnapshot
+        } 'payload and release identity to match'
+    }
     Invoke-Test 'workflow version overrides reject invalid or ambiguous selectors before HTTP' {
         Assert-Throws { & $workflowPath @workflow -GatewayVersion 'latest' } 'GatewayVersion|packageVersion'
         Assert-Throws { & $workflowPath @workflow -GatewayVersion $version -Ref $commit } 'cannot both select'

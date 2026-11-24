@@ -3,8 +3,9 @@
 The packaging repository builds and retains the authorized Gateway Store bundle.
 Store publication runs only in `openclaw/releases`, where a release manager must
 approve the exact candidate before the job can request a Microsoft Store token.
-The local **Request Microsoft Store publication** workflow is a manual recovery
-adapter; it cannot upload or commit a Store submission.
+The local **Request Microsoft Store publication** workflow requests approval after
+an opted-in release completes, and supports manual recovery. It cannot upload or
+commit a Store submission.
 
 ## Activate the centralized publisher
 
@@ -30,7 +31,7 @@ An administrator must complete and verify these separate changes:
    approval gates the credential-bearing job, not changes to its implementation.
 3. Install the existing release GitHub App (ID `2729701`) for `openclaw/releases`
    with Actions write access. Make its existing `GH_APP_PRIVATE_KEY` available
-   to this repository's manual request workflow. The minted token is scoped to
+   to this repository's request workflow. The minted token is scoped to
    the `releases` repository and Actions write; it does not grant Store access.
    That token restriction does not constrain the private key itself: audit the
    App's installation grants and key availability separately.
@@ -81,16 +82,46 @@ release is republished, and no Store token is minted here.
 
 ## Automatic requests and recovery
 
-This repository has no `workflow_run` Store trigger and no automatic-publication
-variable. Gateway's upstream release tooling can request the centralized publisher
-after building the exact released source; it must not also dispatch this manual
-recovery adapter for the same candidate. Manual recovery and automatic callers
-share the central publisher's approval and replay policy, not a second local
-publisher.
+The upstream release request dispatches an `official` build with
+`publish_release=true` and `request_store_publication=true`. The latter defaults
+to false for manual builds. Only that combination records an automatic opt-in in
+the attempt-bound Store witness. Stable builds publish signed GitHub releases;
+beta builds publish signed GitHub prereleases.
+Opted-in builds require the captured payload and release identity to match before
+building or signing. If stable advanced before source capture, the old request
+fails instead of publishing an old payload under the newer release's identity.
+Opting in without official signing and GitHub publication fails before source
+resolution; it never silently turns the request off.
+
+The adapter uses `workflow_run: completed`, not polling or a step inside the
+still-running build. Before acquiring the release App token, it requires a
+successful canonical main-branch manual build and reads that attempt's unique,
+unexpired witness. The current API run must still match the completed event's
+successful attempt and commit. The witness must match the run, attempt, and packaging commit
+and that commit must belong to canonical main's history,
+and explicitly opt in. Legacy witnesses and ordinary builds do not dispatch.
+Stable requests select production; beta requests select development. The central
+publisher independently authorizes source, artifacts, and bundle bytes.
+The adapter selects a run, not an approved candidate. The central publisher
+captures its current attempt and exact bundle for approval, then revalidates that
+same candidate before Store access. Reruns retain the workflow's original inputs
+and source snapshot; a superseded or running candidate cannot reuse approval.
+
+Land this packaging support before updating core to send the new input. Remove
+core's old build polling and central Store dispatch in that same caller update:
+build completion is the only automatic request owner. Core's successful dispatch
+does not mean the build or Store publication has finished. Follow the packaging
+run, its completion adapter, and then the central approval run.
+
+Do not rerun an automatic request workflow after an uncertain dispatch; it
+rejects second attempts. Inspect existing central requests and receipts first,
+then use the manual adapter only when recovery is needed. Manual recovery and
+automatic callers share the central publisher's approval and replay policy,
+not a second local publisher.
 
 ## Development flight
 
-The coordinated core release handoff requests `channel=production` after stable
+The completed-release adapter requests `channel=production` after stable
 builds and `channel=development` after beta builds, with `automatic=true`.
 Beta builds use `official` mode and publish their signed GitHub prerelease before
 retaining the separate unsigned Store bundle and attempt-bound witness.

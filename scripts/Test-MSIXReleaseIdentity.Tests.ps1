@@ -196,4 +196,23 @@ if (
     throw 'The Store-compatible version does not upgrade the latest legacy release.'
 }
 
-Write-Host 'MSIX release-identity tests passed.'
+$latestSelector = Join-Path $PSScriptRoot 'Select-MSIXLatestRelease.ps1'
+foreach ($case in @(
+    @('v2026.11.7-msix.0', 'v2026.11.1-msix.0', $true),
+    @('v2026.11.7-msix.0', 'v2026.11.8-msix.0', $false),
+    @('v2026.11.7-msix.0', 'v2026.11.7-msix.0', $true),
+    @('v2026.11.7-2-msix.0', 'v2026.11.7-msix.0', $true),
+    @('v2026.11.7-msix.1', 'v2026.11.7-2-msix.0', $false),
+    @('v2026.11.7-msix.1', 'v2026.11.7-msix.0', $true),
+    @('v2026.12.1-msix.0', 'v2026.11.99-msix.0', $true),
+    @('v2026.11.10-beta.1-msix.0', 'v2026.11.7-msix.0', $false)
+)) {
+    $actual = & $latestSelector -CandidateTag $case[0] -LatestTag $case[1]
+    if ($actual -ne $case[2]) { throw "Incorrect Latest selection for $($case[0]) after $($case[1])." }
+}
+foreach ($invalid in @('unknown', 'v2026.11.7-msix.10', 'v2026.11.10-beta.1-msix.0')) {
+    Assert-Fails -MessagePattern 'release tag|Latest' -Action {
+        & $latestSelector -CandidateTag 'v2026.11.7-msix.0' -LatestTag $invalid
+    }
+}
+Write-Host 'MSIX release-identity and forward-only Latest tests passed.'
