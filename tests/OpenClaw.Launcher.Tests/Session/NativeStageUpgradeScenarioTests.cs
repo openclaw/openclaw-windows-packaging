@@ -1,5 +1,7 @@
 using System.IO.Compression;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using OpenClaw.Launcher.Gateway;
@@ -466,6 +468,130 @@ public sealed partial class NativeStageUpgradeScenarioTests : IDisposable
         Assert.False(Directory.Exists(rootA));
     }
 
+    /// <summary>
+    /// The opt-in diagnostic reports the source-versus-stage mismatch, including
+    /// that the newly native-bearing package resolves from the immutable
+    /// package, without staging, repairing, or exposing agent paths.
+    /// </summary>
+    [Fact]
+    public async Task StatusNativeExplainsTheMismatchWithoutChangingAnything()
+    {
+        HostOptions a = CreatePackage("pkg-a", PackageA());
+        Assert.Equal(0, await RunAsync(a, "setup"));
+        HostOptions b = CreatePackage("pkg-b", PackageB());
+        string setupBefore = File.ReadAllText(_runtime.Paths.SetupStatePath);
+        string[] stageBefore = SnapshotStages();
+
+        (int exitCode, JsonElement status) = await StatusJsonAsync(b, "--native");
+
+        Assert.Equal(1, exitCode);
+        JsonElement native = status.GetProperty("nativeStage");
+        Assert.True(native.GetProperty("inspected").GetBoolean());
+        Assert.Equal("stale-source", native.GetProperty("state").GetString());
+        Assert.Equal("package-inventory", native.GetProperty("provenance").GetString());
+        Assert.Equal("clawctl setup", native.GetProperty("repair").GetString());
+        Assert.NotEqual(
+            native.GetProperty("expectedContentId").GetString(),
+            native.GetProperty("stagedContentId").GetString());
+        JsonElement javaScript = Package(native, "@openclaw/fs-safe");
+        Assert.Equal("0.26.5", javaScript.GetProperty("sourceVersion").GetString());
+        Assert.False(javaScript.TryGetProperty("stagedVersion", out _));
+        Assert.Equal("immutable", javaScript.GetProperty("resolvesFrom").GetString());
+        Assert.False(javaScript.GetProperty("filesMatch").GetBoolean());
+        JsonElement addon = Package(native, "@openclaw/fs-safe-win32-x64-msvc");
+        Assert.Equal("0.25.0", addon.GetProperty("stagedVersion").GetString());
+        Assert.Equal("staged", addon.GetProperty("resolvesFrom").GetString());
+        Assert.False(addon.GetProperty("filesMatch").GetBoolean());
+        Assert.DoesNotContain(
+            JsonEncodedText.Encode(_agentLocal).ToString(),
+            status.GetRawText(),
+            StringComparison.OrdinalIgnoreCase);
+
+        Assert.Equal(setupBefore, File.ReadAllText(_runtime.Paths.SetupStatePath));
+        Assert.Equal(stageBefore, SnapshotStages());
+        Assert.Empty(_launcher.Runs);
+
+        int inspections = _backend.ExecutedCommandLines.Count(line => line.Contains("--inspect-native", StringComparison.Ordinal));
+        (_, JsonElement plain) = await StatusJsonAsync(b);
+        Assert.False(plain.TryGetProperty("nativeStage", out _));
+        Assert.Equal(
+            inspections,
+            _backend.ExecutedCommandLines.Count(line => line.Contains("--inspect-native", StringComparison.Ordinal)));
+
+        Assert.Equal(0, await RunAsync(b, "setup"));
+        (int repairedExit, JsonElement repaired) = await StatusJsonAsync(b, "--native");
+        Assert.Equal(0, repairedExit);
+        Assert.Equal("current", repaired.GetProperty("nativeStage").GetProperty("state").GetString());
+        Assert.All(
+            repaired.GetProperty("nativeStage").GetProperty("packages").EnumerateArray(),
+            package => Assert.Equal("staged", package.GetProperty("resolvesFrom").GetString()));
+    }
+
+    /// <summary>
+    /// An inspection whose request the workspace refuses reports that it
+    /// was not performed, keeping the rest of the status report.
+    /// </summary>
+    [Fact]
+    public async Task StatusNativeKeepsTheReportWhenTheWorkspaceRefusesTheRequest()
+    {
+        HostOptions b = CreatePackage("pkg-b", PackageB());
+        Assert.Equal(0, await RunAsync(b, "setup"));
+        var workspace = new DirectoryInfo(_backend.Metadata!.EphemeralWorkspacePath);
+        using WindowsIdentity identity = WindowsIdentity.GetCurrent();
+        var refuseNewFiles = new FileSystemAccessRule(
+            identity.User!, FileSystemRights.CreateFiles, AccessControlType.Deny);
+        DirectorySecurity security = workspace.GetAccessControl();
+        security.AddAccessRule(refuseNewFiles);
+        workspace.SetAccessControl(security);
+        try
+        {
+            (_, JsonElement status) = await StatusJsonAsync(b, "--native");
+
+            Assert.Equal("isolated-session", status.GetProperty("integration").GetProperty("kind").GetString());
+            Assert.True(status.TryGetProperty("session", out _));
+            JsonElement native = status.GetProperty("nativeStage");
+            Assert.False(native.GetProperty("inspected").GetBoolean());
+            Assert.False(string.IsNullOrWhiteSpace(native.GetProperty("reason").GetString()));
+        }
+        finally
+        {
+            security = workspace.GetAccessControl();
+            security.RemoveAccessRule(refuseNewFiles);
+            workspace.SetAccessControl(security);
+        }
+    }
+
+    private async Task<(int ExitCode, JsonElement Status)> StatusJsonAsync(HostOptions options, params string[] extra)
+    {
+        using var output = new StringWriter();
+        int exitCode = await OpenClaw.Launcher.Program.RunControlAsync(
+            options,
+            ["status", .. extra, "--json"],
+            _ => { },
+            output,
+            TextWriter.Null,
+            new ScenarioLifecycle(_runtime),
+            readEnvironmentVariable: _ => null,
+            controlOutputOptions: new ClawCtlOutputOptions { Json = true }).ConfigureAwait(false);
+        using JsonDocument document = JsonDocument.Parse(output.ToString());
+        return (exitCode, document.RootElement.Clone());
+    }
+
+    private static JsonElement Package(JsonElement native, string name) =>
+        native.GetProperty("packages").EnumerateArray()
+            .Single(package => package.GetProperty("name").GetString() == name);
+
+    private string[] SnapshotStages()
+    {
+        string parent = Path.Combine(_agentLocal, "OpenClawGatewayMSIX", SessionNativeStager.DirectoryName);
+        return
+        [
+            .. Directory.EnumerateFiles(parent, "*", SearchOption.AllDirectories)
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .Select(file => $"{file}|{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(file)))}")
+        ];
+    }
+
     private static Dictionary<string, string> PackageA() => new()
     {
         [$"{JavaScriptPackage}/package.json"] = "{\"version\":\"0.25.0\"}",
@@ -568,6 +694,8 @@ public sealed partial class NativeStageUpgradeScenarioTests : IDisposable
             "--inspect" => RespondAsRunningGateway(requestPath),
             "--stop" => RespondAsStoppedGateway(requestPath),
             "--request" => RunGuestLaunch(request.CommandLine),
+            "--inspect-native" => SessionNativeStageInspector.Run(requestPath, File.ReadAllText, File.WriteAllText),
+            "--check-config" => RespondAsConfigured(requestPath),
             _ when option.StartsWith("--coordinate-state-transfer=", StringComparison.Ordinal) =>
                 SessionStateTransfer.Run(
                     requestPath,
@@ -626,6 +754,20 @@ public sealed partial class NativeStageUpgradeScenarioTests : IDisposable
         File.WriteAllText(
             SessionLaunchProtocol.ResultPathFor(requestPath),
             SessionInspectProtocol.SerializeResult(new SessionInspectResult { RequestId = request.RequestId }));
+        return 0;
+    }
+
+    private static int RespondAsConfigured(string requestPath)
+    {
+        SessionConfigReadinessRequest request = SessionConfigReadinessProtocol.ReadRequest(File.ReadAllText(requestPath));
+        File.WriteAllText(
+            SessionLaunchProtocol.ResultPathFor(requestPath),
+            SessionConfigReadinessProtocol.SerializeResult(new SessionConfigReadinessResult
+            {
+                RequestId = request.RequestId,
+                State = SessionConfigReadinessState.StartupEligible,
+                Reason = SessionConfigReadinessReason.GatewayModeLocal
+            }));
         return 0;
     }
 

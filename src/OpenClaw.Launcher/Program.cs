@@ -518,6 +518,44 @@ internal static class Program
                 ResolveNativeRedirectPreloadPath())
             : null;
 
+    /// <summary>
+    /// Runs the opt-in native stage inspection for <c>status --native</c>.
+    /// </summary>
+    /// <remarks>
+    /// Starts the recorded session when it is stopped, as any session command
+    /// does, but never provisions, stages a helper, or repairs: an
+    /// installation that cannot be inspected says why instead.
+    /// </remarks>
+    private static async Task<NativeStageStatus> InspectNativeStageAsync(
+        HostOptions options,
+        Session.SessionRuntime runtime,
+        Action<string> log,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            string applicationDirectory = options.RequirePackagedApplicationDirectory();
+            Session.SessionRecord record = await runtime.StartForExecutionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            SessionNativeStageReport report = await runtime.Executor.InspectNativeStageAsync(
+                record,
+                runtime.RequireStagedHelper(record),
+                runtime.GetNativeStage(applicationDirectory),
+                cancellationToken).ConfigureAwait(false);
+            log($"Native stage inspection: {report.State ?? "error"}.");
+            return new NativeStageStatus(report, null);
+        }
+        // An inspection that cannot run, including a workspace that refuses
+        // the request, must not replace the status already collected.
+        catch (Exception exception) when (
+            exception is Session.SessionException or Mxc.MxcException or
+                IOException or UnauthorizedAccessException)
+        {
+            log($"Native stage inspection was not performed: {DiagnosticFailure.Describe(exception)}");
+            return new NativeStageStatus(null, exception.Message);
+        }
+    }
+
     internal static string ResolveNativeRedirectPreloadPath() =>
         Path.GetFullPath(
             Path.Combine(
@@ -751,7 +789,7 @@ internal static class Program
                     return WriteResult(result);
                 },
                 Setup = RunSetupCommandAsync,
-                Status = async cancellationToken =>
+                Status = async (statusOptions, cancellationToken) =>
                 {
                     StatusCommandResult result = await NarrateOperationAsync(
                         new ClawCtlProgress("Checking session, gateway, and recovery status."),
@@ -783,6 +821,10 @@ internal static class Program
                                         cancellationToken).ConfigureAwait(false);
                             Session.SetupStateResult setup =
                                 runtime.SetupState.Read(runtime.ApplicationId);
+                            NativeStageStatus? nativeStage = statusOptions.Native
+                                ? await InspectNativeStageAsync(options, runtime, log, cancellationToken)
+                                    .ConfigureAwait(false)
+                                : null;
                             return new StatusCommandResult(
                                 status,
                                 gateway,
@@ -794,7 +836,8 @@ internal static class Program
                                     Session.SessionCoordinator.MayLocateProvision(setup)
                                     ? Session.SessionCoordinator.DescribeUnownedSetupEvidence(
                                         runtime.SetupState.FilePath)
-                                    : null);
+                                    : null,
+                                nativeStage);
                         }).ConfigureAwait(false);
                     return WriteResult(result);
                 },

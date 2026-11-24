@@ -9,7 +9,7 @@ public sealed class ClawCtlHelpTests
     private static ClawCtlHandlers NoopHandlers() => new()
     {
         Setup = (_, _) => Task.FromResult(0),
-        Status = _ => Task.FromResult(0),
+        Status = (_, _) => Task.FromResult(0),
         CollectLogs = (_, _) => Task.FromResult(0),
         Teardown = (_, _) => Task.FromResult(0),
         PowerShell = (_, _) => Task.FromResult(0),
