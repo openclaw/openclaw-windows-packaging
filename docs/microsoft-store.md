@@ -98,6 +98,7 @@ still-running build. Before acquiring the release App token, it requires a
 successful canonical main-branch manual build and reads that attempt's unique,
 unexpired witness. The current API run must still match the completed event's
 successful attempt and commit. The witness must match the run, attempt, and packaging commit
+and that commit must belong to canonical main's history,
 and explicitly opt in. Legacy witnesses and ordinary builds do not dispatch.
 Stable requests select production; beta requests select development. The central
 publisher independently authorizes source, artifacts, and bundle bytes.

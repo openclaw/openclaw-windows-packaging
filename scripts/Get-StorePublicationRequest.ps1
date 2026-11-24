@@ -45,6 +45,11 @@ if ($current.status -cne 'completed' -or $current.conclusion -cne 'success' -or
     [int]$current.run_attempt -ne $attempt -or $current.head_sha -cne $run.head_sha) {
     throw 'Completed Store request was superseded; inspect the current build attempt before recovery.'
 }
+if ($run.head_sha -cnotmatch '\A[0-9a-f]{40}\z') { throw 'Invalid completed source commit.' }
+$ancestry = (& $CommandInvoker @('api', "repos/$Repository/compare/$($run.head_sha)...main")) | ConvertFrom-Json
+if ($ancestry.status -cnotin @('ahead', 'identical')) {
+    throw 'Completed Store source does not belong to canonical main history.'
+}
 $inventory = (& $CommandInvoker @('api', "repos/$Repository/actions/runs/$runId/artifacts?per_page=100")) |
     ConvertFrom-Json
 if (@($inventory.artifacts).Count -ne [int]$inventory.total_count) { throw 'Incomplete Store witness inventory.' }

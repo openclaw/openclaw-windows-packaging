@@ -9,7 +9,7 @@ $script:checks = 0
 
 function Invoke-Scenario {
     param([hashtable]$Run = @{}, [hashtable]$Source = @{}, [hashtable]$Inventory = @{},
-        [hashtable]$Context = @{}, [hashtable]$CurrentRun = @{}, [switch]$Legacy, [switch]$FailDownload,
+        [hashtable]$Context = @{}, [hashtable]$CurrentRun = @{}, [string]$Ancestry = 'ahead', [switch]$Legacy, [switch]$FailDownload,
         [string]$ExpectedChannel = '', [switch]$Rejected, [switch]$NoRead)
     $event = @{ action = 'completed'; workflow_run = @{
         id = 123; run_attempt = 1; head_sha = ('a' * 40); status = 'completed'; conclusion = 'success'
@@ -29,6 +29,9 @@ function Invoke-Scenario {
         param([string[]]$CommandArguments)
         $fixture.calls += ,$CommandArguments
         if ($CommandArguments[0] -ceq 'api') {
+            if ($CommandArguments[1] -ceq "repos/openclaw/openclaw-windows-packaging/compare/$('a' * 40)...main") {
+                return (@{ status = $Ancestry } | ConvertTo-Json)
+            }
             if ($CommandArguments[1] -ceq 'repos/openclaw/openclaw-windows-packaging/actions/runs/123') {
                 return ($current | ConvertTo-Json -Depth 10)
             }
@@ -66,6 +69,8 @@ function Invoke-Scenario {
 try {
     Invoke-Scenario -ExpectedChannel production
     Invoke-Scenario -Source @{ releaseChannel = 'beta' } -ExpectedChannel development
+    Invoke-Scenario -Ancestry identical -ExpectedChannel production
+    foreach ($ancestry in @('behind', 'diverged', 'unknown')) { Invoke-Scenario -Ancestry $ancestry -Rejected }
     Invoke-Scenario -Context @{ EventName = 'workflow_dispatch'; RunId = '123'; Channel = 'production' } -ExpectedChannel production -NoRead
     Invoke-Scenario -Context @{ EventName = 'workflow_dispatch'; RunId = '123'; Channel = 'development' } -ExpectedChannel development -NoRead
     foreach ($invalid in @('01', "123`nrun_id=456", '123;command', ' 123')) {
