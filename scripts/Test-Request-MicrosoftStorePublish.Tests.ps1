@@ -45,6 +45,21 @@ if ($result.product -cne 'gateway' -or $result.sourceRunId -cne '123' -or $resul
 }
 $script:checks++
 
+foreach ($channel in @('production', 'development')) {
+    $parameters = $canonical.Clone()
+    $parameters.EventName = 'workflow_run'
+    $parameters.Automatic = $true
+    $parameters.Channel = $channel
+    $fixture.calls = @()
+    $result = & $scriptPath @parameters
+    if ($fixture.calls.Count -ne 1 -or $fixture.calls[0][-1] -cne 'automatic=true' -or
+        $result.channel -cne $channel) { throw 'Completed releases must request the central automatic policy.' }
+    $script:checks++
+}
+$parameters = $canonical.Clone()
+$parameters.Automatic = $true
+Assert-Rejected $parameters
+
 foreach ($channel in @('development', 'Development', 'DEVELOPMENT')) {
     $parameters = $canonical.Clone()
     $parameters.Channel = $channel

@@ -86,6 +86,7 @@ or package version logic:
 .\scripts\Test-MSIXUpgradeMatrix.Tests.ps1
 .\scripts\Test-WorkflowPackageVersion.Tests.ps1
 .\scripts\Test-Request-MicrosoftStorePublish.Tests.ps1
+.\scripts\Test-CompletedStoreRequest.Tests.ps1
 .\scripts\Test-GitHooks.Tests.ps1
 ```
 

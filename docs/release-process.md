@@ -317,7 +317,10 @@ separate authorized operations, not part of local implementation validation.
 See [Microsoft Store publication](microsoft-store.md) for the central approval
 cutover, manual requests, the Development tester group/flight, activation, and
 recovery. The coordinated upstream handoff requests production for stable and
-Development for beta. The central publisher owns activation and release-manager
-approval; this repository keeps only a manual request adapter, not a Store API
-engine or automatic trigger. Development activation still requires manual
+Development for beta. Set `request_store_publication=true` with `official` and
+`publish_release=true` to opt in; manual builds default to no Store request.
+The completion-triggered adapter requests approval only after the entire release
+run succeeds, without holding the upstream request open. The central publisher
+owns activation and release-manager approval; this repository keeps the automatic
+and manual request adapter, not a Store API engine. Development activation still requires manual
 submission, certification, and tester install/upgrade proof.

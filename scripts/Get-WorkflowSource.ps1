@@ -11,7 +11,8 @@ param(
     [Parameter(Mandatory)][string]$WorkflowRef,
     [Parameter(Mandatory)][string]$GitHubRef,
     [Parameter(Mandatory)][string]$EventName,
-    [switch]$ReuseSnapshot
+    [switch]$ReuseSnapshot,
+    [switch]$RequireMatchingReleaseIdentity
 )
 
 Set-StrictMode -Version Latest
@@ -96,6 +97,11 @@ if ($separateReleaseIdentity) {
 }
 elseif ($null -ne $releaseIdentityProperty) {
     throw 'The source snapshot has an unexpected release identity source.'
+}
+if ($RequireMatchingReleaseIdentity -and $null -ne $releaseIdentityProperty -and
+    ($source.resolvedCommit -cne $releaseIdentityProperty.Value.resolvedCommit -or
+     $source.packageVersion -cne $releaseIdentityProperty.Value.packageVersion)) {
+    throw 'Automatic publication requires the payload and release identity to match; the release selector may have advanced.'
 }
 if ($refAssertion -and $Ref -ine $source.resolvedCommit) {
     throw 'The requested full SHA does not match the captured GatewayVersion release.'
