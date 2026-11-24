@@ -314,6 +314,15 @@ separate authorized operations, not part of local implementation validation.
 
 ## Store publication requests
 
+Signed GitHub publication queues in one repository-wide concurrency group. While
+holding that slot, the job compares the candidate with the current Latest release
+using the same MSIX version mapping Windows upgrades use. A delayed older build
+still gets its permanent release, but cannot replace a newer stable download as
+Latest; correction releases and packaging revisions retain their upgrade order.
+Previews never become Latest. Failure to read or recognize the existing stable
+Latest release fails closed. Finish older in-flight publication workflows before
+enabling the coordinated automatic caller, since those revisions lack this guard.
+
 See [Microsoft Store publication](microsoft-store.md) for the central approval
 cutover, manual requests, the Development tester group/flight, activation, and
 recovery. The coordinated upstream handoff requests production for stable and

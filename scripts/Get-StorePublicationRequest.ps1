@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][string]$EventPath,
+    [string]$EventPath,
+    [string]$RunId,
+    [string]$Channel,
     [string]$Repository = $env:GITHUB_REPOSITORY,
     [string]$GitHubRef = $env:GITHUB_REF,
     [string]$EventName = $env:GITHUB_EVENT_NAME,
@@ -9,8 +11,16 @@ param(
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-if ($Repository -cne 'openclaw/openclaw-windows-packaging' -or $GitHubRef -cne 'refs/heads/main' -or
-    $EventName -cne 'workflow_run' -or $RequestAttempt -cne '1') {
+if ($Repository -cne 'openclaw/openclaw-windows-packaging' -or $GitHubRef -cne 'refs/heads/main') {
+    throw 'Store requests require canonical main.'
+}
+if ($EventName -ceq 'workflow_dispatch') {
+    if ($RunId -cnotmatch '\A[1-9][0-9]*\z' -or $Channel -cnotin @('production', 'development')) {
+        throw 'Manual Store requests require an exact run ID and production or development channel.'
+    }
+    return [pscustomobject]@{ runId = $RunId; channel = $Channel }
+}
+if ($EventName -cne 'workflow_run' -or $RequestAttempt -cne '1') {
     throw 'Automatic Store requests require a first-attempt completion workflow on canonical main; recover uncertain requests manually.'
 }
 $event = Get-Content -LiteralPath $EventPath -Raw | ConvertFrom-Json
@@ -29,6 +39,11 @@ if ($null -eq $CommandInvoker) {
         if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect completed Store source; no publication requested.' }
         $output
     }
+}
+$current = (& $CommandInvoker @('api', "repos/$Repository/actions/runs/$runId")) | ConvertFrom-Json
+if ($current.status -cne 'completed' -or $current.conclusion -cne 'success' -or
+    [int]$current.run_attempt -ne $attempt -or $current.head_sha -cne $run.head_sha) {
+    throw 'Completed Store request was superseded; inspect the current build attempt before recovery.'
 }
 $inventory = (& $CommandInvoker @('api', "repos/$Repository/actions/runs/$runId/artifacts?per_page=100")) |
     ConvertFrom-Json

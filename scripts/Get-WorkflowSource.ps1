@@ -12,11 +12,15 @@ param(
     [Parameter(Mandatory)][string]$GitHubRef,
     [Parameter(Mandatory)][string]$EventName,
     [switch]$ReuseSnapshot,
-    [switch]$RequireMatchingReleaseIdentity
+    [switch]$RequestStorePublication,
+    [bool]$PublishRelease = $false
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+if ($RequestStorePublication -and ($SigningMode -cne 'official' -or -not $PublishRelease)) {
+    throw 'Automatic Store requests require official signing and GitHub release publication.'
+}
 . (Join-Path $PSScriptRoot 'OpenClawSource.ps1')
 
 $policy = Read-OpenClawReleasePolicy -Path $PolicyPath
@@ -98,7 +102,7 @@ if ($separateReleaseIdentity) {
 elseif ($null -ne $releaseIdentityProperty) {
     throw 'The source snapshot has an unexpected release identity source.'
 }
-if ($RequireMatchingReleaseIdentity -and $null -ne $releaseIdentityProperty -and
+if ($RequestStorePublication -and $null -ne $releaseIdentityProperty -and
     ($source.resolvedCommit -cne $releaseIdentityProperty.Value.resolvedCommit -or
      $source.packageVersion -cne $releaseIdentityProperty.Value.packageVersion)) {
     throw 'Automatic publication requires the payload and release identity to match; the release selector may have advanced.'

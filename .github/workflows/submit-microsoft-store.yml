@@ -47,10 +47,8 @@ jobs:
           SOURCE_RUN_ID: ${{ inputs.run_id }}
           STORE_CHANNEL: ${{ inputs.channel }}
         run: |
-          $request = @{ runId = $env:SOURCE_RUN_ID; channel = $env:STORE_CHANNEL }
-          if ($env:GITHUB_EVENT_NAME -ceq 'workflow_run') {
-            $request = ./scripts/Get-CompletedStoreRequest.ps1 -EventPath $env:GITHUB_EVENT_PATH
-          }
+          $request = ./scripts/Get-StorePublicationRequest.ps1 -EventPath $env:GITHUB_EVENT_PATH `
+            -RunId $env:SOURCE_RUN_ID -Channel $env:STORE_CHANNEL
           if ($null -eq $request) {
             'Completed build did not opt in to automatic Store publication.' >> $env:GITHUB_STEP_SUMMARY
             exit 0

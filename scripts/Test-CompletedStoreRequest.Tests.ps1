@@ -2,14 +2,14 @@
 param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$scriptPath = Join-Path $PSScriptRoot 'Get-CompletedStoreRequest.ps1'
+$scriptPath = Join-Path $PSScriptRoot 'Get-StorePublicationRequest.ps1'
 $root = Join-Path ([IO.Path]::GetTempPath()) "completed-store-test-$([guid]::NewGuid().ToString('N'))"
 [void][IO.Directory]::CreateDirectory($root)
 $script:checks = 0
 
 function Invoke-Scenario {
     param([hashtable]$Run = @{}, [hashtable]$Source = @{}, [hashtable]$Inventory = @{},
-        [hashtable]$Context = @{}, [switch]$Legacy, [switch]$FailDownload,
+        [hashtable]$Context = @{}, [hashtable]$CurrentRun = @{}, [switch]$Legacy, [switch]$FailDownload,
         [string]$ExpectedChannel = '', [switch]$Rejected, [switch]$NoRead)
     $event = @{ action = 'completed'; workflow_run = @{
         id = 123; run_attempt = 1; head_sha = ('a' * 40); status = 'completed'; conclusion = 'success'
@@ -17,6 +17,8 @@ function Invoke-Scenario {
         path = '.github/workflows/gateway-msix.yml'
     } }
     foreach ($key in $Run.Keys) { $event.workflow_run[$key] = $Run[$key] }
+    $current = $event.workflow_run.Clone()
+    foreach ($key in $CurrentRun.Keys) { $current[$key] = $CurrentRun[$key] }
     $witness = @{ runId = '123'; runAttempt = 1; packagingCommit = ('a' * 40); releaseChannel = 'stable'; automaticStorePublication = $true }
     foreach ($key in $Source.Keys) { $witness[$key] = $Source[$key] }
     if ($Legacy) { $witness.Remove('automaticStorePublication') }
@@ -27,6 +29,9 @@ function Invoke-Scenario {
         param([string[]]$CommandArguments)
         $fixture.calls += ,$CommandArguments
         if ($CommandArguments[0] -ceq 'api') {
+            if ($CommandArguments[1] -ceq 'repos/openclaw/openclaw-windows-packaging/actions/runs/123') {
+                return ($current | ConvertTo-Json -Depth 10)
+            }
             if ($CommandArguments[1] -cne 'repos/openclaw/openclaw-windows-packaging/actions/runs/123/artifacts?per_page=100') {
                 throw 'Unexpected inventory request.'
             }
@@ -61,6 +66,14 @@ function Invoke-Scenario {
 try {
     Invoke-Scenario -ExpectedChannel production
     Invoke-Scenario -Source @{ releaseChannel = 'beta' } -ExpectedChannel development
+    Invoke-Scenario -Context @{ EventName = 'workflow_dispatch'; RunId = '123'; Channel = 'production' } -ExpectedChannel production -NoRead
+    Invoke-Scenario -Context @{ EventName = 'workflow_dispatch'; RunId = '123'; Channel = 'development' } -ExpectedChannel development -NoRead
+    foreach ($invalid in @('01', "123`nrun_id=456", '123;command', ' 123')) {
+        Invoke-Scenario -Context @{ EventName = 'workflow_dispatch'; RunId = $invalid; Channel = 'production' } -Rejected -NoRead
+    }
+    foreach ($current in @(@{ run_attempt = 2 }, @{ status = 'in_progress' }, @{ conclusion = 'failure' }, @{ head_sha = ('b' * 40) })) {
+        Invoke-Scenario -CurrentRun $current -Rejected
+    }
     # Completion, not elapsed build time, is the prerequisite for dispatch.
     foreach ($run in @(
         @{ status = 'in_progress' }, @{ conclusion = 'failure' }, @{ event = 'pull_request' },

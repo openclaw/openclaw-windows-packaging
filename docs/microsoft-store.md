@@ -90,14 +90,21 @@ beta builds publish signed GitHub prereleases.
 Opted-in builds require the captured payload and release identity to match before
 building or signing. If stable advanced before source capture, the old request
 fails instead of publishing an old payload under the newer release's identity.
+Opting in without official signing and GitHub publication fails before source
+resolution; it never silently turns the request off.
 
 The adapter uses `workflow_run: completed`, not polling or a step inside the
 still-running build. Before acquiring the release App token, it requires a
 successful canonical main-branch manual build and reads that attempt's unique,
-unexpired witness. The witness must match the run, attempt, and packaging commit
+unexpired witness. The current API run must still match the completed event's
+successful attempt and commit. The witness must match the run, attempt, and packaging commit
 and explicitly opt in. Legacy witnesses and ordinary builds do not dispatch.
 Stable requests select production; beta requests select development. The central
 publisher independently authorizes source, artifacts, and bundle bytes.
+The adapter selects a run, not an approved candidate. The central publisher
+captures its current attempt and exact bundle for approval, then revalidates that
+same candidate before Store access. Reruns retain the workflow's original inputs
+and source snapshot; a superseded or running candidate cannot reuse approval.
 
 Land this packaging support before updating core to send the new input. Remove
 core's old build polling and central Store dispatch in that same caller update:
