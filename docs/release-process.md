@@ -312,7 +312,7 @@ authorized disposition is backed by actual platform denial evidence.
 Cache deletion, dispatch, alert disposition, signing, and publication are
 separate authorized operations, not part of local implementation validation.
 
-## Store publication requests
+## GitHub Latest ordering
 
 Signed GitHub publication queues in one repository-wide concurrency group. While
 holding that slot, the job compares the candidate with the current Latest release
@@ -322,6 +322,8 @@ Latest; correction releases and packaging revisions retain their upgrade order.
 Previews never become Latest. Failure to read or recognize the existing stable
 Latest release fails closed. Finish older in-flight publication workflows before
 enabling the coordinated automatic caller, since those revisions lack this guard.
+
+## Store publication requests
 
 See [Microsoft Store publication](microsoft-store.md) for the central approval
 cutover, manual requests, the Development tester group/flight, activation, and
