@@ -16,7 +16,7 @@ internal static class Program
             "This is the process last-chance handler of a process nobody watches. " +
             "An escaping exception would end in an unexplained exit or a crash " +
             "report instead of a host log entry and exit code 1.")]
-    private static int Main()
+    private static int Main(string[] args)
     {
         using HostDiagnosticLog? log = TryCreateLog();
         void Write(string message)
@@ -33,6 +33,15 @@ internal static class Program
 
         try
         {
+            if (args is ["--store-update-host"])
+            {
+                return StoreUpdateHost.Run(GatewayRecoveryEnvironment.Current(), Write);
+            }
+            if (args.Length != 0)
+            {
+                Write("Unknown recovery helper arguments.");
+                return GatewayRecoveryStart.FailureExitCode;
+            }
             return GatewayRecoveryStart.Run(
                 GatewayRecoveryEnvironment.Current(),
                 new HiddenProcessRunner(),

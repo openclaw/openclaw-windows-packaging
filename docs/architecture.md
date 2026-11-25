@@ -398,6 +398,43 @@ happens before that command starts, including a missing alias, to the host
 diagnostic log, and it never shows UI. Interactive CLI commands keep their
 normal terminal output.
 
+### Opt-in Store servicing example
+
+The recovery helper also accepts `--store-update-host`. This is an example for
+isolated Windows validation, not automatic enrollment or a production update
+policy. The no-argument sign-in path still exits after its start command.
+`clawctl` remains short-lived and owns all Gateway lifecycle decisions.
+
+[`StoreUpdateHost`](../src/OpenClaw.GatewayRecovery/StoreUpdateHost.cs) runs as
+the signed-in user, starts the Gateway through its package-qualified `clawctl`
+alias, and holds a hidden top-level window. On a Windows servicing query it
+registers the current process for restart with the same example argument.
+Only a confirmed servicing shutdown invokes the existing conditional stop with
+the observed launch attempt. A failed stop, replaced attempt, already-stopped
+Gateway, cancelled shutdown, or ordinary window close disarms restart.
+[`StoreUpdateSession`](../src/OpenClaw.GatewayRecovery/StoreUpdateSession.cs)
+checks versioned JSON receipts without becoming another Gateway state writer.
+The helper does not install packages, poll Store, create tasks, or change
+update preferences. A session-local mutex rejects duplicate example hosts for
+the same package family. Separate Windows logon sessions are not coordinated.
+
+After Windows restarts the updated helper, it again resolves the current
+package's control alias and invokes recovery start. It does not silently run
+setup or repair: a changed Node.js runtime or failed recovery remains an
+explicit diagnostic. This example is not yet a complete unattended-update
+solution. Automatic enrollment, active-work draining, competing start fencing,
+activation of a new `clawctl` process during a servicing shutdown,
+other running package commands, cross-session servicing, updated-runtime
+preparation, and Windows forced termination before stop confirmation still
+need design and live proof. Restart registration does not make Store choose
+shutdown rather than deferred deployment.
+
+See [the isolated validation procedure](local-development.md#store-servicing-example)
+for the required native and installed-package proof. Microsoft's
+[packaged desktop restart guidance](https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/desktop-to-uwp-extensions#restart-automatically-after-receiving-an-update-from-the-microsoft-store)
+and [restart API contract](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-registerapplicationrestart)
+are the platform contracts, not evidence that the isolated-session path works.
+
 Earlier generations ran a generated launcher instead: a CMD file, then
 `gateway-launcher.js` through Windows Script Host, each calling a PowerShell
 activation script, with a Startup-folder `.cmd` or `.wsf` fallback. Those files
